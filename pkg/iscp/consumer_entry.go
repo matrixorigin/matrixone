@@ -143,13 +143,13 @@ func (jobEntry *JobEntry) IsInitedAndFinished() bool {
 func (jobEntry *JobEntry) UpdateWatermark(
 	from, to types.TS,
 	watermarkFlushThreshold time.Duration,
-) {
+) error {
 	if from.GE(&to) {
-		return
+		return nil
 	}
 	expectedFrom := jobEntry.watermark.Next()
 	if !expectedFrom.EQ(&from) {
-		FlushPermanentErrorMessage(
+		err := FlushPermanentErrorMessage(
 			jobEntry.tableInfo.exec.ctx,
 			jobEntry.tableInfo.exec.cnUUID,
 			jobEntry.tableInfo.exec.txnEngine,
@@ -159,13 +159,21 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			[]string{jobEntry.jobName},
 			[]uint64{jobEntry.jobID},
 			[]uint64{jobEntry.currentLSN},
-			[]*JobStatus{{}},
+			[]*JobStatus{{Stage: jobEntry.stage}},
 			types.MaxTs(),
 			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
 			[]uint64{jobEntry.currentLSN},
 		)
+		if err != nil {
+			return err
+		}
+		// The catalog is now durably terminal. Reflect that state locally and do
+		// not move progress across the discontinuity that caused the fence.
+		jobEntry.state = ISCPJobState_Error
+		return nil
 	}
 	jobEntry.watermark = to
+	return nil
 }
 
 // flushThreshold is how far the in-memory watermark must run ahead of the

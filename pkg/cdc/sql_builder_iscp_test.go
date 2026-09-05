@@ -29,6 +29,18 @@ func TestISCPLogUpdateResultSQLRejectsStageRegression(t *testing.T) {
 
 	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
 	require.Contains(t, sql, "CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= 1")
+	require.Contains(t, sql, "AND (3 = 4 OR")
+	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
+}
+
+func TestISCPLogUpdateResultSQLLetsTerminalErrorWinWithoutRegressingStage(t *testing.T) {
+	sql := CDCSQLBuilder.ISCPLogUpdateResultSQL(
+		1, 2, "job", 3, types.BuildTS(4, 0),
+		`{"LSN":5,"Stage":0}`, 0, 4, 4,
+	)
+
+	require.Contains(t, sql, "AND (4 = 4 OR")
+	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 0)")
 }
 
 func TestISCPLogRepairLegacyWatermarkStageSQLIsConservative(t *testing.T) {

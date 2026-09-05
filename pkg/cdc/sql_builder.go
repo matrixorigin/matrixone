@@ -323,7 +323,8 @@ const (
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_state = %d,` +
 		`watermark = '%s',` +
-		`job_status = '%s'` +
+		`job_status = JSON_SET('%s', '$.Stage', ` +
+		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d))` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
@@ -331,7 +332,8 @@ const (
 		`AND job_id = %d ` +
 		`AND job_state != 4 ` +
 		`AND JSON_EXTRACT(job_status, '$.LSN') = '%d' ` +
-		`AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d`
+		`AND (%d = 4 OR ` +
+		`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d)`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
@@ -1047,11 +1049,13 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		jobState,
 		newWatermark.ToString(),
 		jobStatus,
+		jobStage,
 		accountID,
 		tableID,
 		jobName,
 		jobID,
 		expectPrevLSN,
+		jobState,
 		jobStage,
 	)
 }

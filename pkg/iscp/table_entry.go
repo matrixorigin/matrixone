@@ -253,9 +253,12 @@ func (t *TableEntry) markIterationPending(iter *IterationContext) error {
 	return nil
 }
 
-func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
+func (t *TableEntry) UpdateWatermark(iter *IterationContext) error {
 	if iter.fromTS.GE(&iter.toTS) {
-		return
+		return nil
+	}
+	if len(iter.jobNames) != len(iter.jobIDs) {
+		return moerr.NewInternalErrorNoCtx("invalid ISCP watermark iteration")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -264,8 +267,15 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 			JobName: jobName,
 			JobID:   iter.jobIDs[i],
 		}]
-		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
+		if jobEntry == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"ISCP job %s/%d no longer exists", jobName, iter.jobIDs[i])
+		}
+		if err := jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 type watermarkFlushReservation struct {

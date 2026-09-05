@@ -577,7 +577,15 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
-					table.UpdateWatermark(iter)
+					if updateErr := table.UpdateWatermark(iter); updateErr != nil {
+						logutil.Error(
+							"ISCP-Task update watermark failed",
+							zap.Uint32("accountID", iter.accountID),
+							zap.Uint64("tableID", iter.tableID),
+							zap.Strings("jobNames", iter.jobNames),
+							zap.Error(updateErr),
+						)
+					}
 				}
 			}
 		case <-flushWatermarkTrigger.C:

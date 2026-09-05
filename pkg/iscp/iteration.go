@@ -847,6 +847,10 @@ func FlushPermanentErrorMessage(
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
 	defer cancel()
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
+	for _, status := range jobStatuses {
+		status.ErrorCode = PermanentErrorThreshold
+		status.ErrorMsg = errMsg
+	}
 	return FlushJobStatusOnIterationState(
 		ctx,
 		cnUUID,

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -381,6 +382,126 @@ func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("watermark flush did not complete after the reader released the table lock")
 	}
+}
+
+func TestUpdateWatermarkDiscontinuityFencesWithoutAdvancing(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background()}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(10, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	before := job.watermark
+
+	FlushJobStatusOnIterationState = func(
+		_ context.Context,
+		_ string,
+		_ engine.Engine,
+		_ client.TxnClient,
+		_ uint32,
+		_ uint64,
+		_ []string,
+		_ []uint64,
+		_ []uint64,
+		statuses []*JobStatus,
+		_ types.TS,
+		state int8,
+		_ []uint64,
+	) error {
+		require.Equal(t, ISCPJobState_Error, state)
+		require.Len(t, statuses, 1)
+		require.Equal(t, int8(JobStage_Running), statuses[0].Stage)
+		require.Equal(t, PermanentErrorThreshold, statuses[0].ErrorCode)
+		require.Contains(t, statuses[0].ErrorMsg, "update watermark failed")
+		return nil
+	}
+
+	err := job.UpdateWatermark(types.BuildTS(20, 0), types.BuildTS(30, 0), time.Second)
+
+	require.NoError(t, err)
+	require.Equal(t, ISCPJobState_Error, job.state)
+	require.True(t, job.watermark.EQ(&before))
+}
+
+func TestUpdateWatermarkDiscontinuityKeepsLocalStateWhenFenceFails(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	exec := &ISCPTaskExecutor{ctx: context.Background()}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	job := NewJobEntryWithStatus(
+		table,
+		"index_idx",
+		&JobSpec{},
+		&JobStatus{LSN: 5, Stage: JobStage_Running},
+		1,
+		types.BuildTS(10, 0),
+		ISCPJobState_Completed,
+		0,
+	)
+	before := job.watermark
+	wantErr := errors.New("terminal status write failed")
+	FlushJobStatusOnIterationState = func(
+		context.Context, string, engine.Engine, client.TxnClient,
+		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
+		types.TS, int8, []uint64,
+	) error {
+		return wantErr
+	}
+
+	err := job.UpdateWatermark(types.BuildTS(20, 0), types.BuildTS(30, 0), time.Second)
+
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	require.True(t, job.watermark.EQ(&before))
+}
+
+func TestFlushPermanentErrorMessagePopulatesDefaultStatus(t *testing.T) {
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+
+	statuses := []*JobStatus{nil}
+	FlushJobStatusOnIterationState = func(
+		_ context.Context,
+		_ string,
+		_ engine.Engine,
+		_ client.TxnClient,
+		_ uint32,
+		_ uint64,
+		_ []string,
+		_ []uint64,
+		_ []uint64,
+		got []*JobStatus,
+		_ types.TS,
+		state int8,
+		_ []uint64,
+	) error {
+		require.Equal(t, ISCPJobState_Error, state)
+		require.Len(t, got, 1)
+		require.Equal(t, uint64(7), got[0].LSN)
+		require.Equal(t, int8(JobStage_Init), got[0].Stage)
+		require.Equal(t, PermanentErrorThreshold, got[0].ErrorCode)
+		require.Equal(t, "invalid catalog status", got[0].ErrorMsg)
+		return nil
+	}
+
+	err := FlushPermanentErrorMessage(
+		context.Background(), "cn", nil, nil,
+		1, 2, []string{"job"}, []uint64{3}, []uint64{7}, statuses,
+		types.MaxTs(), "invalid catalog status", []uint64{6},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, statuses[0])
 }
 
 func TestTryFlushWatermarkPreservesRunningStage(t *testing.T) {
