@@ -247,6 +247,23 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 	}
 }
 
+func TestFoldedBinaryLiteralPreservesResolvedSQLType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.New(types.T_binary, 3, 0),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		vec, err := generateConstExpressionExecutor(proc, typ, &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "a\x00b"},
+		}, nil)
+		require.NoError(t, err)
+		require.Equal(t, typ.Oid, vec.GetType().Oid)
+		require.Equal(t, []byte("a\x00b"), vec.GetBytesAt(0))
+		vec.Free(proc.Mp())
+	}
+}
+
 func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	exprs := []*plan.Expr{

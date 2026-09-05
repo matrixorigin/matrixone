@@ -7935,14 +7935,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_timestamp:
 			value = newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](from, row).String2(jsonSessionTimeZone(proc), 6))
 		case types.T_geometry, types.T_geometry32:
-			var geoJSON []byte
-			geoJSON, err = geometryToGeoJSONBytes(from.GetBytesAt(row))
-			if err == nil {
-				value, err = types.ParseSliceToByteJson(geoJSON)
-				if err == nil && value.Type != bytejson.TpCodeObject {
-					err = moerr.NewInvalidInputf(ctx, "geometry GeoJSON must be an object")
-				}
-			}
+			value, err = geometryToByteJSON(ctx, from.GetBytesAt(row))
 		default:
 			return formatCastError(ctx, from, types.T_json.ToType(), "")
 		}

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -2077,224 +2078,24 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 	if proc != nil {
 		ctx = proc.Ctx
 	}
-	fromType := v.GetType()
-	switch fromType.Oid {
-	case types.T_bool:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
+	if !v.IsNull(uint64(row)) {
+		switch v.GetType().Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			kind := v.GetPrepareParamKindAt(row)
+			if kind != vector.PrepareParamNone {
+				return preparedTextToJSONValue(ctx, string(v.GetBytesAt(row)), kind)
+			}
 		}
-		return vector.GetFixedAtNoTypeCheck[bool](v, row), nil
-	case types.T_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int8](v, row)), nil
-	case types.T_int16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), nil
-	case types.T_int32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int32](v, row)), nil
-	case types.T_int64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[int64](v, row), nil
-	case types.T_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)), nil
-	case types.T_uint16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)), nil
-	case types.T_uint32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)), nil
-	case types.T_uint64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
-	case types.T_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), nil
-	case types.T_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[float64](v, row), nil
-	case types.T_char, types.T_varchar, types.T_text:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		value := string(v.GetBytesAt(row))
-		kind := v.GetPrepareParamKindAt(row)
-		if kind == vector.PrepareParamNone {
-			return value, nil
-		}
-		return preparedTextToJSONValue(ctx, value, kind)
-	case types.T_json:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		data := v.GetBytesAt(row)
-		if len(data) == 0 {
-			return nil, nil
-		}
-		bj := types.DecodeJson(data)
-		return bj, nil
-	case types.T_date:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDate, vector.GetFixedAtNoTypeCheck[types.Date](v, row).String()), nil
-	case types.T_time:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale)), nil
-	case types.T_datetime:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale)), nil
-	case types.T_timestamp:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), fromType.Scale)), nil
-	case types.T_decimal64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_decimal128:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
-	case types.T_decimal256:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_year:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[int16](v, row)
-		return strconv.FormatInt(int64(val), 10), nil
-	case types.T_bit:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		ctx := context.Background()
-		if proc != nil && proc.Ctx != nil {
-			ctx = proc.Ctx
-		}
-		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
-	case types.T_enum:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Enum](v, row)
-		return val.String(), nil
-	case types.T_geometry:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		data := v.GetBytesAt(row)
-		return string(data), nil
-	case types.T_uuid:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String(), nil
-	case types.T_array_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float32](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float64](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = x
-		}
-		return out, nil
-	case types.T_array_bf16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_float16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[int8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	default:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
 	}
+	return jsonvalue.FromVector(
+		ctx,
+		v,
+		row,
+		jsonSessionTimeZone(proc),
+		func(payload []byte) (bytejson.ByteJson, error) {
+			return geometryToByteJSON(ctx, payload)
+		},
+	)
 }
 
 func preparedTextToJSONValue(
@@ -2341,6 +2142,21 @@ func jsonSessionTimeZone(proc *process.Process) *time.Location {
 	return proc.GetSessionInfo().TimeZone
 }
 
+func geometryToByteJSON(ctx context.Context, payload []byte) (bytejson.ByteJson, error) {
+	geoJSON, err := geometryToGeoJSONBytes(payload)
+	if err != nil {
+		return bytejson.ByteJson{}, err
+	}
+	value, err := types.ParseSliceToByteJson(geoJSON)
+	if err != nil {
+		return bytejson.ByteJson{}, err
+	}
+	if value.Type != bytejson.TpCodeObject {
+		return bytejson.ByteJson{}, moerr.NewInvalidInputf(ctx, "geometry GeoJSON must be an object")
+	}
+	return value, nil
+}
+
 type opBuiltInJsonObject struct{}
 
 func newOpBuiltInJsonObject() *opBuiltInJsonObject {
@@ -2376,7 +2192,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			}
 			// key may be any type, convert to string representation.
-			keyAny, err := arrayOp.convertToAny(proc, params[i], j)
+			keyAny, err := op.convertKeyToAny(proc, arrayOp, params[i], j)
 			if err != nil {
 				return err
 			}
@@ -2435,6 +2251,36 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		}
 	}
 	return nil
+}
+
+// convertKeyToAny retains the existing JSON_OBJECT member-name conversion for
+// SQL types whose value representation intentionally changes in constructors.
+func (op *opBuiltInJsonObject) convertKeyToAny(
+	proc *process.Process,
+	arrayOp *opBuiltInJsonArray,
+	v *vector.Vector,
+	row int,
+) (any, error) {
+	typ := v.GetType()
+	switch typ.Oid {
+	case types.T_time:
+		return newTypedByteJson(bytejson.TpCodeTime,
+			vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(typ.Scale)), nil
+	case types.T_datetime:
+		return newTypedByteJson(bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(typ.Scale)), nil
+	case types.T_timestamp:
+		return newTypedByteJson(bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), typ.Scale)), nil
+	case types.T_year:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), 10), nil
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
+	case types.T_geometry:
+		return string(v.GetBytesAt(row)), nil
+	default:
+		return arrayOp.convertToAny(proc, v, row)
+	}
 }
 
 type opBuiltInJsonType struct{}
