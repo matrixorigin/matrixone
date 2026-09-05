@@ -553,7 +553,52 @@ is no device arena to bound. Switching flavours also requires clearing
 `thirdparties/_jemalloc_build` and running `make clean` in `cgo/`, or the stale
 objects from the other flavour fail the link.
 
-### 10.2 Real-GPU run
+### 10.2 Index build time is not affected
+
+The branch touches load and search, not build, and a paired run on the same box
+confirms it. Fresh `mo-data`, the same 1M wiki_all f32 CSVs, the same
+`cagra_1M_local_f32` cell, the CN's fileservice memory cache at 8 GB:
+
+| run | this branch | `main` (362b1fba26) |
+|---|---|---|
+| import 1M rows | 132 s | 244 s |
+| CREATE INDEX, straight after import | 308 s | 462 s |
+| CREATE INDEX, cluster settled | 195 s | 361 s |
+
+The branch is *faster* in both pairings, so there is nothing here to attribute to
+it. What actually drives the number is visible in the build's own log line:
+
+```
+CAGRA create: 6112 MB host available ... -> 1556093 rows fit   -> 1 sub-index   195 s
+CAGRA create: 1710 MB host available ... ->  435520 rows fit   -> 3 sub-indexes 308 s
+CAGRA create: 3475 MB host available ... ->  884933 rows fit   -> 2 sub-indexes 361 s (main)
+                                          ->  307047 rows fit  -> 4 sub-indexes 462 s (main)
+```
+
+CAGRA sizes its sub-indexes from **free host RAM sampled when the build starts**,
+so a run that begins under memory pressure rotates into more of them and pays for
+each one's build, save and tar. That is the same mechanism on both branches, and
+it is why a single build sample on this box is worth little.
+
+A phase breakdown of the 195 s single-sub-index run, from the service log:
+
+| phase | time |
+|---|---|
+| plan and start | 15 s |
+| read source + GPU build | 76 s |
+| `gpu_cagra_save_dir` | 7 s |
+| tar the 3.3 GB `index.bin` | 22 s |
+| 27 SQLs recording the artifact | 68 s |
+
+Over half the wall clock is persisting the index, none of it CAGRA compute. The
+3.3 GB is inherent to an f32 cell: 1M x 768 x 4 bytes of dataset plus the graph.
+
+A Go CPU profile across the first build shows the other reason a post-import
+sample reads high: TAE's merge of the freshly imported table runs concurrently,
+`mergesort.(*merger[string]).merge` taking 25.8% of samples against
+`libcuvs.so`'s 21.6%.
+
+### 10.3 Real-GPU run
 
 Recorded here because these branches are GPU-only: green CPU CI never executes
 them, and the design names CAGRA/IVF-PQ snapshot, admission order and allocation
