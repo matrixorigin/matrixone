@@ -15,10 +15,12 @@
 package iscp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -36,11 +38,13 @@ import (
 )
 
 func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
-	jsonBytes, err := json.Marshal(jobSpec)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(jobSpec); err != nil {
 		return "", err
 	}
-	return string(jsonBytes), nil
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 func UnmarshalJobSpec(jsonByte []byte) (*JobSpec, error) {
@@ -134,6 +138,151 @@ func UnregisterJobsByDBName(
 		DefaultRetryInterval,
 		DefaultRetryDuration,
 	)
+}
+
+// MarkJobsErrorBySourceTable preserves materialized results when any source
+// relation is dropped. Jobs may be anchored on the dropped source or on a
+// different source, so dependency matching must use the complete job spec.
+func MarkJobsErrorBySourceTable(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	sourceTableID uint64,
+	errMsg string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND drop_at IS NULL", accountID)
+	result, err := ExecWithResult(ctx, query, cnUUID, txn)
+	if err != nil {
+		// Generic table DROP/RENAME paths run in deployments and tests where
+		// the optional ISCP catalog has not been bootstrapped. No MV job can
+		// exist without mo_iscp_log, so dependency invalidation is a no-op in
+		// that state. Other catalog and executor failures must still abort DDL.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil
+		}
+		return err
+	}
+	defer result.Close()
+	type jobRef struct {
+		tableID, jobID uint64
+		name           string
+	}
+	refs := make([]jobRef, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		names := executor.GetStringRows(cols[1])
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[2])
+		for i := 0; i < rows; i++ {
+			spec, decodeErr := UnmarshalJobSpec([]byte(cols[3].GetStringAt(i)))
+			if decodeErr != nil {
+				continue
+			}
+			if materializedViewJobReferencesSource(spec, sourceTableID) {
+				refs = append(refs, jobRef{tableID: tableIDs[i], jobID: jobIDs[i], name: names[i]})
+			}
+		}
+		return true
+	})
+	status, err := json.Marshal(&JobStatus{ErrorCode: 1, ErrorMsg: errMsg})
+	if err != nil {
+		return err
+	}
+	quotedStatus := strings.NewReplacer(`\`, `\\`, "'", "''").Replace(string(status))
+	for _, ref := range refs {
+		quotedName := strings.NewReplacer(`\`, `\\`, "'", "''").Replace(ref.name)
+		update := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET job_state = %d, job_status = '%s' WHERE account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d AND drop_at IS NULL",
+			ISCPJobState_Error, quotedStatus, accountID, ref.tableID, quotedName, ref.jobID)
+		updated, updateErr := ExecWithResult(ctx, update, cnUUID, txn)
+		if updateErr != nil {
+			return updateErr
+		}
+		updated.Close()
+	}
+	return nil
+}
+
+func materializedViewJobReferencesSource(spec *JobSpec, sourceTableID uint64) bool {
+	if spec == nil || spec.ConsumerType != int8(ConsumerType_MaterializedView) {
+		return false
+	}
+	for _, source := range spec.ConsumerInfo.SourceTableInfos() {
+		if source.TableID == sourceTableID {
+			return true
+		}
+	}
+	return false
+}
+
+func materializedViewJobMatchesTarget(spec *JobSpec, dbName, tableName string) bool {
+	return spec != nil &&
+		spec.ConsumerType == int8(ConsumerType_MaterializedView) &&
+		strings.EqualFold(spec.ConsumerInfo.DBName, dbName) &&
+		strings.EqualFold(spec.ConsumerInfo.TableName, tableName)
+}
+
+// UnregisterMaterializedView drops every active generation of one MV without
+// resolving its source table. Job names are not unique because database/table
+// underscores can collide, so the target identity comes from the job spec.
+func UnregisterMaterializedView(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+	tableName string,
+) error {
+	return retry(ctx, func() error {
+		return unregisterMaterializedView(ctx, cnUUID, txn, dbName, tableName)
+	}, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
+}
+
+func unregisterMaterializedView(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+	tableName string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND drop_at IS NULL", accountID)
+	result, err := ExecWithResult(ctxWithSysAccount, query, cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	type jobRef struct {
+		tableID, jobID uint64
+		name           string
+	}
+	refs := make([]jobRef, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		names := executor.GetStringRows(cols[1])
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[2])
+		for i := 0; i < rows; i++ {
+			spec, decodeErr := UnmarshalJobSpec([]byte(cols[3].GetStringAt(i)))
+			if decodeErr == nil && materializedViewJobMatchesTarget(spec, dbName, tableName) {
+				refs = append(refs, jobRef{tableID: tableIDs[i], jobID: jobIDs[i], name: names[i]})
+			}
+		}
+		return true
+	})
+	for _, ref := range refs {
+		update := cdc.CDCSQLBuilder.ISCPLogUpdateDropAtSQL(accountID, ref.tableID, ref.name, ref.jobID)
+		updated, updateErr := ExecWithResult(ctxWithSysAccount, update, cnUUID, txn)
+		if updateErr != nil {
+			return updateErr
+		}
+		updated.Close()
+	}
+	return nil
 }
 
 func unregisterJobsByDBName(
@@ -271,6 +420,38 @@ func registerJob(
 		DBName:    jobID.DBName,
 		TableName: jobID.TableName,
 	}
+	// Resolve every source in the same transaction as the anchor. The anchor
+	// remains SrcTable for compatibility with existing log readers.
+	sources := jobSpec.ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		sources = []TableInfo{jobSpec.SrcTable}
+	}
+	if len(sources) > MaxSourceTables {
+		return false, moerr.NewInternalErrorNoCtxf("too many ISCP source tables: %d", len(sources))
+	}
+	resolved := make([]TableInfo, 0, len(sources))
+	seenSources := make(map[[2]uint64]struct{}, len(sources))
+	for _, source := range sources {
+		if source.TableID == 0 {
+			source.TableID, source.DBID, err = getTableID(
+				ctxWithSysAccount, cnUUID, txn, tenantId, source.DBName, source.TableName)
+			if err != nil {
+				return
+			}
+		}
+		key := [2]uint64{source.DBID, source.TableID}
+		if _, exists := seenSources[key]; exists {
+			continue
+		}
+		seenSources[key] = struct{}{}
+		resolved = append(resolved, source)
+	}
+	if len(resolved) == 0 {
+		resolved = []TableInfo{jobSpec.SrcTable}
+	}
+	jobSpec.SrcTables = resolved
+	jobSpec.SrcTable = resolved[0]
+	tableID = jobSpec.SrcTable.TableID
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,

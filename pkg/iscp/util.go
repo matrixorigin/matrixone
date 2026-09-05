@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
@@ -41,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -334,32 +337,65 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Datetime).String2(typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Time).String2(typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Timestamp).String2(time.UTC, typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal64:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal64:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert decimal64 value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal128:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert decimal128 value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Uuid:
+			value = v.String()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "convert uuid value of type %T into SQL", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -528,24 +564,19 @@ var CheckLeaseWithRetry = func(
 func checkLease(
 	ctx context.Context,
 	cnUUID string,
-	txnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
+	_ engine.Engine,
+	_ client.TxnClient,
 ) (ok bool, err error) {
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	txn, err := getTxn(ctxWithTimeout, txnEngine, cnTxnClient, "iscp check lease")
-	if err != nil {
-		return
-	}
-	defer func() {
-		err = finishISCPTransaction(ctxWithTimeout, txn, err)
-		if err != nil {
-			ok = false
-		}
-	}()
 
 	var runner string
-	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
+	// Lease validation is a metadata read only.  Do not create an engine
+	// transaction here: initializing one can wait on catalog/logtail state and
+	// block ISCP admission even though the task-runner row is readable.  The
+	// SQL executor creates the appropriate short-lived read transaction when
+	// no txn is supplied.
+	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, nil)
 	if err != nil {
 		return
 	}
@@ -569,8 +600,35 @@ func GetTaskRunner(
 	cnUUID string,
 	txn client.TxnOperator,
 ) (string, error) {
+	// The CN task service already owns the daemon-task lease.  Query it through
+	// its storage abstraction first so lease checks do not create an unrelated
+	// internal SQL transaction while the CN is processing a large snapshot.
+	if rt := moruntime.ServiceRuntime(cnUUID); rt != nil {
+		if v, ok := rt.GetGlobalVariables("task-service"); ok {
+			if ts, ok := v.(taskservice.TaskService); ok && ts != nil {
+				daemonTasks, err := ts.QueryDaemonTask(
+					ctx,
+					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_ISCPExecutor),
+				)
+				if err != nil {
+					return "", err
+				}
+				if len(daemonTasks) == 0 {
+					return "", nil
+				}
+				if len(daemonTasks) != 1 {
+					return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected ISCP daemon task count: %d", len(daemonTasks)))
+				}
+				return daemonTasks[0].TaskRunner, nil
+			}
+		}
+	}
+
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	// This is a short metadata lookup.  A long timeout here blocks the whole
+	// ISCP scheduler and prevents an initial snapshot from being retried after
+	// a transient task-service/catalog stall.
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, 30*time.Second, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
 	defer cancel()
 
 	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`

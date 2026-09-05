@@ -60,6 +60,59 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestCreateMaterializedView(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create materialized view if not exists mv as select k, count(*) from src group by k", 1)
+	require.NoError(t, err)
+	view, ok := stmt.(*tree.CreateView)
+	require.True(t, ok)
+	require.True(t, view.Materialized)
+	require.True(t, view.IfNotExists)
+	require.Equal(t,
+		"create materialized view if not exists mv as select k, count(*) from src group by k",
+		tree.String(view, dialect.MYSQL))
+}
+
+func TestMaterializedViewRefreshSyntax(t *testing.T) {
+	tests := []struct {
+		sql    string
+		method tree.MaterializedViewRefreshMethod
+		timing tree.MaterializedViewRefreshTiming
+		format string
+	}{
+		{"create materialized view mv refresh fast on change as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
+		{"create materialized view mv refresh incremental as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
+		{"create materialized view mv refresh full on demand as select count(*) from src", tree.MaterializedViewRefreshComplete, tree.MaterializedViewRefreshOnDemand, "create materialized view mv refresh complete on demand as select count(*) from src"},
+		{"create materialized view mv refresh auto as select count(*) from src", tree.MaterializedViewRefreshForce, tree.MaterializedViewRefreshOnChange, "create materialized view mv as select count(*) from src"},
+	}
+	for _, test := range tests {
+		stmt, err := ParseOne(context.Background(), test.sql, 1)
+		require.NoError(t, err, test.sql)
+		view := stmt.(*tree.CreateView)
+		require.Equal(t, test.method, view.RefreshMethod)
+		require.Equal(t, test.timing, view.RefreshTiming)
+		require.Equal(t, test.format, tree.String(view, dialect.MYSQL))
+	}
+
+	stmt, err := ParseOne(context.Background(), "refresh materialized view db.mv", 1)
+	require.NoError(t, err)
+	refresh := stmt.(*tree.RefreshMaterializedView)
+	require.Equal(t, "refresh materialized view db.mv", tree.String(refresh, dialect.MYSQL))
+	require.Equal(t, (&tree.CreateView{}).StmtKind(), refresh.StmtKind())
+
+	_, err = ParseOne(context.Background(), "create materialized view mv refresh fast on commit as select count(*) from src", 1)
+	require.Error(t, err)
+}
+
+func TestDropMaterializedView(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "drop materialized view if exists mv", 1)
+	require.NoError(t, err)
+	view, ok := stmt.(*tree.DropView)
+	require.True(t, ok)
+	require.True(t, view.Materialized)
+	require.Equal(t, "drop materialized view if exists mv", tree.String(view, dialect.MYSQL))
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)

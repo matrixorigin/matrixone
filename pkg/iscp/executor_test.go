@@ -204,6 +204,38 @@ func TestNewJobEntryRestoresPersistedLSN(t *testing.T) {
 	require.Equal(t, uint64(5), job.currentLSN)
 }
 
+func TestNewJobWithInFlightPersistedStateCanBeScheduled(t *testing.T) {
+	exec := &ISCPTaskExecutor{}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"job",
+		&JobSpec{},
+		&JobStatus{LSN: 1},
+		1,
+		types.TS{},
+		ISCPJobState_Running,
+		0,
+	)
+
+	job := table.jobs[JobKey{JobName: "job", JobID: 1}]
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"job",
+		&JobSpec{},
+		&JobStatus{LSN: 1},
+		1,
+		types.TS{},
+		ISCPJobState_Running,
+		0,
+	)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 1)
+	require.True(t, iters[0].fromTS.IsEmpty())
+}
+
 func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
@@ -267,6 +299,42 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	require.Len(t, iters, 1)
 	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
 	require.Equal(t, []int8{JobStage_Running, JobStage_Running}, iters[0].stages)
+}
+
+func TestTableEntryDoesNotShareIterationBeyondSourceLimit(t *testing.T) {
+	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
+	firstSources := make([]TableInfo, MaxSourceTables)
+	for i := range firstSources {
+		firstSources[i] = TableInfo{DBID: 1, TableID: uint64(i + 1)}
+	}
+	secondSources := []TableInfo{
+		firstSources[MaxSourceTables-1],
+		{DBID: 1, TableID: MaxSourceTables + 1},
+	}
+	watermark := types.BuildTS(10, 0)
+	specs := []*JobSpec{
+		{
+			ConsumerInfo: ConsumerInfo{SrcTables: firstSources},
+			TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+		},
+		{
+			ConsumerInfo: ConsumerInfo{SrcTables: secondSources},
+			TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+		},
+	}
+	for i, spec := range specs {
+		name := fmt.Sprintf("mv_%d", i)
+		table.jobs[JobKey{JobName: name, JobID: uint64(i + 1)}] = NewJobEntry(
+			table, name, spec, uint64(i+1), watermark, ISCPJobState_Completed, 0,
+		)
+	}
+
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		require.Len(t, iter.jobNames, 1)
+		require.LessOrEqual(t, len(iter.sourceTables), MaxSourceTables)
+	}
 }
 
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
@@ -370,6 +438,22 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
 }
 
+func TestPrepareIterationRangeRejectsRegressedUpperBound(t *testing.T) {
+	from := types.BuildTS(20, 1)
+	iter := &IterationContext{fromTS: from, toTS: types.MaxTs()}
+	regressed := from.Prev()
+
+	require.False(t, prepareIterationRange(iter, regressed))
+	require.True(t, iter.toTS.EQ(&regressed))
+}
+
+func TestPrepareIterationRangeAcceptsCaughtUpUpperBound(t *testing.T) {
+	from := types.BuildTS(20, 1)
+	iter := &IterationContext{fromTS: from, toTS: types.MaxTs()}
+
+	require.True(t, prepareIterationRange(iter, from))
+	require.True(t, iter.toTS.EQ(&from))
+}
 func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
 	jobKey := JobKey{JobName: "job", JobID: 1}

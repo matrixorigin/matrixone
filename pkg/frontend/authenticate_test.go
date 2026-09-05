@@ -873,6 +873,7 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.ShowCreateView{}},
 		{stmt: &tree.CreateTable{}},
 		{stmt: &tree.CreateView{}},
+		{stmt: &tree.RefreshMaterializedView{}},
 		{stmt: &tree.DropTable{}},
 		{stmt: &tree.DropView{}},
 		{stmt: &tree.Select{}},

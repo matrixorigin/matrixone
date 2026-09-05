@@ -70,6 +70,16 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
+		// Pending/Running is only durable while an iteration is being
+		// admitted or executed.  If this is the first time this job is seen
+		// by the current executor generation, there cannot be an in-flight
+		// worker for it.  Treat the state as completed so the initial
+		// snapshot (or the interrupted iteration) can be scheduled again.
+		// Without this, a transient task-runner lookup failure can leave a
+		// newly registered job permanently invisible to getCandidate().
+		if state == ISCPJobState_Pending || state == ISCPJobState_Running {
+			state = ISCPJobState_Completed
+		}
 		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
 		return
@@ -108,6 +118,36 @@ func (t *TableEntry) IsEmpty() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.jobs) == 0
+}
+
+// sourceTableInfos returns the union of source relations used by active jobs
+// on this anchor. The anchor itself is retained for legacy jobs.
+func (t *TableEntry) sourceTableInfos() []TableInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	seen := make(map[[2]uint64]struct{})
+	result := make([]TableInfo, 0)
+	for _, job := range t.jobs {
+		if job.dropAt != 0 {
+			continue
+		}
+		sources := job.sourceTables
+		if len(sources) == 0 {
+			sources = []TableInfo{{DBID: t.dbID, TableID: t.tableID, DBName: t.dbName, TableName: t.tableName}}
+		}
+		for _, source := range sources {
+			key := [2]uint64{source.DBID, source.TableID}
+			if source.TableID == 0 {
+				key[0], key[1] = 0, uint64(len(result)+1)
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			result = append(result, source)
+		}
+	}
+	return result
 }
 
 func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
@@ -162,14 +202,15 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
 			iterations = append(iterations, &IterationContext{
-				tableID:   t.tableID,
-				accountID: t.accountID,
-				jobNames:  []string{sinker.jobName},
-				jobIDs:    []uint64{sinker.jobID},
-				lsn:       []uint64{sinker.currentLSN + 1},
-				stages:    []int8{sinker.stage},
-				fromTS:    types.TS{},
-				toTS:      types.TS{},
+				tableID:      t.tableID,
+				accountID:    t.accountID,
+				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				jobNames:     []string{sinker.jobName},
+				jobIDs:       []uint64{sinker.jobID},
+				lsn:          []uint64{sinker.currentLSN + 1},
+				stages:       []int8{sinker.stage},
+				fromTS:       types.TS{},
+				toTS:         types.TS{},
 			})
 			continue
 		}
@@ -186,9 +227,25 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if share {
 			for _, iter := range shareableIterations {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
+					if sourceTablesUnionSize(iter.sourceTables, sinker.sourceTables) > MaxSourceTables {
+						// Keep the jobs in separate iterations.  Sharing an iteration
+						// with an oversized source union would make collection fail
+						// before any stream is opened, permanently stalling both jobs.
+						continue
+					}
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+					seen := make(map[[2]uint64]struct{}, len(iter.sourceTables))
+					for _, source := range iter.sourceTables {
+						seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+					}
+					for _, source := range sinker.sourceTables {
+						key := [2]uint64{source.DBID, source.TableID}
+						if _, exists := seen[key]; !exists {
+							iter.sourceTables = append(iter.sourceTables, source)
+						}
+					}
 					iter.stages = append(iter.stages, sinker.stage)
 					foundIteration = true
 					break
@@ -197,14 +254,15 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 		if !foundIteration {
 			iter := &IterationContext{
-				tableID:   t.tableID,
-				accountID: t.accountID,
-				jobNames:  []string{sinker.jobName},
-				jobIDs:    []uint64{sinker.jobID},
-				lsn:       []uint64{sinker.currentLSN + 1},
-				stages:    []int8{sinker.stage},
-				fromTS:    from,
-				toTS:      to,
+				tableID:      t.tableID,
+				accountID:    t.accountID,
+				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				jobNames:     []string{sinker.jobName},
+				jobIDs:       []uint64{sinker.jobID},
+				lsn:          []uint64{sinker.currentLSN + 1},
+				stages:       []int8{sinker.stage},
+				fromTS:       from,
+				toTS:         to,
 			}
 			iterations = append(iterations, iter)
 			if sinker.stage != JobStage_Init {
@@ -216,6 +274,17 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 	}
 	return iterations, minFromTS
+}
+
+func sourceTablesUnionSize(left, right []TableInfo) int {
+	seen := make(map[[2]uint64]struct{}, len(left)+len(right))
+	for _, source := range left {
+		seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+	}
+	for _, source := range right {
+		seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+	}
+	return len(seen)
 }
 
 // markIterationPending records ownership only after a worker accepts the

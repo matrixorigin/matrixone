@@ -58,7 +58,8 @@ var running atomic.Bool
 const (
 	DefaultGCInterval             = time.Hour
 	DefaultGCTTL                  = time.Hour
-	DefaultSyncTaskInterval       = time.Second * 10
+	DefaultSyncTaskInterval       = time.Second
+	DefaultChangePollInterval     = time.Second
 	DefaultFlushWatermarkInterval = time.Hour
 	DefaultFlushWatermarkTTL      = time.Hour
 	// Index jobs persist their watermark far more eagerly than the general job
@@ -78,6 +79,7 @@ type ISCPExecutorOption struct {
 	GCInterval             time.Duration
 	GCTTL                  time.Duration
 	SyncTaskInterval       time.Duration
+	ChangePollInterval     time.Duration
 	FlushWatermarkInterval time.Duration
 	FlushWatermarkTTL      time.Duration
 	// IndexFlushWatermarkInterval is the flush threshold for ConsumerType_IndexSync
@@ -151,6 +153,9 @@ func fillDefaultOption(option *ISCPExecutorOption) *ISCPExecutorOption {
 	if option.SyncTaskInterval == 0 {
 		option.SyncTaskInterval = DefaultSyncTaskInterval
 	}
+	if option.ChangePollInterval == 0 {
+		option.ChangePollInterval = min(DefaultChangePollInterval, option.SyncTaskInterval)
+	}
 	if option.FlushWatermarkInterval == 0 {
 		option.FlushWatermarkInterval = DefaultFlushWatermarkInterval
 	}
@@ -186,6 +191,7 @@ func NewISCPTaskExecutor(
 			zap.Any("gcInterval", option.GCInterval),
 			zap.Any("gcttl", option.GCTTL),
 			zap.Any("syncTaskInterval", option.SyncTaskInterval),
+			zap.Any("changePollInterval", option.ChangePollInterval),
 			zap.Any("flushWatermarkInterval", option.FlushWatermarkInterval),
 			zap.Any("indexFlushWatermarkInterval", option.IndexFlushWatermarkInterval),
 			zap.Any("retryTimes", option.RetryTimes),
@@ -511,6 +517,8 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	defer syncTaskTrigger.Stop()
+	changePollTrigger := time.NewTicker(exec.option.ChangePollInterval)
+	defer changePollTrigger.Stop()
 	// The ticker serves every job class, so it must run at the SHORTEST threshold
 	// any class uses; a slower tick silently caps that class's freshness.
 	flushWatermarkTrigger := time.NewTicker(min(
@@ -542,90 +550,9 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 				)
 				continue
 			}
-			// get candidate iterations and tables
-			iterations, candidateTables, fromTSs := exec.getCandidateTables()
-			if len(iterations) == 0 {
-				continue
-			}
-			// check if there are any dirty tables
-			tables, toTS, minTS, err := exec.getDirtyTables(ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
-			// injection is for ut
-			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
-				err = moerr.NewInternalErrorNoCtx(msg)
-				objectio.WaitForISCPExecutorFault(ctx, msg)
-			}
-			var getDirtyTablesFailed bool
-			if err != nil {
-				logutil.Error(
-					"ISCP-Task get dirty tables failed",
-					zap.Error(err),
-				)
-				getDirtyTablesFailed = true
-			}
-			// run iterations with dirty table
-			// update watermark for clean tables
-			for _, iter := range iterations {
-				maxTS := types.MaxTs()
-				if iter.toTS.EQ(&maxTS) {
-					iter.toTS = toTS
-				}
-				// if the interval is too long, truncate it to the max change interval
-				if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
-					iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
-				}
-				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
-				ok := shouldProcessIteration(iter, getDirtyTablesFailed, minTS, tables)
-				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
-				if !tableExists {
-					logutil.Error(
-						"ISCP-Task get table failed",
-						zap.Uint32("accountID", iter.accountID),
-						zap.Uint64("tableID", iter.tableID),
-					)
-					continue
-				}
-				if ok {
-					ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
-					if err != nil {
-						logutil.Error("ISCP-Task check lease failed", zap.Error(err))
-						continue
-					}
-					if !ok {
-						go exec.Cancel()
-						break
-					}
-					err = worker.Submit(iter)
-					if err != nil {
-						logutil.Error("ISCP-Task submit iteration failed", zap.Error(err))
-						continue
-					}
-					// Admission is the linearization point. The worker now owns the
-					// iteration, so hide it from the next candidate scan.
-					if err = table.markIterationPending(iter); err != nil {
-						logutil.Error("ISCP-Task mark admitted iteration failed", zap.Error(err))
-						// The accepted iteration cannot be retracted safely. Cancel this
-						// generation; the next Start repairs and rebuilds its state.
-						go exec.Cancel()
-						return
-					}
-					if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterSubmit) {
-						logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelAfterSubmit)
-					}
-					if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-submit" {
-						logutil.Infof("ISCP-Task injected hook %s", msg)
-					}
-				} else {
-					if updateErr := table.UpdateWatermark(iter); updateErr != nil {
-						logutil.Error(
-							"ISCP-Task update watermark failed",
-							zap.Uint32("accountID", iter.accountID),
-							zap.Uint64("tableID", iter.tableID),
-							zap.Strings("jobNames", iter.jobNames),
-							zap.Error(updateErr),
-						)
-					}
-				}
-			}
+			exec.scheduleIterations(ctx, worker)
+		case <-changePollTrigger.C:
+			exec.scheduleIterations(ctx, worker)
 		case <-flushWatermarkTrigger.C:
 			err := exec.FlushWatermarkForAllTables(exec.option.FlushWatermarkTTL)
 			if err != nil {
@@ -645,6 +572,98 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
 	}
+}
+
+func (exec *ISCPTaskExecutor) scheduleIterations(ctx context.Context, worker Worker) {
+	iterations, candidateTables, fromTSs := exec.getCandidateTables()
+	if len(iterations) == 0 {
+		return
+	}
+	tables, toTS, minTS, err := exec.getDirtyTables(ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+		objectio.WaitForISCPExecutorFault(ctx, msg)
+	}
+	getDirtyTablesFailed := err != nil
+	if err != nil {
+		logutil.Error("ISCP-Task get dirty tables failed", zap.Error(err))
+	}
+	for _, iter := range iterations {
+		if !prepareIterationRange(iter, toTS) {
+			// GetChangedTableList obtains its upper bound from a fresh transaction.
+			// That snapshot can temporarily lag the watermark persisted by the
+			// preceding iteration. Do not admit an inverted range: CollectChanges
+			// rejects it, and admission would leave the job pending until replay.
+			continue
+		}
+		var dirty bool
+		if iterationNeedsInit(iter) || iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
+			dirty = true
+		} else if len(iter.sourceTables) == 0 {
+			_, dirty = tables[iter.tableID]
+		} else {
+			for _, source := range iter.sourceTables {
+				if _, changed := tables[source.TableID]; changed {
+					dirty = true
+					break
+				}
+			}
+		}
+		table, tableExists := exec.getTable(iter.accountID, iter.tableID)
+		if !tableExists {
+			logutil.Error("ISCP-Task get table failed", zap.Uint32("accountID", iter.accountID), zap.Uint64("tableID", iter.tableID))
+			continue
+		}
+		if !dirty {
+			table.UpdateWatermark(iter)
+			continue
+		}
+		leaseOK, leaseErr := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+		if leaseErr != nil {
+			logutil.Error("ISCP-Task check lease failed", zap.Error(leaseErr))
+			continue
+		}
+		if !leaseOK {
+			go exec.Cancel()
+			return
+		}
+		if err = worker.Submit(iter); err != nil {
+			logutil.Error("ISCP-Task submit iteration failed", zap.Error(err))
+			continue
+		}
+		// Admission is the linearization point. The worker now owns the
+		// iteration, so hide it from the next candidate scan.
+		if err = table.markIterationPending(iter); err != nil {
+			logutil.Error("ISCP-Task mark admitted iteration failed", zap.Error(err))
+			// The accepted iteration cannot be retracted safely. Cancel this
+			// generation; the next Start repairs and rebuilds its state.
+			go exec.Cancel()
+			return
+		}
+		if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterSubmit) {
+			logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelAfterSubmit)
+		}
+		if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-submit" {
+			logutil.Infof("ISCP-Task injected hook %s", msg)
+		}
+	}
+}
+
+// prepareIterationRange replaces an open-ended candidate with the latest safe
+// upper bound and enforces the maximum chunk size. A false return means that
+// the upper bound has not caught up with the job watermark yet.
+func prepareIterationRange(iter *IterationContext, toTS types.TS) bool {
+	maxTS := types.MaxTs()
+	if iter.toTS.EQ(&maxTS) {
+		iter.toTS = toTS
+	}
+	if iter.toTS.LT(&iter.fromTS) {
+		return false
+	}
+	if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+		iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+	}
+	return true
 }
 
 func shouldReplayISCPLog(err error) bool {
@@ -1243,11 +1262,26 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	dbs := make([]uint64, 0, len(candidateTables))
 	tbls := make([]uint64, 0, len(candidateTables))
 	fromTimestamps := make([]timestamp.Timestamp, 0, len(candidateTables))
+	seen := make(map[[3]uint64]int)
 	for i, t := range candidateTables {
-		accs = append(accs, uint64(t.accountID))
-		dbs = append(dbs, t.dbID)
-		tbls = append(tbls, t.tableID)
-		fromTimestamps = append(fromTimestamps, fromTSs[i].ToTimestamp())
+		sources := t.sourceTableInfos()
+		if len(sources) == 0 {
+			sources = []TableInfo{{DBID: t.dbID, TableID: t.tableID}}
+		}
+		for _, source := range sources {
+			key := [3]uint64{uint64(t.accountID), source.DBID, source.TableID}
+			if at, ok := seen[key]; ok {
+				if fromTSs[i].ToTimestamp().Less(fromTimestamps[at]) {
+					fromTimestamps[at] = fromTSs[i].ToTimestamp()
+				}
+				continue
+			}
+			seen[key] = len(accs)
+			accs = append(accs, uint64(t.accountID))
+			dbs = append(dbs, source.DBID)
+			tbls = append(tbls, source.TableID)
+			fromTimestamps = append(fromTimestamps, fromTSs[i].ToTimestamp())
+		}
 	}
 	// tmpTS := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
 	tables = make(map[uint64]struct{})

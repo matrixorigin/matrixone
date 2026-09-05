@@ -20,10 +20,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -95,6 +98,57 @@ func (c drainingIterationConsumer) Consume(ctx context.Context, data DataRetriev
 	}
 }
 
+type boundaryOnlyIterationConsumer struct {
+	gotBoundary bool
+}
+
+type batchAttrsIterationConsumer struct {
+	attrs []string
+}
+
+type sourceIDsIterationConsumer struct {
+	sourceIDs chan uint64
+}
+
+func (c *sourceIDsIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	for {
+		d := data.Next()
+		if d.SourceTableID != 0 {
+			c.sourceIDs <- d.SourceTableID
+		}
+		done := d.noMoreData
+		err := d.err
+		d.Done()
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
+func (c *batchAttrsIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	for {
+		d := data.Next()
+		if d.insertBatch != nil && len(d.insertBatch.Batches) > 0 {
+			c.attrs = append([]string(nil), d.insertBatch.Batches[0].Attrs...)
+		}
+		done := d.noMoreData
+		err := d.err
+		d.Done()
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
+func (c *boundaryOnlyIterationConsumer) NeedsChangePayload(int8) bool { return false }
+
+func (c *boundaryOnlyIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	d := data.Next()
+	c.gotBoundary = d.noMoreData && d.insertBatch == nil && d.deleteBatch == nil && d.err == nil
+	d.Done()
+	return nil
+}
+
 func testIterationContext(jobNames ...string) *IterationContext {
 	if len(jobNames) == 0 {
 		jobNames = []string{"job"}
@@ -112,6 +166,82 @@ func testIterationContext(jobNames ...string) *IterationContext {
 		jobIDs:    jobIDs,
 		lsn:       lsns,
 	}
+}
+
+func TestSharedIterationRoutesEachSourceOnlyToOwningJob(t *testing.T) {
+	jobSpecs := []*JobSpec{
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 20}}}},
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 30}}}},
+	}
+	require.True(t, consumerAcceptsSource(jobSpecs, 0, 10))
+	require.True(t, consumerAcceptsSource(jobSpecs, 0, 20))
+	require.False(t, consumerAcceptsSource(jobSpecs, 0, 30))
+	require.True(t, consumerAcceptsSource(jobSpecs, 1, 10))
+	require.False(t, consumerAcceptsSource(jobSpecs, 1, 20))
+	require.True(t, consumerAcceptsSource(jobSpecs, 1, 30))
+}
+
+func TestSharedIterationFanoutRoutesOverlappingSourceSets(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	makeChanges := func(sourceID uint64) *iterationChangesHandle {
+		sent := false
+		return &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+			if sent {
+				return nil, nil, engine.ChangesHandle_Tail_done, nil
+			}
+			sent = true
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+			var block types.Blockid
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(int64(sourceID), 0), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.NewRowid(&block, uint32(sourceID)), false, mp))
+			bat.SetRowCount(1)
+			return bat, nil, engine.ChangesHandle_Tail_done, nil
+		}}
+	}
+
+	iterCtx := &IterationContext{
+		accountID: 1,
+		tableID:   2,
+		jobNames:  []string{"mv_ab", "mv_ac"},
+		jobIDs:    []uint64{1, 2},
+		lsn:       []uint64{1, 2},
+	}
+	jobSpecs := []*JobSpec{
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 20}}}},
+		{ConsumerInfo: ConsumerInfo{SrcTables: []TableInfo{{TableID: 10}, {TableID: 30}}}},
+	}
+	consumers := []*sourceIDsIterationConsumer{
+		{sourceIDs: make(chan uint64, 4)},
+		{sourceIDs: make(chan uint64, 4)},
+	}
+	streams := []iterationSourceChanges{
+		{tableID: 10, changes: makeChanges(10)},
+		{tableID: 20, changes: makeChanges(20)},
+		{tableID: 30, changes: makeChanges(30)},
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	runISCPTaskIterationConsumers(
+		context.Background(), nil, iterCtx, streams,
+		[]Consumer{consumers[0], consumers[1]},
+		[]*JobStatus{{}, {}}, nil, ISCPDataType_Tail,
+		packer, mp, 0, 1, 0, 1, false, jobSpecs,
+	)
+
+	var got0, got1 []uint64
+	for len(consumers[0].sourceIDs) > 0 {
+		got0 = append(got0, <-consumers[0].sourceIDs)
+	}
+	for len(consumers[1].sourceIDs) > 0 {
+		got1 = append(got1, <-consumers[1].sourceIDs)
+	}
+	require.ElementsMatch(t, []uint64{10, 20}, got0)
+	require.ElementsMatch(t, []uint64{10, 30}, got1)
 }
 
 func runIterationConsumersForTest(
@@ -150,6 +280,7 @@ func runIterationConsumersWithStatusesForTest(
 			changes,
 			consumers,
 			statuses,
+			nil,
 			typ,
 			packer,
 			mp,
@@ -157,9 +288,109 @@ func runIterationConsumersWithStatusesForTest(
 			0,
 			1,
 			0,
+			false,
+			nil,
 		)
 	}()
 	return done, statuses
+}
+
+func TestRunIterationSkipsChangesForBoundaryOnlyConsumers(t *testing.T) {
+	nextCalled := false
+	changes := &iterationChangesHandle{next: func(
+		context.Context,
+		*mpool.MPool,
+	) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		nextCalled = true
+		return nil, nil, engine.ChangesHandle_Snapshot, nil
+	}}
+	consumer := &boundaryOnlyIterationConsumer{}
+	mp := mpool.MustNewZero()
+	done := runIterationConsumersForTest(
+		context.Background(),
+		testIterationContext(),
+		changes,
+		[]Consumer{consumer},
+		ISCPDataType_Snapshot,
+		mp,
+	)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("boundary-only iteration did not finish")
+	}
+	require.False(t, nextCalled)
+	require.True(t, consumer.gotBoundary)
+}
+
+func TestRunIterationKeepsChangesForMixedConsumers(t *testing.T) {
+	nextCalled := false
+	changes := &iterationChangesHandle{next: func(
+		context.Context,
+		*mpool.MPool,
+	) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		nextCalled = true
+		return nil, nil, engine.ChangesHandle_Snapshot, nil
+	}}
+	boundaryConsumer := &boundaryOnlyIterationConsumer{}
+	done := runIterationConsumersForTest(
+		context.Background(),
+		testIterationContext("boundary", "legacy"),
+		changes,
+		[]Consumer{boundaryConsumer, drainingIterationConsumer{}},
+		ISCPDataType_Snapshot,
+		mpool.MustNewZero(),
+	)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("mixed-consumer iteration did not finish")
+	}
+	require.True(t, nextCalled)
+	require.True(t, boundaryConsumer.gotBoundary)
+}
+
+func TestRunIterationRestoresAttrsWithRetainedRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(2), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], types.BuildTS(1, 0), false, mp))
+	bat.SetRowCount(1)
+
+	sent := false
+	changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		if sent {
+			return nil, nil, engine.ChangesHandle_Tail_done, nil
+		}
+		sent = true
+		return bat, nil, engine.ChangesHandle_Tail_done, nil
+	}}
+	consumer := &batchAttrsIterationConsumer{}
+	packer := types.NewPacker()
+	defer packer.Close()
+	runISCPTaskIterationConsumers(
+		context.Background(), nil, testIterationContext(), changes,
+		[]Consumer{consumer}, []*JobStatus{{}},
+		&planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "event_id"}, {Name: "bytes_sent"}, {Name: objectio.DefaultCommitTS_Attr},
+		}},
+		ISCPDataType_Tail, packer, mp, 3, 0, 2, 1, true,
+		nil,
+	)
+	require.Equal(t, []string{
+		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,
+	}, consumer.attrs)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {

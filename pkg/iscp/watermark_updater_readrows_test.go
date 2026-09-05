@@ -16,8 +16,12 @@ package iscp
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -45,6 +49,176 @@ func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
 	_, _, err := getTableID(context.Background(), "", nil, 0, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid rows 2")
+}
+
+func TestMarshalJobSpecPreservesSQLCharacters(t *testing.T) {
+	spec, err := MarshalJobSpec(&JobSpec{ConsumerInfo: ConsumerInfo{
+		RefreshSQL: "select date_trunc('minute', ts) where status >= 500",
+	}})
+	require.NoError(t, err)
+	require.Contains(t, spec, "status >= 500")
+	require.NotContains(t, spec, `\u003e`)
+
+	byteJSON, err := types.ParseStringToByteJson(spec)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(byteJSON)
+	require.NoError(t, err)
+	decoded, err := UnmarshalJobSpec(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "select date_trunc('minute', ts) where status >= 500", decoded.RefreshSQL)
+}
+
+func TestMaterializedViewJobReferencesSingleAndMultipleSources(t *testing.T) {
+	legacy := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTable:     TableInfo{TableID: 10},
+	}}
+	require.True(t, materializedViewJobReferencesSource(legacy, 10))
+	require.False(t, materializedViewJobReferencesSource(legacy, 11))
+
+	multi := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTables:    []TableInfo{{TableID: 10}, {TableID: 11}},
+	}}
+	require.True(t, materializedViewJobReferencesSource(multi, 10))
+	require.True(t, materializedViewJobReferencesSource(multi, 11))
+
+	indexJob := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_IndexSync), SrcTable: TableInfo{TableID: 10},
+	}}
+	require.False(t, materializedViewJobReferencesSource(indexJob, 10))
+}
+
+func TestMaterializedViewJobMatchesTargetAvoidsJobNameCollisions(t *testing.T) {
+	spec := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "a_b", TableName: "c",
+	}}
+	require.True(t, materializedViewJobMatchesTarget(spec, "a_b", "c"))
+	require.True(t, materializedViewJobMatchesTarget(spec, "A_B", "C"))
+	require.False(t, materializedViewJobMatchesTarget(spec, "a", "b_c"))
+	spec.ConsumerType = int8(ConsumerType_IndexSync)
+	require.False(t, materializedViewJobMatchesTarget(spec, "a_b", "c"))
+}
+
+func TestMarkJobsErrorBySourceTableAllowsMissingISCPLog(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() { ExecWithResult = oldExecWithResult }()
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_ISCP_LOG)
+	}
+	require.NoError(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"))
+
+	expected := errors.New("executor unavailable")
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, expected
+	}
+	require.ErrorIs(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"), expected)
+}
+
+func TestMarkJobsErrorBySourceTableUpdatesEveryMatchingGeneration(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	matching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTables:    []TableInfo{{TableID: 10}, {TableID: 11}},
+	}})
+	nonMatching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), SrcTable: TableInfo{TableID: 12},
+	}})
+	result, mp := newMaterializedViewJobsResult(t,
+		[]uint64{100, 101, 102}, []string{"mv'job", "other", "invalid"}, []uint64{1, 2, 3},
+		[]string{matching, nonMatching, "not-json"})
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	var updates []string
+	calls := 0
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		if calls == 1 {
+			return result, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	}
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	require.NoError(t, MarkJobsErrorBySourceTable(ctx, "cn", nil, 11, "source's table was dropped"))
+	require.Len(t, updates, 1)
+	require.Contains(t, updates[0], "table_id = 100")
+	require.Contains(t, updates[0], "job_name = 'mv''job'")
+	require.Contains(t, updates[0], "source''s table was dropped")
+}
+
+func TestUnregisterMaterializedViewUsesTargetIdentity(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+
+	matching := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "db", TableName: "mv",
+	}})
+	collision := encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "d", TableName: "b_mv",
+	}})
+	result, mp := newMaterializedViewJobsResult(t,
+		[]uint64{100, 101, 102}, []string{"materialized_view_db_mv", "materialized_view_db_mv", "invalid"}, []uint64{1, 2, 3},
+		[]string{matching, collision, "not-json"})
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	var updates []string
+	calls := 0
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		if calls == 1 {
+			return result, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	}
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
+	require.NoError(t, unregisterMaterializedView(ctx, "cn", nil, "DB", "MV"))
+	require.Len(t, updates, 1)
+	require.True(t, strings.Contains(strings.ToLower(updates[0]), "update mo_catalog.mo_iscp_log"))
+	require.Contains(t, updates[0], "table_id = 100")
+}
+
+func encodeMaterializedViewJobSpec(t *testing.T, spec *JobSpec) string {
+	t.Helper()
+	raw, err := MarshalJobSpec(spec)
+	require.NoError(t, err)
+	byteJSON, err := types.ParseStringToByteJson(raw)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(byteJSON)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func newMaterializedViewJobsResult(
+	t *testing.T,
+	tableIDs []uint64,
+	names []string,
+	jobIDs []uint64,
+	specs []string,
+) (executor.Result, *mpool.MPool) {
+	t.Helper()
+	require.Len(t, tableIDs, len(names))
+	require.Len(t, tableIDs, len(jobIDs))
+	require.Len(t, tableIDs, len(specs))
+	mp := mpool.MustNewZero()
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, tableIDs))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, names))
+	require.NoError(t, executor.AppendFixedRows(memRes, 2, jobIDs))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, specs))
+	return memRes.GetResult(), mp
 }
 
 func TestUnregisterJobsByDBNameEscapesDatabaseLiteral(t *testing.T) {

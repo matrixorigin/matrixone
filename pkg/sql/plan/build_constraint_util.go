@@ -582,9 +582,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	var newCols []*ColDef
+	writeMVState := tblInfo.typ == "insert" && CanWriteMaterializedViewHiddenColumns(ctx.GetContext(), tableDef)
 	for _, col := range tableDef.Cols {
 		if col.Hidden && tblInfo.typ == "insert" {
-			if col.Name == catalog.FakePrimaryKeyColName {
+			if col.Name == catalog.FakePrimaryKeyColName || writeMVState && col.Name != catalog.Row_ID {
 				// fake pk is auto increment, need to fill.
 				// TODO(fagongzi): we need to use a separate tag to mark the columns
 				// for these behaviors, instead of using column names, which needs to

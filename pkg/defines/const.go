@@ -79,7 +79,7 @@ const (
 	MORPCVersion41     int64 = 41 // cycle-safe bounded current-role closure table function
 	MORPCVersion42     int64 = 42 // transactional SQL-task child cleanup
 	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
-	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
+	MORPCVersion44     int64 = 44 // multi-source ISCP jobs and validated MongoDB explicit-query scan payload
 	MORPCVersion45     int64 = 45 // bounded Parquet whole-file fanout payload
 	MORPCVersion46     int64 = 46 // subscription-aware information-schema metadata table functions
 	MORPCVersion47     int64 = 47 // ordinary window hash partition pipeline algorithm

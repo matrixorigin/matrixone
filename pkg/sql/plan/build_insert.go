@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -53,6 +54,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	internalMVState := strings.HasPrefix(strings.ToLower(tblName), "__mo_mv_state_") ||
+		strings.HasPrefix(strings.ToLower(t.GetName()), "__mo_mv_state_")
+	if internalMVState && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view internal state")
+	}
 	qualifierDB := string(stmt.TargetDatabaseName)
 	if qualifierDB == "" {
 		qualifierDB = dbName
@@ -80,6 +86,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef) || internalMVState) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view")
+	}
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	// if err != nil {
 	// 	return nil, err

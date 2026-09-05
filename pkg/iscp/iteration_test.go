@@ -19,14 +19,158 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolveSingleSourceInsertIndexesWithRetainedRowID(t *testing.T) {
+	def := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "id"}, {Name: "value"}, {Name: "__mo_cpkey"}, {Name: "__mo_commit_ts"}},
+		Name2ColIndex: map[string]int32{"id": 0, "value": 1},
+		Pkey:          &planpb.PrimaryKeyDef{Names: []string{"id"}},
+	}
+
+	tsIdx, pkIdx := resolveSingleSourceInsertIndexes(def, false)
+	require.Equal(t, 3, tsIdx)
+	require.Equal(t, 0, pkIdx)
+
+	tsIdx, pkIdx = resolveSingleSourceInsertIndexes(def, true)
+	require.Equal(t, 4, tsIdx)
+	require.Equal(t, 1, pkIdx)
+}
+
+func TestResolveMVBatchIndexesUsesRetainedBatchLayout(t *testing.T) {
+	def := &planpb.TableDef{
+		Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	bat := batch.NewWithSize(4)
+	bat.Attrs = []string{"__mo_rowid", "id", "service", "__mo_commit_ts"}
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	defer bat.Clean(nil)
+
+	tsIdx, pkIdx := resolveMVBatchIndexes(bat, def, true, true)
+	require.Equal(t, 3, tsIdx)
+	require.Equal(t, 0, pkIdx)
+}
+
+func TestEnsureISCPInsertBatchAttrsRestoresPersistedObjectSchema(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+
+	def := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "event_id"},
+		{Name: "bytes_sent"},
+		{Name: objectio.DefaultCommitTS_Attr},
+	}}
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(99), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], types.BuildTS(10, 0), false, mp))
+	bat.SetRowCount(1)
+
+	require.NoError(t, ensureISCPInsertBatchAttrs(bat, def, true))
+	require.Equal(t, []string{
+		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,
+	}, bat.Attrs)
+
+	atomicBat := NewAtomicBatch(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 3, 0)
+	rows, err := materializedViewRowsFromBatch(atomicBat, true)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, int64(7), rows[0].Values["event_id"])
+	require.Equal(t, int64(99), rows[0].Values["bytes_sent"])
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestEnsureISCPInsertBatchAttrsRejectsUnknownLayout(t *testing.T) {
+	def := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "event_id"},
+		{Name: objectio.DefaultCommitTS_Attr},
+	}}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer bat.Clean(nil)
+
+	err := ensureISCPInsertBatchAttrs(bat, def, true)
+	require.ErrorContains(t, err, "schema mismatch")
+}
+
+func TestAtomicBatchRetainsRowsWithDistinctRowIDs(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	ts := types.BuildTS(1, 0)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, uint32(i)), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(i+1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], ts, false, mp))
+	}
+	bat.SetRowCount(3)
+	atomicBat := NewAtomicBatch(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 2, 0)
+	require.Equal(t, 3, atomicBat.Rows.Len())
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMaterializedViewDeleteRowsRetainCommitTS(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	rowid := types.NewRowid(&block, 7)
+	commitTS := types.BuildTS(20, 3)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowid, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], commitTS, false, mp))
+	bat.SetRowCount(1)
+	atomicBat := NewAtomicBatch(mp)
+	defer atomicBat.Close()
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 2, 1)
+	rows, err := materializedViewRowsFromBatch(atomicBat, false)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, rowid, rows[0].RowID)
+	require.Equal(t, commitTS, rows[0].CommitTS)
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
 
 type iscpLogBatch struct {
 	jobNames   []string

@@ -59,6 +59,13 @@ func NewISCPData(
 	return d
 }
 
+func (d *ISCPData) SetSourceTableID(tableID uint64) *ISCPData {
+	if d != nil {
+		d.SourceTableID = tableID
+	}
+	return d
+}
+
 func (d *ISCPData) Set(cnt int) {
 	d.refcnt.Add(int32(cnt))
 }
@@ -208,6 +215,14 @@ func (r *DataRetrieverImpl) GetAccountID() uint32 {
 
 func (r *DataRetrieverImpl) GetTableID() uint64 {
 	return r.tableID
+}
+
+func (r *DataRetrieverImpl) GetToTS() types.TS {
+	return r.status.To
+}
+
+func (r *DataRetrieverImpl) GetFromTS() types.TS {
+	return r.status.From
 }
 
 func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) bool {
