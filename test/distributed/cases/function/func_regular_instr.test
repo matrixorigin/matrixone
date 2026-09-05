@@ -134,3 +134,8 @@ INSERT INTO t_regexp_utf8 VALUES (1, '甲😀乙😀丙'), (2, 'ASCII');
 SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
 SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
 DROP TABLE t_regexp_utf8;
+
+# Binary subjects use one-based byte positions; text subjects use characters.
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2) AS binary_pos,
+       REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2) AS varbinary_pos,
+       REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 1) AS varbinary_end;

@@ -116,3 +116,7 @@ INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_SUBSTR(str1, '*'), REGEXP_SUBSTR(str2,'hav','hiv') FROM t;
 error parsing regexp: missing argument to repetition operator: `*`
 drop table t;
+SELECT HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2)) AS binary_substr,
+HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2)) AS varbinary_substr;
+binary_substr    varbinary_substr
+E4B8AD    E4B8AD

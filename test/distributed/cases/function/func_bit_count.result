@@ -186,10 +186,10 @@ SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
 4
 DROP TABLE t_bit_count;
 SELECT BIT_COUNT('abc') AS nonnumeric,
-       BIT_COUNT('12x') AS numeric_prefix,
-       BIT_COUNT('1.9') AS decimal_prefix,
-       BIT_COUNT('-12x') AS negative_prefix,
-       BIT_COUNT('+x') AS sign_without_digits;
+BIT_COUNT('12x') AS numeric_prefix,
+BIT_COUNT('1.9') AS decimal_prefix,
+BIT_COUNT('-12x') AS negative_prefix,
+BIT_COUNT('+x') AS sign_without_digits;
 nonnumeric    numeric_prefix    decimal_prefix    negative_prefix    sign_without_digits
 0    2    1    61    0
 DROP TABLE IF EXISTS t_bit_count_coercion;

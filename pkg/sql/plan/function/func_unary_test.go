@@ -813,6 +813,23 @@ func TestOrdMultibyteUTF8(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestOrdBinaryUsesFirstOctet(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.New(oid, 4, 0), []string{"é", "中", ""}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xE4, 0}, nil),
+				Ord)
+			tc.parameters[0].SetIsBin(true)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 // QUOTE
 func initQuoteTestCase() []tcTemp {
 	return []tcTemp{

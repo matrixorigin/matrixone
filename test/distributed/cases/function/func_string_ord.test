@@ -37,3 +37,7 @@ CREATE TABLE t_ord_utf8(id INT PRIMARY KEY, str VARCHAR(50));
 INSERT INTO t_ord_utf8 VALUES (1, 'é'), (2, '中'), (3, '😀'), (4, 'ASCII');
 SELECT id, str, ORD(str) AS ord_value FROM t_ord_utf8 ORDER BY id;
 DROP TABLE t_ord_utf8;
+
+# Binary values are byte strings even when their bytes form valid UTF-8.
+SELECT ORD(CAST(_binary'é' AS BINARY(2))) AS binary_ord,
+       ORD(CAST(_binary'é' AS VARBINARY(2))) AS varbinary_ord;

@@ -38,9 +38,9 @@ SELECT ORD('A') AS ord_value, ASCII('A') AS ascii_value;
 ord_value    ascii_value
 65    65
 SELECT ORD('é') AS latin1_multibyte,
-       ORD('中') AS cjk_multibyte,
-       ORD('😀') AS four_byte_multibyte,
-       ORD('éx') AS first_character_only;
+ORD('中') AS cjk_multibyte,
+ORD('😀') AS four_byte_multibyte,
+ORD('éx') AS first_character_only;
 latin1_multibyte    cjk_multibyte    four_byte_multibyte    first_character_only
 50089    14989485    4036991104    50089
 DROP TABLE IF EXISTS t_ord_utf8;
@@ -53,3 +53,7 @@ id    str    ord_value
 3    😀    4036991104
 4    ASCII    65
 DROP TABLE t_ord_utf8;
+SELECT ORD(CAST(_binary'é' AS BINARY(2))) AS binary_ord,
+ORD(CAST(_binary'é' AS VARBINARY(2))) AS varbinary_ord;
+binary_ord    varbinary_ord
+195    195

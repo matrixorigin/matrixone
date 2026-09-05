@@ -468,6 +468,11 @@ func OrdString(val []byte) int64 {
 }
 
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetIsBin() {
+		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
+			return int64(StringSingle(v))
+		}, selectList)
+	}
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return OrdString(v)
 	}, selectList)

@@ -110,6 +110,100 @@ func Test_BuiltIn_RegexpMultibytePositions(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		name        string
+		pattern     string
+		subject     string
+		replacement string
+		position    int64
+		occurrence  int64
+		want        string
+	}{
+		{name: "overlap_first", pattern: "aa", subject: "aaa", replacement: "X", position: 2, occurrence: 1, want: "aX"},
+		{name: "overlap_all", pattern: "aa", subject: "aaa", replacement: "X", position: 2, occurrence: 0, want: "aX"},
+		{name: "begin_anchor_keeps_original_context", pattern: "^", subject: "abc", replacement: "X", position: 2, occurrence: 0, want: "abc"},
+		{name: "anchor_alternative_does_not_steal_overlap", pattern: "aaa|^|aa", subject: "aaa", replacement: "X", position: 2, occurrence: 1, want: "aX"},
+		{name: "multiline_anchor_keeps_previous_newline", pattern: "(?m)^b", subject: "a\nb", replacement: "X", position: 3, occurrence: 1, want: "a\nX"},
+		{name: "zero_width_match_abutting_discarded_match", pattern: "(?m)a|$", subject: "a\nb", replacement: "X", position: 2, occurrence: 1, want: "aX\nb"},
+		{name: "zero_width_keeps_non_overlapping_iteration", pattern: "b*", subject: "ab", replacement: "X", position: 2, occurrence: 0, want: "aX"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplace(tc.pattern, tc.subject, tc.replacement, tc.position, tc.occurrence)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			subjectType := types.New(oid, 6, 0)
+			patternType := types.New(oid, 3, 0)
+
+			instr := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(subjectType, []string{"中中"}, nil),
+					NewFunctionTestInput(patternType, []string{"中"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4}, nil),
+				newOpBuiltInRegexp().builtInRegexpInstr)
+			instr.parameters[0].SetIsBin(true)
+			instr.parameters[1].SetIsBin(true)
+			ok, info := instr.Run()
+			require.True(t, ok, info)
+
+			instrEnd := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(subjectType, []string{"中中"}, nil),
+					NewFunctionTestInput(patternType, []string{"中"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+					NewFunctionTestInput(types.T_int8.ToType(), []int8{1}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil),
+				newOpBuiltInRegexp().builtInRegexpInstr)
+			instrEnd.parameters[0].SetIsBin(true)
+			instrEnd.parameters[1].SetIsBin(true)
+			ok, info = instrEnd.Run()
+			require.True(t, ok, info)
+
+			substr := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(subjectType, []string{"中中"}, nil),
+					NewFunctionTestInput(patternType, []string{"中"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+				},
+				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中"}, nil),
+				newOpBuiltInRegexp().builtInRegexpSubstr)
+			substr.parameters[0].SetIsBin(true)
+			substr.parameters[1].SetIsBin(true)
+			ok, info = substr.Run()
+			require.True(t, ok, info)
+
+			replace := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(subjectType, []string{"中中"}, nil),
+					NewFunctionTestInput(patternType, []string{"中"}, nil),
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{"X"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				},
+				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中X"}, nil),
+				newOpBuiltInRegexp().builtInRegexpReplace)
+			replace.parameters[0].SetIsBin(true)
+			replace.parameters[1].SetIsBin(true)
+			replace.parameters[2].SetIsBin(true)
+			ok, info = replace.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInRegexp()
