@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -73,6 +74,8 @@ type Options struct {
 	keepTxnAlive            bool
 	lockWaitTimeout         time.Duration
 	lockWaitTimeoutSet      bool
+	cnLabels                map[string]string
+	querySchedulingIntent   schedule.SchedulingIntent
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is

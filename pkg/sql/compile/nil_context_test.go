@@ -26,12 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type spySQLExecutor struct {
-	ctx context.Context
+	ctx  context.Context
+	opts executor.Options
 }
 
 func (s *spySQLExecutor) Exec(
@@ -40,6 +42,7 @@ func (s *spySQLExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	s.ctx = ctx
+	s.opts = opts
 	return executor.Result{}, nil
 }
 
@@ -70,6 +73,26 @@ func TestCompileRunSqlWithResultAndOptionsUsesTopContextWhenProcCtxNil(t *testin
 	accountID, err := defines.GetAccountId(spyExec.ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(catalog.System_Account), accountID)
+}
+
+func TestCompileRunSqlWithResultAndOptionsPreservesSchedulingConstraints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.CNLabels = map[string]string{"account": "tp", "role": "tp"}
+	intent := schedule.SchedulingIntent{
+		Explicit:          true,
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+	}
+	proc.Base.SessionInfo.QuerySchedulingIntent = intent
+
+	spyExec := &spySQLExecutor{}
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+	c := &Compile{proc: proc, pn: &pbplan.Plan{}}
+
+	_, err := c.runSqlWithResultAndOptions("select 1", NoAccountId, executor.StatementOption{})
+	require.NoError(t, err)
+	require.Equal(t, proc.Base.SessionInfo.CNLabels, spyExec.opts.CNLabels())
+	require.Equal(t, intent, spyExec.opts.QuerySchedulingIntent())
 }
 
 func TestSQLExecutorExecTxnHandlesNilContext(t *testing.T) {

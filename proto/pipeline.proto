@@ -666,6 +666,18 @@ message ProcessInfo {
   bool statement_runtime_ignore = 13;
 }
 
+message QuerySchedulingIntent {
+  bool explicit = 1;
+  string requested_pool = 2;
+  uint32 pool_fallback = 3;
+  uint32 empty_worker_policy = 4;
+  uint32 current_cn_policy = 5;
+  uint32 worker_set_mode = 6;
+  int32 max_workers = 7;
+  string selection_key = 8;
+  string algorithm_version = 9;
+}
+
 message SessionInfo {
   string user = 1;
   string host = 2;
@@ -681,6 +693,10 @@ message SessionInfo {
   bool matrixone_native_mode = 12;
   bool explicit_zero_temporal_cast_returns_null = 13;
   string sql_mode = 14;
+  // Immutable CN label selector inherited by nested/internal SQL. Remote
+  // processes must retain it so child queries cannot escape the parent pool.
+  map<string, string> cn_labels = 15;
+  QuerySchedulingIntent query_scheduling_intent = 16;
 }
 
 message SessionLoggerInfo {
