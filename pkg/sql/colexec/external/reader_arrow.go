@@ -478,6 +478,14 @@ func (r *ArrowReader) ReadBatch(
 	}
 	record := r.pending
 	start := r.rowOffset
+	if start == 0 {
+		// A RecordBatch is immutable. Validate its complete shape and validity
+		// exactly once before output-window budgeting; later windows only pay
+		// their own conversion validation.
+		if err := r.plan.ValidateRecord(ctx, record); err != nil {
+			return false, err
+		}
+	}
 	maxRows := min(arrowMaxOutputRows, int(record.NumRows()-start))
 	rows, err := r.plan.MaxOutputRows(ctx, record, start, maxRows, r.param.maxBatchSize)
 	if err != nil {

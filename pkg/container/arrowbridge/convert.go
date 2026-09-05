@@ -198,6 +198,9 @@ func validateArrowArrayValidity(ctx context.Context, column arrow.Array) (int, e
 			return 0, moerr.NewInvalidInput(ctx, "Arrow validity buffer is too short")
 		}
 		for row := 0; row < rows; row++ {
+			if err := checkConvertContext(ctx, row); err != nil {
+				return 0, err
+			}
 			bit := int64(bitOffset) + int64(row)
 			if validity[bit>>3]&(1<<uint(bit&7)) == 0 {
 				actualNulls++

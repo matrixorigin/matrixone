@@ -33,6 +33,36 @@ type conditionalMemoryFS struct {
 	identity ObjectIdentity
 }
 
+type closeErrorReadCloser struct {
+	*bytes.Reader
+	err error
+}
+
+func (r *closeErrorReadCloser) Close() error { return r.err }
+
+type conditionalCloseErrorFS struct {
+	*conditionalMemoryFS
+	closeErr error
+}
+
+func (f *conditionalCloseErrorFS) OpenReadWithIdentity(
+	ctx context.Context,
+	path string,
+	offset, size int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if expected != f.identity {
+		return nil, ErrObjectChanged
+	}
+	vector := &IOVector{FilePath: path, Policy: SkipAllCache, Entries: []IOEntry{{Offset: offset, Size: size}}}
+	if err := f.MemoryFS.Read(ctx, vector); err != nil {
+		return nil, err
+	}
+	data := append([]byte(nil), vector.Entries[0].Data...)
+	vector.Release()
+	return &closeErrorReadCloser{Reader: bytes.NewReader(data), err: f.closeErr}, nil
+}
+
 func (f *conditionalMemoryFS) StatFileIdentity(ctx context.Context, path string) (ObjectIdentity, error) {
 	if err := ctx.Err(); err != nil {
 		return ObjectIdentity{}, err
@@ -312,6 +342,31 @@ func TestConditionalRangeLeaseFixesObjectIdentity(t *testing.T) {
 	_, err = reader.ReadRangeLeaseWithIdentity(ctx, "conditional:file", 1, 3, identity, admission)
 	require.ErrorIs(t, err, ErrObjectChanged)
 	require.Equal(t, int64(3), admission.aborted.Load())
+}
+
+func TestConditionalRangeLeaseAbortsAdmissionWhenCloseReportsObjectChanged(t *testing.T) {
+	ctx := context.Background()
+	memoryFS, err := NewMemoryFS("conditional-close", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memoryFS.Write(ctx, IOVector{
+		FilePath: "conditional-close:file",
+		Entries:  []IOEntry{{Offset: 0, Size: 3, Data: []byte("abc")}},
+	}))
+	identity := ObjectIdentity{ETag: "etag-v1", Size: 3, LastModified: time.Unix(10, 0).UTC()}
+	fs := &conditionalCloseErrorFS{
+		conditionalMemoryFS: &conditionalMemoryFS{MemoryFS: memoryFS, identity: identity},
+		closeErr:            errors.Join(ErrObjectChanged, errors.New("conditional response finalized stale")),
+	}
+	reader := NewLeasedRangeReader(fs).(ConditionalLeasedRangeReader)
+	admission := new(testRangeAdmission)
+
+	lease, err := reader.ReadRangeLeaseWithIdentity(ctx, "conditional-close:file", 0, 3, identity, admission)
+	require.Nil(t, lease)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	require.Equal(t, int64(3), admission.reserved.Load())
+	require.Equal(t, int64(3), admission.aborted.Load())
+	require.Zero(t, admission.committed.Load())
+	require.Zero(t, admission.released.Load())
 }
 
 func TestConditionalRangeRejectsIncompleteIdentityAndOutOfBounds(t *testing.T) {

@@ -1232,6 +1232,15 @@ func TestRejectsMismatchedArrowNullCount(t *testing.T) {
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 
+	// Output budgeting deliberately performs only O(columns) structural checks.
+	// ArrowReader validates this immutable record once before splitting it, so
+	// repeated windows cannot rescan the complete validity bitmap.
+	rows, err := plan.MaxOutputRows(context.Background(), record, 0, 1, 1<<20)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	err = plan.ValidateRecord(context.Background(), record)
+	require.ErrorContains(t, err, "validity bitmap")
+
 	converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
 	require.ErrorContains(t, err, "validity bitmap")
 	require.Nil(t, converted)
