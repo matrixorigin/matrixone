@@ -1927,6 +1927,28 @@ func TestJsonValueReturningAndResponses(t *testing.T) {
 	})
 }
 
+func TestJsonValueWarningDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	target := types.T_varchar.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json"}, []bool{false}),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$"}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+	}
+	fc := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(target, false, []string{""}, []bool{true}), JsonValue)
+	s, info := fc.Run()
+	require.True(t, s, info)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.ER_INVALID_JSON_TEXT, session.warnings[0].code)
+}
+
 func TestJsonValueContractBoundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
