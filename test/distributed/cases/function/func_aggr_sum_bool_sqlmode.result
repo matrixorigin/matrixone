@@ -48,7 +48,7 @@ drop table if exists ctas_types;
 create table ctas_types as select sum(i<>0) as s, avg(i<>0) as a from t;
 select column_name, data_type from information_schema.columns where table_schema = 'bool_sumavg_sqlmode' and table_name = 'ctas_types' order by column_name;
 column_name    data_type
-a    double
+a    decimal
 s    bigint
 select * from ctas_types;
 s    a

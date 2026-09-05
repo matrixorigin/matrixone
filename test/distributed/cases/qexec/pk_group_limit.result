@@ -144,7 +144,8 @@ group by id
 limit 10
 ) q
 where a is not null;
-invalid input: Decimal128 Div overflow: 9999999999999999999999999999.9999999999/1
+➤ count(*)[-5,64,0]  𝄀
+2
 select id
 from edge_values
 group by id

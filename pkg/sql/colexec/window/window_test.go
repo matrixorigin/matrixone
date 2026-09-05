@@ -2260,14 +2260,17 @@ func TestBoundedSlidingRangeAvgAcrossPeersAndOutputChunks(t *testing.T) {
 	for _, output := range [][2]int{{0, 1}, {1, 4}, {4, len(values)}} {
 		result, err := ctr.processAggregateFuncRange(0, arg, proc, output[0], output[1])
 		require.NoError(t, err)
-		got = append(got, vector.MustFixedColWithTypeCheck[float64](result)...)
+		require.Equal(t, types.T_decimal128, result.GetType().Oid)
+		for _, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+			got = append(got, types.Decimal128ToFloat64(value, result.GetType().Scale))
+		}
 		result.Free(proc.Mp())
 		if output[1] < len(values) {
 			require.NotNil(t, ctr.runningAgg)
 		}
 	}
 
-	require.InDeltaSlice(t, []float64{4.0 / 3, 4.0 / 3, 2.4, 10.0 / 3, 10.0 / 3, 7}, got, 1e-12)
+	require.InDeltaSlice(t, []float64{4.0 / 3, 4.0 / 3, 2.4, 10.0 / 3, 10.0 / 3, 7}, got, 1e-4)
 	require.Nil(t, ctr.runningAgg)
 	require.Zero(t, ctr.runningPeerEnd)
 
@@ -2339,8 +2342,12 @@ func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
 
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 			require.NoError(t, err)
-			require.InDeltaSlice(t, test.want,
-				vector.MustFixedColWithTypeCheck[float64](result), 1e-12)
+			require.Equal(t, types.T_decimal128, result.GetType().Oid)
+			got := make([]float64, 0, result.Length())
+			for _, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+				got = append(got, types.Decimal128ToFloat64(value, result.GetType().Scale))
+			}
+			require.InDeltaSlice(t, test.want, got, 1e-4)
 			require.Nil(t, ctr.runningAgg)
 
 			result.Free(proc.Mp())

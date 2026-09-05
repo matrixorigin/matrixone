@@ -400,7 +400,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0
@@ -767,7 +767,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0
