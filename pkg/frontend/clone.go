@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -651,6 +652,8 @@ func resolveSnapshot(
 	return snapshot, nil
 }
 
+var resolveSnapshotForClone = resolveSnapshot
+
 func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
 	origin := strconv.FormatInt(snapshotTS, 10)
 	return &tree.AtTimeStamp{
@@ -721,7 +724,13 @@ func getOpAndToAccountId(
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
-	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+	if snapshot, err = resolveSnapshotForClone(ses, atTsExpr); err != nil {
+		if atTsExpr != nil && plan.IsSnapshotNotFound(err) {
+			return 0, 0, nil, plan.NewSnapshotNotFoundError(
+				reqCtx,
+				atTsExpr.SnapshotName,
+			)
+		}
 		return 0, 0, nil, err
 	}
 
@@ -1451,6 +1460,33 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+
+	// Subscription metadata functions are private to the canonical
+	// information_schema views. A cloned information_schema remains useful as
+	// a local catalog snapshot, but must not turn a user-owned view into a new
+	// cross-account execution boundary. Restore TABLES and COLUMNS from their
+	// local-only definitions before remapping the clone target.
+	if strings.EqualFold(srcDBName, sysview.InformationDBConst) {
+		var localDDL string
+		switch {
+		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
+			localDDL = sysview.InformationSchemaTablesV41DDL
+		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
+			localDDL = sysview.InformationSchemaColumnsV41DDL
+		}
+		if localDDL != "" {
+			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)
+			if parseErr != nil {
+				return "", parseErr
+			}
+			localCreateView, localOK := localStmt.(*tree.CreateView)
+			if !localOK {
+				return "", moerr.NewInternalErrorNoCtxf(
+					"local information_schema view SQL is %T, expected *tree.CreateView", localStmt)
+			}
+			createView = localCreateView
+		}
+	}
 	cloneTargetDatabase := dstDBName
 	if lowerCaseTableNames == 1 {
 		cloneTargetDatabase = tree.NewCStr(dstDBName, lowerCaseTableNames).Compare()

@@ -811,7 +811,7 @@ func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
 }
 
-func TestWindowSlidingSumCapability(t *testing.T) {
+func TestWindowSlidingSumAvgCapability(t *testing.T) {
 	mp := mpool.MustNewZero()
 	tests := []struct {
 		name     string
@@ -826,8 +826,12 @@ func TestWindowSlidingSumCapability(t *testing.T) {
 		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
 		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
 		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
-		{name: "avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType()},
+		{name: "int32 avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType(), want: true},
+		{name: "int64 avg", aggID: AggIdOfAvg, typ: types.T_int64.ToType(), want: true},
+		{name: "decimal64 avg", aggID: AggIdOfAvg, typ: types.New(types.T_decimal64, 18, 2), want: true},
+		{name: "float avg", aggID: AggIdOfAvg, typ: types.T_float64.ToType()},
 		{name: "distinct sum", aggID: AggIdOfSum, distinct: true, typ: types.T_int32.ToType()},
+		{name: "distinct avg", aggID: AggIdOfAvg, distinct: true, typ: types.T_int32.ToType()},
 	}
 
 	for _, test := range tests {
@@ -839,6 +843,108 @@ func TestWindowSlidingSumCapability(t *testing.T) {
 		})
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestWindowSlidingAvgRemoveUpdatesCountAndEmptyState(t *testing.T) {
+	t.Run("remaining row", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		typ := types.T_int32.ToType()
+		input := testutil.NewInt32Vector(3, typ, mp, false,
+			[]bool{false, true, false}, []int32{2, 0, 4})
+		defer input.Free(mp)
+
+		exec, err := MakeAgg(mp, AggIdOfAvg, false, typ)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.True(t, SupportsWindowSliding(exec))
+
+		for row := 0; row < input.Length(); row++ {
+			require.NoError(t, AddWindowRow(exec, row, []*vector.Vector{input}))
+		}
+		require.NoError(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+		require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		defer results[0].Free(mp)
+		require.False(t, results[0].IsNull(0))
+		require.Equal(t, types.T_decimal128, results[0].GetType().Oid)
+		value := vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0]
+		require.Equal(t, "4.0000", value.Format(results[0].GetType().Scale))
+	})
+
+	t.Run("empty frame", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		typ := types.T_int32.ToType()
+		input := testutil.NewInt32Vector(1, typ, mp, false, nil, []int32{2})
+		defer input.Free(mp)
+
+		exec, err := MakeAgg(mp, AggIdOfAvg, false, typ)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, AddWindowRow(exec, 0, []*vector.Vector{input}))
+		require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+		require.Error(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		defer results[0].Free(mp)
+		require.True(t, results[0].IsNull(0))
+	})
+}
+
+func TestWindowSlidingAvgDecimalStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		typ       types.Type
+		makeInput func(*mpool.MPool) *vector.Vector
+		want      string
+	}{
+		{
+			name: "int64",
+			typ:  types.T_int64.ToType(),
+			makeInput: func(mp *mpool.MPool) *vector.Vector {
+				return testutil.NewInt64Vector(2, types.T_int64.ToType(), mp, false, nil, []int64{2, 4})
+			},
+			want: "4.0000",
+		},
+		{
+			name: "decimal64",
+			typ:  types.New(types.T_decimal64, 18, 2),
+			makeInput: func(mp *mpool.MPool) *vector.Vector {
+				typ := types.New(types.T_decimal64, 18, 2)
+				return testutil.NewDecimal64Vector(
+					2, typ, mp, false, nil, []types.Decimal64{200, 400})
+			},
+			want: "4.000000",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := test.makeInput(mp)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, false, test.typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.True(t, SupportsWindowSliding(exec))
+			require.NoError(t, AddWindowRow(exec, 0, []*vector.Vector{input}))
+			require.NoError(t, AddWindowRow(exec, 1, []*vector.Vector{input}))
+			require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.False(t, results[0].IsNull(0))
+			value := vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0]
+			require.Equal(t, test.want, value.Format(results[0].GetType().Scale))
+		})
+	}
 }
 
 func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {

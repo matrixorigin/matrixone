@@ -67,6 +67,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	if partition.Limit != nil {
 		return partition.prepareTopN(proc)
 	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.prepareHash(proc)
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -90,6 +93,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 	if partition.Limit != nil {
 		return partition.callTopN(proc)
+	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.callHash(proc)
 	}
 	analyzer := partition.OpAnalyzer
 

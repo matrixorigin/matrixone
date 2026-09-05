@@ -6955,6 +6955,23 @@ func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Exp
 	return expr, nil
 }
 
+// appendPadSpaceWindowKeyCastIfNeeded canonicalizes direct CHAR window keys
+// into the same PAD SPACE comparison domain as promoted string keys. Ordinary
+// predicates deliberately keep their existing CHAR comparison binding so that
+// optimizer key recognition is unchanged outside window planning.
+func appendPadSpaceWindowKeyCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
+	if isCastOverload(expr, 2) {
+		return expr, nil
+	}
+	argType := makeTypeByPlan2Expr(expr)
+	if argType.Oid == types.T_char {
+		targetType := argType
+		targetType.Oid = types.T_varchar
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&targetType))
+	}
+	return appendPadSpaceComparisonCastIfNeeded(ctx, expr)
+}
+
 func isCastOverload(expr *Expr, overloadID int32) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {

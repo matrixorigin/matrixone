@@ -121,6 +121,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
 	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(fsMultipartInitCounter)
 	registry.MustRegister(FSObjectStorageOperations)
 
 	registry.MustRegister(FSHTTPTraceCounter)

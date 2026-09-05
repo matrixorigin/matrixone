@@ -192,7 +192,7 @@ func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Ve
 }
 
 func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
-	if !exec.isSum || exec.IsDistinct() {
+	if exec.IsDistinct() {
 		return false
 	}
 	// Floating subtraction can change results for infinities and accumulate
@@ -206,12 +206,26 @@ func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
 }
 
 func (exec *sumAvgExec[T, A]) addWindowRow(row int, vectors []*vector.Vector) error {
-	if err := exec.Fill(0, row, vectors); err != nil {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	sums := chunkArr[T](exec.state[0].vecs[0])
+	result := sums[0] + value
+	if err := exec.ofCheck(sums[0], value, result); err != nil {
 		return err
 	}
-	if !windowRowIsNull(vectors[0], row) {
-		exec.windowNonNullCount++
+	sums[0] = result
+	if exec.isSum {
+		exec.state[0].vecs[0].UnsetNull(0)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
 	}
+	exec.windowNonNullCount++
 	return nil
 }
 
@@ -221,7 +235,7 @@ func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector)
 		return nil
 	}
 	if exec.windowNonNullCount <= 0 {
-		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
 	}
 	if vec.IsConst() {
 		row = 0
@@ -230,9 +244,18 @@ func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector)
 	sums := chunkArr[T](exec.state[0].vecs[0])
 	sums[0] -= value
 	exec.windowNonNullCount--
+	if !exec.isSum {
+		counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+		if counts[0] <= 0 {
+			return moerr.NewInternalErrorNoCtx("sliding AVG count state is empty")
+		}
+		counts[0]--
+	}
 	if exec.windowNonNullCount == 0 {
 		sums[0] = 0
-		exec.state[0].vecs[0].SetNull(0)
+		if exec.isSum {
+			exec.state[0].vecs[0].SetNull(0)
+		}
 	}
 	return nil
 }
@@ -1103,16 +1126,30 @@ func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector
 }
 
 func (exec *sumAvgDecExec[A, S]) windowSlidingSupported() bool {
-	return exec.isSum && !exec.IsDistinct() && exec.localAddSafe
+	return !exec.IsDistinct() && exec.localAddSafe
 }
 
 func (exec *sumAvgDecExec[A, S]) addWindowRow(row int, vectors []*vector.Vector) error {
-	if err := exec.Fill(0, row, vectors); err != nil {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := decimalStateFromArg[A, S](
+		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+	sums := chunkArr[S](exec.state[0].vecs[0])
+	var err error
+	if sums[0], err = decimalStateAdd(sums[0], value); err != nil {
 		return err
 	}
-	if !windowRowIsNull(vectors[0], row) {
-		exec.windowNonNullCount++
+	if exec.isSum {
+		exec.state[0].vecs[0].UnsetNull(0)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
 	}
+	exec.windowNonNullCount++
 	return nil
 }
 
@@ -1122,7 +1159,7 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 		return nil
 	}
 	if exec.windowNonNullCount <= 0 {
-		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
 	}
 	if vec.IsConst() {
 		row = 0
@@ -1132,10 +1169,19 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 	sums := chunkArr[S](exec.state[0].vecs[0])
 	sums[0] = decimalStateAddUnchecked(sums[0], decimalStateMinus(value))
 	exec.windowNonNullCount--
+	if !exec.isSum {
+		counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+		if counts[0] <= 0 {
+			return moerr.NewInternalErrorNoCtx("sliding AVG count state is empty")
+		}
+		counts[0]--
+	}
 	if exec.windowNonNullCount == 0 {
 		var zero S
 		sums[0] = zero
-		exec.state[0].vecs[0].SetNull(0)
+		if exec.isSum {
+			exec.state[0].vecs[0].SetNull(0)
+		}
 	}
 	return nil
 }

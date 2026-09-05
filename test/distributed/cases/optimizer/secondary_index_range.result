@@ -17,8 +17,8 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 }
 
 analyze table t1(val);
-approx_count_distinct(val)
-100
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t1  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  100  ¦  1  ¦  100  ¦  2  ¦  2800  ¦  OK  ¦  q=1/1
 explain select * from t1 where val >= 50 and val <= 80;
 -- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -208,8 +208,8 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 }
 
 analyze table t2(a);
-approx_count_distinct(a)
-3
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t2  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  5  ¦  1  ¦  5  ¦  2  ¦  140  ¦  OK  ¦  q=1/1
 explain select * from t2 where a >= 10 and a <= 20;
 -- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -267,8 +267,8 @@ select mo_ctl('dn', 'flush', 'd1.t3');
 }
 
 analyze table t3(city);
-approx_count_distinct(city)
-4
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t3  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  6  ¦  1  ¦  6  ¦  2  ¦  288  ¦  OK  ¦  q=1/1
 explain select * from t3 where city >= 'Boston' and city <= 'Denver';
 -- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -360,8 +360,8 @@ select mo_ctl('dn', 'flush', 'd1.t4');
 }
 
 analyze table t4(x);
-approx_count_distinct(x)
-50
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t4  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  50  ¦  1  ¦  50  ¦  2  ¦  1400  ¦  OK  ¦  q=1/1
 explain select * from t4 where x >= 10 and x <= 20;
 -- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -571,8 +571,8 @@ select mo_ctl('dn', 'flush', 'd1.t5');
 }
 
 analyze table t5(val);
-approx_count_distinct(val)
-3
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t5  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  5  ¦  1  ¦  5  ¦  2  ¦  140  ¦  OK  ¦  q=1/1
 select * from t5 where val >= 10 and val <= 30 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
 2  ¦  10  𝄀
@@ -609,8 +609,8 @@ select mo_ctl('dn', 'flush', 'd1.t6');
 }
 
 analyze table t6(val);
-approx_count_distinct(val)
-100
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t6  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  100  ¦  1  ¦  100  ¦  2  ¦  2800  ¦  OK  ¦  q=1/1
 explain select * from t6 where val > 100 and val < 200;
 -- @regex("Index Table Scan", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -687,8 +687,8 @@ select mo_ctl('dn', 'flush', 'd1.t7');
 }
 
 analyze table t7(d);
-approx_count_distinct(d)
-5
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t7  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  5  ¦  1  ¦  5  ¦  2  ¦  140  ¦  OK  ¦  q=1/1
 explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
 -- @regex("Index Table Scan", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -737,8 +737,8 @@ select mo_ctl('dn', 'flush', 'd1.t8');
 }
 
 analyze table t8(price);
-approx_count_distinct(price)
-5
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t8  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  5  ¦  1  ¦  5  ¦  2  ¦  160  ¦  OK  ¦  q=1/1
 explain select * from t8 where price >= 19.99 and price <= 49.99;
 -- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -804,8 +804,8 @@ select mo_ctl('dn', 'flush', 'd1.t9');
 }
 
 analyze table t9(status);
-approx_count_distinct(status)
-3
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t9  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  5  ¦  1  ¦  5  ¦  2  ¦  240  ¦  OK  ¦  q=1/1
 explain select count(*) from t9 where status = 'active';
 -- @regex("Index Table Scan", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
