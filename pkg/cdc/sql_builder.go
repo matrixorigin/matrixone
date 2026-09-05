@@ -1024,12 +1024,12 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 		CDCSQLTemplates[CDCInsertMOISCPLogSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
-		jobSpec,
+		escapeSQLString(jobSpec),
 		jobState,
 		watermark.ToString(),
-		jobStatus,
+		escapeSQLString(jobStatus),
 	)
 }
 
@@ -1048,11 +1048,11 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
 		jobState,
 		newWatermark.ToString(),
-		jobStatus,
+		escapeSQLString(jobStatus),
 		jobStage,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 		expectPrevLSN,
 		jobState,
@@ -1092,7 +1092,7 @@ func (b cdcSQLBuilder) ISCPLogAdvanceWatermarkSQL(
 		jobStage,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 		expectPrevLSN,
 	)
@@ -1108,7 +1108,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
 		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 	)
 }
@@ -1122,10 +1122,10 @@ func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
-		jobSpec,
+		escapeSQLString(jobSpec),
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 		jobID,
 	)
 }
@@ -1150,7 +1150,7 @@ func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
 		CDCSQLTemplates[CDCSelectMOISCPLogByTableSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		jobName,
+		escapeSQLString(jobName),
 	)
 }
 

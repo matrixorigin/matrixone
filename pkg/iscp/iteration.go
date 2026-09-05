@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -754,8 +755,8 @@ var GetJobSpecs = func(
 		if i > 0 {
 			buf.WriteString(" OR")
 		}
-		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d)",
-			tenantId, tableID, jobName, jobIDs[i]))
+		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d)",
+			tenantId, tableID, sqlquote.String(jobName), jobIDs[i]))
 	}
 	sql := buf.String()
 	execResult, err := ExecWithResult(ctx, sql, cnUUID, txn)
@@ -1232,23 +1233,4 @@ func splitInitSQL(s string) []string {
 		return []string{one}
 	}
 	return []string{s}
-}
-
-func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
-	if txnOp == nil {
-		return err
-	}
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx),
-		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
-	)
-	defer cancel()
-	if err != nil {
-		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
-			return errors.Join(err, rollbackErr)
-		}
-		return err
-	}
-	return txnOp.Commit(cleanupCtx)
 }

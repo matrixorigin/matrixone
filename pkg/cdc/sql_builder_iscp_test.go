@@ -52,3 +52,41 @@ func TestISCPLogAdvanceWatermarkSQLCarriesMonotonicStage(t *testing.T) {
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
 	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
 }
+
+func TestISCPLogSQLBuildersEscapeStringLiterals(t *testing.T) {
+	jobName := `job_'name\path`
+	jobSpec := `{"InitSQL":"select 'quoted' from C:\\data"}`
+	jobStatus := `{"ErrorMsg":"can't open C:\\data","LSN":5,"Stage":1}`
+	watermark := types.BuildTS(4, 0)
+
+	insertSQL := CDCSQLBuilder.ISCPLogInsertSQL(
+		1, 2, jobName, 3, jobSpec, 1, watermark, jobStatus,
+	)
+	require.Contains(t, insertSQL, `'job_''name\\path'`)
+	require.Contains(t, insertSQL, `'{"InitSQL":"select ''quoted'' from C:\\\\data"}'`)
+	require.Contains(t, insertSQL, `'{"ErrorMsg":"can''t open C:\\\\data","LSN":5,"Stage":1}'`)
+
+	updateSQL := CDCSQLBuilder.ISCPLogUpdateResultSQL(
+		1, 2, jobName, 3, watermark, jobStatus, 1, 1, 4,
+	)
+	require.Contains(t, updateSQL, `JSON_SET('{"ErrorMsg":"can''t open C:\\\\data","LSN":5,"Stage":1}'`)
+	require.Contains(t, updateSQL, `job_name = 'job_''name\\path'`)
+
+	advanceSQL := CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
+		1, 2, jobName, 3, watermark, 5, 1, 1, 4,
+	)
+	require.Contains(t, advanceSQL, `job_name = 'job_''name\\path'`)
+
+	require.Contains(t,
+		CDCSQLBuilder.ISCPLogUpdateDropAtSQL(1, 2, jobName, 3),
+		`job_name = 'job_''name\\path'`,
+	)
+	require.Contains(t,
+		CDCSQLBuilder.ISCPLogUpdateJobSpecSQL(1, 2, jobName, 3, jobSpec),
+		`job_spec = '{"InitSQL":"select ''quoted'' from C:\\\\data"}'`,
+	)
+	require.Contains(t,
+		CDCSQLBuilder.ISCPLogSelectByTableSQL(1, 2, jobName),
+		`job_name = 'job_''name\\path'`,
+	)
+}

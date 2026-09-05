@@ -258,6 +258,19 @@ func TestFinishISCPTransactionRollsBackWithIndependentContext(t *testing.T) {
 	require.NoError(t, txn.rollbackErrAtCall)
 }
 
+func TestFinishISCPTransactionDoesNotCommitCanceledSuccess(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	txn := &iscpTxnForTest{}
+
+	err := finishISCPTransaction(parent, txn, nil)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, txn.rolledBack)
+	require.False(t, txn.committed)
+	require.NoError(t, txn.rollbackErrAtCall)
+}
+
 func TestRunInitSQLTransactionCommitsStatementsAndStageTogether(t *testing.T) {
 	txn := &iscpTxnForTest{}
 	steps := make([]string, 0, 2)

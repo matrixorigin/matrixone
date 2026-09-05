@@ -431,6 +431,7 @@ func isAmbiguousLegacyInit(state int8, jobSpec *JobSpec, jobStatus *JobStatus) b
 func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
+	var quarantinedJobs uint64
 	sql := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
         SET job_state = %d
@@ -449,7 +450,16 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
 	if txnOp != nil {
 		defer func() {
-			err = finishISCPTransaction(ctx, txnOp, err)
+			err = finishISCPTransaction(ctxWithTimeout, txnOp, err)
+			// Report only a durable repair. Logging before Commit can claim that
+			// jobs were fenced even when the transaction subsequently aborts.
+			if err == nil && quarantinedJobs > 0 {
+				logutil.Warn(
+					"ISCP-Task quarantined ambiguous legacy initialization state",
+					zap.Uint64("jobCount", quarantinedJobs),
+					zap.String("action", "query mo_catalog.mo_iscp_log by the durable ErrorMsg and recreate each affected job"),
+				)
+			}
 		}()
 	}
 	if err != nil {
@@ -480,12 +490,7 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 		return
 	}
 	defer result.Close()
-	if result.AffectedRows > 0 {
-		logutil.Warn(
-			"ISCP-Task quarantined ambiguous legacy initialization state",
-			zap.Uint64("jobCount", result.AffectedRows),
-		)
-	}
+	quarantinedJobs = result.AffectedRows
 	return nil
 }
 
@@ -745,7 +750,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		defer func() {
+			err = finishISCPTransaction(ctx, txnOp, err)
+		}()
 	}
 	if err != nil {
 		return
@@ -930,11 +937,7 @@ func (exec *ISCPTaskExecutor) loadReplay(
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, txn.Rollback(ctx))
-			return
-		}
-		err = txn.Commit(ctx)
+		err = finishISCPTransaction(ctx, txn, err)
 	}()
 
 	tableID, _, err = getTableID(ctx, exec.cnUUID, txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
@@ -1296,15 +1299,21 @@ func (exec *ISCPTaskExecutor) flushWatermarkForAllTablesWithTxn(
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
 	var pending map[*TableEntry][]watermarkFlushReservation
+	jobCount := 0
 	defer func() {
-		err = finishISCPTransaction(exec.ctx, txn, err)
+		err = finishISCPTransaction(ctx, txn, err)
 		if err != nil {
 			for table, reservations := range pending {
 				table.rollbackWatermarkFlushes(reservations)
 			}
+			return
 		}
+		logutil.Info(
+			"ISCP-Task flush watermark",
+			zap.Any("table count", len(tables)),
+			zap.Int("jobCount", jobCount),
+		)
 	}()
-	jobCount := 0
 	for _, table := range tables {
 		reservations, flushErr := table.tryFlushWatermark(ctx, txn, ttl)
 		if len(reservations) > 0 {
@@ -1319,11 +1328,6 @@ func (exec *ISCPTaskExecutor) flushWatermarkForAllTablesWithTxn(
 			return err
 		}
 	}
-	logutil.Info(
-		"ISCP-Task flush watermark",
-		zap.Any("table count", len(tables)),
-		zap.Int("jobCount", jobCount),
-	)
 	return nil
 }
 
@@ -1334,19 +1338,23 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	}
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
+	defer func() {
+		err = finishISCPTransaction(ctx, txn, err)
+		if err == nil {
+			logutil.Info(
+				"ISCP-Task GC",
+				zap.Any("gcTime", gcTime),
+			)
+		}
+	}()
 	iscpLogGCSql := cdc.CDCSQLBuilder.ISCPLogGCSQL(gcTime)
 	result, err := ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn)
 	if err != nil {
 		return err
 	}
 	result.Close()
-	logutil.Info(
-		"ISCP-Task GC",
-		zap.Any("gcTime", gcTime),
-	)
-	return err
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) String() string {
