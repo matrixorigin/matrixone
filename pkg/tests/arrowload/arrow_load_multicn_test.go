@@ -32,7 +32,7 @@ import (
 // second CN. Worker shutdown runs last because it intentionally removes that CN
 // from the fixture.
 func TestArrowLoadMultiCN(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 2)
+	c := startArrowLoadCluster(t, 2, true, false, true)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_multicn")
 	mustExec(t, db, "use arrow_multicn")

@@ -85,9 +85,11 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 	settings, err := compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
 	require.True(t, settings.Enabled)
-	require.True(t, settings.S3Enabled)
-	require.True(t, settings.DistributedEnabled)
-	require.Same(t, param, arrowParamForRollout(param, settings))
+	require.False(t, settings.S3Enabled)
+	require.False(t, settings.DistributedEnabled)
+	serial := arrowParamForRollout(param, settings)
+	require.NotSame(t, param, serial)
+	require.False(t, serial.Parallel)
 
 	frontend.ArrowLoad.Enabled = false
 	_, err = compile.requireArrowLoadEnabled(param)
@@ -97,7 +99,7 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 	frontend.ArrowLoad.DistributedEnabled = false
 	settings, err = compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
-	serial := arrowParamForRollout(param, settings)
+	serial = arrowParamForRollout(param, settings)
 	require.NotSame(t, param, serial)
 	require.True(t, param.Parallel, "rollout fallback must not mutate the reusable parser parameter")
 	require.False(t, serial.Parallel)

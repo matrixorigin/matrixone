@@ -15,8 +15,9 @@
 // Package arrowload holds release-level, end-to-end BVT coverage for
 // `LOAD DATA ... format='arrow'` (issue #23684). Tests run against dedicated,
 // non-shared embedded clusters (see cluster_test.go). The main BVTs exercise the
-// default-on configuration, while focused rollback cases can flip Arrow LOAD kill
-// switches without affecting any other package's shared embedded cluster.
+// local-only default configuration, while focused cases explicitly opt into S3
+// or distributed Arrow LOAD without affecting any other package's shared
+// embedded cluster.
 package arrowload
 
 import (
