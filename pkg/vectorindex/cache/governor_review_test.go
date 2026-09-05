@@ -453,12 +453,9 @@ func TestGovernorRefusesOnlyToProtectABusyIncumbent(t *testing.T) {
 	<-held.searching
 	defer close(held.release)
 
-	_, _, err := c.Search(sp, "__mo_index_secondary_arrival",
-		&countingSearch{host: 200}, nil, vectorindex.RuntimeConfig{})
-	require.Error(t, err, "200+200 exceeds 250 and the incumbent is busy, so the arrival is refused")
-	require.Contains(t, err.Error(), "index cache is full")
+	// 200+200 exceeds 250 and the incumbent is busy, so the arrival is refused.
+	loadRefused(t, c, sp, "__mo_index_secondary_arrival", 200, 0)
 	require.True(t, isResident(c, busy), "the live search is never sacrificed for an arrival")
-	require.False(t, isResident(c, "__mo_index_secondary_arrival"))
 }
 
 // permanentInvalidState is a RESIDENT algorithm whose backend keeps failing with the public

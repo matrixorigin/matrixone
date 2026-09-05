@@ -76,7 +76,6 @@ func stubSysLimit(t *testing.T, c *VectorIndexCache, value caps) {
 	c.sysLimit.value, c.sysLimit.fetched = value, time.Now()
 }
 
-// loadInto puts one sized entry into the cache under key, as account would have loaded it.
 // loadRefused drives a load the admission policy is expected to REJECT: it does not fit even
 // after every idle entry has been reclaimed, and live entries are never preempted for it.
 func loadRefused(t *testing.T, c *VectorIndexCache, sp *sqlexec.SqlProcess, key string, host, device int64) {
@@ -87,6 +86,7 @@ func loadRefused(t *testing.T, c *VectorIndexCache, sp *sqlexec.SqlProcess, key 
 	require.False(t, isResident(c, key), "and it leaves nothing behind")
 }
 
+// loadInto puts one sized entry into the cache under key, as account would have loaded it.
 func loadInto(t *testing.T, c *VectorIndexCache, sp *sqlexec.SqlProcess, key string, host, device int64) *countingSearch {
 	t.Helper()
 	algo := &countingSearch{host: host, device: device}
