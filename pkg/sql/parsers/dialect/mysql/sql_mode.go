@@ -26,6 +26,8 @@ const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 // rejects it when this token is absent.
 const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
 
+const SQLModeNoUnsignedSubtraction = "NO_UNSIGNED_SUBTRACTION"
+
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
 	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"

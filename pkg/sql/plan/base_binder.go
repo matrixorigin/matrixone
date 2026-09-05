@@ -3479,6 +3479,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
+	unsignedSubtractionResultType := b.unsignedIntegerSubtractionResultType(name, args)
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
@@ -3526,6 +3527,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if unsignedSubtractionResultType != nil {
+		var err error
+		args, err = b.castUnsignedIntegerSubtractionArgs(args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
 	if coerceErr != nil {
 		return nil, coerceErr
@@ -3606,6 +3614,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			if unsignedSubtractionResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), e, *unsignedSubtractionResultType)
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3625,6 +3636,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
+			if unsignedSubtractionResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), builtinExpr, *unsignedSubtractionResultType)
 			}
 			return builtinExpr, nil
 		}
@@ -5413,6 +5427,62 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// unsignedIntegerSubtractionResultType returns MySQL's result domain for
+// integer subtraction. This is intentionally decided before prepared numeric
+// argument reconciliation: that reconciliation may temporarily widen an
+// explicit unsigned cast containing a parameter to DECIMAL128.
+func (b *baseBinder) unsignedIntegerSubtractionResultType(name string, args []*Expr) *Type {
+	if name != "-" || len(args) != 2 {
+		return nil
+	}
+
+	left := types.T(args[0].Typ.Id)
+	right := types.T(args[1].Typ.Id)
+	if !integerSubtractionOperand(left) || !integerSubtractionOperand(right) ||
+		(!unsignedIntegerSubtractionOperand(left) && !unsignedIntegerSubtractionOperand(right)) {
+		return nil
+	}
+
+	resultType := types.T_uint64.ToType()
+	if b.builder != nil && b.builder.noUnsignedSubtraction {
+		resultType = types.T_int64.ToType()
+	}
+	planType := makePlan2Type(&resultType)
+	return &planType
+}
+
+// castUnsignedIntegerSubtractionArgs performs the arithmetic in DECIMAL128 so
+// signed operands and the complete UINT64 range can be combined without an
+// operand cast failing before subtraction. The caller applies the final
+// implicit BIGINT cast to enforce the selected signed or unsigned bound.
+func (b *baseBinder) castUnsignedIntegerSubtractionArgs(args []*Expr) ([]*Expr, error) {
+	decimalType := types.New(types.T_decimal128, 38, 0)
+	for i := range args {
+		if makeTypeByPlan2Expr(args[i]).Eq(decimalType) {
+			continue
+		}
+		casted, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&decimalType))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = casted
+	}
+	return args, nil
+}
+
+func integerSubtractionOperand(typ types.T) bool {
+	return typ.IsInteger() || typ == types.T_bit
+}
+
+func unsignedIntegerSubtractionOperand(typ types.T) bool {
+	switch typ {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
+		return true
+	default:
+		return false
+	}
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {

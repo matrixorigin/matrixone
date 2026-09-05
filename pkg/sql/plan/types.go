@@ -421,6 +421,9 @@ type QueryBuilder struct {
 	isPrepareStatement     bool
 	mysqlCompatible        bool
 	mysqlFullGroupByCompat bool
+	// noUnsignedSubtraction makes integer subtraction return a signed BIGINT
+	// even when either operand is unsigned, matching MySQL's SQL mode.
+	noUnsignedSubtraction bool
 	// boolSumAvgCompat is the ENABLE_BOOL_SUMAVG sql_mode, resolved once per
 	// builder like the two flags above so every bind path (direct, HAVING,
 	// window, PREPARE) reads the same decision.
