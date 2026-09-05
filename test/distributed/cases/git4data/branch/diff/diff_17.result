@@ -66,8 +66,8 @@ show create table diff_projected;
 diff_projected  ¦  CREATE TABLE `diff_projected` (
   `__mo_diff_source` varchar(255) DEFAULT NULL,
   `__mo_diff_flag` varchar(16) DEFAULT NULL,
-  `flag` varchar(20) DEFAULT NULL,
   `id` int NOT NULL,
+  `flag` varchar(20) DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL
 )
 select __mo_diff_source, __mo_diff_flag, flag, id, amount
@@ -85,6 +85,7 @@ show create table diff_projected_dedup;
 diff_projected_dedup  ¦  CREATE TABLE `diff_projected_dedup` (
   `__mo_diff_source` varchar(255) DEFAULT NULL,
   `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `source` varchar(20) DEFAULT NULL
 )

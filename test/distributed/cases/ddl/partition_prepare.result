@@ -810,5 +810,48 @@ o_w_id    o_d_id    o_id    o_c_id    o_carrier_id    o_ol_cnt    o_all_local
 10    5    525    1264    9    15    1
 10    10    2344    1590    null    11    1
 10    10    2977    1049    null    13    1
+prepare __mo_stmt_partition_null from 'select count(*) from bmsql_oorder where o_w_id = ?';
+SET @o_w_id_null = NULL;
+EXECUTE __mo_stmt_partition_null USING @o_w_id_null;
+count(*)
+0
+deallocate prepare __mo_stmt_partition_null;
+drop table if exists partition_prepare_nullable_in;
+create table partition_prepare_nullable_in (k int, v int)
+partition by list(k) (
+partition p0 values in (0),
+partition p1 values in (1),
+partition p2 values in (2)
+);
+insert into partition_prepare_nullable_in values (0, 10), (1, 11), (2, 12);
+prepare __mo_stmt_partition_nullable_select from
+'select k, v from partition_prepare_nullable_in where k in (?, ?) order by k';
+SET @partition_keep = 1;
+SET @partition_null = NULL;
+EXECUTE __mo_stmt_partition_nullable_select USING @partition_keep, @partition_null;
+k    v
+1    11
+EXECUTE __mo_stmt_partition_nullable_select USING @partition_null, @partition_keep;
+k    v
+1    11
+deallocate prepare __mo_stmt_partition_nullable_select;
+prepare __mo_stmt_partition_nullable_update from
+'update partition_prepare_nullable_in set v = v + 100 where k in (?, ?)';
+EXECUTE __mo_stmt_partition_nullable_update USING @partition_keep, @partition_null;
+deallocate prepare __mo_stmt_partition_nullable_update;
+select k, v from partition_prepare_nullable_in order by k;
+k    v
+0    10
+1    111
+2    12
+prepare __mo_stmt_partition_nullable_delete from
+'delete from partition_prepare_nullable_in where k in (?, ?)';
+EXECUTE __mo_stmt_partition_nullable_delete USING @partition_null, @partition_keep;
+deallocate prepare __mo_stmt_partition_nullable_delete;
+select k, v from partition_prepare_nullable_in order by k;
+k    v
+0    10
+2    12
+drop table partition_prepare_nullable_in;
 drop table bmsql_oorder;
 drop database if exists tpcc;

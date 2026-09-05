@@ -871,7 +871,12 @@ type Tombstoner interface {
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
 
-	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+	PrefetchTombstones(
+		ctx context.Context,
+		srvId string,
+		fs fileservice.FileService,
+		bid []objectio.Blockid,
+	)
 
 	// it applies the block related in-memory tombstones to the rowsOffset
 	// `bid` is the block id
@@ -1334,12 +1339,117 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// TableVersionedStats is an optional engine capability for readers that know
+// the table definition used by their plan. Implementations must not return
+// schema-bound statistics collected for another definition version. It is
+// optional so engines and mocks that expose only metadata-derived statistics
+// keep the existing Engine contract.
+type TableVersionedStats interface {
+	StatsAtTableVersion(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		sync bool,
+		tableDefVersion uint32,
+	) *pb.StatsInfo
+}
+
+// RemoteStatsExporter is an optional engine capability for serving statistics
+// to another CN. Unlike a local unversioned Stats reader, the remote caller
+// cannot prove which table-definition version it will use. Implementations
+// must therefore reject schema-bound statistics rather than serialize them.
+type RemoteStatsExporter interface {
+	StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo
+}
+
+// StatsRefreshOptions carries statistics that the statement computed from a
+// table-wide scan. Object metadata remains the source of all fields not
+// present here.
+type StatsRefreshOptions struct {
+	// TableDefVersion is the schema version that owned the table-wide
+	// observation. It is required whenever TableRowCount or ColumnNDVs carries
+	// an observation. The engine rejects it if the current physical table has
+	// crossed a schema boundary, preventing an old column value from being
+	// applied to a dropped-and-recreated column with the same name.
+	TableDefVersion *uint32
+
+	// TableRowCount is the exact row count observed by the same table-wide scan
+	// as ColumnNDVs. Nil leaves the object-metadata estimate unchanged.
+	TableRowCount *float64
+
+	// ColumnNDVs maps canonical column names to table-wide approximate distinct
+	// counts. The engine validates the names and values, caps them at the
+	// effective table row count, and applies them before publishing the new
+	// statistics object.
+	ColumnNDVs map[string]float64
+}
+
 // StatsRefresher is an optional engine capability for statements that define
 // a synchronous statistics-publication boundary, such as ANALYZE TABLE.
 // Implementations must not return until Stats() can observe the returned
 // statistics on the local engine instance.
 type StatsRefresher interface {
 	RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error)
+}
+
+// StatsRefresherWithOptions extends StatsRefresher without breaking engines
+// that implement the original synchronous refresh capability.
+type StatsRefresherWithOptions interface {
+	StatsRefresher
+	RefreshTableStatsWithOptions(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		options StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
+}
+
+// AnalyzeTableRequest is the storage-facing contract for a manual ANALYZE
+// collection. The relation owns snapshot visibility and physical range
+// selection; callers provide only bounded policy inputs and resolved columns.
+type AnalyzeTableRequest struct {
+	Process           any
+	Columns           []string
+	FullScan          bool
+	Seed              [32]byte
+	TargetRows        uint64
+	MinBlocks         uint64
+	MaxBlocks         uint64
+	MaxStrata         uint32
+	MaxDistinctValues uint64
+	ColumnsPerPass    uint32
+}
+
+// AnalyzeTableResult contains the StatsInfo compatibility adapter and explicit
+// collection diagnostics. The relation never publishes this result itself.
+type AnalyzeTableResult struct {
+	Stats             *pb.StatsInfo
+	Mode              string
+	Coverage          string
+	PopulationRows    uint64
+	PopulationExact   bool
+	PopulationBlocks  uint64
+	SampleRows        uint64
+	SampleBlocks      uint64
+	SampleBytes       uint64
+	ColumnsAnalyzed   uint32
+	SampleNumerator   uint64
+	SampleDenominator uint64
+}
+
+// AnalyzableRelation is optional so non-disttae engines and existing relation
+// mocks are not forced to implement a storage-specific maintenance operation.
+type AnalyzableRelation interface {
+	AnalyzeTable(ctx context.Context, request AnalyzeTableRequest) (*AnalyzeTableResult, error)
+}
+
+// AnalyzedStatsPublisher owns the publication boundary after successful data
+// collection. Durable publication can evolve behind this same capability.
+type AnalyzedStatsPublisher interface {
+	PublishAnalyzedStats(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		tableDefVersion uint32,
+		stats *pb.StatsInfo,
+	) (*pb.StatsInfo, error)
 }
 
 // LogtailReadBarrier is an optional engine capability that establishes a

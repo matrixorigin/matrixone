@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -693,7 +694,35 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	if activeRoutine != nil {
-		return activeRoutine.Cancel()
+		if err := activeRoutine.Cancel(); err != nil {
+			// The durable status was claimed before invoking the local
+			// lifecycle owner. Put it back into the retryable state when cleanup
+			// fails; otherwise a transient DELETE failure can strand durable CDC
+			// metadata behind a terminal Canceled row.
+			restoreCtx, restoreCancel := context.WithTimeoutCause(
+				context.Background(),
+				time.Second*5,
+				moerr.CauseCancelTaskHandle,
+			)
+			restoreNow := time.Now()
+			updated, restoreErr := t.runner.service.UpdateDaemonTaskStatus(
+				restoreCtx,
+				tk.ID,
+				task.TaskStatus_CancelRequested,
+				restoreNow,
+				restoreNow,
+				WithTaskStatusCond(task.TaskStatus_Canceled),
+				WithTaskRunnerCond(EQ, tk.TaskRunner),
+			)
+			restoreCancel()
+			if restoreErr == nil && updated != 1 {
+				restoreErr = moerr.NewInternalErrorNoCtx("cancel cleanup failed to restore CancelRequested status")
+			}
+			if restoreErr != nil {
+				return moerr.AttachCause(restoreCtx, errors.Join(err, restoreErr))
+			}
+			return err
+		}
 	}
 	return nil
 }
