@@ -252,6 +252,50 @@ func TestInitialSnapshotEpochStateDistinguishesCreateFromRestart(t *testing.T) {
 	require.Equal(t, candidate, state.Epoch)
 }
 
+func TestInitialSnapshotEpochMissingWithProgressRemainsRejected(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	candidate := types.BuildTS(300, 0)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := updater.GetOrCreateInitialSnapshotEpochStateForProgress(
+			context.Background(), key, 11, candidate, types.BuildTS(200, 0), 11)
+		require.ErrorContains(t, err, "metadata is missing")
+		_, exists := executor.epoch(11)
+		require.False(t, exists, "a rejected admission must not create metadata trusted by its retry")
+	}
+}
+
+func TestInitialSnapshotEpochAllowsNewSourceGenerationProgress(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+	_, err := updater.GetOrCreateInitialSnapshotEpochState(
+		context.Background(), key, 10, types.BuildTS(100, 0))
+	require.NoError(t, err)
+
+	state, err := updater.GetOrCreateInitialSnapshotEpochStateForProgress(
+		context.Background(), key, 11, types.BuildTS(300, 0), types.BuildTS(200, 0), 10)
+	require.NoError(t, err)
+	require.True(t, state.Created)
+	require.True(t, state.HasOtherGeneration)
+	require.Equal(t, types.BuildTS(300, 0), state.Epoch)
+}
+
+func TestInitialSnapshotEpochRejectsStaleSourceBeforeInsert(t *testing.T) {
+	executor := newSnapshotEpochTestExecutor()
+	updater := NewCDCWatermarkUpdater(t.Name(), executor)
+	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
+
+	_, err := updater.GetOrCreateInitialSnapshotEpochStateForProgress(
+		context.Background(), key, 11, types.BuildTS(300, 0), types.BuildTS(200, 0), 12)
+	require.Error(t, err)
+	require.True(t, IsRetryableSnapshotEpochError(err))
+	_, exists := executor.epoch(11)
+	require.False(t, exists, "a stale source view must not add a retired epoch row")
+}
+
 func TestInitialSnapshotEpochAmbiguousInsertRecovery(t *testing.T) {
 	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
 	candidate := types.BuildTS(100, 3)
@@ -423,6 +467,8 @@ func TestSnapshotEpochSQLUsesEscapedKeys(t *testing.T) {
 	require.Contains(t, sql, "db_name = 'd''b'")
 	require.Contains(t, sql, "table_name = 't''bl'")
 	require.Contains(t, CDCSQLBuilder.InsertSnapshotEpochSQL(key, 9, types.BuildTS(10, 1)), "ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch")
+	require.Contains(t, CDCSQLBuilder.ClaimWatermarkOwnerSQL(key, 123), "GREATEST(owner_generation, 123)")
+	require.Contains(t, CDCSQLBuilder.GetWatermarkOwnerProgressSQL(key), "SELECT owner_generation, watermark, source_table_id")
 	require.Contains(t, CDCSQLBuilder.GetHighestOtherSnapshotGenerationSQL(key, 9), "ORDER BY source_table_id DESC")
 	require.Contains(t, CDCSQLBuilder.DeleteSnapshotEpochGenerationsBeforeSQL(key, 9), "source_table_id < 9")
 	require.Contains(t, CDCSQLBuilder.DeleteOrphanSnapshotEpochSQL(), "LEFT JOIN `mo_catalog`.`mo_cdc_task`")
@@ -434,7 +480,7 @@ func TestBufferedWatermarkFromSupersededOwnerIsDropped(t *testing.T) {
 	key := &WatermarkKey{AccountId: 7, TaskId: "task", DBName: "db", TableName: "tbl"}
 	watermark := types.BuildTS(200, 1)
 	fenceChecks := 0
-	ctx := WithWatermarkOwnerFence(context.Background(), NewOwnerFence(func(ctx context.Context) error {
+	ctx := WithWatermarkOwnerFence(context.Background(), NewOwnerFenceForGeneration(time.UnixMicro(1), func(ctx context.Context) error {
 		fenceChecks++
 		return moerr.NewInvalidTask(ctx, "old-cn", 1)
 	}), 11)
@@ -456,7 +502,7 @@ func TestBufferedWatermarksValidateSharedOwnerOnce(t *testing.T) {
 	updater := NewCDCWatermarkUpdater(t.Name(), executor)
 	watermark := types.BuildTS(200, 1)
 	fenceChecks := 0
-	fence := NewOwnerFence(func(ctx context.Context) error {
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(ctx context.Context) error {
 		fenceChecks++
 		return moerr.NewInvalidTask(ctx, "old-cn", 1)
 	})

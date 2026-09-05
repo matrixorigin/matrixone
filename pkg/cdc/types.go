@@ -136,6 +136,17 @@ func (f *OwnerFence) Check(ctx context.Context) error {
 	return &RetryableOwnerFenceError{err: err}
 }
 
+// GenerationToken is the durable, strictly monotonic daemon-claim rank. Stable
+// snapshot admission persists it before touching the target, so an async
+// checkpoint from an older owner can be rejected in the same transaction that
+// reads the admission row.
+func (f *OwnerFence) GenerationToken() uint64 {
+	if f == nil || f.generation.IsZero() || f.generation.UnixMicro() <= 0 {
+		return 0
+	}
+	return uint64(f.generation.UnixMicro())
+}
+
 func (f *OwnerFence) supersedes(other *OwnerFence) bool {
 	if f == nil || f == other {
 		return false

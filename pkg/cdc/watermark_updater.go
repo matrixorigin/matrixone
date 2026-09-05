@@ -334,6 +334,7 @@ type CDCWatermarkUpdater struct {
 	// from being persisted after another owner takes over.
 	cacheUncommittedFence map[WatermarkKey]*OwnerFence
 	cacheCommittingFence  map[WatermarkKey]*OwnerFence
+	activeWatermarkFence  map[WatermarkKey]*OwnerFence
 
 	// Error metadata cache (similar to watermark cache)
 	// Cached in memory to avoid synchronous SQL queries in RecordError()
@@ -394,6 +395,7 @@ func NewCDCWatermarkUpdater(
 		cacheCommittedGeneration:   make(map[WatermarkKey]uint64),
 		cacheUncommittedFence:      make(map[WatermarkKey]*OwnerFence),
 		cacheCommittingFence:       make(map[WatermarkKey]*OwnerFence),
+		activeWatermarkFence:       make(map[WatermarkKey]*OwnerFence),
 		errorMetadataCache:         make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
 		commitFailureCount:         make(map[WatermarkKey]uint32),
 		commitCircuitOpen:          make(map[WatermarkKey]time.Time),
@@ -533,6 +535,7 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			delete(u.cacheCommittedGeneration, *job.Key)
 			delete(u.cacheUncommittedFence, *job.Key)
 			delete(u.cacheCommittingFence, *job.Key)
+			delete(u.activeWatermarkFence, *job.Key)
 			delete(u.errorMetadataCache, *job.Key)
 			if openedAt, opened := u.commitCircuitOpen[*job.Key]; opened {
 				if time.Since(openedAt) < watermarkCircuitBreakPeriod {
@@ -836,7 +839,7 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 		commitGroups = append(commitGroups, commitGroup{sqls: sqls, keys: legacyWatermarks})
 	}
 	if sqls := u.constructBatchUpdateMonotonicWMSQLs(
-		stableWatermarks, u.cacheCommittingGeneration); len(sqls) > 0 {
+		stableWatermarks, u.cacheCommittingGeneration, u.cacheCommittingFence); len(sqls) > 0 {
 		commitGroups = append(commitGroups, commitGroup{sqls: sqls, keys: stableWatermarks})
 	}
 	u.Unlock()
@@ -908,6 +911,16 @@ func (u *CDCWatermarkUpdater) persistBatchUpdateWM() (errMsg string, err error) 
 	committedCount := 0
 	now := time.Now()
 	for key, watermark := range u.cacheCommitting {
+		if fence := u.cacheCommittingFence[key]; fence != nil {
+			if active, ok := u.activeWatermarkFence[key]; ok && active != fence {
+				// A replacement in this process has already published a newer
+				// replay generation. The durable SQL was also fenced by that row;
+				// never let the obsolete completion poison the shared local cache.
+				delete(u.commitFailureCount, key)
+				delete(u.commitCircuitOpen, key)
+				continue
+			}
+		}
 		if _, failed := failedKeys[key]; failed {
 			generation := u.cacheCommittingGeneration[key]
 			if existing, ok := u.cacheUncommitted[key]; ok && shouldRetainBufferedWatermark(
@@ -1006,12 +1019,13 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 }
 
 type guardedWatermarkRow struct {
-	accountID  uint64
-	taskID     string
-	dbName     string
-	tableName  string
-	value      string
-	generation uint64
+	accountID       uint64
+	taskID          string
+	dbName          string
+	tableName       string
+	value           string
+	generation      uint64
+	ownerGeneration uint64
 }
 
 type watermarkTaskKey struct {
@@ -1089,7 +1103,13 @@ func watermarkMonotonicUpdateRowSQL(row guardedWatermarkRow, withAliases bool) s
 	}
 	builder.WriteString(strconv.FormatUint(row.generation, 10))
 	if withAliases {
-		builder.WriteString(" AS source_table_id")
+		builder.WriteString(" AS source_table_id, ")
+	} else {
+		builder.WriteString(", ")
+	}
+	builder.WriteString(strconv.FormatUint(row.ownerGeneration, 10))
+	if withAliases {
+		builder.WriteString(" AS owner_generation")
 	}
 	return builder.String()
 }
@@ -1249,25 +1269,29 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQLs(
 			value:     wm.ToString(),
 		})
 	}
-	return buildGuardedWatermarkSQLBatches(rows, watermarkUpdateRowSQL, CDCSQLBuilder.GuardedWatermarkUpdateSQL)
+	return buildGuardedWatermarkSQLBatches(rows, watermarkUpdateRowSQL,
+		CDCSQLBuilder.GuardedWatermarkUpdateSQL)
 }
 
 func (u *CDCWatermarkUpdater) constructBatchUpdateMonotonicWMSQLs(
 	keys map[WatermarkKey]types.TS,
 	generations map[WatermarkKey]uint64,
+	fences map[WatermarkKey]*OwnerFence,
 ) []string {
 	rows := make([]guardedWatermarkRow, 0, len(keys))
 	for key, wm := range keys {
 		rows = append(rows, guardedWatermarkRow{
-			accountID:  key.AccountId,
-			taskID:     key.TaskId,
-			dbName:     key.DBName,
-			tableName:  key.TableName,
-			value:      wm.ToString(),
-			generation: generations[key],
+			accountID:       key.AccountId,
+			taskID:          key.TaskId,
+			dbName:          key.DBName,
+			tableName:       key.TableName,
+			value:           wm.ToString(),
+			generation:      generations[key],
+			ownerGeneration: fences[key].GenerationToken(),
 		})
 	}
-	return buildGuardedWatermarkSQLBatches(rows, watermarkMonotonicUpdateRowSQL, CDCSQLBuilder.GuardedMonotonicWatermarkUpdateSQL)
+	return buildGuardedWatermarkSQLBatches(rows, watermarkMonotonicUpdateRowSQL,
+		CDCSQLBuilder.GuardedMonotonicWatermarkUpdateSQL)
 }
 
 func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
@@ -1283,7 +1307,8 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
 			value:     job.ErrMsg,
 		})
 	}
-	return buildGuardedWatermarkSQLBatches(rows, watermarkErrorRowSQL, CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL)
+	return buildGuardedWatermarkSQLBatches(rows, watermarkErrorRowSQL,
+		CDCSQLBuilder.GuardedWatermarkErrorUpdateSQL)
 }
 
 func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
@@ -1345,7 +1370,8 @@ func (u *CDCWatermarkUpdater) constructAddWMSQLs(
 			value:     job.Watermark.ToString(),
 		})
 	}
-	return buildGuardedWatermarkSQLBatches(rows, watermarkInsertRowSQL, CDCSQLBuilder.GuardedWatermarkInsertSQL)
+	return buildGuardedWatermarkSQLBatches(rows, watermarkInsertRowSQL,
+		CDCSQLBuilder.GuardedWatermarkInsertSQL)
 }
 
 func (u *CDCWatermarkUpdater) constructReadWMSQL(
@@ -1485,6 +1511,91 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 		return types.TS{}, 0, err
 	}
 	u.Lock()
+	u.cacheCommitted[*key] = watermark
+	u.cacheCommittedGeneration[*key] = generation
+	u.Unlock()
+	return watermark, generation, nil
+}
+
+// ClaimWatermarkOwner durably publishes the daemon generation that is allowed
+// to advance one table's stable watermark, then returns progress ordered after
+// that claim. Both takeover and checkpoint update the same row, so either the
+// old checkpoint commits first and is observed here, or it loses the owner
+// equality check in the guarded upsert.
+func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
+	ctx context.Context,
+	key *WatermarkKey,
+	fence *OwnerFence,
+) (types.TS, uint64, error) {
+	ownerGeneration := fence.GenerationToken()
+	if ownerGeneration == 0 {
+		return types.TS{}, 0, moerr.NewInternalErrorf(
+			ctx, "invalid CDC watermark owner generation for %s", key.String())
+	}
+	if err := fence.Check(ctx); err != nil {
+		return types.TS{}, 0, err
+	}
+
+	claimCtx, cancel := context.WithTimeoutCause(
+		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	claimCtx = defines.AttachAccountId(claimCtx, catalog.System_Account)
+	if err := u.ie.Exec(
+		claimCtx,
+		CDCSQLBuilder.ClaimWatermarkOwnerSQL(key, ownerGeneration),
+		ie.SessionOverrideOptions{},
+	); err != nil {
+		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
+	}
+
+	res := u.ie.Query(
+		claimCtx,
+		CDCSQLBuilder.GetWatermarkOwnerProgressSQL(key),
+		ie.SessionOverrideOptions{},
+	)
+	if err := res.Error(); err != nil {
+		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
+	}
+	if res.RowCount() != 1 {
+		return types.TS{}, 0, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+			ctx, "CDC watermark owner row is missing for %s", key.String()))
+	}
+	currentOwner, err := res.GetUint64(claimCtx, 0, 0)
+	if err != nil {
+		return types.TS{}, 0, err
+	}
+	if currentOwner > ownerGeneration {
+		return types.TS{}, 0, &OwnerFenceLostError{err: moerr.NewInvalidTask(
+			ctx, "CDC watermark owner was superseded", ownerGeneration)}
+	}
+	if currentOwner < ownerGeneration {
+		return types.TS{}, 0, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+			ctx, "CDC watermark owner claim %d was not durable for %s (found %d)",
+			ownerGeneration, key.String(), currentOwner))
+	}
+	watermarkText, err := res.GetString(claimCtx, 0, 1)
+	if err != nil {
+		return types.TS{}, 0, err
+	}
+	watermark, err := parseWatermarkTS(watermarkText)
+	if err != nil {
+		return types.TS{}, 0, moerr.NewInternalErrorf(
+			ctx, "invalid CDC watermark %q for %s: %v", watermarkText, key.String(), err)
+	}
+	generation, err := res.GetUint64(claimCtx, 0, 2)
+	if err != nil {
+		return types.TS{}, 0, err
+	}
+	if err = fence.Check(ctx); err != nil {
+		return types.TS{}, 0, err
+	}
+
+	u.Lock()
+	if !u.activateWatermarkFenceLocked(*key, fence) {
+		u.Unlock()
+		return types.TS{}, 0, &OwnerFenceLostError{err: moerr.NewInvalidTask(
+			ctx, "CDC watermark owner was superseded locally", ownerGeneration)}
+	}
 	u.cacheCommitted[*key] = watermark
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
@@ -1782,6 +1893,10 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 		return moerr.NewInternalErrorNoCtx(
 			"owner-fenced CDC watermark update requires a source table generation")
 	}
+	if fenced && incomingFence != nil && incomingFence.GenerationToken() == 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"owner-fenced CDC watermark update requires a durable owner generation")
+	}
 	if fenced && incomingFence != nil && !u.shouldBufferStableWatermarkLocked(
 		*key, *watermark, incomingGeneration, incomingFence) {
 		return nil
@@ -1859,6 +1974,35 @@ func (u *CDCWatermarkUpdater) shouldBufferStableWatermarkLocked(
 	return true
 }
 
+// activateWatermarkFenceLocked publishes a replacement fence and removes local
+// non-durable progress that would otherwise outrank the replacement's durable
+// reread. A delayed old admission cannot move the local generation backward.
+// The caller must hold u.Lock.
+func (u *CDCWatermarkUpdater) activateWatermarkFenceLocked(key WatermarkKey, fence *OwnerFence) bool {
+	if active := u.activeWatermarkFence[key]; active != nil && active != fence &&
+		active.GenerationToken() >= fence.GenerationToken() {
+		return false
+	}
+	if cached := u.cacheUncommittedFence[key]; cached != nil && cached != fence {
+		delete(u.cacheUncommitted, key)
+		delete(u.cacheUncommittedGeneration, key)
+		delete(u.cacheUncommittedFence, key)
+	}
+	if cached := u.cacheCommittingFence[key]; cached != nil && cached != fence {
+		delete(u.cacheCommitting, key)
+		delete(u.cacheCommittingGeneration, key)
+		delete(u.cacheCommittingFence, key)
+	}
+	delete(u.commitFailureCount, key)
+	if _, opened := u.commitCircuitOpen[key]; opened {
+		delete(u.commitCircuitOpen, key)
+		v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+		v2.CdcWatermarkCircuitOpenGauge.Dec()
+	}
+	u.activeWatermarkFence[key] = fence
+	return true
+}
+
 func watermarkProgressIsNewer(
 	candidateGeneration uint64,
 	candidate types.TS,
@@ -1930,6 +2074,7 @@ func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, log
 	delete(u.cacheCommittedGeneration, *key)
 	delete(u.cacheUncommittedFence, *key)
 	delete(u.cacheCommittingFence, *key)
+	delete(u.activeWatermarkFence, *key)
 	delete(u.errorMetadataCache, *key)
 	if openedAt, opened := u.commitCircuitOpen[*key]; opened {
 		if time.Since(openedAt) < watermarkCircuitBreakPeriod {

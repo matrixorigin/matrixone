@@ -40,7 +40,7 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 34)
-	require.Len(t, clusterUpgEntries, 10)
+	require.Len(t, clusterUpgEntries, 11)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
@@ -74,8 +74,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.ADD_COLUMN, clusterUpgEntries[8].UpgType)
 	require.Contains(t, clusterUpgEntries[8].UpgSql, "source_table_id bigint unsigned not null default 0")
 	require.Equal(t, int64(defines.MORPCVersion48), clusterUpgEntries[8].RequiredProtocolVersion)
-	require.Equal(t, upgradeDaemonClaimPrecision.UpgSql, clusterUpgEntries[9].UpgSql)
+	require.Equal(t, catalog.MO_CDC_WATERMARK, clusterUpgEntries[9].TableName)
+	require.Equal(t, versions.ADD_COLUMN, clusterUpgEntries[9].UpgType)
+	require.Contains(t, clusterUpgEntries[9].UpgSql, "owner_generation bigint unsigned not null default 0")
 	require.Equal(t, int64(defines.MORPCVersion48), clusterUpgEntries[9].RequiredProtocolVersion)
+	require.Equal(t, upgradeDaemonClaimPrecision.UpgSql, clusterUpgEntries[10].UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion48), clusterUpgEntries[10].RequiredProtocolVersion)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {

@@ -66,8 +66,10 @@ The implementation must preserve all of the following:
 8. **Exact execution ownership.** Every target effect and buffered watermark is
    tied to the immutable daemon claim generation that created its pipeline. An
    old pipeline cannot borrow a newer Resume/Restart token from the same
-   in-process executor. Stable watermark SQL is monotonic, so a delayed old
-   writer cannot regress a value already persisted by a replacement.
+   in-process executor. Before target replay, each owner publishes its monotonic
+   daemon-claim generation in the table watermark row. Stable watermark SQL
+   matches that generation on the same row, so a delayed old writer cannot
+   certify target data changed by a replacement.
 9. **Serialized takeover.** Target effects from two owners of the same CDC
    task/table are serialized with a target-side advisory lock. The lock covers
    an actual DDL or transaction interval, not pipeline idle time.
@@ -100,13 +102,13 @@ the legacy code, so task dispatch rejects them before claim. Persisting the
 public boolean as false is defense in depth: software that understands only the
 old option falls back to one atomic transaction.
 
-The generation column added to the existing watermark catalog is separately
+The generation columns added to the existing watermark catalog are separately
 gated by cumulative protocol v48. Older binaries insert positional six-column
 watermark rows, so `ALTER TABLE` must wait until every CN writer runs code that
 uses an explicit column list. Stable task creation is rejected while the common
 deployment protocol is below v48; legacy and `NoFull` CDC remain available.
 After the column is installed, an operational rollback must not reintroduce a
-pre-v48 CN whose six-value positional insert cannot address the seven-column
+pre-v48 CN whose six-value positional insert cannot address the eight-column
 table. Roll back the catalog change before lowering the common protocol, or
 keep all CDC writers at v48 or later.
 
@@ -116,6 +118,25 @@ Before starting any stable reader or sinker, the executor loads or persists `S`
 in `mo_catalog.mo_cdc_snapshot`, keyed by:
 
 `(account_id, task_id, db_name, table_name, source_table_id)`.
+
+The watermark row stores `owner_generation`, the positive microsecond rank
+derived from the daemon task's strictly monotonic `last_run`. The first
+watermark read is used only to decide whether a missing epoch may be created.
+Non-empty same-generation progress without an epoch fails before INSERT, so
+that rejected attempt cannot manufacture metadata trusted by its retry.
+Progress from a retired source-table generation remains eligible for normal
+table-recreation recovery.
+
+On every stable pipeline start, including explicit `StartTs` and `NoFull`,
+startup advances the watermark row's `owner_generation` with `GREATEST`,
+verifies that its exact generation won, and rereads both watermark fields. The
+claim and stable checkpoint update serialize on that same watermark row.
+Therefore either the old checkpoint commits first and the replacement reread
+observes it, or the replacement claim commits first and the old checkpoint's
+owner equality condition is false. Only after this ordering point may target
+initialization or replay begin. Keeping ownership on the watermark row avoids
+inventing snapshot-epoch rows for modes that intentionally have no initial
+snapshot.
 
 `S` is the current source transaction snapshot when that table generation is
 discovered, capped by an explicit `EndTs` before persistence. It is not task
@@ -207,10 +228,15 @@ taskservice/storage result leaves them retryable instead of misclassifying the
 owner as stale. Values from a newer generation that arrive concurrently remain
 in the uncommitted cache for its next flush. Because claim validation and SQL
 cannot be one transaction across taskservice and the watermark updater,
-stable-task upserts compare `(source_table_id, physical, logical)` in SQL:
-higher source generation wins unconditionally, and timestamps are monotonic
-only within one generation. Legacy updates are emitted in a separate batch and
-keep their historical rewind behavior.
+stable-task upserts require the watermark row's `owner_generation` to match the
+buffered claim. They then compare
+`(source_table_id, physical, logical)` in SQL: higher source generation wins
+unconditionally, and timestamps are monotonic only within one generation. A
+replacement on the same CN also removes non-durable cache tiers owned by the
+previous fence and replaces the active in-memory fence, preventing either stale
+cache priority or a rejected old SQL completion from poisoning the replacement.
+Legacy updates are emitted in a separate batch and keep their historical rewind
+behavior.
 
 `InitSnapshotSplitTxn=false` and unmarked legacy tasks keep one atomic initial
 snapshot transaction.
@@ -499,7 +525,8 @@ under the existing remote evidence directory above.
 | Source batch | collector | sink command completion or reader cleanup |
 | Target transaction | sink executor | commit, rollback, or close |
 | Target advisory lock | sink executor for one effect interval | post-commit release, rollback/error, DDL completion, or close |
-| Stable epoch row | task/table generation | next successfully initialized higher table generation, terminal task cleanup, or orphan cleanup |
+| Stable epoch row | task/table source generation and replay endpoint | next successfully initialized higher table generation, terminal task cleanup, or orphan cleanup |
+| Watermark owner generation | latest admitted daemon claim for one task/table | next stable owner claim or watermark-row cleanup |
 | Owner fence | executor generation | immutable object becomes unreachable after all old pipelines stop |
 
 The principal wait chain is:
@@ -519,7 +546,8 @@ groups.
 | Crash or ambiguous result after intermediate commit | group may be present; empty watermark | replay `S`; `REPLACE` converges |
 | Source DELETE or PK change during retry | partial snapshot at `S` | replay `S`, then apply `(S, next]` mutation |
 | Final target commit succeeds but owner changed | complete target may exist; no new watermark from old owner | old fence fails, replacement replays `S` |
-| Old watermark SQL passes its check, then stalls across takeover | old value may arrive late | stable monotonic upsert cannot replace the newer durable watermark; a pre-epoch value still identifies an incomplete recreated generation on restart |
+| Old watermark SQL passes its first check, then stalls across takeover | replacement may be ready to replay | replacement claims the same watermark row before replay; either it observes the old checkpoint first or the old checkpoint loses its owner equality check |
+| Epoch metadata is missing beside current-generation progress | target image is not attributable to a durable epoch | fail before creating an epoch; repeated admission remains rejected |
 | Watermark SQL persistence fails | target committed; fenced value remains retryable | retry async persistence or replay after restart |
 | Persisted source history expired | partial target possible | fail closed; operator must recreate after checking/resetting target |
 | Pause/cancel during collection | no active target effect after cleanup | release permit; resume reuses `S` |
@@ -552,8 +580,12 @@ generation per asynchronous flush. This avoids work proportional to
 `table_count / polling_frequency` while retaining the final persistence fence.
 Stable and legacy keys share the CN updater but are emitted as separate SQL
 batches only when both kinds are present in one flush. Stable upserts add four
-small timestamp component casts plus integer generation comparison per
-conflicting row; there is no per-row network round trip.
+small timestamp component casts plus source and owner generation comparisons
+on the watermark row; there is no extra metadata join or per-row network round
+trip. Pipeline admission adds one watermark-owner UPDATE and one ordered
+owner/progress read per table startup. Initial-snapshot tasks also perform the
+existing epoch metadata operations. These operations are not on the per-batch
+or per-row data path.
 
 The CN-wide initial-snapshot limiter is enabled only when startup classification
 proves that a full snapshot is pending. A restarted stream whose durable
@@ -605,6 +637,11 @@ Deterministic tests must cover:
   definitions (task tables intentionally have no `mo_indexes` mirror rows);
 - successful restart emits no timeout report; actual timeout retains its error;
 - shared-fence watermark validation and stale buffered watermark rejection;
+- takeover admission ordered against delayed checkpoint SQL, including partial
+  replacement replay and same-CN cache publication;
+- repeated missing-epoch admission with current-generation progress remaining
+  rejected without catalog mutation, while retired-generation recovery remains
+  allowed;
 - restart with a non-empty watermark reloading the durable epoch, recreated-ID
   reset classification, first collection from an empty generation-local
   position, atomic watermark/generation loading, malformed-catalog rejection,

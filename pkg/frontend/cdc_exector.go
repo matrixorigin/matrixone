@@ -2993,7 +2993,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		return err
 	}
 	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
-	if exec.stableInitialSnapshot && !exec.noFull && exec.startTs.IsEmpty() {
+	if exec.stableInitialSnapshot {
 		if err = ownerFence.Check(ctx); err != nil {
 			return err
 		}
@@ -3002,58 +3002,74 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		if err != nil {
 			return err
 		}
-		candidate := types.TimestampToTS(txnOp.SnapshotTS())
-		// Persist the actual bounded snapshot endpoint. Persisting a later
-		// transaction timestamp and only capping it inside the reader would make
-		// a completed EndTs task look permanently pre-epoch after restart.
-		candidate = capInitialSnapshotEpoch(candidate, exec.endTs)
 		var epochState cdc.InitialSnapshotEpochState
-		epochState, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochState(
-			ctx,
-			&watermarkKey,
-			info.SourceTblId,
-			candidate,
-		)
+		initialSnapshot := !exec.noFull && exec.startTs.IsEmpty()
+		if initialSnapshot {
+			candidate := types.TimestampToTS(txnOp.SnapshotTS())
+			// Persist the actual bounded snapshot endpoint. Persisting a later
+			// transaction timestamp and only capping it inside the reader would make
+			// a completed EndTs task look permanently pre-epoch after restart.
+			candidate = capInitialSnapshotEpoch(candidate, exec.endTs)
+			epochState, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochStateForProgress(
+				ctx,
+				&watermarkKey,
+				info.SourceTblId,
+				candidate,
+				watermark,
+				watermarkGeneration,
+			)
+			if err != nil {
+				return err
+			}
+			initialSnapshotEpoch = epochState.Epoch
+		}
+		// Publish the execution generation before using progress for admission.
+		// This claim and guarded checkpoints serialize on the same watermark row:
+		// the reread sees an old checkpoint that won first, or fences one that lost.
+		// Explicit StartTs and no-full tasks need the same protection even though
+		// they intentionally have no initial-snapshot epoch row.
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.ClaimWatermarkOwner(
+			ctx, &watermarkKey, ownerFence)
 		if err != nil {
 			return err
 		}
-		initialSnapshotEpoch = epochState.Epoch
+		if initialSnapshot {
+			// A stable task can only have a non-empty watermark after its epoch
+			// metadata was durable. Missing metadata without an older generation is
+			// corruption/manual deletion; choosing a fresh epoch would strand target
+			// rows from an unknown source image.
+			incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
+				watermark, watermarkGeneration, info.SourceTblId, epochState)
+			if generationAhead {
+				return cdc.NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+					ctx,
+					"CDC source table generation %d is older than durable CDC metadata for %s (watermark generation %d, newer snapshot generation present: %t)",
+					info.SourceTblId, watermarkKey.String(), watermarkGeneration,
+					epochState.HasNewerGeneration,
+				))
+			}
+			if metadataMissing {
+				return moerr.NewInternalErrorf(
+					ctx,
+					"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
+					watermarkKey.String(), info.SourceTblId, watermark.ToString(),
+				)
+			}
 
-		// A stable task can only have a non-empty watermark after its epoch
-		// metadata was durable. Missing metadata without an older generation is
-		// corruption/manual deletion; choosing a fresh epoch would strand target
-		// rows from an unknown source image.
-		incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
-			watermark, watermarkGeneration, info.SourceTblId, epochState)
-		if generationAhead {
-			return cdc.NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
-				ctx,
-				"CDC source table generation %d is older than durable CDC metadata for %s (watermark generation %d, newer snapshot generation present: %t)",
-				info.SourceTblId, watermarkKey.String(), watermarkGeneration,
-				epochState.HasNewerGeneration,
-			))
+			// Empty or pre-epoch progress means the initial snapshot is incomplete.
+			// If another table ID exists, reset the target under the ownership lock;
+			// otherwise retain partial same-epoch target groups for idempotent replay.
+			initialSnapshotPending = incomplete
+			if resetTarget {
+				info.IdChanged = true
+			}
+			// NewSinker clears IdChanged after a successful target reset, so capture
+			// cleanup intent before handing it the mutable table descriptor. A
+			// completed current generation may also compact a retired row left by a
+			// crash after target commit but before metadata cleanup.
+			compactSnapshotEpochs = shouldCompactStableSnapshotEpochs(
+				info.IdChanged, incomplete, epochState.HasOtherGeneration)
 		}
-		if metadataMissing {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
-				watermarkKey.String(), info.SourceTblId, watermark.ToString(),
-			)
-		}
-
-		// Empty or pre-epoch progress means the initial snapshot is incomplete.
-		// If another table ID exists, reset the target under the ownership lock;
-		// otherwise retain partial same-epoch target groups for idempotent replay.
-		initialSnapshotPending = incomplete
-		if resetTarget {
-			info.IdChanged = true
-		}
-		// NewSinker clears IdChanged after a successful target reset, so capture
-		// cleanup intent before handing it the mutable table descriptor. A
-		// completed current generation may also compact a retired row left by a
-		// crash after target commit but before metadata cleanup.
-		compactSnapshotEpochs = shouldCompactStableSnapshotEpochs(
-			info.IdChanged, incomplete, epochState.HasOtherGeneration)
 	}
 
 	// Note: Do NOT clear err_msg here

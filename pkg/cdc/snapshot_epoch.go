@@ -115,10 +115,45 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 	sourceTableID uint64,
 	candidate types.TS,
 ) (InitialSnapshotEpochState, error) {
+	return u.getOrCreateInitialSnapshotEpochState(
+		ctx, key, sourceTableID, candidate, types.TS{}, 0, false)
+}
+
+// GetOrCreateInitialSnapshotEpochStateForProgress refuses to manufacture an
+// epoch beside progress whose source image is unknown. The check is performed
+// before INSERT, so retrying the failed admission cannot turn its own rejected
+// candidate into trusted metadata.
+func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochStateForProgress(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+	candidate types.TS,
+	watermark types.TS,
+	watermarkGeneration uint64,
+) (InitialSnapshotEpochState, error) {
+	return u.getOrCreateInitialSnapshotEpochState(
+		ctx, key, sourceTableID, candidate, watermark, watermarkGeneration, true)
+}
+
+func (u *CDCWatermarkUpdater) getOrCreateInitialSnapshotEpochState(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+	candidate types.TS,
+	watermark types.TS,
+	watermarkGeneration uint64,
+	validateProgress bool,
+) (InitialSnapshotEpochState, error) {
 	if sourceTableID == 0 || candidate.IsEmpty() || !candidate.Valid() {
 		return InitialSnapshotEpochState{}, moerr.NewInternalErrorf(
 			ctx, "invalid CDC snapshot epoch candidate %s for source table %d",
 			candidate.ToString(), sourceTableID)
+	}
+	if validateProgress && watermarkGeneration > sourceTableID {
+		return InitialSnapshotEpochState{}, NewRetryableSnapshotEpochError(
+			moerr.NewInternalErrorf(ctx,
+				"CDC source table generation %d is older than durable watermark generation %d for %s",
+				sourceTableID, watermarkGeneration, key.String()))
 	}
 
 	if epoch, ok, err := u.readInitialSnapshotEpoch(ctx, key, sourceTableID); err != nil {
@@ -132,12 +167,12 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 			HasNewerGeneration: changed && otherGeneration > sourceTableID,
 		}, err
 	}
-
 	// Do not manufacture a retry anchor for a catalog view that is already
 	// known to be stale. The post-insert check below is still required for a
 	// concurrent newer claim between this preflight and the INSERT.
-	if otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
-		ctx, key, sourceTableID); err != nil {
+	otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
+		ctx, key, sourceTableID)
+	if err != nil {
 		return InitialSnapshotEpochState{}, err
 	} else if changed && otherGeneration > sourceTableID {
 		return InitialSnapshotEpochState{}, NewRetryableSnapshotEpochError(
@@ -147,7 +182,15 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 				sourceTableID, otherGeneration, key.String(),
 			))
 	}
-
+	if validateProgress && !watermark.IsEmpty() &&
+		(watermarkGeneration == sourceTableID ||
+			(watermarkGeneration == 0 && !changed)) {
+		return InitialSnapshotEpochState{}, moerr.NewInternalErrorf(
+			ctx,
+			"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
+			key.String(), sourceTableID, watermark.ToString(),
+		)
+	}
 	persistCtx, cancel := context.WithTimeoutCause(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
 	defer cancel()
@@ -187,7 +230,7 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 			ctx, "CDC snapshot epoch was not durable for %s generation %d",
 			key.String(), sourceTableID)}
 	}
-	otherGeneration, changed, err := u.highestOtherInitialSnapshotGeneration(
+	otherGeneration, changed, err = u.highestOtherInitialSnapshotGeneration(
 		ctx, key, sourceTableID)
 	return InitialSnapshotEpochState{
 		Epoch:              epoch,

@@ -29,6 +29,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -1574,7 +1576,8 @@ func TestCDCWatermarkUpdaterPartitionsStableMonotonicWatermarks(t *testing.T) {
 	watermark := types.BuildTS(100, 2)
 	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), legacyKey, &watermark))
 	require.NoError(t, updater.UpdateWatermarkOnly(
-		WithWatermarkOwnerFence(context.Background(), NewOwnerFence(func(context.Context) error { return nil }), 22),
+		WithWatermarkOwnerFence(context.Background(), NewOwnerFenceForGeneration(
+			time.UnixMicro(123), func(context.Context) error { return nil }), 22),
 		stableKey,
 		&watermark,
 	))
@@ -1593,6 +1596,12 @@ func TestCDCWatermarkUpdaterPartitionsStableMonotonicWatermarks(t *testing.T) {
 	require.Contains(t, exec.sqls[1], "SUBSTRING_INDEX")
 	require.Contains(t, exec.sqls[1], "source_table_id")
 	require.Contains(t, exec.sqls[1], "22 AS source_table_id")
+	require.Contains(t, exec.sqls[1], "123 AS owner_generation")
+	require.NotContains(t, exec.sqls[1], "mo_cdc_snapshot")
+	require.Contains(t, exec.sqls[1], "VALUES(owner_generation) = owner_generation")
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exec.sqls[1], 1)
+	require.NoError(t, err)
+	stmt.Free()
 	require.Contains(t, exec.sqls[1], "'stable'")
 }
 
@@ -1605,7 +1614,7 @@ func TestCDCWatermarkUpdaterIsolatesSQLFailureByProtocolBatch(t *testing.T) {
 	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), legacyKey, &watermark))
 	require.NoError(t, updater.UpdateWatermarkOnly(
 		WithWatermarkOwnerFence(
-			context.Background(), NewOwnerFence(func(context.Context) error { return nil }), 22),
+			context.Background(), NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return nil }), 22),
 		stableKey,
 		&watermark,
 	))
@@ -1735,11 +1744,17 @@ func TestCDCWatermarkUpdaterRejectsOwnerFenceWithoutSourceGeneration(t *testing.
 	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "tbl"}
 	watermark := types.BuildTS(100, 0)
-	fence := NewOwnerFence(func(context.Context) error { return nil })
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return nil })
 
 	err := updater.UpdateWatermarkOnly(
 		WithWatermarkOwnerFence(context.Background(), fence, 0), key, &watermark)
 	require.ErrorContains(t, err, "source table generation")
+	require.Empty(t, updater.cacheUncommitted)
+
+	err = updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(context.Background(), NewOwnerFence(func(context.Context) error { return nil }), 12),
+		key, &watermark)
+	require.ErrorContains(t, err, "durable owner generation")
 	require.Empty(t, updater.cacheUncommitted)
 }
 
@@ -1749,7 +1764,7 @@ func TestCDCWatermarkUpdaterRetriesTransientOwnerCheck(t *testing.T) {
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "tbl"}
 	watermark := types.BuildTS(100, 0)
 	backendErr := errors.New("task storage unavailable")
-	fence := NewOwnerFence(func(context.Context) error { return backendErr })
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return backendErr })
 	require.NoError(t, updater.UpdateWatermarkOnly(
 		WithWatermarkOwnerFence(context.Background(), fence, 12), key, &watermark))
 
@@ -1773,13 +1788,13 @@ func TestCDCWatermarkUpdaterIsolatesTransientFenceFailurePerKey(t *testing.T) {
 	backendErr := errors.New("task storage unavailable")
 	require.NoError(t, updater.UpdateWatermarkOnly(
 		WithWatermarkOwnerFence(
-			context.Background(), NewOwnerFence(func(context.Context) error { return nil }), 12),
+			context.Background(), NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return nil }), 12),
 		goodKey,
 		&watermark,
 	))
 	require.NoError(t, updater.UpdateWatermarkOnly(
 		WithWatermarkOwnerFence(
-			context.Background(), NewOwnerFence(func(context.Context) error { return backendErr }), 12),
+			context.Background(), NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return backendErr }), 12),
 		retryKey,
 		&watermark,
 	))

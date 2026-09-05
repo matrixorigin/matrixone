@@ -47,6 +47,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	cleanupLegacyOrphanSQLTaskChildren,
 	createMoCdcSnapshot,
 	addCdcWatermarkSourceTableID,
+	addCdcWatermarkOwnerGeneration,
 	upgradeDaemonClaimPrecision,
 }
 
@@ -96,6 +97,23 @@ var addCdcWatermarkSourceTableID = versions.UpgradeEntry{
 	},
 	// Older CNs insert six positional values into mo_cdc_watermark. Delay the
 	// seventh column until every CN writer uses an explicit column list.
+	RequiredProtocolVersion: defines.MORPCVersion48,
+}
+
+var addCdcWatermarkOwnerGeneration = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_WATERMARK,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: "alter table mo_catalog.mo_cdc_watermark " +
+		"add column owner_generation bigint unsigned not null default 0 after source_table_id",
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		column, err := versions.CheckTableColumn(
+			txn, accountID, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK, "owner_generation")
+		return column.IsExits, err
+	},
+	// This column is used only by stable-task writers, but the table shape is
+	// still shared with every CN. Keep its rollout behind the same mixed-version
+	// gate as source_table_id.
 	RequiredProtocolVersion: defines.MORPCVersion48,
 }
 
