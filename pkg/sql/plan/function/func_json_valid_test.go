@@ -1765,6 +1765,21 @@ func TestJsonValue(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	t.Run("legacy default width routes an over-wide value to NULL", func(t *testing.T) {
+		longJSON := `{"a":"` + strings.Repeat("x", 513) + `"}`
+		tc := tcTemp{
+			info: "json_value legacy default width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{longJSON}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
 	t.Run("non simple paths follow scalar match semantics", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_value non simple paths",
