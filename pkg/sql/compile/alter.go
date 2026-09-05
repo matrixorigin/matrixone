@@ -1048,6 +1048,27 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 	return opt, nil
 }
 
+// alterCopyCreateOptions builds the statement options for the ALTER ... COPY replica create.
+//
+// Both carried values exist because the replica is created from regenerated DDL, which cannot
+// express them: KeepLogicalId preserves the table's logical id, and KeepRelKind preserves its
+// relkind. Without the latter buildCreateTable derives a kind from the replica's temporary
+// name -- and for a hidden index table that kind is the only thing keeping it out of the
+// relkind-keyed restore/CLONE filters, so losing it silently promotes the table to an
+// ordinary one.
+//
+// Split out so the carried values are assertable without an executor.
+func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
+	// The temporary relation is not externally visible. Its parent backrefs are
+	// reconciled after the original relation is replaced, so avoid materializing
+	// an intermediate parent->temporary-table relationship here.
+	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
+		opts = opts.WithKeepLogicalId(oldLogicalId)
+	}
+	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType())
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -1245,15 +1266,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
-	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	// The temporary relation is not externally visible. Its parent backrefs are
-	// reconciled after the original relation is replaced, so avoid materializing
-	// an intermediate parent->temporary-table relationship here.
-	createTmpOpts := executor.StatementOption{}.WithIgnoreForeignKey()
-
-	if oldLogicalId != 0 {
-		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
-	}
+	createTmpOpts := alterCopyCreateOptions(qry)
 	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",

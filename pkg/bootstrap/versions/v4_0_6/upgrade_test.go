@@ -860,8 +860,19 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); err != nil {
 			t.Fatalf("tenant upgrade: %v", err)
 		}
-		if len(executed) == 0 || executed[len(executed)-1] != legacyForeignKeyReferencedIndexDefinitionsSQL {
-			t.Fatalf("unexpected SQL: %v", executed)
+		if len(executed) == 0 {
+			t.Fatalf("no SQL executed")
+		}
+		// Assert the step RAN rather than which is last, so appending a step does not fail
+		// this. The index metadata provenance migration moved to v4_0_7 and is asserted there.
+		var sawLegacyFK bool
+		for _, sql := range executed {
+			if sql == legacyForeignKeyReferencedIndexDefinitionsSQL {
+				sawLegacyFK = true
+			}
+		}
+		if !sawLegacyFK {
+			t.Fatalf("legacy foreign-key definitions query did not run: %v", executed)
 		}
 		if err := Handler.HandleClusterUpgrade(context.Background(), txnExecutor); err != nil {
 			t.Fatalf("cluster upgrade: %v", err)

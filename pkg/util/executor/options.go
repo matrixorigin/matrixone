@@ -474,6 +474,24 @@ func (opts StatementOption) WithKeepLogicalId(keep uint64) StatementOption {
 	return opts
 }
 
+// KeepRelKind returns the mo_tables.relkind the statement must stamp on the table it
+// creates, and whether one was supplied. Empty string is a meaningful value (it is what
+// a hidden table carries), so the presence flag is separate.
+func (opts StatementOption) KeepRelKind() (string, bool) {
+	return opts.keepRelKind, opts.hasKeepRelKind
+}
+
+// WithKeepRelKind carries a table's existing relkind onto a replica created by
+// regenerated DDL. ALTER TABLE ... COPY rebuilds the table from constructCreateTableSQL,
+// which cannot express relkind, so without this the replica silently takes the kind
+// buildCreateTable computes from its name -- losing hnsw_meta / cagra_meta / ivfpq_meta /
+// ftv2_meta / fulltext / 'i' and un-hiding the table from every relkind-keyed filter.
+func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
+	opts.keepRelKind = kind
+	opts.hasKeepRelKind = true
+	return opts
+}
+
 func (opts StatementOption) WithIgnorePublish() StatementOption {
 	opts.ignorePublish = true
 	return opts

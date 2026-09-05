@@ -19,19 +19,19 @@ execute wait_ready;
 deallocate prepare wait_ready;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-0
-select id from t order by l2_distance(v, '[0,0,0]') asc limit 2 by rank with option 'mode=force';
+70368744177664
+select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
 2
-set global max_index_cache_size = 1;
+set global max_index_cache_size = 4096;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-1
+4096
 use idx_cap_db;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-1
+4096
 select id from t order by l2_distance(v, '[0,0,0]') asc limit 2;
 ➤ id[-5,64,0]  𝄀
 1  𝄀

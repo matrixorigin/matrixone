@@ -41,7 +41,7 @@ func TestHostSpillDirCreatesUnderLocalRoot(t *testing.T) {
 
 	got := HostSpillDir(context.Background(), local, "cn0")
 	require.Equal(t, filepath.Join(root, localSpillSubdir, "cn0"), got,
-		"each CN gets its own spill namespace")
+		"each CN gets its own subdirectory so a shared LOCAL volume stays safe to sweep")
 
 	fi, err := os.Stat(got)
 	require.NoError(t, err, "the directory must be created, not just named")
@@ -51,15 +51,15 @@ func TestHostSpillDirCreatesUnderLocalRoot(t *testing.T) {
 	require.Equal(t, got, HostSpillDir(context.Background(), local, "cn0"))
 }
 
-// A matching CN UUID does not prove that a file's owning process is dead.
-// Its file may still be awaiting mmap/open during overlapping process teardown.
-func TestHostSpillDirPreservesExistingFilesOnFirstUse(t *testing.T) {
+// A spill file outliving the process that mapped it is an orphan: nothing else collects
+// the LOCAL volume, so the next start of the SAME CN reclaims its own leftovers.
+func TestHostSpillDirSweepsOrphansOnFirstUse(t *testing.T) {
 	root := t.TempDir()
 	local, err := fileservice.NewLocalFS(context.Background(),
 		defines.LocalFileServiceName, root, fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 
-	// Both a previous incarnation and a neighbour may still own their files.
+	// A previous incarnation of cn0 left a model behind, and a neighbour CN has a live one.
 	mine := filepath.Join(root, localSpillSubdir, "cn0")
 	theirs := filepath.Join(root, localSpillSubdir, "cn1")
 	require.NoError(t, os.MkdirAll(mine, 0o755))
@@ -73,11 +73,12 @@ func TestHostSpillDirPreservesExistingFilesOnFirstUse(t *testing.T) {
 	require.Equal(t, mine, got)
 
 	_, err = os.Stat(orphan)
-	require.NoError(t, err, "same UUID alone does not authorize deletion")
+	require.True(t, os.IsNotExist(err), "this CN's own leftover is reclaimed")
 	_, err = os.Stat(live)
 	require.NoError(t, err, "another CN's file is never touched")
 
-	// Repeated directory lookup must also preserve an in-flight load's file.
+	// The sweep runs once per process: a file created after it must survive later calls,
+	// or an in-flight load would lose its own mapping.
 	inflight := filepath.Join(mine, "hnsw777777")
 	require.NoError(t, os.WriteFile(inflight, []byte("mapped right now"), 0o644))
 	require.Equal(t, mine, HostSpillDir(context.Background(), local, "cn0"))

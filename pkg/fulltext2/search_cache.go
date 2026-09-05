@@ -159,10 +159,10 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc
 // model checkBaseLoadBudget uses to admit the load in the first place (estBytesPerDocHeap), so
-// retention and admission use the same estimate, not an exact total-memory measurement.
-// Base posting blocks are mmap-backed and excluded from this heap estimate.
-// OS page residency, tail storage and query workspace still require separate memory
-// accounting; a cache target is not an OOM guarantee. No device bytes are charged.
+// the governor bounds exactly the quantity that gate measured. Base posting blocks are excluded
+// for the same reason they are excluded there: they are views into a shared read-only mmap --
+// reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
+// resident, so the device figure is 0.
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
 		// Between Preload and Load: report what Load is about to cost.

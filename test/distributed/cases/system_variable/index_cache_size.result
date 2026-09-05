@@ -2,10 +2,10 @@ drop account if exists acc_idx_var;
 create account acc_idx_var admin_name 'admin' identified by '123456';
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-0
+70368744177664
 select @@global.max_gpu_index_cache_size;
 ➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
-0
+1546188226560
 set max_index_cache_size = 1048576;
 internal error: the system variable is global
 set session max_index_cache_size = 1048576;
@@ -20,10 +20,10 @@ set @@session.max_gpu_index_cache_size = 1048576;
 internal error: the system variable is global
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
-0
+70368744177664
 select @@global.max_gpu_index_cache_size;
 ➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
-0
+1546188226560
 set global max_index_cache_size = 1099511627776;
 select @@global.max_index_cache_size;
 ➤ @@global.max_index_cache_size[-1,16383,0]  𝄀

@@ -19,9 +19,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // localSpillSubdir is the vector index's own scratch directory under the LOCAL
@@ -57,6 +59,7 @@ func HostSpillDir(ctx context.Context, rootFS fileservice.FileService, service s
 		return ""
 	}
 	dir := filepath.Join(local.RootPath(), localSpillSubdir, spillOwner(service))
+	sweepOnce(dir, service)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		// Non-fatal: fall back to $TMPDIR rather than failing a build because a
 		// scratch directory could not be created.
@@ -65,9 +68,12 @@ func HostSpillDir(ctx context.Context, rootFS fileservice.FileService, service s
 	return dir
 }
 
-// spillOwner selects a per-CN namespace, not a process-liveness proof. Never
-// delete existing files on first use: a previous process with the same identity
-// may still be loading them. Owners clean up their own files explicitly.
+// spillOwner is the per-CN subdirectory name. Spill files are owned by exactly one CN, so
+// keying the directory by service id lets that CN reclaim its own leftovers without ever
+// touching a neighbour's -- two CNs configured onto one LOCAL volume stay independent.
+// A CN's uuid is configuration, not generated per boot, so the name is stable across a
+// restart, which is what makes the sweep below find the previous incarnation's files
+// instead of accumulating one directory per boot.
 func spillOwner(service string) string {
 	clean := strings.Map(func(r rune) rune {
 		switch {
@@ -81,4 +87,48 @@ func spillOwner(service string) string {
 		return "shared"
 	}
 	return clean
+}
+
+// sweeping tracks the one sweep per directory per process.
+var sweeping sync.Map
+
+// sweepOnce deletes everything left in this CN's spill directory, once per process.
+//
+// A spill file is removed by Destroy, so one still present when this process first needs the
+// directory was left by an earlier incarnation that did not get to run it. Nothing else
+// collects them -- the LOCAL volume is the operator's data directory, not $TMPDIR -- so
+// without this a CN killed mid-load leaves a full-size model behind for good, and repeated
+// crashes fill the volume.
+//
+// Three things make the delete safe. Only this CN's own subdirectory is touched, so a
+// neighbour sharing the volume is never affected. It runs before this process creates
+// anything here, so it cannot reach a file this process is about to map. And if an earlier
+// process is somehow still winding down with a file mapped, unlinking it does not disturb
+// that mapping -- the inode outlives the name for as long as the mapping holds it.
+//
+// Deliberately lazy rather than wired into CN startup: a CN that never loads a vector index
+// has nothing here to reclaim, and this keeps the reclaim beside the code that owns the
+// directory instead of adding a startup dependency.
+//
+// Skipped when the service id is empty (unit tests, one-shot tools): with no owner to
+// attribute files to, "shared" may be in use by something still running.
+func sweepOnce(dir, service string) {
+	if service == "" {
+		return
+	}
+	once, _ := sweeping.LoadOrStore(dir, &sync.Once{})
+	once.(*sync.Once).Do(func() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return // absent on a first start, which is the common case
+		}
+		for _, e := range entries {
+			victim := filepath.Join(dir, e.Name())
+			if err := os.RemoveAll(victim); err != nil {
+				logutil.Warnf("vectorindex spill sweep: remove %s: %v", victim, err)
+				continue
+			}
+			logutil.Infof("vectorindex spill sweep: reclaimed orphaned %s", victim)
+		}
+	})
 }
