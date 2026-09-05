@@ -536,6 +536,16 @@ func TestRefreshTaskStoragePingHeartbeatAndUpdateCdc(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
 
+	dt.Details = &task.Details{Error: "failed startup"}
+	affected, err = s.UpdateDaemonTaskError(ctx, dt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+	stored, err := s.QueryDaemonTask(ctx, WithTaskIDCond(EQ, dt.ID))
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Equal(t, dt.Details.Error, stored[0].Details.Error)
+	require.Equal(t, dt.LastHeartbeat, stored[0].LastHeartbeat)
+
 	affected, err = s.UpdateCDCTask(ctx, task.TaskStatus_Canceled, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, affected)
@@ -578,11 +588,15 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.UpdateDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d2")})
 	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateDaemonTaskError(ctx, newTestDaemonTask(1, "d2"), false)
+	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.DeleteDaemonTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.QueryDaemonTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.HeartbeatDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d3")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.ValidateDaemonTask(ctx, newTestDaemonTask(1, "d3"))
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
 	require.ErrorIs(t, err, ErrNotReady)
@@ -634,8 +648,10 @@ func (f taskStorageFactoryFunc) Create(address string) (TaskStorage, error) {
 
 type trackedTaskStorage struct {
 	TaskStorage
-	closeCount atomic.Int64
-	closeErr   error
+	closeCount    atomic.Int64
+	pingCount     atomic.Int64
+	validateCount atomic.Int64
+	closeErr      error
 }
 
 func newTrackedTaskStorage() *trackedTaskStorage {
@@ -646,4 +662,42 @@ func (s *trackedTaskStorage) Close() error {
 	s.closeCount.Add(1)
 	_ = s.TaskStorage.Close()
 	return s.closeErr
+}
+
+func (s *trackedTaskStorage) PingContext(ctx context.Context) error {
+	s.pingCount.Add(1)
+	return s.TaskStorage.PingContext(ctx)
+}
+
+func (s *trackedTaskStorage) ValidateDaemonTask(
+	ctx context.Context, claim task.DaemonTask,
+) (bool, error) {
+	s.validateCount.Add(1)
+	return s.TaskStorage.ValidateDaemonTask(ctx, claim)
+}
+
+func TestRefreshTaskStorageValidationDoesNotDoubleRoundTrip(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	store := newTrackedTaskStorage()
+	claim := newTestDaemonTask(1, "claim")
+	claim.TaskStatus = task.TaskStatus_Running
+	claim.TaskRunner = "runner-1"
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+	_, err := store.AddDaemonTask(ctx, claim)
+	require.NoError(t, err)
+
+	refreshable := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		&testStorageFactory{stores: map[string]TaskStorage{"s1": store}},
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, refreshable.Close()) }()
+
+	valid, err := refreshable.ValidateDaemonTask(ctx, claim)
+	require.NoError(t, err)
+	require.True(t, valid)
+	require.Equal(t, int64(1), store.validateCount.Load())
+	require.Zero(t, store.pingCount.Load(),
+		"validation is already a database round trip and must not be preceded by ping")
 }

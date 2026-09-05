@@ -34,6 +34,17 @@ type addAsyncErrStorage struct {
 	err error
 }
 
+type validateDaemonErrStorage struct {
+	TaskStorage
+	err error
+}
+
+func (s *validateDaemonErrStorage) ValidateDaemonTask(
+	context.Context, task.DaemonTask,
+) (bool, error) {
+	return false, s.err
+}
+
 func (s *addAsyncErrStorage) AddAsyncTask(context.Context, ...task.AsyncTask) (int, error) {
 	return 0, s.err
 }
@@ -693,6 +704,82 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
 	assert.Equal(t, task.TaskStatus_CancelRequested, ts[0].TaskStatus)
 	assert.Equal(t, updateAt, ts[0].UpdateAt)
+}
+
+func TestValidateDaemonTask(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemTaskStorage()
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	claim := newTestDaemonTask(1, "claim")
+	claim.TaskStatus = task.TaskStatus_Running
+	claim.TaskRunner = "runner-1"
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	assert.NoError(t, service.ValidateDaemonTask(ctx, claim))
+
+	wrongRunner := claim
+	wrongRunner.TaskRunner = "runner-2"
+	err := service.ValidateDaemonTask(ctx, wrongRunner)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	wrongGeneration := claim
+	wrongGeneration.LastRun = claim.LastRun.Add(time.Microsecond)
+	err = service.ValidateDaemonTask(ctx, wrongGeneration)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	for _, status := range []task.TaskStatus{
+		task.TaskStatus_Created,
+		task.TaskStatus_Completed,
+		task.TaskStatus_Paused,
+		task.TaskStatus_Error,
+		task.TaskStatus_Canceled,
+		task.TaskStatus_ResumeRequested,
+		task.TaskStatus_PauseRequested,
+		task.TaskStatus_CancelRequested,
+		task.TaskStatus_RestartRequested,
+	} {
+		updated := claim
+		updated.TaskStatus = status
+		_, updateErr := store.UpdateDaemonTask(ctx, []task.DaemonTask{updated})
+		assert.NoError(t, updateErr)
+		err = service.ValidateDaemonTask(ctx, claim)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask), "status %s must not authorize effects", status)
+	}
+
+	for i, status := range []task.TaskStatus{
+		task.TaskStatus_ResumeRequested,
+		task.TaskStatus_RestartRequested,
+	} {
+		startupClaim := claim
+		startupClaim.TaskStatus = status
+		startupClaim.LastRun = claim.LastRun.Add(time.Duration(i+1) * time.Microsecond)
+		_, updateErr := store.UpdateDaemonTask(ctx, []task.DaemonTask{startupClaim})
+		assert.NoError(t, updateErr)
+		assert.NoErrorf(t, service.ValidateDaemonTask(ctx, startupClaim), "%s startup generation must authorize effects", status)
+
+		promoted := startupClaim
+		promoted.TaskStatus = task.TaskStatus_Running
+		_, updateErr = store.UpdateDaemonTask(ctx, []task.DaemonTask{promoted})
+		assert.NoError(t, updateErr)
+		assert.NoErrorf(t, service.ValidateDaemonTask(ctx, startupClaim), "%s generation must remain valid after Running publication", status)
+
+		revoked := promoted
+		revoked.TaskStatus = task.TaskStatus_PauseRequested
+		_, updateErr = store.UpdateDaemonTask(ctx, []task.DaemonTask{revoked})
+		assert.NoError(t, updateErr)
+		err = service.ValidateDaemonTask(ctx, startupClaim)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	}
+	assert.NoError(t, service.Close())
+
+	backendErr := errors.New("validate backend failed")
+	service = NewTaskService(runtime.DefaultRuntime(), &validateDaemonErrStorage{
+		TaskStorage: NewMemTaskStorage(),
+		err:         backendErr,
+	})
+	assert.ErrorIs(t, service.ValidateDaemonTask(ctx, claim), backendErr)
+	assert.NoError(t, service.Close())
 }
 
 func TestAddCdcTask1(t *testing.T) {

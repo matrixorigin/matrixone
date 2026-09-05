@@ -116,6 +116,8 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 			PubInfo: &pbplan.PubInfo{TenantId: 9}},
 			snapshot: &pbplan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 8}}, want: 9},
 		{name: "cluster table", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table"}, want: 0},
+		{name: "SYS-only ordinary CDC snapshot table keeps tenant context",
+			obj: &pbplan.ObjectRef{SchemaName: catalog.MO_CATALOG, ObjName: catalog.MO_CDC_SNAPSHOT}, want: 7},
 		{name: "relation kind alone keeps tenant context", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "cluster_table"},
 			tableDef: &pbplan.TableDef{TableType: catalog.SystemClusterRel}, want: 7},
 		{name: "publication overrides generic cluster name", obj: &pbplan.ObjectRef{

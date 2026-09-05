@@ -27,6 +27,7 @@ mo_cache
 mo_ccpr_dbs
 mo_ccpr_log
 mo_ccpr_tables
+mo_cdc_snapshot
 mo_cdc_task
 mo_cdc_watermark
 mo_columns

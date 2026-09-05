@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,6 +65,9 @@ type mysqlSinker2 struct {
 	accountId uint64
 	taskId    string
 	dbTblInfo *DbTableInfo
+	// Non-zero only for stable-epoch tasks. It makes watermark validation use
+	// the same generation-first ordering as the async writer.
+	watermarkGeneration uint64
 
 	// Dependencies
 	watermarkUpdater *CDCWatermarkUpdater
@@ -106,6 +110,7 @@ var _ Sinker = (*mysqlSinker2)(nil)
 // This is the main entry point for creating CDC sink, replacing the old CreateMysqlSinker
 // Defined as var for test mocking
 var CreateMysqlSinker2 = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -118,6 +123,27 @@ var CreateMysqlSinker2 = func(
 	maxSqlLength uint64,
 	sendSqlTimeout string,
 ) (Sinker, error) {
+	return createMysqlSinker2(
+		ctx, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+		retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, nil,
+	)
+}
+
+func createMysqlSinker2(
+	ctx context.Context,
+	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
+	dbTblInfo *DbTableInfo,
+	watermarkUpdater *CDCWatermarkUpdater,
+	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
+	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
+	ownerFence *OwnerFence,
+) (Sinker, error) {
 	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
 	if tableDef != nil {
@@ -126,6 +152,7 @@ var CreateMysqlSinker2 = func(
 
 	// 2. Create Executor (replaces Sink in old architecture)
 	executor, err := NewExecutor(
+		ctx,
 		sinkUri.User, sinkUri.Password,
 		sinkUri.Ip, sinkUri.Port,
 		retryTimes, retryDuration,
@@ -136,8 +163,42 @@ var CreateMysqlSinker2 = func(
 		return nil, err
 	}
 
-	// 3. Execute DDL initialization (same as old version)
-	ctx := context.Background()
+	// 3. Execute DDL initialization (same as old version). Stable tasks pass
+	// the table-callback lifecycle context so pause/cancel can interrupt target
+	// lock acquisition and initialization SQL.
+	var targetOwnerFence func(context.Context) error
+	var targetWaitCheck func(context.Context) error
+	if ownerFence != nil {
+		targetWaitCheck = func(waitCtx context.Context) error {
+			if err := waitCtx.Err(); err != nil {
+				return err
+			}
+			if ar != nil {
+				select {
+				case <-ar.Pause:
+					return moerr.NewInternalError(waitCtx, "task paused while waiting for target ownership")
+				case <-ar.Cancel:
+					return moerr.NewInternalError(waitCtx, "task cancelled while waiting for target ownership")
+				default:
+				}
+			}
+			return nil
+		}
+		targetOwnerFence = ownerFence.Check
+		lockIdentity := fmt.Sprintf(
+			"%d\x00%s\x00%s\x00%s",
+			accountId,
+			taskId,
+			dbTblInfo.SinkDbName,
+			dbTblInfo.SinkTblName,
+		)
+		if err = executor.AcquireTargetLock(
+			ctx, lockIdentity, targetOwnerFence, targetWaitCheck,
+		); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 
 	// Helper function to add padding
 	addPadding := func(sql string) []byte {
@@ -203,6 +264,12 @@ var CreateMysqlSinker2 = func(
 		executor.Close()
 		return nil, err
 	}
+	if targetOwnerFence != nil {
+		if err = executor.ReleaseTargetLock(); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 
 	// 4. Create SQL Statement Builder
 	builder, err := NewCDCStatementBuilder(
@@ -227,6 +294,9 @@ var CreateMysqlSinker2 = func(
 		builder,
 		ar,
 	)
+	if ownerFence != nil {
+		sinker.watermarkGeneration = dbTblInfo.SourceTblId
+	}
 
 	// Note: Run() will be started by the caller (e.g., cdc_executor.go)
 	// This maintains compatibility with the old mysqlSinker pattern
@@ -817,7 +887,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		TableName: s.dbTblInfo.SourceTblName,
 	}
 
-	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
+	watermark, watermarkGeneration, err := s.watermarkUpdater.GetFromCacheWithGeneration(ctx, &key)
 	if err != nil {
 		logutil.Error("cdc.mysql_sinker2.get_watermark_failed",
 			zap.String("table", s.dbTblInfo.String()),
@@ -827,11 +897,14 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		return
 	}
 
-	if data.toTs.LT(&watermark) {
+	if isWatermarkAheadOfOutput(
+		watermark, watermarkGeneration, data.toTs, s.watermarkGeneration) {
 		logutil.Error("cdc.mysql_sinker2.unexpected_watermark",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("toTs", data.toTs.ToString()),
-			zap.String("watermark", watermark.ToString()))
+			zap.String("watermark", watermark.ToString()),
+			zap.Uint64("source-table-id", s.watermarkGeneration),
+			zap.Uint64("watermark-source-table-id", watermarkGeneration))
 		err := moerr.NewInternalError(ctx, "unexpected watermark")
 		s.SetError(err)
 		return
@@ -866,6 +939,16 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	}
 
 	s.sendCommand(cmd)
+}
+
+func isWatermarkAheadOfOutput(
+	watermark types.TS,
+	watermarkGeneration uint64,
+	outputTS types.TS,
+	outputGeneration uint64,
+) bool {
+	return watermarkGeneration > outputGeneration ||
+		(watermarkGeneration == outputGeneration && outputTS.LT(&watermark))
 }
 
 // sendCommand sends a command to the consumer goroutine
@@ -916,6 +999,13 @@ func (s *mysqlSinker2) SendDummy() {
 	s.sendCommand(NewDummyCommand())
 }
 
+// releaseTargetOwnership ends the current effect interval after the consumer
+// has synchronously completed COMMIT and the producer has accepted the related
+// watermark. The next BEGIN reacquires and revalidates the same target lock.
+func (s *mysqlSinker2) releaseTargetOwnership() error {
+	return s.executor.ReleaseTargetLock()
+}
+
 // Error returns the current error state
 //
 // Thread-safe and panic-free (unlike old implementation)
@@ -936,8 +1026,12 @@ func (s *mysqlSinker2) SetError(err error) {
 		return
 	}
 
-	// Convert to moerr.Error if needed
-	if _, ok := err.(*moerr.Error); !ok {
+	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
+	// depend on their identity, and converting them to a plain moerr would turn
+	// supersession into shared table failure metadata.
+	if _, ok := err.(*moerr.Error); !ok &&
+		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) &&
+		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
 		err = moerr.ConvertGoError(context.Background(), err)
 	}
 

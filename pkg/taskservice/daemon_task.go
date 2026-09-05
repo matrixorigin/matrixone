@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -63,6 +64,11 @@ const (
 	retiredDaemonTaskBatchSize = 16
 )
 
+func isCDCTaskCode(code task.TaskCode) bool {
+	return code == task.TaskCode_InitCdc ||
+		code == task.TaskCode_InitCdcStableEpoch
+}
+
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
 	out := logutil.StringFingerprintFields("task-name", taskNameFromDetails(t))
 	out = append(out, logutil.StringFingerprintFields("task-id", strconv.FormatUint(t.ID, 10))...)
@@ -83,6 +89,13 @@ type startTask struct {
 type restartAdmissionContextKey struct{}
 
 type taskExecutorTaskSchedulerContextKey struct{}
+
+type daemonAttachmentContextKey struct{}
+
+type daemonAttachment struct {
+	owner *daemonTask
+	claim task.DaemonTask
+}
 
 // TaskExecutorTaskScheduler admits a child task into the same task-runner
 // stopper that owns its TaskExecutor. The stopper supplies cancellation and,
@@ -138,18 +151,6 @@ func (t *startTask) Handle(_ context.Context) error {
 	if err := t.runner.stopper.RunTask(func(ctx context.Context) {
 		var err error
 		var ok bool
-		defer func() {
-			// if cdc task quit without error
-			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
-				return
-			}
-			// Only remove the daemon task if this goroutine successfully
-			// started it. Otherwise we may remove a task that was started
-			// by a different goroutine for the same task ID.
-			if ok {
-				t.runner.removeDaemonTask(t.task.task.ID)
-			}
-		}()
 
 		ok, err = t.runner.startDaemonTask(ctx, t.task, t.restartClaim)
 		if err != nil {
@@ -158,7 +159,7 @@ func (t *startTask) Handle(_ context.Context) error {
 				// not write the observed RestartRequested snapshot back: a
 				// newer PAUSE/CANCEL request may already have superseded it.
 				eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
-					return cdcRestartEventFields(t.task.task, append([]zap.Field{
+					return cdcRestartEventFields(t.task.taskSnapshot(), append([]zap.Field{
 						zap.String("reason", "restart-claim-failed"),
 					}, logutil.ErrorFingerprintFields("error", err)...)...)
 				})
@@ -167,7 +168,7 @@ func (t *startTask) Handle(_ context.Context) error {
 				// the pre-claim snapshot back as an executor error: the update may
 				// have failed after another runner or control request won.
 				t.runner.logger.Error("failed to claim daemon task",
-					zap.Uint64("task ID", t.task.task.ID),
+					zap.Uint64("task ID", t.task.taskSnapshot().ID),
 					zap.Error(err))
 			}
 			return
@@ -178,31 +179,79 @@ func (t *startTask) Handle(_ context.Context) error {
 		if !ok {
 			return
 		}
+		claim := t.task.taskSnapshot()
+		defer func() { t.runner.completeDaemonTask(ctx, t.task, claim, t.restartClaim, err) }()
 
 		// Start the go-routine to execute the task. It hangs here until
 		// the task encounters some error or be canceled.
-		executorCtx := ctx
+		executorCtx := context.WithValue(ctx, daemonAttachmentContextKey{}, daemonAttachment{owner: t.task, claim: claim})
 		if t.restartClaim {
-			executorCtx = WithRestartAdmission(ctx)
+			executorCtx = WithRestartAdmission(executorCtx)
 		}
-		if t.task.task.Metadata.Executor == task.TaskCode_InitCdc {
+		if isCDCTaskCode(claim.Metadata.Executor) {
 			executorCtx = withTaskExecutorTaskScheduler(
 				executorCtx,
 				t.runner.stopper.RunNamedTask,
 			)
 		}
-		if err = t.task.executor(executorCtx, &t.task.task); err != nil {
-			if t.restartClaim {
-				t.runner.releaseRestartClaim(t.task, err)
-			} else {
-				// set the record of this task error message.
-				t.runner.setDaemonTaskError(ctx, t.task, err)
-			}
-		}
+		invocation := claim
+		err = t.task.executor(executorCtx, &invocation)
 	}); err != nil {
 		return err
 	}
 	return nil
+}
+
+// Completion runs only after the executor has returned (including its Start
+// attempt's done notification). It may wait for local admission, but admission
+// must never join this wrapper: CDC Resume/Restart joins Start, not this defer.
+// Heartbeats and admission use TryLock and never wait behind completion SQL.
+func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, claim task.DaemonTask, restart bool, execErr error) {
+	if claim.TaskType == task.TaskType_CreateCdc && execErr == nil {
+		return
+	}
+	dt.claimLifecycle.Lock()
+	defer dt.claimLifecycle.Unlock()
+	if dt.claimLost.Load() || !sameDaemonClaim(dt.taskSnapshot(), claim) {
+		return
+	}
+	if execErr != nil {
+		// Error helpers receive a private original snapshot, never the reused
+		// daemonTask. A rejected CAS leaves newer control-request ownership intact.
+		var superseded bool
+		if restart {
+			superseded = r.releaseRestartClaim(claim, execErr)
+		} else {
+			superseded = r.setDaemonTaskError(ctx, claim, execErr)
+		}
+		if superseded {
+			if ar := dt.activeRoutine.Load(); ar != nil && *ar != nil {
+				return
+			}
+			// The factory has returned, so a missing routine is no longer an
+			// in-progress Attach. Retaining it would renew a dead execution while
+			// every control handler waits for a routine that can never arrive.
+			// Preserve the durable request, but retire this exact registration
+			// and fence queued local admission before allowing lease recovery.
+			dt.claimLost.Store(true)
+		}
+		// Successful Attach transfers the executor lifetime to this runner.
+		// Only the still-current completion may cancel it; the old factory must
+		// not cancel a same-object Resume/Restart after its Start returns late.
+		if isCDCTaskCode(claim.Metadata.Executor) {
+			dt.claimLost.Store(true)
+			if ar := dt.activeRoutine.Load(); ar != nil && *ar != nil {
+				if cancelErr := (*ar).Cancel(); cancelErr != nil {
+					r.logger.Warn("failed to cancel completed daemon execution", zap.Uint64("task ID", claim.ID), zap.Error(cancelErr))
+				}
+			}
+		}
+	}
+	r.removeDaemonTaskIf(claim.ID, dt)
+}
+
+func sameDaemonClaim(a, b task.DaemonTask) bool {
+	return a.ID == b.ID && a.TaskRunner == b.TaskRunner && a.LastRun.Equal(b.LastRun)
 }
 
 func taskNameFromDetails(t task.DaemonTask) string {
@@ -228,9 +277,16 @@ func newResumeTask(r *taskRunner, t *daemonTask) *resumeTask {
 }
 
 func (t *resumeTask) Handle(ctx context.Context) error {
+	if !t.task.claimLifecycle.TryLock() {
+		return nil // The durable request remains retry-owned.
+	}
+	defer t.task.claimLifecycle.Unlock()
+	if t.task.claimLost.Load() {
+		return nil
+	}
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseResumeTaskHandle)
 	defer cancel()
-	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.task.ID))
+	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.taskSnapshot().ID))
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
 	}
@@ -272,8 +328,30 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
 		return moerr.NewInternalErrorf(handleCtx, "cannot handle resume operation, "+
-			"active routine not set for task %d", t.task.task.ID)
+			"active routine not set for task %d", t.task.taskSnapshot().ID)
 	}
+	// Advance the durable claim generation before admitting replacement work.
+	// Keeping ResumeRequested during this first CAS means a failed local Resume
+	// remains retry-owned, while every target/watermark fence used by the
+	// replacement observes the new token.
+	previousRun := tk.LastRun
+	nowTime := nextDaemonClaimTime(previousRun, time.Now())
+	tk.LastRun = nowTime
+	tk.LastHeartbeat = nowTime
+	updated, err := t.runner.service.UpdateDaemonTask(
+		handleCtx,
+		[]task.DaemonTask{tk},
+		WithTaskStatusCond(task.TaskStatus_ResumeRequested),
+		WithTaskRunnerCond(EQ, requestRunner),
+		WithLastRun(previousRun),
+	)
+	if err != nil {
+		return moerr.AttachCause(handleCtx, err)
+	}
+	if updated != 1 {
+		return nil
+	}
+	t.task.publishClaim(tk)
 	// ResumeRequested is the durable retry owner. Keep it published until the
 	// active executor has admitted recovery, so a concurrent executor failure or
 	// a synchronous resume error cannot strand daemon Running with no live
@@ -283,9 +361,6 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	}
 
 	tk.TaskStatus = task.TaskStatus_Running
-	nowTime := time.Now()
-	tk.LastRun = nowTime
-	tk.LastHeartbeat = nowTime
 	// Failed recovery can legitimately consume most of handleCtx while waiting
 	// for startup readiness. Publish with an independent bounded context and a
 	// status/runner CAS so a concurrent CANCEL, PAUSE, or ownership transfer is
@@ -296,11 +371,12 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		moerr.CauseResumeTaskHandle,
 	)
 	defer updateCancel()
-	updated, err := t.runner.service.UpdateDaemonTask(
+	updated, err = t.runner.service.UpdateDaemonTaskStatus(
 		updateCtx,
-		[]task.DaemonTask{tk},
+		tk.ID, tk.TaskStatus, time.Now(), tk.EndAt,
 		WithTaskStatusCond(task.TaskStatus_ResumeRequested),
-		WithTaskRunnerCond(EQ, requestRunner),
+		WithTaskRunnerCond(EQ, tk.TaskRunner),
+		WithLastRun(tk.LastRun),
 	)
 	if err != nil {
 		return moerr.AttachCause(updateCtx, err)
@@ -308,6 +384,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	if updated != 1 {
 		return nil
 	}
+	t.task.publishClaim(tk)
 	t.runner.logger.Info("cdc.task.resume.finish",
 		zap.Uint64("task-id", tk.ID),
 		zap.String("task-name", taskNameFromDetails(tk)),
@@ -331,18 +408,25 @@ func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
 }
 
 func (t *restartTask) Handle(ctx context.Context) error {
+	if !t.task.claimLifecycle.TryLock() {
+		return nil // The durable request remains retry-owned.
+	}
+	defer t.task.claimLifecycle.Unlock()
+	if t.task.claimLost.Load() {
+		return nil
+	}
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseRestartTaskHandle)
 	defer cancel()
-	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.task.ID))
+	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.taskSnapshot().ID))
 	if err != nil {
 		eventCDCRestartQueryFailed.ErrorLazy(func() []zap.Field {
-			return cdcRestartEventFields(t.task.task, logutil.ErrorFingerprintFields("error", err)...)
+			return cdcRestartEventFields(t.task.taskSnapshot(), logutil.ErrorFingerprintFields("error", err)...)
 		})
 		return cdcRestartHandleError("CDC restart task query failed")
 	}
 	if len(tasks) != 1 {
 		eventCDCRestartQueryWrongCount.ErrorLazy(func() []zap.Field {
-			return cdcRestartEventFields(t.task.task, zap.Int("task-count", len(tasks)))
+			return cdcRestartEventFields(t.task.taskSnapshot(), zap.Int("task-count", len(tasks)))
 		})
 		return cdcRestartHandleError("CDC restart task query returned an unexpected count")
 	}
@@ -396,6 +480,27 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		})
 		return cdcRestartHandleError("CDC restart active routine is unavailable")
 	}
+	// Establish and publish the new claim generation before Restart can launch
+	// target work. The request status remains durable retry ownership until the
+	// replacement reports ready.
+	previousRun := tk.LastRun
+	nowTime := nextDaemonClaimTime(previousRun, time.Now())
+	tk.LastRun = nowTime
+	tk.LastHeartbeat = nowTime
+	updated, err := t.runner.service.UpdateDaemonTask(
+		handleCtx,
+		[]task.DaemonTask{tk},
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithTaskRunnerCond(EQ, requestRunner),
+		WithLastRun(previousRun),
+	)
+	if err != nil {
+		return cdcRestartHandleError("CDC restart claim update failed")
+	}
+	if updated != 1 {
+		return nil
+	}
+	t.task.publishClaim(tk)
 
 	eventCDCRestartActiveRoutineCalling.DebugLazy(func() []zap.Field {
 		return cdcRestartEventFields(tk)
@@ -417,20 +522,18 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	// may legitimately expire while Restart drains the old generation and
 	// starts its replacement.
 	tk.TaskStatus = task.TaskStatus_Running
-	nowTime := time.Now()
-	tk.LastRun = nowTime
-	tk.LastHeartbeat = nowTime
 	updateCtx, updateCancel := context.WithTimeoutCause(
 		context.Background(),
 		time.Second*5,
 		moerr.CauseRestartTaskHandle,
 	)
 	defer updateCancel()
-	updated, err := t.runner.service.UpdateDaemonTask(
+	updated, err = t.runner.service.UpdateDaemonTaskStatus(
 		updateCtx,
-		[]task.DaemonTask{tk},
+		tk.ID, tk.TaskStatus, time.Now(), tk.EndAt,
 		WithTaskStatusCond(task.TaskStatus_RestartRequested),
-		WithTaskRunnerCond(EQ, requestRunner),
+		WithTaskRunnerCond(EQ, tk.TaskRunner),
+		WithLastRun(tk.LastRun),
 	)
 	if err != nil {
 		eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
@@ -444,6 +547,7 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		})
 		return nil
 	}
+	t.task.publishClaim(tk)
 
 	eventCDCRestartStatusUpdated.InfoLazy(func() []zap.Field {
 		return cdcRestartEventFields(tk,
@@ -478,7 +582,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CausePauseTaskHandle)
 	defer cancel()
 	start := time.Now()
-	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.task.ID))
+	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.taskSnapshot().ID))
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
 	}
@@ -519,7 +623,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
 			return moerr.NewInternalErrorf(handleCtx, "cannot handle pause operation, "+
-				"active routine not set for task %d", t.task.task.ID)
+				"active routine not set for task %d", t.task.taskSnapshot().ID)
 		}
 		if err := (*ar).Pause(); err != nil {
 			return err
@@ -529,9 +633,14 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	tk.TaskStatus = task.TaskStatus_Paused
 	updateCtx, updateCancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CausePauseTaskHandle)
 	defer updateCancel()
-	_, err = t.runner.service.UpdateDaemonTask(updateCtx, []task.DaemonTask{tk})
+	updated, err := t.runner.service.UpdateDaemonTaskStatus(updateCtx, tk.ID, tk.TaskStatus,
+		time.Now(), tk.EndAt, WithTaskStatusCond(task.TaskStatus_PauseRequested),
+		WithTaskRunnerCond(EQ, tk.TaskRunner), WithLastRun(tk.LastRun))
 	if err != nil {
 		return moerr.AttachCause(updateCtx, err)
+	}
+	if updated != 1 {
+		return nil
 	}
 
 	if err := t.runner.pauseTaskCompleted(ctx, tk); err != nil {
@@ -672,6 +781,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	conditions := []Condition{
 		WithTaskStatusCond(task.TaskStatus_CancelRequested),
 		WithTaskRunnerCond(EQ, tk.TaskRunner),
+		WithLastRun(tk.LastRun),
 	}
 	if !localOwner {
 		// Reading an expired foreign lease is not authority to terminate it: the
@@ -740,12 +850,49 @@ type ActiveRoutine interface {
 	Restart() error
 }
 
+// DaemonTaskClaimUpdater is implemented by executors whose durable side
+// effects are fenced by the daemon claim generation. It is optional so legacy
+// executors keep the existing ActiveRoutine contract.
+type DaemonTaskClaimUpdater interface {
+	UpdateDaemonTaskClaim(task.DaemonTask)
+}
+
 type daemonTask struct {
-	task     task.DaemonTask
-	executor TaskExecutor
+	// Serializes local claim admission with ownership-loss publication, including
+	// the gap between the durable CAS and publishClaim. Heartbeats never wait
+	// behind startup or its downstream I/O: a busy lifecycle is checked next tick.
+	claimLifecycle sync.Mutex
+	taskMu         sync.RWMutex
+	task           task.DaemonTask
+	executor       TaskExecutor
+	claimLost      atomic.Bool
 	// activeRoutine is the go-routine runs in background to execute
 	// the daemon task.
 	activeRoutine atomic.Pointer[ActiveRoutine]
+}
+
+func (t *daemonTask) taskSnapshot() task.DaemonTask {
+	t.taskMu.RLock()
+	defer t.taskMu.RUnlock()
+	return t.task
+}
+
+// publishClaim is the in-process linearization point for a persisted daemon
+// generation. Runner heartbeats and executor side-effect fences both advance
+// from the same snapshot.
+func (t *daemonTask) publishClaim(claim task.DaemonTask) {
+	t.taskMu.Lock()
+	t.task = claim
+	t.taskMu.Unlock()
+	t.claimLost.Store(false)
+
+	ar := t.activeRoutine.Load()
+	if ar == nil || *ar == nil {
+		return
+	}
+	if updater, ok := (*ar).(DaemonTaskClaimUpdater); ok {
+		updater.UpdateDaemonTaskClaim(claim)
+	}
 }
 
 func (r *taskRunner) newDaemonTask(t task.DaemonTask) (*daemonTask, error) {
@@ -1103,17 +1250,31 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 	// persisted as Paused. Keep polling Paused CDC tasks so the hook has a retry path.
 	var localPausedFinalize, laggedPausedFinalize []task.DaemonTask
 	if r.options.pauseTaskCompleted != nil {
-		localPausedFinalize = r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Paused),
-			WithTaskRunnerCond(EQ, r.runnerID),
-			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
-		)
+		for _, code := range []task.TaskCode{
+			task.TaskCode_InitCdc,
+			task.TaskCode_InitCdcStableEpoch,
+		} {
+			localPausedFinalize = append(localPausedFinalize,
+				r.queryDaemonTasks(ctx,
+					WithTaskStatusCond(task.TaskStatus_Paused),
+					WithTaskRunnerCond(EQ, r.runnerID),
+					WithTaskExecutorCond(EQ, code),
+				)...,
+			)
+		}
 		localPausedFinalize = r.filterUncompletedPauseTasks(localPausedFinalize)
-		laggedPausedFinalize = r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Paused),
-			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
-		)
+		for _, code := range []task.TaskCode{
+			task.TaskCode_InitCdc,
+			task.TaskCode_InitCdcStableEpoch,
+		} {
+			laggedPausedFinalize = append(laggedPausedFinalize,
+				r.queryDaemonTasks(ctx,
+					WithTaskStatusCond(task.TaskStatus_Paused),
+					WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+					WithTaskExecutorCond(EQ, code),
+				)...,
+			)
+		}
 		laggedPausedFinalize = r.filterUncompletedPauseTasks(laggedPausedFinalize)
 	}
 	tasks := r.mergeTasks(localPause, laggedPause, localPausedFinalize, laggedPausedFinalize)
@@ -1194,16 +1355,62 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	r.daemonTasks.Unlock()
 
 	for _, dt := range tasks {
-		if err := r.service.HeartbeatDaemonTask(ctx, dt.task); err != nil {
+		claim := dt.taskSnapshot()
+		if err := r.service.HeartbeatDaemonTask(ctx, claim); err != nil {
 			r.logger.Error("task heartbeat failed",
-				zap.Uint64("task ID", dt.task.ID),
+				zap.Uint64("task ID", claim.ID),
 				zap.Error(err))
+			// Storage and network failures are not proof that ownership was lost.
+			// Keep the current generation live and retry its heartbeat on the next
+			// tick. ErrInvalidTask is the explicit taskservice fence: the durable
+			// claim no longer matches this runner/generation and local target work
+			// must stop.
+			if claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch &&
+				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
+				r.relinquishDaemonClaim(dt, claim) {
+				// Relinquish heartbeat ownership before cancellation. Pointer-aware
+				// removal prevents an old heartbeat snapshot from deleting a newer
+				// local generation for the same task ID.
+				ar := dt.activeRoutine.Load()
+				if ar != nil && *ar != nil {
+					active := *ar
+					if scheduleErr := r.stopper.RunNamedTask(
+						"cancel-cdc-after-claim-loss",
+						func(context.Context) {
+							if cancelErr := active.Cancel(); cancelErr != nil {
+								r.logger.Error("failed to stop CDC task after heartbeat failure",
+									zap.Uint64("task ID", claim.ID),
+									zap.Error(cancelErr))
+							}
+						},
+					); scheduleErr != nil {
+						r.logger.Error("failed to schedule CDC stop after heartbeat failure",
+							zap.Uint64("task ID", claim.ID),
+							zap.Error(scheduleErr))
+					}
+				}
+			}
 		}
 	}
 }
 
+func (r *taskRunner) relinquishDaemonClaim(dt *daemonTask, failed task.DaemonTask) bool {
+	if !dt.claimLifecycle.TryLock() {
+		return false
+	}
+	defer dt.claimLifecycle.Unlock()
+	current := dt.taskSnapshot()
+	if current.TaskRunner != failed.TaskRunner || !current.LastRun.Equal(failed.LastRun) {
+		return false // The failed heartbeat belongs to a superseded local claim.
+	}
+	if !dt.claimLost.CompareAndSwap(false, true) {
+		return false
+	}
+	return r.removeDaemonTaskIf(failed.ID, dt)
+}
+
 func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
-	t := dt.task
+	t := dt.taskSnapshot()
 	expectedStatus := t.TaskStatus
 	if restartClaim {
 		expectedStatus = task.TaskStatus_RestartRequested
@@ -1211,6 +1418,10 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
+	// LastRun is the durable claim generation used to fence stale daemon
+	// owners. Keep it strictly monotonic even if this runner's wall clock moved
+	// backwards. MO timestamps preserve microseconds in sys_daemon_task.
+	nowTime = nextDaemonClaimTime(t.LastRun, nowTime)
 	t.UpdateAt = nowTime
 	t.LastRun = nowTime
 
@@ -1244,49 +1455,55 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	// Publish the claimed snapshot. All later heartbeat, error, and lifecycle
 	// writes must carry the generation's actual Running status and owner rather
 	// than the stale pre-claim dispatcher snapshot.
-	dt.task = t
+	dt.publishClaim(t)
 	r.addDaemonTask(dt)
 	return true, nil
 }
 
-func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, errMsg error) {
-	r.logger.Info("daemon task stopped with error", zap.Uint64("task ID", dt.task.ID),
+func nextDaemonClaimTime(previous, now time.Time) time.Time {
+	// The durable token is timestamp(6). Canonicalize before comparing so two
+	// nanosecond clock samples cannot collapse onto the same stored generation.
+	now = now.Truncate(time.Microsecond)
+	if now.After(previous) {
+		return now
+	}
+	return previous.Truncate(time.Microsecond).Add(time.Microsecond)
+}
+
+// The result reports a rejected CAS: a superseding control request still owns
+// the local routine. Storage failure is not proof of supersession.
+func (r *taskRunner) setDaemonTaskError(ctx context.Context, t task.DaemonTask, errMsg error) bool {
+	r.logger.Info("daemon task stopped with error", zap.Uint64("task ID", t.ID),
 		zap.Error(errMsg))
-	t := dt.task
 	nowTime := time.Now()
 	t.UpdateAt = nowTime
 	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = errMsg.Error()
 	// TODO(volgariver6): if it is a retryable error, do not update the status,
 	// otherwise, set the status to Error.
-	updated, err := r.service.UpdateDaemonTask(
-		ctx,
-		[]task.DaemonTask{t},
-		WithTaskStatusCond(task.TaskStatus_Running),
-		WithTaskRunnerCond(EQ, r.runnerID),
-	)
+	updateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	updated, err := r.service.UpdateDaemonTaskError(updateCtx, t, false)
 	if err != nil {
 		r.logger.Error("failed to set error message to task",
 			zap.Uint64("task ID", t.ID),
 			zap.String("error message", errMsg.Error()),
 			zap.Error(err))
-		return
+		return false
 	}
 	if updated == 0 {
 		r.logger.Debug("skip stale daemon task error update",
 			zap.Uint64("task ID", t.ID),
 			zap.String("error message", errMsg.Error()))
 	}
+	return updated == 0
 }
 
 // releaseRestartClaim makes a failed fresh takeover immediately retryable.
 // The status/runner CAS preserves a newer PAUSE/CANCEL and prevents an older
 // failed executor from releasing a later claim.
-func (r *taskRunner) releaseRestartClaim(dt *daemonTask, startErr error) {
-	retry := dt.task
-	retry.TaskStatus = task.TaskStatus_RestartRequested
-	retry.TaskRunner = ""
-	retry.LastHeartbeat = time.Time{}
+func (r *taskRunner) releaseRestartClaim(claim task.DaemonTask, startErr error) bool {
+	retry := claim
 	retry.UpdateAt = time.Now()
 	retry.Details = cloneDaemonTaskDetails(retry.Details)
 	retry.Details.Error = "CDC restart startup failed"
@@ -1297,34 +1514,30 @@ func (r *taskRunner) releaseRestartClaim(dt *daemonTask, startErr error) {
 		moerr.CauseRestartTaskHandle,
 	)
 	defer cancel()
-	updated, err := r.service.UpdateDaemonTask(
-		updateCtx,
-		[]task.DaemonTask{retry},
-		WithTaskStatusCond(task.TaskStatus_Running),
-		WithTaskRunnerCond(EQ, r.runnerID),
-	)
+	updated, err := r.service.UpdateDaemonTaskError(updateCtx, retry, true)
 	if err != nil {
 		eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
-			return cdcRestartEventFields(dt.task, append([]zap.Field{
+			return cdcRestartEventFields(claim, append([]zap.Field{
 				zap.String("reason", "release-failed-restart-claim"),
 			}, logutil.ErrorFingerprintFields("error", err)...)...)
 		})
-		return
+		return false
 	}
 	if updated != 1 {
 		eventCDCRestartSkippedInvalidStatus.InfoLazy(func() []zap.Field {
 			return cdcRestartEventFields(
-				dt.task,
+				claim,
 				zap.String("reason", "failed-restart-claim-superseded"),
 			)
 		})
-		return
+		return true
 	}
 	eventCDCRestartFailed.ErrorLazy(func() []zap.Field {
-		return cdcRestartEventFields(dt.task, append([]zap.Field{
+		return cdcRestartEventFields(claim, append([]zap.Field{
 			zap.String("reason", "fresh-startup-failed"),
 		}, logutil.ErrorFingerprintFields("error", startErr)...)...)
 	})
+	return false
 }
 
 func cloneDaemonTaskDetails(d *task.Details) *task.Details {
@@ -1341,10 +1554,11 @@ func cloneDaemonTaskDetails(d *task.Details) *task.Details {
 func (r *taskRunner) addDaemonTask(dt *daemonTask) {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()
-	if _, ok := r.daemonTasks.m[dt.task.ID]; ok {
+	claim := dt.taskSnapshot()
+	if _, ok := r.daemonTasks.m[claim.ID]; ok {
 		return
 	}
-	r.daemonTasks.m[dt.task.ID] = dt
+	r.daemonTasks.m[claim.ID] = dt
 }
 
 func (r *taskRunner) getDaemonTask(id uint64) (*daemonTask, bool) {
@@ -1360,6 +1574,21 @@ func (r *taskRunner) removeDaemonTask(id uint64) {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()
 	delete(r.daemonTasks.m, id)
+}
+
+// removeDaemonTaskIf relinquishes heartbeat ownership only when expected is
+// still the locally published generation. A stale cleanup must not remove a
+// replacement generation that reused the same durable task ID.
+func (r *taskRunner) removeDaemonTaskIf(id uint64, expected *daemonTask) bool {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	current, ok := r.daemonTasks.m[id]
+	if !ok || current != expected {
+		return false
+	}
+	delete(r.daemonTasks.m, id)
+	r.clearPauseTaskCompleted(id)
+	return true
 }
 
 func (r *taskRunner) exists(id uint64) bool {

@@ -1120,11 +1120,11 @@ func TestTableDetectorCleanupWatermarks(t *testing.T) {
 	mockExec.EXPECT().
 		Exec(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-			assert.Contains(t, sql, "DELETE w FROM")
+			assert.Contains(t, sql, "DELETE ")
 			assert.Contains(t, sql, "account_id")
 			return executor.Result{AffectedRows: 5}, nil
 		}).
-		Times(1)
+		Times(2)
 
 	td.cleanupOrphanWatermarks(context.Background())
 }
@@ -1143,11 +1143,11 @@ func TestTableDetectorCleanupWatermarksNoAccounts(t *testing.T) {
 	mockExec.EXPECT().
 		Exec(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-			assert.Contains(t, sql, "DELETE w FROM")
+			assert.Contains(t, sql, "DELETE ")
 			assert.NotContains(t, sql, "WHERE w.account_id IN")
 			return executor.Result{AffectedRows: 0}, nil
 		}).
-		Times(1)
+		Times(2)
 
 	td.cleanupOrphanWatermarks(context.Background())
 }

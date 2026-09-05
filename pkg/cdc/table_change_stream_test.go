@@ -42,7 +42,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -102,7 +101,9 @@ func (m *watermarkUpdaterStub) withUpdateError(fn func(call int) error) *waterma
 	return m
 }
 
-func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *watermarkUpdaterStub) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	if m.skipRemove {
 		return nil
 	}
@@ -208,7 +209,9 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *test
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
 	stream1 := createTestStream(
 		mp,
 		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
@@ -265,9 +268,12 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
-	require.NoError(t, limiter.Acquire(context.Background(), 1))
-	defer limiter.Release(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
+	limiterPermit, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	defer limiterPermit.Release()
 
 	stream := createTestStream(
 		mp,
@@ -279,6 +285,22 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	permit, err := stream.acquireInitialSnapshotPermit(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, permit)
+}
+
+func TestTableChangeStream_OwnerFencedProgressAlwaysBindsSourceGeneration(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "explicit_start", SourceTblId: 77},
+		WithOwnerFence(NewOwnerFence(func(context.Context) error { return nil })),
+	)
+	defer stream.Close()
+
+	require.False(t, stream.initSnapshotSplitTxn,
+		"the counterexample intentionally does not use a split initial snapshot")
+	require.Equal(t, uint64(77), stream.txnManager.watermarkGeneration)
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
@@ -761,6 +783,19 @@ type immediateChangesHandle struct {
 	batches []changeBatch
 	nextIdx int
 	closed  bool
+}
+
+type beforeNextChangesHandle struct {
+	engine.ChangesHandle
+	before func()
+}
+
+func (h *beforeNextChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.before()
+	return h.ChangesHandle.Next(ctx, mp)
 }
 
 func newImmediateChangesHandle(batches []changeBatch) *immediateChangesHandle {
@@ -1452,6 +1487,7 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.NotNil(t, tracker, "tracker should be created even if begin fails")
 	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
 	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB(), "failed TailDone must have one cleanup owner")
 }
 
 func TestTableChangeStream_BeginFailure_NetworkError_Retryable(t *testing.T) {
@@ -2000,16 +2036,18 @@ func (n *noopTxnOperator) Delete(key string) {}
 // tableStreamHarnessConfig captures the configurable parts of the test harness
 // so individual test cases can focus on behavior rather than boilerplate setup.
 type tableStreamHarnessConfig struct {
-	initSnapshotSplitTxn bool
-	noFull               bool
-	startTs              types.TS
-	endTs                types.TS
-	frequency            time.Duration
-	tableDef             *plan.TableDef
-	tableInfo            *DbTableInfo
-	watermarkUpdater     WatermarkUpdater
-	updaterStop          func()
-	runningReaders       *sync.Map
+	initSnapshotSplitTxn   bool
+	initialSnapshotEpoch   types.TS
+	initialSnapshotPending *bool
+	noFull                 bool
+	startTs                types.TS
+	endTs                  types.TS
+	frequency              time.Duration
+	tableDef               *plan.TableDef
+	tableInfo              *DbTableInfo
+	watermarkUpdater       WatermarkUpdater
+	updaterStop            func()
+	runningReaders         *sync.Map
 	// Retry configuration for testing (use shorter delays to speed up tests)
 	retryOptions []TableChangeStreamOption
 }
@@ -2043,6 +2081,12 @@ func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
 
 type tableStreamHarnessOption func(*tableStreamHarnessConfig)
 
+func withHarnessInitSnapshotSplitTxn(split bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initSnapshotSplitTxn = split
+	}
+}
+
 func withHarnessNoFull(noFull bool) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.noFull = noFull
@@ -2064,6 +2108,18 @@ func withHarnessEndTs(ts types.TS) tableStreamHarnessOption {
 func withHarnessFrequency(freq time.Duration) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.frequency = freq
+	}
+}
+
+func withHarnessInitialSnapshotEpoch(ts types.TS) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotEpoch = ts
+	}
+}
+
+func withHarnessInitialSnapshotPending(pending bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotPending = &pending
 	}
 }
 
@@ -2163,6 +2219,12 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 			WithMaxRetryCount(3),
 			WithRetryBackoff(5*time.Millisecond, 20*time.Millisecond, 2.0),
 		}
+	}
+	if !cfg.initialSnapshotEpoch.IsEmpty() {
+		retryOptions = append(retryOptions, WithInitialSnapshotEpoch(cfg.initialSnapshotEpoch))
+	}
+	if cfg.initialSnapshotPending != nil {
+		retryOptions = append(retryOptions, WithInitialSnapshotPending(*cfg.initialSnapshotPending))
 	}
 
 	stream := NewTableChangeStream(
@@ -2373,6 +2435,249 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 		}
 		return ts
 	}
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	var current atomic.Int64
+	current.Store(100)
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: current.Load()}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	current.Store(120)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 2)
+	assert.True(t, calls[0].from.IsEmpty())
+	assert.Equal(t, epoch, calls[0].to)
+	assert.Equal(t, epoch, calls[1].from)
+	assert.Equal(t, types.BuildTS(120, 0), calls[1].to)
+}
+
+func TestTableChangeStream_StableSnapshotRecordsTransferredRows(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		return newImmediateChangesHandle([]changeBatch{{
+			insert: createTestBatch(t, h.MP(), to, []int32{1, 2, 3}),
+			hint:   engine.ChangesHandle_Snapshot,
+		}}), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	require.Equal(t, uint64(3), h.Stream().progressTracker.totalRowsProcessed.Load())
+}
+
+func TestTableChangeStream_SnapshotRotationFailureCleansIncomingBatch(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	commitErr := moerr.NewInternalErrorNoCtx("target commit failed")
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		first := createTestBatch(t, h.MP(), to, []int32{1})
+		incoming := createTestBatch(t, h.MP(), to, []int32{2})
+		nextCalls := 0
+		return &beforeNextChangesHandle{
+			ChangesHandle: newImmediateChangesHandle([]changeBatch{
+				{insert: first, hint: engine.ChangesHandle_Snapshot},
+				{insert: incoming, hint: engine.ChangesHandle_Snapshot},
+			}),
+			before: func() {
+				nextCalls++
+				if nextCalls == 2 {
+					// Force rotation without allocating a 512 MiB test batch.
+					h.Stream().dataProcessor.snapshotTxnBytes = uint64(initialSnapshotTxnByteLimit) - 1
+					h.Sinker().setCommitError(commitErr)
+				}
+			},
+		}, nil
+	})
+
+	require.ErrorIs(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()), commitErr)
+	h.Sinker().releaseOutputs()
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB())
+}
+
+func TestTableChangeStream_RecreatedGenerationStartsFromEmptyPosition(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	key := (&WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"})
+	updater.watermarks[updater.keyString(key)] = types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessInitialSnapshotPending(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done()
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.True(t, calls[0].from.IsEmpty(), "retired generation watermark must not skip the new full snapshot")
+	require.Equal(t, epoch, calls[0].to)
+}
+
+func TestTableChangeStream_CompletedRestartsBypassSharedSnapshotLimiter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		return 400, true
+	})
+
+	for _, table := range []string{"t1", "t2", "t3"} {
+		stream := createTestStream(
+			mp,
+			&DbTableInfo{SourceDbName: "db", SourceTblName: table, SourceTblId: 10},
+			WithInitialSnapshotLimiter(limiter),
+			WithInitialSnapshotPending(false),
+		)
+		permit, err := stream.acquireInitialSnapshotPermit(context.Background())
+		require.NoError(t, err)
+		require.Nil(t, permit)
+		stream.Close()
+	}
+
+	limiter.mu.Lock()
+	require.Zero(t, limiter.inFlight)
+	require.Zero(t, limiter.nextTicket, "completed restart must not enter global FIFO admission")
+	limiter.mu.Unlock()
+
+	pending := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "pending", SourceTblId: 11},
+		WithInitialSnapshotLimiter(limiter),
+		WithInitialSnapshotPending(true),
+	)
+	permit, err := pending.acquireInitialSnapshotPermit(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, permit)
+	permit.Release()
+	pending.Close()
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochHonorsEndTs(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	end := types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessEndTs(end),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, end, calls[0].to)
+}
+
+func TestTableChangeStream_LegacySplitTaskFallsBackToAtomicCurrentSnapshot(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	assert.False(t, h.Stream().initSnapshotSplitTxn)
+	assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, types.BuildTS(100, 0), calls[0].to)
+}
+
+func TestTableChangeStream_StableEpochRequiresAnInitialSnapshot(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	for _, tc := range []struct {
+		name    string
+		options []tableStreamHarnessOption
+	}{
+		{
+			name: "no full",
+			options: []tableStreamHarnessOption{
+				withHarnessNoFull(true),
+			},
+		},
+		{
+			name: "explicit start timestamp",
+			options: []tableStreamHarnessOption{
+				withHarnessStartTs(types.BuildTS(10, 0)),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := []tableStreamHarnessOption{
+				withHarnessInitSnapshotSplitTxn(true),
+				withHarnessInitialSnapshotEpoch(epoch),
+			}
+			opts = append(opts, tc.options...)
+			h := newTableStreamHarness(t, opts...)
+			h.Stream().start.Done() // The test does not invoke Run.
+			assert.False(t, h.Stream().initSnapshotSplitTxn)
+			assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+		})
+	}
+}
+
+func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(120, 0)),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 100}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	assert.Empty(t, h.CollectCallsSnapshot())
+	assert.Zero(t, updater.updateCalls.Load())
+}
+
+func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+	)
+	h.Stream().start.Done() // The test invokes handleStaleRead directly, not Run.
+
+	err := h.Stream().handleStaleRead(h.Context(), newNoopTxnOperator())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stable initial snapshot")
+	assert.Zero(t, h.Sinker().ResetCountSnapshot())
 }
 
 func (h *tableStreamHarness) SetTryEnterRunSql(fn func(context.Context, client.TxnOperator, string) (func(), error)) {
@@ -2796,6 +3101,22 @@ func TestTableChangeStream_DetermineRetryable_TableNotFoundError(t *testing.T) {
 			assert.Equal(t, tc.wantRetry, retryable, tc.description)
 		})
 	}
+}
+
+func TestTableChangeStream_DetermineRetryable_TargetLockFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stream := createTestStream(mp, &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	})
+	require.True(t, stream.determineRetryable(
+		newRetryableTargetLockError(errors.New("target unavailable")),
+	))
+	require.True(t, stream.determineRetryable(
+		newRetryableConnectionError(errors.New("target unavailable")),
+	))
 }
 
 // TestTableChangeStream_TableNotFoundError_Integration verifies end-to-end behavior
