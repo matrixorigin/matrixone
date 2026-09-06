@@ -860,7 +860,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
 				return newProtocolVersionResultValue(t,
-					`{"method":"GETPROTOCOLVERSION","result":"cn-a:42,cn-b:42"}`), nil
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:48,cn-b:48"}`), nil
 			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
