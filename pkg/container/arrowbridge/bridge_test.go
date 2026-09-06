@@ -33,6 +33,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// contextCheckBudget turns every cancellation checkpoint into an observable
+// unit of work. It lets a regression test distinguish the selected one-row
+// window from an accidental rescan of a large immutable dictionary.
+type contextCheckBudget struct {
+	context.Context
+	limit  int
+	checks int
+}
+
+func (c *contextCheckBudget) Err() error {
+	c.checks++
+	if c.checks > c.limit {
+		return context.Canceled
+	}
+	return nil
+}
+
 func TestBindByNameAndPosition(t *testing.T) {
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "B", Type: arrow.PrimitiveTypes.Int64},
@@ -1986,6 +2003,47 @@ func TestDictionaryGatherMaterializesAndPropagatesLogicalNulls(t *testing.T) {
 	indices.Release()
 	values.Release()
 	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+func TestValidatedDictionaryWindowDoesNotRescanImmutableValues(t *testing.T) {
+	const dictionaryRows = 4096
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	indicesBuilder := array.NewInt32Builder(alloc)
+	valuesBuilder := array.NewStringBuilder(alloc)
+	for row := 0; row < dictionaryRows; row++ {
+		indicesBuilder.Append(int32(row))
+		valuesBuilder.Append("dictionary-value")
+	}
+	indices := indicesBuilder.NewArray()
+	indicesBuilder.Release()
+	values := valuesBuilder.NewArray()
+	valuesBuilder.Release()
+	dictionaryType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int32, ValueType: arrow.BinaryTypes.String}
+	dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: dictionaryType}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, dictionaryRows)
+	plan, err := Bind(context.Background(), schema,
+		[]TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	require.NoError(t, plan.ValidateRecord(context.Background(), record))
+
+	view := record.NewSlice(0, 1)
+	budget := &contextCheckBudget{Context: context.Background(), limit: 6}
+	mp := mpool.MustNewZero()
+	converted, _, err := plan.ConvertValidatedRecordWindow(budget, view, mp, ConvertOptions{})
+	require.NoError(t, err)
+	require.LessOrEqual(t, budget.checks, 6,
+		"one output window must not revalidate all immutable dictionary values")
+	require.Equal(t, "dictionary-value", converted.Vecs[0].GetStringAt(0))
+
+	converted.Clean(mp)
+	view.Release()
+	record.Release()
+	dictionary.Release()
+	indices.Release()
+	values.Release()
+	require.Zero(t, mp.CurrNB())
 	alloc.AssertSize(t, 0)
 }
 

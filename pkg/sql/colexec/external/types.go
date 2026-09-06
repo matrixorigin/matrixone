@@ -80,6 +80,10 @@ type ExParamConst struct {
 	// ArrowForceMaterialize is the compile-time rollout snapshot propagated to
 	// every local or remote External scope. It is not a per-batch heuristic.
 	ArrowForceMaterialize bool
+	// ArrowDistributedExecution records that this scope was created by Arrow
+	// fanout. It intentionally differs from Extern.Parallel: shard scopes clear
+	// the user request after planning but still require worker-side opt-in.
+	ArrowDistributedExecution bool
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr

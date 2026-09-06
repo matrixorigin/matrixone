@@ -147,7 +147,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		if param.Extern.Parallel && !settings.DistributedEnabled {
+		if param.ArrowDistributedExecution && !settings.DistributedEnabled {
 			return moerr.NewNotSupported(proc.Ctx,
 				"distributed Arrow LOAD is disabled by configuration")
 		}

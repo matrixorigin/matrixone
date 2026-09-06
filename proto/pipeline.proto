@@ -534,6 +534,10 @@ message ExternalScan {
   // Compile-time policy snapshot. Older CNs ignore this additive field and
   // still reject Arrow format before execution, so mixed versions fail closed.
   bool arrow_force_materialize = 33;
+  // This records actual fanout placement independently of the SQL PARALLEL
+  // request. Fanout scopes clear that request after splitting, but every
+  // receiving CN must still enforce its own distributed Arrow rollout gate.
+  bool arrow_distributed_execution = 34;
 }
 
 message TableScan {

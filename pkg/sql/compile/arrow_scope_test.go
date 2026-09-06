@@ -330,6 +330,8 @@ func TestCompileArrowRecordBatchFanoutPublishesOneShardPerScope(t *testing.T) {
 		op, ok := scope.RootOp.(*external.External)
 		require.True(t, ok)
 		require.False(t, op.Es.Extern.Parallel)
+		require.True(t, op.Es.ArrowDistributedExecution,
+			"fanout must retain worker-gate intent after clearing the user request")
 		require.Equal(t, []string{path}, op.Es.FileList)
 		require.Equal(t, []int64{1000}, op.Es.FileSize)
 		require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, op.Es.ArrowExecutionScope)
@@ -344,6 +346,41 @@ func TestCompileArrowRecordBatchFanoutPublishesOneShardPerScope(t *testing.T) {
 		require.Equal(t, want.RecordBatchStart, got.RecordBatchStart)
 		require.Equal(t, want.RecordBatchEnd, got.RecordBatchEnd)
 		require.Equal(t, want.EstimatedRows, got.EstimatedRows)
+	}
+}
+
+func TestCompileArrowWholeFileFanoutRetainsWorkerGateIntent(t *testing.T) {
+	node := &plan.Node{
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD), TbColToDataCol: map[string]int32{"id": 0}},
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+			Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+		}}},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{ScanType: tree.INFILE, Format: tree.ARROW, ArrowContainer: tree.ARROW_CONTAINER_FILE},
+		ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Parallel: true},
+	}
+	files := []string{"arrow-plan:one.arrow", "arrow-plan:two.arrow"}
+	runtime := &arrowCompileRuntime{
+		identitiesByPath: map[string]*pipeline.ArrowObjectIdentity{
+			files[0]: {FileIndex: 0, Etag: "etag-one", Size: 100},
+			files[1]: {FileIndex: 1, Etag: "etag-two", Size: 100},
+		},
+		shardsByPath: map[string][]*pipeline.ArrowRecordBatchShard{},
+	}
+	c := NewMockCompile(t)
+	c.addr = "local-cn"
+	c.ncpu = 2
+	c.anal = &AnalyzeModule{isFirst: true, qry: &plan.Query{LoadTag: true, StmtType: plan.Query_INSERT}}
+
+	scopes, err := c.compileExternScanWholeFileFanout(node, param, files, []int64{100, 100}, true, false, runtime)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+	for _, scope := range scopes {
+		op, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, op.Es.Extern.Parallel)
+		require.True(t, op.Es.ArrowDistributedExecution)
 	}
 }
 

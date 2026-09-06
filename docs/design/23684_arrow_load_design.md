@@ -56,8 +56,12 @@ worker CN's `ParameterUnit` before constructing an Arrow reader:
 
 This prevents a coordinator's stale or more-permissive configuration from
 bypassing a worker's fail-closed policy during a rolling change.  The execution
-scope remains a positive compile authorization and MORPC v48 remains the
-receiver compatibility gate.  v48 is `up/main` v47 plus one on the delivery
+scope remains a positive compile authorization. Arrow fanout additionally
+serializes `arrow_distributed_execution`; it is independent of the requested
+`Parallel` flag because already-planned shard scopes must clear that flag to
+avoid a second split. `External.Prepare` applies the worker's distributed gate
+to this execution fact before it opens I/O. MORPC v48 remains the receiver
+compatibility gate.  v48 is `up/main` v47 plus one on the delivery
 rebase; older peers reject the additive Arrow pipeline fields, so mixed-version
 deployments must drain or keep remote Arrow modes disabled.  Downgrade is safe
 under the same gates because local Arrow does not advertise a remote capability.
@@ -73,10 +77,12 @@ parse, conversion, cancellation, and commit failure all abort the reservation;
 the released lease returns its exact charge once.
 
 For a record batch, the reader validates immutable shape and validity once at
-record admission.  It then budgets and converts windows.  Budgeting performs
-only O(columns) structural validation; each conversion checks its selected
-window and its cancellation checkpoint.  Thus a record split into K output
-batches has linear total validity work rather than K full-record scans.  The
+record admission, including dictionary values. It then budgets and converts
+windows.  Budgeting performs only O(columns) structural validation; each
+conversion checks its selected indices, validity window, and cancellation
+checkpoint without rescanning immutable dictionary values.  Thus a record split
+into K output batches has linear total validity work rather than K full-record
+scans.  The
 statement account bounds retained range and vector capacity; pin amplification
 forces materialization instead of retaining an oversized source allocation.
 

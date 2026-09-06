@@ -506,7 +506,7 @@ func (r *ArrowReader) ReadBatch(
 		location = proc.GetSessionInfo().TimeZone
 	}
 	convertStart := time.Now()
-	converted, stats, err := r.plan.Convert(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
+	converted, stats, err := r.plan.ConvertValidatedRecordWindow(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
 		Location: location, Allocation: r.allocation, ForceMaterialize: r.forceMaterialize,
 	})
 	observeArrowPhase(convertStart, "convert", err)

@@ -95,13 +95,14 @@ func validateRecordColumns(
 	record arrow.RecordBatch,
 	schema *arrow.Schema,
 	columns []columnPlan,
+	validateDictionaryValues bool,
 ) error {
 	if err := validateRecordShape(ctx, record, schema, columns); err != nil {
 		return err
 	}
 	for _, binding := range columns {
 		column := record.Column(binding.source)
-		if _, err := validateArrowArrayValidity(ctx, column); err != nil {
+		if _, err := validateArrowArrayValidity(ctx, column, validateDictionaryValues); err != nil {
 			return err
 		}
 	}
@@ -122,7 +123,7 @@ func (p *Plan) ValidateRecord(ctx context.Context, record arrow.RecordBatch) err
 	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
 		return moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
 	}
-	return validateRecordColumns(ctx, record, recordSchema, p.columns)
+	return validateRecordColumns(ctx, record, recordSchema, p.columns, true)
 }
 
 func validateRecordShape(

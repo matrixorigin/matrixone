@@ -905,6 +905,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.ExternalScan = &pipeline.ExternalScan{
 			ArrowExecutionScope:         t.Es.ArrowExecutionScope,
 			ArrowForceMaterialize:       t.Es.ArrowForceMaterialize,
+			ArrowDistributedExecution:   t.Es.ArrowDistributedExecution,
 			ArrowObjectIdentities:       t.Es.ArrowObjectIdentities,
 			ArrowRecordBatchShards:      t.Es.ArrowRecordBatchShards,
 			ArrowSchemaFingerprint:      t.Es.ArrowSchemaFingerprint,
@@ -1560,6 +1561,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				ExParamConst: external.ExParamConst{
 					ArrowExecutionScope:         t.ArrowExecutionScope,
 					ArrowForceMaterialize:       t.ArrowForceMaterialize,
+					ArrowDistributedExecution:   t.ArrowDistributedExecution,
 					ArrowObjectIdentities:       t.ArrowObjectIdentities,
 					ArrowRecordBatchShards:      t.ArrowRecordBatchShards,
 					ArrowSchemaFingerprint:      t.ArrowSchemaFingerprint,

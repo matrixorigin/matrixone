@@ -86,6 +86,29 @@ func (p *Plan) Convert(
 	mp *mpool.MPool,
 	options ConvertOptions,
 ) (_ *batch.Batch, stats ConvertStats, err error) {
+	return p.convert(ctx, record, mp, options, true)
+}
+
+// ConvertValidatedRecordWindow converts a slice of a record that was already
+// accepted by ValidateRecord. It revalidates the selected rows and dictionary
+// indices, but it deliberately does not rescan immutable dictionary values.
+// Callers must use only slices derived from that exact immutable record.
+func (p *Plan) ConvertValidatedRecordWindow(
+	ctx context.Context,
+	record arrow.RecordBatch,
+	mp *mpool.MPool,
+	options ConvertOptions,
+) (_ *batch.Batch, stats ConvertStats, err error) {
+	return p.convert(ctx, record, mp, options, false)
+}
+
+func (p *Plan) convert(
+	ctx context.Context,
+	record arrow.RecordBatch,
+	mp *mpool.MPool,
+	options ConvertOptions,
+	validateDictionaryValues bool,
+) (_ *batch.Batch, stats ConvertStats, err error) {
 	if p == nil || record == nil || mp == nil {
 		return nil, stats, moerr.NewInvalidInput(ctx, "invalid Arrow conversion input")
 	}
@@ -99,7 +122,7 @@ func (p *Plan) Convert(
 	if schemaFingerprint(recordSchema) != p.schemaFingerprint {
 		return nil, stats, moerr.NewInvalidInput(ctx, "Arrow record schema does not match the bound schema")
 	}
-	if err := validateRecordColumns(ctx, record, recordSchema, p.columns); err != nil {
+	if err := validateRecordColumns(ctx, record, recordSchema, p.columns, validateDictionaryValues); err != nil {
 		return nil, stats, err
 	}
 	if options.Location == nil {
@@ -121,7 +144,7 @@ func (p *Plan) Convert(
 			return nil, stats, err
 		}
 		column := record.Column(binding.source)
-		nullCount, validityErr := validateArrowArrayValidity(ctx, column)
+		nullCount, validityErr := validateArrowArrayValidity(ctx, column, validateDictionaryValues)
 		if validityErr != nil {
 			return nil, stats, validityErr
 		}
@@ -161,7 +184,11 @@ func (p *Plan) Convert(
 	return bat, stats, nil
 }
 
-func validateArrowArrayValidity(ctx context.Context, column arrow.Array) (int, error) {
+func validateArrowArrayValidity(
+	ctx context.Context,
+	column arrow.Array,
+	validateDictionaryValues bool,
+) (int, error) {
 	if column == nil || column.Data() == nil {
 		return 0, moerr.NewInvalidInput(ctx, "Arrow column has no array data")
 	}
@@ -219,13 +246,15 @@ func validateArrowArrayValidity(ctx context.Context, column arrow.Array) (int, e
 		if err := validateDictionaryIndices(ctx, dictionary, values.Len()); err != nil {
 			return 0, err
 		}
-		if _, err := validateArrowArrayValidity(ctx, values); err != nil {
-			return 0, err
-		}
-		switch values.(type) {
-		case *array.String, *array.LargeString, *array.Binary, *array.LargeBinary, *array.FixedSizeBinary:
-			if _, err := inspectVarlen(ctx, values); err != nil {
+		if validateDictionaryValues {
+			if _, err := validateArrowArrayValidity(ctx, values, true); err != nil {
 				return 0, err
+			}
+			switch values.(type) {
+			case *array.String, *array.LargeString, *array.Binary, *array.LargeBinary, *array.FixedSizeBinary:
+				if _, err := inspectVarlen(ctx, values); err != nil {
+					return 0, err
+				}
 			}
 		}
 	}

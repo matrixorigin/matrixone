@@ -477,7 +477,11 @@ func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
 	settings := proc.Ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit).SV
 
 	param := externalArrowParam(nil, "worker-gate.arrow", 1, tree.ARROW_CONTAINER_FILE)
-	param.Extern.Parallel = true
+	// Fanout scopes deliberately clear the user PARALLEL request after their
+	// ranges are assigned. The serialized execution signal, not that request,
+	// is what makes this an executing distributed scope on the worker.
+	param.Extern.Parallel = false
+	param.ArrowDistributedExecution = true
 	arg := NewArgument().WithEs(param)
 	err := arg.Prepare(proc)
 	require.ErrorContains(t, err, "distributed Arrow LOAD is disabled")

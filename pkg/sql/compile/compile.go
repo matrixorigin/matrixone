@@ -3857,6 +3857,11 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 			strictSQLMode, c.arrowExecutionScope(node, shardParam),
 			runtime.forShard(filePath, shard),
 		)
+		// A shard must not retain Parallel=true: that flag requests generic
+		// splitting and would split this already-planned record range again.
+		// Preserve the distinct execution fact for the receiving CN's rollout
+		// gate before this scope is serialized over MORPC.
+		op.Es.ArrowDistributedExecution = true
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		scopes = append(scopes, scope)
@@ -3927,6 +3932,9 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			arrowRuntime...,
 		)
 		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
+		// Whole-file Arrow fanout also clears Extern.Parallel above. Keep the
+		// execution-side authorization signal independent of that user request.
+		op.Es.ArrowDistributedExecution = len(arrowRuntime) > 0
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		ss = append(ss, scope)

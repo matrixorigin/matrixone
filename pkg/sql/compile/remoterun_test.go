@@ -1772,8 +1772,11 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 
 	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
 		&external.ExternalParam{
-			ExParamConst: external.ExParamConst{ArrowExecutionScope: pipeline.ArrowExecutionScope_ArrowLoadData},
-			ExParam:      external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+			ExParamConst: external.ExParamConst{
+				ArrowExecutionScope:       pipeline.ArrowExecutionScope_ArrowLoadData,
+				ArrowDistributedExecution: true,
+			},
+			ExParam: external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
 		},
 	)}
 
@@ -1804,6 +1807,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 		ExParamConst: external.ExParamConst{
 			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
 			ArrowForceMaterialize:      true,
+			ArrowDistributedExecution:  true,
 			ArrowObjectIdentities:      identities,
 			ArrowRecordBatchShards:     shards,
 			ArrowSchemaFingerprint:     fingerprint,
@@ -1819,6 +1823,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, instruction.ExternalScan.ArrowExecutionScope)
 	require.True(t, instruction.ExternalScan.ArrowForceMaterialize)
+	require.True(t, instruction.ExternalScan.ArrowDistributedExecution)
 	require.Equal(t, identities, instruction.ExternalScan.ArrowObjectIdentities)
 	require.Equal(t, shards, instruction.ExternalScan.ArrowRecordBatchShards)
 	require.Equal(t, fingerprint, instruction.ExternalScan.ArrowSchemaFingerprint)
@@ -1834,6 +1839,7 @@ func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, restoredExternal.Es.ArrowExecutionScope)
 	require.True(t, restoredExternal.Es.ArrowForceMaterialize)
+	require.True(t, restoredExternal.Es.ArrowDistributedExecution)
 	require.Equal(t, identities, restoredExternal.Es.ArrowObjectIdentities)
 	require.Equal(t, shards, restoredExternal.Es.ArrowRecordBatchShards)
 	require.Equal(t, fingerprint, restoredExternal.Es.ArrowSchemaFingerprint)
