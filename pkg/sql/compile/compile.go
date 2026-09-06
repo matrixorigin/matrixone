@@ -441,6 +441,14 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	// Materialized sources own allocation-account-backed retained and decoded
+	// batches but are not VM operators. Close their compile-owned safety nets
+	// before sealing the execution account, especially on partial-run failures
+	// where producer/reader Reset did not release every source owner.
+	for k, source := range c.materializedSources {
+		source.Close()
+		delete(c.materializedSources, k)
+	}
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -532,10 +540,6 @@ func (c *Compile) clear() {
 	}
 	for k := range c.materializedSinkScanNodes {
 		delete(c.materializedSinkScanNodes, k)
-	}
-	for k, source := range c.materializedSources {
-		source.Close()
-		delete(c.materializedSources, k)
 	}
 	for k := range c.materializedReaderIDs {
 		delete(c.materializedReaderIDs, k)
@@ -908,13 +912,16 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 	}
 	startedSources = make([]*materialized.Source, 0, len(c.materializedSources))
 	for _, source := range c.materializedSources {
+		if c.allocationAttempt == nil || c.allocationAttempt.account == nil {
+			return startedSources, mpool.ErrAllocationAccountInvariant
+		}
 		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}, Budget: spillBudget}); err != nil {
+		}, Budget: spillBudget, AllocationAccount: c.allocationAttempt.account}); err != nil {
 			return startedSources, err
 		}
 		startedSources = append(startedSources, source)
@@ -944,7 +951,15 @@ func (c *Compile) runPipelineAttempt(run func() error) (err error) {
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
 	return materialized.SpillBudget{
 		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
-			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
+			budget, err := proc.GetExecutionResourceBudget()
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			reservation, err := budget.ReserveTransientMemory(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return reservation, nil
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetExecutionResourceBudget()
@@ -4962,6 +4977,13 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		for i := range ss {
+			c.setProjection(node, ss[i])
+		}
+		c.anal.isFirst = false
+		return ss
+	}
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -6706,7 +6728,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -6847,7 +6869,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -6855,6 +6877,7 @@ func (c *Compile) compileMergeGroup(
 		return []*Scope{rs}
 	} else {
 		var aggs []aggexec.AggFuncExecExpression
+		groupingAware := false
 
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
@@ -6864,6 +6887,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
+				groupingAware = op.UsesGroupingAwareHash()
 			}
 		}
 		c.anal.isFirst = false
@@ -6872,7 +6896,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], aggs, groupingAware)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -7152,6 +7176,19 @@ func supportsRemoteParquetWholeFileFanout(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion45
+}
+
+func supportsRemoteGroupingSetExpansion(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion49
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
