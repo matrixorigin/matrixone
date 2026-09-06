@@ -997,9 +997,16 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 	}
 	for _, t := range r.restartTasks(ctx) {
 		// A restart of an executor already owned by this runner is an
-		// in-process lifecycle transition. An unassigned or stale foreign task
-		// has no local active routine to restart, so claim it through the normal
-		// start path, which fences ownership with the heartbeat condition.
+		// in-process lifecycle transition. An unassigned durable request may
+		// still have the local active routine that it explicitly asks us to
+		// restart, so prefer that routine before considering a fresh claim. A
+		// stale foreign task has no authoritative local routine and takes the
+		// fenced start path after any obsolete local registration is retired.
+		dt, local := r.getDaemonTask(t.ID)
+		if local && (t.TaskRunner == "" || strings.EqualFold(t.TaskRunner, r.runnerID)) {
+			handlers = append(handlers, newRestartTask(r, dt))
+			continue
+		}
 		if !strings.EqualFold(t.TaskRunner, r.runnerID) {
 			dt, err := r.newDaemonTask(t)
 			if err != nil {
@@ -1010,18 +1017,13 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 			handlers = append(handlers, newRestartStartTask(r, dt))
 			continue
 		}
-		dt, ok := r.getDaemonTask(t.ID)
-		if ok {
-			handlers = append(handlers, newRestartTask(r, dt))
-		} else {
-			dt, err := r.newDaemonTask(t)
-			if err != nil {
-				r.logger.Error("failed to dispatch daemon task",
-					zap.Uint64("task ID", t.ID), zap.Error(err))
-				continue
-			}
-			handlers = append(handlers, newRestartStartTask(r, dt))
+		dt, err := r.newDaemonTask(t)
+		if err != nil {
+			r.logger.Error("failed to dispatch daemon task",
+				zap.Uint64("task ID", t.ID), zap.Error(err))
+			continue
 		}
+		handlers = append(handlers, newRestartStartTask(r, dt))
 	}
 	for _, t := range r.pauseTasks(ctx) {
 		dt, ok := r.getDaemonTask(t.ID)
@@ -1410,6 +1412,16 @@ func (r *taskRunner) relinquishDaemonClaim(dt *daemonTask, failed task.DaemonTas
 }
 
 func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
+	// Reserve the task ID before touching durable ownership. A stale local
+	// heartbeat can make the same still-running task visible to startTasks after
+	// a taskservice outage. Without this local admission point, this runner can
+	// advance its own durable generation and then fail to publish the new
+	// daemonTask because the old pointer is still registered.
+	if !r.reserveDaemonTaskAdmission(dt) {
+		return false, nil
+	}
+	defer r.releaseDaemonTaskAdmission(dt)
+
 	t := dt.taskSnapshot()
 	expectedStatus := t.TaskStatus
 	if restartClaim {
@@ -1456,7 +1468,13 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	// writes must carry the generation's actual Running status and owner rather
 	// than the stale pre-claim dispatcher snapshot.
 	dt.publishClaim(t)
-	r.addDaemonTask(dt)
+	if !r.publishDaemonTaskAdmission(dt) {
+		// All local publishers participate in the reservation protocol, so this
+		// is an invariant violation rather than an expected ownership race. The
+		// durable lease remains recoverable through its ordinary timeout.
+		return false, moerr.NewInternalErrorf(ctx,
+			"failed to publish locally reserved daemon task %d", t.ID)
+	}
 	return true, nil
 }
 
@@ -1551,14 +1569,65 @@ func cloneDaemonTaskDetails(d *task.Details) *task.Details {
 	return &clone
 }
 
-func (r *taskRunner) addDaemonTask(dt *daemonTask) {
+// reserveDaemonTaskAdmission is the local linearization point before a daemon
+// ownership CAS. It serializes concurrent poll results and prevents a runner
+// from claiming a task ID that already has a live local generation. No storage
+// or executor work is performed while daemonTasks is locked.
+func (r *taskRunner) reserveDaemonTaskAdmission(dt *daemonTask) bool {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()
 	claim := dt.taskSnapshot()
 	if _, ok := r.daemonTasks.m[claim.ID]; ok {
-		return
+		return false
+	}
+	if r.daemonTasks.admissions == nil {
+		r.daemonTasks.admissions = make(map[uint64]*daemonTask)
+	}
+	if _, ok := r.daemonTasks.admissions[claim.ID]; ok {
+		return false
+	}
+	r.daemonTasks.admissions[claim.ID] = dt
+	return true
+}
+
+func (r *taskRunner) releaseDaemonTaskAdmission(dt *daemonTask) {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	claim := dt.taskSnapshot()
+	if r.daemonTasks.admissions[claim.ID] == dt {
+		delete(r.daemonTasks.admissions, claim.ID)
+	}
+}
+
+// publishDaemonTaskAdmission transfers a successful durable claim from local
+// admission ownership into heartbeat/executor ownership.
+func (r *taskRunner) publishDaemonTaskAdmission(dt *daemonTask) bool {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	claim := dt.taskSnapshot()
+	if r.daemonTasks.admissions[claim.ID] != dt {
+		return false
+	}
+	if _, ok := r.daemonTasks.m[claim.ID]; ok {
+		return false
 	}
 	r.daemonTasks.m[claim.ID] = dt
+	delete(r.daemonTasks.admissions, claim.ID)
+	return true
+}
+
+func (r *taskRunner) addDaemonTask(dt *daemonTask) bool {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	claim := dt.taskSnapshot()
+	if _, ok := r.daemonTasks.m[claim.ID]; ok {
+		return false
+	}
+	if _, ok := r.daemonTasks.admissions[claim.ID]; ok {
+		return false
+	}
+	r.daemonTasks.m[claim.ID] = dt
+	return true
 }
 
 func (r *taskRunner) getDaemonTask(id uint64) (*daemonTask, bool) {

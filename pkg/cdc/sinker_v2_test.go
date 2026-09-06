@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -583,6 +584,108 @@ func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestMysqlSinker2_ConsumerExitUnblocksAndRejectsCommands(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal func(context.CancelFunc, *ActiveRoutine)
+	}{
+		{
+			name: "context cancellation",
+			signal: func(cancel context.CancelFunc, _ *ActiveRoutine) {
+				cancel()
+			},
+		},
+		{
+			name: "pause",
+			signal: func(_ context.CancelFunc, ar *ActiveRoutine) {
+				ar.ClosePause()
+			},
+		},
+		{
+			name: "cancel",
+			signal: func(_ context.CancelFunc, ar *ActiveRoutine) {
+				ar.CloseCancel()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, _, err := sqlmock.New()
+			require.NoError(t, err)
+
+			tableDef := &plan.TableDef{
+				Name: "test",
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				},
+				Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+				Name2ColIndex: map[string]int32{"id": 0},
+			}
+			builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+			require.NoError(t, err)
+
+			ar := NewCdcActiveRoutine()
+			sinker := NewMysqlSinker2(
+				&Executor{conn: db}, 1, "task-1",
+				&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+				nil, builder, ar,
+			)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			go sinker.Run(ctx, ar)
+
+			test.signal(cancel, ar)
+			select {
+			case <-sinker.consumerDone:
+			case <-time.After(time.Second):
+				t.Fatal("sinker consumer did not stop after lifecycle signal")
+			}
+			require.Error(t, sinker.Error(), "consumer exit must reject later commands")
+			sinker.ClearError() // Rollback clears the triggering error before sending.
+			require.NoError(t, sinker.Error())
+
+			var permitReleases atomic.Int32
+			batchCommand := NewInsertBatchCommand(
+				&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
+				nil,
+				types.BuildTS(1, 0),
+				types.BuildTS(2, 0),
+			)
+			batchCommand.InsertBatch.SetRowCount(1)
+			batchCommand.snapshotPermit = &snapshotPermit{
+				release: func(bool) { permitReleases.Add(1) },
+			}
+			commands := []*Command{
+				NewBeginCommand(),
+				batchCommand,
+				NewCommitCommand(),
+				NewDummyCommand(),
+			}
+			for _, cmd := range commands {
+				sent := make(chan struct{})
+				go func(cmd *Command) {
+					sinker.sendCommand(cmd)
+					close(sent)
+				}(cmd)
+				select {
+				case <-sent:
+				case <-time.After(time.Second):
+					t.Fatalf("command %s remained blocked after consumer exit", cmd.String())
+				}
+				require.Error(t, sinker.Error(),
+					"a command dropped after consumer exit must republish the terminal error")
+			}
+			require.Nil(t, batchCommand.InsertBatch)
+			require.Nil(t, batchCommand.snapshotPermit)
+			require.Equal(t, int32(1), permitReleases.Load())
+
+			sinker.Close()
+			require.NoError(t, db.Close())
+		})
+	}
 }
 
 func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {

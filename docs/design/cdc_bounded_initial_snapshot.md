@@ -100,6 +100,15 @@ The implementation must preserve all of the following:
     so an obsolete owner can delete only generations older than itself and can
     never delete a replacement's retry anchor. A detector that can already see
     a higher durable generation fails before inserting a stale retry anchor.
+14. **Single local daemon admission.** A runner reserves a task ID before the
+    durable claim CAS and transfers that reservation atomically into its local
+    heartbeat/executor registration. A stale heartbeat must not let one CN
+    advance its own durable generation while the preceding local execution is
+    still registered.
+15. **Consumer-exit propagation.** If the sink command consumer exits before
+    producer cleanup, every blocked or later sender is released, transferred
+    batch ownership is closed exactly once, and a terminal error is visible
+    even when rollback cleared the original lifecycle error.
 
 ## Implemented protocol
 
@@ -300,6 +309,14 @@ their historical error upsert because they have no durable owner column.
 snapshot transaction.
 
 ### Daemon-claim and target fencing
+
+Daemon dispatch has a separate, short-lived local admission map keyed by task
+ID. Admission is reserved before the durable ownership CAS; no storage or
+executor operation runs while the map mutex is held. A successful CAS transfers
+the same object from admission into the local running map under that mutex, and
+all error paths release the reservation. This prevents both concurrent poll
+handlers and a stale-heartbeat self-takeover from creating a durable generation
+that has no local heartbeat owner. It does not block takeover by another CN.
 
 Taskservice persists and publishes a monotonic `last_run` claim token for Start,
 Resume, and Restart. The CDC executor creates one immutable `OwnerFence` object
@@ -606,12 +623,27 @@ not a new service/BVT or throughput run; they created no service or persistent
 test data. Logs are `pre-attach-fix-tests.log` and `failed-pause-fix-tests.log`
 under the existing remote evidence directory above.
 
+Validation of the local-admission and consumer-exit correction (2026-09-06):
+
+- The same-CN stale-heartbeat recovery, concurrent admission, storage-error
+  cleanup, and consumer exit on context/pause/cancel are deterministic barrier
+  tests. Each new or changed concurrency case passed 100 independent race
+  repetitions; the pre-existing unassigned-runner Restart case also passed 100
+  race repetitions after its dispatcher boundary was corrected.
+- Full normal packages passed: taskservice 26.384s, CDC 12.003s, frontend
+  25.778s. Full race packages passed: taskservice 27.236s, CDC 14.028s,
+  frontend 34.195s. Scoped `go vet` passed for all three packages.
+- No SQL, wire protocol, row-processing, or target statement semantics changed,
+  so no new service/BVT or throughput claim is made for this lifecycle-only
+  correction.
+
 ## Ownership and wait analysis
 
 | Resource | Acquired by | Terminal release |
 | --- | --- | --- |
 | Snapshot permit | reader before `collector.Next` | collector error, non-snapshot result, untransferred `ChangeData.Clean`, or sink command completion |
 | Source batch | collector; then the non-nil `ChangeData` field until explicitly transferred | untransferred `ChangeData.Clean`, processor-group cleanup, `AtomicBatch.Close`, or sink command completion |
+| Sink command consumer | one `mysqlSinker2.Run` invocation | publishes its terminal error, then closes `consumerDone`; blocked/later senders close commands and transferred permits |
 | Target transaction | sink executor | commit, rollback, or close |
 | Target advisory lock | sink executor for one effect interval | post-commit release, rollback/error, DDL completion, or close |
 | Target connection attempt | one sink initialization or explicit connection check | publish live pool on success; close on ping/cancellation failure and close probe-only pools immediately |
@@ -654,6 +686,9 @@ groups.
 | Advisory-lock release response is lost | server may or may not have released it | clear executor ownership and discard the physical session instead of returning it to the pool |
 | Resume/Restart on same runner | old pipelines retain old fence | local identity check rejects future old effects; delayed old watermark admission is ignored |
 | Transient heartbeat backend error | claim not proven stale | retain local generation and retry heartbeat |
+| Heartbeat remains stale and the same CN polls before recovery | old local generation is still registered | reject the duplicate at local admission before durable CAS; recovered heartbeat renews the unchanged generation |
+| Two poll handlers select the same task concurrently | neither owns the task yet | one local reservation reaches durable CAS; the other returns without storage work |
+| Sinker consumer exits before producer send/rollback | active target transaction or transferred batch may remain | wake senders through `consumerDone`, close each dropped command/permit, republish a terminal error after `ClearError`, then reader cleanup closes the executor and releases transaction/lock ownership |
 | Transient owner-fence check error | claim state unknown | retain/retry the operation and buffered watermark; do not publish a permanent table error |
 | Explicit owner-fence loss | obsolete execution generation | clean up local target state and stop without writing shared table `err_msg` |
 | Source table dropped/recreated | retired epoch row remains | fresh source ID gets new `S`; target reset occurs under lock |
@@ -673,6 +708,12 @@ scale this is tens of short control operations over a multi-minute scan, not
 one operation per row or SQL statement. Releasing per group is preferred over
 a pipeline-lifetime lock because it bounds takeover wait when source collection
 stalls.
+
+Local daemon admission adds one map lookup and a short mutex interval per task
+claim, not per heartbeat, source row, or batch. Consumer-exit observation adds
+one receive arm to the existing blocking command send. Both changes are outside
+the successful row-processing hot path and add no queue, polling loop, timer,
+or background goroutine.
 
 The same rule applies to the incremental tail. With a continuously non-empty
 table at the default 200 ms interval, claim traffic is at most five read-only

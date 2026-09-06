@@ -78,6 +78,11 @@ type mysqlSinker2 struct {
 	cmdCh chan *Command
 	// Channel closed during shutdown to unblock senders/listeners
 	closeCh chan struct{}
+	// consumerDone closes whenever the sole command consumer exits. Senders
+	// must observe it independently of Close: context or control cancellation
+	// can stop Run before the reader reaches its deferred sinker cleanup.
+	consumerDone     chan struct{}
+	consumerDoneOnce sync.Once
 
 	// Error state - atomic access, no panic risk
 	err atomic.Pointer[error]
@@ -332,6 +337,7 @@ func NewMysqlSinker2(
 		ar:               ar,
 		cmdCh:            make(chan *Command), // Unbuffered for backpressure
 		closeCh:          make(chan struct{}),
+		consumerDone:     make(chan struct{}),
 		closed:           false,
 	}
 
@@ -363,6 +369,7 @@ func (s *mysqlSinker2) AttachProgressTracker(pt *ProgressTracker) {
 func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Info("cdc.mysql_sinker2.run_start",
 		zap.String("table", s.dbTblInfo.String()))
+	defer s.consumerDoneOnce.Do(func() { close(s.consumerDone) })
 
 	// Check if already closed before incrementing wait group
 	// This prevents data race with Close() calling wg.Wait()
@@ -385,12 +392,15 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.setErrorIfNil(context.Cause(ctx))
 			return
 		case <-s.closeCh:
 			return
 		case <-ar.Pause:
+			s.setErrorIfNil(fmt.Errorf("CDC sinker paused"))
 			return
 		case <-ar.Cancel:
+			s.setErrorIfNil(fmt.Errorf("CDC sinker cancelled"))
 			return
 		case cmd, ok := <-s.cmdCh:
 			if !ok {
@@ -962,6 +972,7 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	}
 	cmdCh := s.cmdCh
 	closeCh := s.closeCh
+	consumerDone := s.consumerDone
 	s.senderWG.Add(1)
 	s.closeMutex.RUnlock()
 
@@ -971,6 +982,14 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	case cmdCh <- cmd:
 	case <-closeCh:
 		// Clean up batch data in dropped commands
+		cmd.Close()
+		return
+	case <-consumerDone:
+		// Run can stop on context/pause/cancel before Close is reached by the
+		// producer. Republish a terminal error here because rollback deliberately
+		// clears an earlier error before sending its recovery commands. Otherwise
+		// a command dropped after consumer exit could be mistaken for success.
+		s.setErrorIfNil(fmt.Errorf("CDC sinker consumer stopped"))
 		cmd.Close()
 		return
 	}
@@ -1025,7 +1044,11 @@ func (s *mysqlSinker2) SetError(err error) {
 		s.err.Store(nil)
 		return
 	}
+	err = normalizeMysqlSinkerError(err)
+	s.err.Store(&err)
+}
 
+func normalizeMysqlSinkerError(err error) error {
 	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
 	// depend on their identity, and converting them to a plain moerr would turn
 	// supersession into shared table failure metadata.
@@ -1034,8 +1057,15 @@ func (s *mysqlSinker2) SetError(err error) {
 		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
 		err = moerr.ConvertGoError(context.Background(), err)
 	}
+	return err
+}
 
-	s.err.Store(&err)
+func (s *mysqlSinker2) setErrorIfNil(err error) {
+	if err == nil {
+		return
+	}
+	err = normalizeMysqlSinkerError(err)
+	s.err.CompareAndSwap(nil, &err)
 }
 
 // ClearError clears the error state

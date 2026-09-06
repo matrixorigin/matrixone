@@ -711,9 +711,25 @@ func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
 	}
 	require.True(t, r.exists(claim.ID))
 
+	// The durable heartbeat is now stale while the original local executor is
+	// still healthy. If polling wins the race with the recovered heartbeat, the
+	// runner must not advance its own durable generation and strand both the old
+	// and replacement daemonTask objects.
+	candidates := r.startTasks(context.Background())
+	require.Len(t, candidates, 1)
+	selfTakeover := &daemonTask{task: candidates[0]}
+	started, err := r.startDaemonTask(context.Background(), selfTakeover, false)
+	require.NoError(t, err)
+	require.False(t, started)
+	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+	require.Equal(t, claim.LastRun, stored.LastRun)
+	published, ok := r.getDaemonTask(claim.ID)
+	require.True(t, ok)
+	require.Same(t, local, published)
+
 	hook.setHeartbeatErr(nil)
 	r.doSendHeartbeat(context.Background())
-	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
 	require.True(t, stored.LastHeartbeat.After(claim.LastHeartbeat))
 	require.True(t, r.exists(claim.ID))
 
@@ -738,10 +754,97 @@ func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
 	superseding.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
 	replacement := &daemonTask{task: superseding}
-	started, err := r.startDaemonTask(context.Background(), replacement, false)
+	started, err = r.startDaemonTask(context.Background(), replacement, false)
 	require.NoError(t, err)
 	require.True(t, started)
-	published, ok := r.getDaemonTask(claim.ID)
+	published, ok = r.getDaemonTask(claim.ID)
+	require.True(t, ok)
+	require.Same(t, replacement, published)
+}
+
+func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var updateCalls atomic.Int32
+	hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+		if updateCalls.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		return hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+	})
+
+	type startResult struct {
+		started bool
+		err     error
+	}
+	firstResult := make(chan startResult, 1)
+	first := &daemonTask{task: dt}
+	go func() {
+		started, err := r.startDaemonTask(context.Background(), first, false)
+		firstResult <- startResult{started: started, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first daemon admission did not reach durable CAS")
+	}
+
+	secondResult := make(chan startResult, 1)
+	go func() {
+		started, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, false)
+		secondResult <- startResult{started: started, err: err}
+	}()
+	select {
+	case result := <-secondResult:
+		require.NoError(t, result.err)
+		require.False(t, result.started)
+	case <-time.After(time.Second):
+		t.Fatal("duplicate local admission waited behind durable storage")
+	}
+	require.Equal(t, int32(1), updateCalls.Load())
+
+	close(release)
+	result := <-firstResult
+	require.NoError(t, result.err)
+	require.True(t, result.started)
+	published, ok := r.getDaemonTask(dt.ID)
+	require.True(t, ok)
+	require.Same(t, first, published)
+}
+
+func TestStartDaemonTaskReleasesAdmissionAfterStorageError(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	hook.setUpdateErr(errors.New("task storage unavailable"))
+	started, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, false)
+	require.Error(t, err)
+	require.False(t, started)
+
+	hook.setUpdateErr(nil)
+	replacement := &daemonTask{task: dt}
+	started, err = r.startDaemonTask(context.Background(), replacement, false)
+	require.NoError(t, err)
+	require.True(t, started)
+	published, ok := r.getDaemonTask(dt.ID)
 	require.True(t, ok)
 	require.Same(t, replacement, published)
 }

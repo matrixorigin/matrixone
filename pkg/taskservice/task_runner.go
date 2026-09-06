@@ -177,7 +177,8 @@ type taskRunner struct {
 	// daemonTasks contains all daemon tasks that run on this node.
 	daemonTasks struct {
 		sync.Mutex
-		m map[uint64]*daemonTask
+		m          map[uint64]*daemonTask
+		admissions map[uint64]*daemonTask
 	}
 
 	pauseCompletedTasks struct {
@@ -228,6 +229,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 	r.runningTasks.completedTasks = make(map[uint64]struct{})
 	r.pendingTaskHandle = make(chan TaskHandler, 20)
 	r.daemonTasks.m = make(map[uint64]*daemonTask)
+	r.daemonTasks.admissions = make(map[uint64]*daemonTask)
 	r.pauseCompletedTasks.m = make(map[uint64]struct{})
 	return r
 }
