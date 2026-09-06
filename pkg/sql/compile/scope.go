@@ -738,20 +738,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 	queryCtx := scopeRunQueryContext(s.Proc)
+	var terminalErr error
 	if sender != nil && isScopeCancellationError(err) {
 		// An internal cancellation can win the receive select just before the
 		// remote execution publishes its terminal response. Stop the producer
-		// through the existing cleanup handshake and arbitrate the returned
-		// terminal before cancellation normalization can classify the result as
-		// a successful early stop.
-		if terminalErr := sender.waitingTheStopResponse(); terminalErr != nil &&
-			(queryCtx == nil || queryCtx.Err() == nil) {
-			// Query cancellation and deadlines own their terminal result. A failed
-			// teardown must not replace that externally requested outcome, while an
-			// internal pipeline cancellation still needs the handshake failure to
-			// prevent false success.
-			err = terminalErr
-		}
+		// through the existing cleanup handshake and retain its terminal for
+		// arbitration after resolving the cancellation's primary cause.
+		terminalErr = sender.waitingTheStopResponse()
 	}
 
 	runErr, _ := normalizeScopeRunError(
@@ -759,6 +752,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		s.Proc.Ctx,
 		queryCtx,
 	)
+	if runErr == nil && terminalErr != nil {
+		// A query-owned terminal or substantive pipeline cancellation cause is
+		// primary. StopSending supplies the result only when the original
+		// cancellation was secondary; this still makes a terminal-less handshake
+		// fail closed without allowing teardown fallout to hide execution failure.
+		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
+	}
 	// The retained local root is the hand-off boundary from RemoteRun to its
 	// consumer. Publish its durable Error terminal before canceling this scope;
 	// otherwise the consumer can observe cancellation first and finish without

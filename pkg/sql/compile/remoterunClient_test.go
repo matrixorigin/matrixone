@@ -588,6 +588,27 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			wantStopSendingCount: 1,
 		},
 		{
+			name:                 "substantive cancellation cause survives StopSending send failure",
+			cancelCause:          duplicateErr,
+			stopSendErr:          moerr.NewBackendClosedNoCtx(),
+			wantErr:              duplicateErr,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "substantive cancellation cause survives StopSending response closure",
+			cancelCause:          duplicateErr,
+			closeStopResponse:    true,
+			wantErr:              duplicateErr,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "substantive cancellation cause survives StopSending timeout",
+			cancelCause:          duplicateErr,
+			timeoutStopResponse:  true,
+			wantErr:              duplicateErr,
+			wantStopSendingCount: 1,
+		},
+		{
 			name:                 "normal internal cancellation remains secondary",
 			wantStopSendingCount: 1,
 		},
