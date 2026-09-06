@@ -119,6 +119,56 @@ func TestPipelineSignalReceiverCancellationPreservesDurableEdgeFailure(t *testin
 	}
 }
 
+func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *testing.T) {
+	duplicateErr := moerr.NewDuplicateEntryNoCtx("5", "primary")
+	interruptedErr := moerr.NewQueryInterrupted(context.Background())
+
+	for _, test := range []struct {
+		name              string
+		errs              []error
+		wantSubstantiveErr bool
+	}{
+		{
+			name:              "cancellation before execution failure",
+			errs:              []error{interruptedErr, duplicateErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name:              "execution failure before cancellation",
+			errs:              []error{duplicateErr, interruptedErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name: "cancellation only",
+			errs: []error{interruptedErr, context.Canceled},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			regs := make([]*WaitRegister, len(test.errs))
+			for i, terminalErr := range test.errs {
+				regs[i] = NewPipelineEdge(1, 1)
+				regs[i].Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+				if regs[i].SendError(terminalErr) {
+					t.Fatalf("error signal %d unexpectedly fit behind buffered data", i)
+				}
+			}
+
+			receiver := InitPipelineSignalReceiver(ctx, regs)
+			err := receiver.contextDoneError()
+			if test.wantSubstantiveErr {
+				if !errors.Is(err, duplicateErr) {
+					t.Fatalf("durable failure selection depended on edge order: got %v, want %v", err, duplicateErr)
+				}
+			} else if !IsPipelineCancellationError(err) {
+				t.Fatalf("cancellation-only edges returned non-cancellation error: %v", err)
+			}
+		})
+	}
+}
+
 func TestPipelineSignalReceiverWaitingEndUsesCleanupTimeout(t *testing.T) {
 	oldCleanupWaitTimeout := PipelineCleanupWaitTimeout
 	PipelineCleanupWaitTimeout = 10 * time.Millisecond

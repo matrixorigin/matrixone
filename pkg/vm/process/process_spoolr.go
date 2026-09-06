@@ -367,9 +367,10 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 }
 
 type PipelineSignalReceiver struct {
-	usrCtx context.Context
-	srcReg []*WaitRegister
-	doneCh []<-chan struct{}
+	usrCtx   context.Context
+	queryCtx context.Context
+	srcReg   []*WaitRegister
+	doneCh   []<-chan struct{}
 
 	alive int
 
@@ -392,6 +393,22 @@ type PipelineSignalReceiverState struct {
 }
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
+	return initPipelineSignalReceiver(runningCtx, nil, regs)
+}
+
+// InitPipelineSignalReceiverFromProcess initializes a receiver with both levels
+// of execution context. The query context owns client cancellation and
+// deadlines, while proc.Ctx may also be canceled internally to stop a pipeline.
+func InitPipelineSignalReceiverFromProcess(proc *Process, regs []*WaitRegister) *PipelineSignalReceiver {
+	queryCtx, _ := GetQueryCtxFromProc(proc)
+	return initPipelineSignalReceiver(proc.Ctx, queryCtx, regs)
+}
+
+func initPipelineSignalReceiver(
+	runningCtx context.Context,
+	queryCtx context.Context,
+	regs []*WaitRegister,
+) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
 	srcRegs := slices.Clone(regs)
 	doneCh := make([]<-chan struct{}, len(regs))
@@ -420,6 +437,7 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 	return &PipelineSignalReceiver{
 		usrCtx:        runningCtx,
+		queryCtx:      queryCtx,
 		srcReg:        srcRegs,
 		doneCh:        doneCh,
 		alive:         len(regs),
@@ -488,7 +506,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 				continue
 			}
 			// EventError or EventAbort: propagate the error.
-			return nil, msg.terminalErr
+			return nil, receiver.resolveTerminalError(msg.terminalErr)
 		}
 
 		content, info = msg.Action()
@@ -497,7 +515,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
 			if info != nil {
-				return nil, info
+				return nil, receiver.resolveTerminalError(info)
 			}
 			continue
 		}
@@ -523,6 +541,9 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 	if receiver == nil || receiver.usrCtx == nil {
 		return nil
 	}
+	if queryErr := receiver.queryContextError(); queryErr != nil {
+		return queryErr
+	}
 	if errors.Is(receiver.usrCtx.Err(), context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
@@ -530,12 +551,32 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 	if cause != nil && !IsPipelineCancellationError(cause) {
 		return cause
 	}
+	var cancellationErr error
 	for _, reg := range receiver.srcReg {
 		if err := reg.Err(); err != nil {
-			return err
+			if !IsPipelineCancellationError(err) {
+				return err
+			}
+			if cancellationErr == nil {
+				cancellationErr = err
+			}
 		}
 	}
-	return nil
+	return cancellationErr
+}
+
+func (receiver *PipelineSignalReceiver) resolveTerminalError(err error) error {
+	if queryErr := receiver.queryContextError(); queryErr != nil {
+		return queryErr
+	}
+	return err
+}
+
+func (receiver *PipelineSignalReceiver) queryContextError() error {
+	if receiver == nil || receiver.queryCtx == nil {
+		return nil
+	}
+	return receiver.queryCtx.Err()
 }
 
 // idx is start from 0, this is the index of receiver at the receiver.regs.
