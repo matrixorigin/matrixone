@@ -531,6 +531,25 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
+	t.Run("TopOrderedOutput", func(t *testing.T) {
+		original := top.NewArgument().
+			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
+			WithFs([]*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			}}).
+			WithOrderedOutput()
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredTop, ok := restored.(*top.Top)
+		require.True(t, ok)
+		require.True(t, restoredTop.OrderedOutput)
+		require.Equal(t, original.Limit, restoredTop.Limit)
+		require.Equal(t, original.Fs, restoredTop.Fs)
+	})
+
 	t.Run("GroupMetadata", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}

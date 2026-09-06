@@ -800,6 +800,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
@@ -1418,9 +1419,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
-		op = top.NewArgument().
+		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.TopOrderedOutput {
+			topArg.WithOrderedOutput()
+		}
+		op = topArg
 	// should change next day?
 	case vm.Intersect:
 		arg := intersect.NewArgument()

@@ -644,6 +644,9 @@ message Instruction {
   // gated by MORPCVersion49 until every participant understands them.
   repeated bool projection_grouping_flags = 60;
   int32 projection_grouping_set_count = 61;
+  // TOP only: every runtime worker must be consolidated into one stream that
+  // remains ordered across batch boundaries before leaving its CN.
+  bool top_ordered_output = 62;
 }
 
 message AnalysisList {

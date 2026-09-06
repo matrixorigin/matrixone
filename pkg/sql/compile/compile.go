@@ -6391,6 +6391,12 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 
 const mergeTopResidentPlanThreshold uint64 = 8192 * 2
 
+// Streaming has an extra k-way merge at each CN boundary. Keep the existing
+// MergeOrder path while its estimated candidates fit in a few spill windows;
+// beyond that point bounded hierarchical merging avoids materializing and
+// repeatedly spilling a much larger P*K candidate set.
+const distributedTopNStreamingThresholdBytes = 4 * 128 * mpool.MB
+
 // canUseResidentMergeTop limits the resident-only global MergeTop to small,
 // statically bounded plans. Large or runtime limits use the existing spill-capable
 // Top and MergeOrder operators instead.
@@ -6406,11 +6412,62 @@ func canUseResidentMergeTop(topN *plan.Expr) bool {
 	return ok && value.U64Val <= mergeTopResidentPlanThreshold
 }
 
+func shouldUseDistributedOrderedTop(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+) bool {
+	if topN == nil {
+		return false
+	}
+	if canUseResidentMergeTop(topN) {
+		return false
+	}
+	if node == nil || node.Stats == nil ||
+		node.Stats.Cost <= 0 || node.Stats.Rowsize <= 0 ||
+		math.IsNaN(node.Stats.Cost) || math.IsInf(node.Stats.Cost, 0) ||
+		math.IsNaN(node.Stats.Rowsize) || math.IsInf(node.Stats.Rowsize, 0) {
+		// Missing or invalid estimates must choose the bounded path.
+		return true
+	}
+	fanout := 0
+	for _, scope := range ss {
+		if scope == nil {
+			continue
+		}
+		fanout += max(1, scope.NodeInfo.Mcpu)
+	}
+	if fanout == 0 {
+		return true
+	}
+	candidateRows := node.Stats.Cost
+	if literal, ok := topN.Expr.(*plan.Expr_Lit); ok && literal.Lit != nil {
+		if value, ok := literal.Lit.Value.(*plan.Literal_U64Val); ok {
+			if value.U64Val == 0 {
+				return false
+			}
+			candidateRows = math.Min(
+				candidateRows,
+				float64(value.U64Val)*float64(fanout),
+			)
+		}
+	}
+	candidateBytes := candidateRows * node.Stats.Rowsize
+	return math.IsInf(candidateBytes, 0) ||
+		candidateBytes > float64(distributedTopNStreamingThresholdBytes)
+}
+
 func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
+	useOrderedStreams := supportsDistributedOrderedTop(c.proc.GetService()) &&
+		hasMaterializedTopOrderColumns(node.OrderBy) &&
+		shouldUseDistributedOrderedTop(node, topN, ss)
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructTop(node, topN)
+		if useOrderedStreams {
+			op.WithOrderedOutput()
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -6421,13 +6478,24 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
 		op := constructTop(node, topN)
+		if useOrderedStreams {
+			op.WithOrderedOutput()
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
+	if useOrderedStreams {
+		rs := c.newMergeTopScope(node, topN, ss)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
+	// During a rolling upgrade an older CN can still interleave its DOP
+	// workers. Keep the collection-based path until every participant supports
+	// the ordered-stream boundary.
 	ss = c.mergeShuffleScopesIfNeeded(ss, false)
 	rs := c.newMergeScope(ss)
-
 	currentFirstFlag = c.anal.isFirst
 	if canUseResidentMergeTop(topN) {
 		arg := constructMergeTop(node, topN)
@@ -6436,17 +6504,30 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
-
 	mergeOrder := constructMergeOrder(node)
 	mergeOrder.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeOrder)
 	c.anal.isFirst = false
-
 	globalLimit := constructLimit(&plan.Node{Limit: topN})
 	globalLimit.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	rs.setRootOperator(globalLimit)
 	c.anal.isFirst = false
 	return []*Scope{rs}
+}
+
+func hasMaterializedTopOrderColumns(orderBy []*plan.OrderBySpec) bool {
+	if len(orderBy) == 0 {
+		return false
+	}
+	for _, spec := range orderBy {
+		if spec == nil || spec.Expr == nil {
+			return false
+		}
+		if _, ok := spec.Expr.Expr.(*plan.Expr_Col); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
@@ -7189,6 +7270,19 @@ func supportsRemoteGroupingSetExpansion(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion49
+}
+
+func supportsDistributedOrderedTop(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion53
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
@@ -7970,6 +8064,33 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
 		j++
+	}
+	return rs
+}
+
+// newMergeTopScope connects one ordered stream from every input scope to a
+// leaf MergeTop. Runtime DOP is consolidated inside each input CN before its
+// connector writes this edge, so every receiver has exactly one producer.
+func (c *Compile) newMergeTopScope(node *plan.Node, topN *plan.Expr, ss []*Scope) *Scope {
+	rs := c.newEmptyMergeScope()
+	rs.PreScopes = ss
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	if len(ss) > 0 {
+		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
+	}
+
+	arg := constructMergeTop(node, topN).WithOrderedStreams()
+	c.hasMergeOp = true
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(arg)
+
+	for i := range ss {
+		reg := rs.Proc.Reg.MergeReceivers[i]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+		connArg := connector.NewArgument().WithReg(reg)
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
 	}
 	return rs
 }

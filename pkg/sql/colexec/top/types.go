@@ -96,10 +96,11 @@ type container struct {
 }
 
 type Top struct {
-	Limit       *plan.Expr
-	TopValueTag int32
-	ctr         container
-	Fs          []*plan.OrderBySpec
+	Limit         *plan.Expr
+	TopValueTag   int32
+	OrderedOutput bool
+	ctr           container
+	Fs            []*plan.OrderBySpec
 
 	vm.OperatorBase
 }
@@ -136,6 +137,11 @@ func (top *Top) WithLimit(limit *plan.Expr) *Top {
 
 func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
 	top.Fs = fs
+	return top
+}
+
+func (top *Top) WithOrderedOutput() *Top {
+	top.OrderedOutput = true
 	return top
 }
 

@@ -148,6 +148,216 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestMergeTopOrderedStreamsMergesWithoutRetainingLimitRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Reg.MergeReceivers = []*process.WaitRegister{
+		process.NewPipelineEdge(4, 1),
+		process.NewPipelineEdge(4, 1),
+	}
+
+	for i, values := range [][]int64{{1, 3, 5}, {2, 4, 6}} {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+		}
+		bat.SetRowCount(len(values))
+		require.True(t, proc.Reg.MergeReceivers[i].SendDataDirect(proc.Ctx, bat, proc.Mp()))
+		require.True(t, proc.Reg.MergeReceivers[i].SendEnd())
+	}
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(4)).
+		WithFs([]*plan.OrderBySpec{{Expr: newExpression(0)}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 3, 4},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Less(t, result.Batch.Size(), mergeTopStreamBatchBytes)
+
+	arg.Reset(proc, false, nil)
+	arg.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsAcrossBatchBoundariesDescending(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Reg.MergeReceivers = []*process.WaitRegister{
+		process.NewPipelineEdge(4, 1),
+		process.NewPipelineEdge(4, 1),
+		process.NewPipelineEdge(1, 1),
+	}
+	sendInt64Stream(t, proc, proc.Reg.MergeReceivers[0], []int64{9, 7}, []int64{5, 1})
+	sendInt64Stream(t, proc, proc.Reg.MergeReceivers[1], []int64{10, 8, 6}, []int64{4, 2})
+	require.True(t, proc.Reg.MergeReceivers[2].SendEnd())
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(7)).
+		WithFs([]*plan.OrderBySpec{{Expr: newExpression(0), Flag: plan.OrderBySpec_DESC}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 9, 8, 7, 6, 5, 4},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+
+	arg.Reset(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsChunksOutputRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	reg := process.NewPipelineEdge(2, 1)
+	proc.Reg.MergeReceivers = []*process.WaitRegister{reg}
+	values := make([]int64, mergeTopStreamBatchRows+17)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	sendInt64Stream(t, proc, reg, values)
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(uint64(len(values)))).
+		WithFs([]*plan.OrderBySpec{{Expr: newExpression(0)}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, mergeTopStreamBatchRows, first.Batch.RowCount())
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 17, second.Batch.RowCount())
+	require.Equal(t, int64(mergeTopStreamBatchRows),
+		vector.MustFixedColWithTypeCheck[int64](second.Batch.Vecs[0])[0])
+
+	arg.Reset(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsVarlenNullsFirst(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Reg.MergeReceivers = []*process.WaitRegister{
+		process.NewPipelineEdge(2, 1),
+		process.NewPipelineEdge(2, 1),
+	}
+	sendStringStream(t, proc, proc.Reg.MergeReceivers[0],
+		[]string{"", "a", "c"}, []bool{true, false, false})
+	sendStringStream(t, proc, proc.Reg.MergeReceivers[1],
+		[]string{"", "b", "d"}, []bool{true, false, false})
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(6)).
+		WithFs([]*plan.OrderBySpec{{
+			Expr: newStringExpression(0),
+			Flag: plan.OrderBySpec_NULLS_FIRST,
+		}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 6, result.Batch.RowCount())
+	require.True(t, result.Batch.Vecs[0].IsNull(0))
+	require.True(t, result.Batch.Vecs[0].IsNull(1))
+	for row, expected := range []string{"a", "b", "c", "d"} {
+		require.Equal(t, expected,
+			string(result.Batch.Vecs[0].GetBytesAt(row+2)))
+	}
+
+	arg.Reset(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsPropagatesTerminalError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Reg.MergeReceivers = []*process.WaitRegister{
+		process.NewPipelineEdge(1, 1),
+		process.NewPipelineEdge(1, 1),
+	}
+	require.True(t, proc.Reg.MergeReceivers[0].SendError(context.Canceled))
+	require.True(t, proc.Reg.MergeReceivers[1].SendEnd())
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).
+		WithFs([]*plan.OrderBySpec{{Expr: newExpression(0)}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	_, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Reset(proc, true, err)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsRejectsInvalidOrderColumn(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	reg := process.NewPipelineEdge(2, 1)
+	proc.Reg.MergeReceivers = []*process.WaitRegister{reg}
+	sendInt64Stream(t, proc, reg, []int64{1})
+
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).
+		WithFs([]*plan.OrderBySpec{{Expr: newExpression(1)}}).
+		WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	_, err := arg.Call(proc)
+	require.ErrorContains(t, err, "column 1 out of range")
+
+	arg.Reset(proc, true, err)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func sendInt64Stream(
+	t *testing.T,
+	proc *process.Process,
+	reg *process.WaitRegister,
+	batches ...[]int64,
+) {
+	t.Helper()
+	for _, values := range batches {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+		}
+		bat.SetRowCount(len(values))
+		require.True(t, reg.SendDataDirect(proc.Ctx, bat, proc.Mp()))
+	}
+	require.True(t, reg.SendEnd())
+}
+
+func sendStringStream(
+	t *testing.T,
+	proc *process.Process,
+	reg *process.WaitRegister,
+	values []string,
+	nulls []bool,
+) {
+	t.Helper()
+	require.Len(t, nulls, len(values))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for i, value := range values {
+		require.NoError(t,
+			vector.AppendBytes(bat.Vecs[0], []byte(value), nulls[i], proc.Mp()))
+	}
+	bat.SetRowCount(len(values))
+	require.True(t, reg.SendDataDirect(proc.Ctx, bat, proc.Mp()))
+	require.True(t, reg.SendEnd())
+}
+
 func TestMergeTopEmitsFinalBatchOnce(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
 		[]*plan.OrderBySpec{{Expr: newExpression(0)}})
@@ -388,6 +598,12 @@ func newExpression(pos int32) *plan.Expr {
 			Id: int32(types.T_int64),
 		},
 	}
+}
+
+func newStringExpression(pos int32) *plan.Expr {
+	expr := newExpression(pos)
+	expr.Typ.Id = int32(types.T_varchar)
+	return expr
 }
 
 // create a new block based on the type information, ds[i] == true: in descending order
