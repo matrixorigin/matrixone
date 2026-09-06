@@ -345,6 +345,72 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
 }
 
+func TestSelectMetaLockRequirement(t *testing.T) {
+	call := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+
+	tests := []struct {
+		name               string
+		query              *plan.Query
+		wantLock           bool
+		wantUnresolvedFull bool
+	}{
+		{
+			name: "nil query",
+		},
+		{
+			name:  "nil node",
+			query: &plan.Query{Nodes: []*plan.Node{nil}},
+		},
+		{
+			name:  "ordinary select",
+			query: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}}},
+		},
+		{
+			name:     "select for update",
+			query:    &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP}}},
+			wantLock: true,
+		},
+		{
+			name: "unresolved fulltext filter",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:   plan.Node_TABLE_SCAN,
+				FilterList: []*plan.Expr{call("fulltext_match")},
+			}}},
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name: "nested unresolved fulltext score",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{call("round", call("fulltext_match_score"))},
+			}}},
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name: "rewritten fulltext plan",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:    plan.Node_FUNCTION_SCAN,
+				ProjectList: []*plan.Expr{call("fulltext_index_scan")},
+			}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			needsLock, hasUnresolvedFullText := selectMetaLockRequirement(test.query)
+			require.Equal(t, test.wantLock, needsLock)
+			require.Equal(t, test.wantUnresolvedFull, hasUnresolvedFullText)
+		})
+	}
+}
+
 // ============================================================================
 // Tests for rewriteAutoModeToPre
 // ============================================================================

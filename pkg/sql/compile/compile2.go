@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -152,6 +153,7 @@ func (c *Compile) Compile(
 
 	// statistical information record and trace.
 	compileStart := time.Now()
+	hasUnresolvedFullTextPlan := false
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer func() {
 		if e := recover(); e != nil {
@@ -188,12 +190,7 @@ func (c *Compile) Compile(
 		if qry, ok := queryPlan.Plan.(*plan.Plan_Query); ok {
 			switch qry.Query.StmtType {
 			case plan.Query_SELECT:
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_LOCK_OP {
-						c.needLockMeta = true
-						break
-					}
-				}
+				c.needLockMeta, hasUnresolvedFullTextPlan = selectMetaLockRequirement(qry.Query)
 			case plan.Query_INSERT:
 				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
@@ -240,6 +237,11 @@ func (c *Compile) Compile(
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
+	if hasUnresolvedFullTextPlan {
+		// Inert unless the cross-CN visibility test pauses a stale plan before
+		// its pre-pipeline metadata lock validates the catalog generation.
+		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedFullTextPlanCompiledFault)
+	}
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -248,6 +250,54 @@ func (c *Compile) Compile(
 	}
 
 	return c.proc.GetQueryContextError()
+}
+
+const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
+
+// selectMetaLockRequirement reports whether a SELECT must validate its table
+// definitions against mo_tables before execution. An unresolved fulltext
+// placeholder means index rewriting used a table definition without a usable
+// FULLTEXT index. Taking the metadata lock lets a concurrent CREATE INDEX
+// advance the snapshot and rebuild that stale plan before the placeholder can
+// reach execution.
+func selectMetaLockRequirement(query *plan.Query) (needsLock, hasUnresolvedFullText bool) {
+	if query == nil {
+		return false, false
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		if node.NodeType == plan.Node_LOCK_OP {
+			needsLock = true
+		}
+		if expressionsContainUnresolvedFullText(node.FilterList) ||
+			expressionsContainUnresolvedFullText(node.ProjectList) {
+			return true, true
+		}
+	}
+	return needsLock, false
+}
+
+func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
+	for _, expression := range expressions {
+		found := false
+		_ = plan.VisitExprTree(expression, func(candidate *plan.Expr) error {
+			function := candidate.GetF()
+			if function == nil || function.Func == nil {
+				return nil
+			}
+			switch function.Func.ObjName {
+			case "fulltext_match", "fulltext_match_score":
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // Run executes the pipeline and returns the result.
