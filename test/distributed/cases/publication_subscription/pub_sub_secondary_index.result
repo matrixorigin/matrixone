@@ -1,0 +1,47 @@
+drop publication if exists pub_secondary_idx;
+drop account if exists sub_secondary_idx;
+drop database if exists pub_secondary_idx_db;
+create account sub_secondary_idx admin_name = 'admin' identified by '111';
+create database pub_secondary_idx_db;
+create table pub_secondary_idx_db.audit_events (
+id int primary key,
+event_type varchar(32),
+created_at bigint,
+index idx_event_type (event_type),
+index idx_created_at (created_at)
+);
+insert into pub_secondary_idx_db.audit_events
+select g.result,
+if(g.result in (42, 4242), 'login_success', 'other'),
+g.result
+from generate_series(1, 100000) g;
+select mo_ctl('dn', 'flush', 'pub_secondary_idx_db.audit_events');
+mo_ctl(dn, flush, pub_secondary_idx_db.audit_events)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
+create publication pub_secondary_idx database pub_secondary_idx_db account sub_secondary_idx;
+drop database if exists sub_secondary_idx_db;
+create database sub_secondary_idx_db from sys publication pub_secondary_idx;
+explain select count(*) as login_count from sub_secondary_idx_db.audit_events force index (idx_event_type)
+where event_type = 'login_success';
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Index Table Scan on audit_events.idx_event_type
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select count(*) as login_count from sub_secondary_idx_db.audit_events force index (idx_event_type)
+where event_type = 'login_success';
+login_count
+2
+select count(*) as recent_count from sub_secondary_idx_db.audit_events force index (idx_created_at)
+where created_at >= 99999;
+recent_count
+2
+drop database sub_secondary_idx_db;
+drop publication pub_secondary_idx;
+drop database pub_secondary_idx_db;
+drop account sub_secondary_idx;
