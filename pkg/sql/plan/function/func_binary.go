@@ -6759,6 +6759,14 @@ func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResu
 }
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	// BLOB keeps the historical text SUBSTRING behavior unless the binder has
+	// proved a bounded binary result. In that case the result type is narrowed
+	// to VARBINARY, and the operation must preserve bytes for binary aggregates.
+	resultType := result.GetResultVector().GetType().Oid
+	if resultType == types.T_binary || resultType == types.T_varbinary {
+		return SubStringBinaryWith3Args(ivecs, result, proc, length, selectList)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
