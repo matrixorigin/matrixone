@@ -85,10 +85,20 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
 	dbName := createDatabase.GetDatabase()
 
-	// The existence decision and the create must be serialized by the same
-	// catalog-key lock. In particular, every transparent RC retry must cross
-	// this boundary again instead of turning a transient catalog view into an
-	// IF NOT EXISTS no-op.
+	// A positive catalog lookup is already authoritative for this transaction's
+	// snapshot and must not wait behind unrelated DDL that holds a shared
+	// database lock. Only the absence-to-create transition needs serialization.
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return err
+	}
+
+	// Serialize competing creators, then recheck under the lock. Another
+	// transaction may have created the database after the optimistic lookup.
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}

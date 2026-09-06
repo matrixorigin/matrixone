@@ -63,7 +63,7 @@ commit;
 select dat_id <> (select id from create_database_txn_audit.ids) as recreated_with_new_id
 from mo_catalog.mo_database where datname = 'create_database_txn_target';
 recreated_with_new_id
-true
+1
 select * from create_database_txn_target.recreated_table;
 id
 8
@@ -78,7 +78,7 @@ rollback;
 select dat_id = (select id from create_database_txn_audit.ids) as rollback_kept_original_id
 from mo_catalog.mo_database where datname = 'create_database_txn_target';
 rollback_kept_original_id
-true
+1
 select * from create_database_txn_target.recreated_table;
 id
 8

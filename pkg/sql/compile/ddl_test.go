@@ -57,56 +57,135 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestCreateDatabaseSerializesExistenceAndReportsPhysicalCreation(t *testing.T) {
-	lookupErr := errors.New("catalog lookup failed")
+func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
+	lookupFailure := errors.New("catalog lookup failed")
 	lockErr := errors.New("catalog lock failed")
 	createErr := errors.New("catalog create failed")
 
+	type lookupResult struct {
+		existing bool
+		err      error
+	}
 	for _, tc := range []struct {
 		name         string
-		existing     bool
 		ifNotExists  bool
-		lookupErr    error
+		lookups      []lookupResult
 		lockErr      error
 		createErr    error
 		wantCreate   bool
 		wantErr      error
 		wantErrCode  uint16
 		wantAffected uint64
+		wantEvents   []string
 	}{
-		{name: "physical creation", lookupErr: moerr.GetOkExpectedEOB(), wantCreate: true, wantAffected: 1},
-		{name: "if not exists no-op", existing: true, ifNotExists: true},
-		{name: "strict duplicate", existing: true, wantErrCode: moerr.ErrDBAlreadyExists},
-		{name: "lookup failure is not absence", lookupErr: lookupErr, wantErr: lookupErr},
-		{name: "lock failure stops before lookup", lockErr: lockErr, wantErr: lockErr},
-		{name: "create failure has no affected row", lookupErr: moerr.GetOkExpectedEOB(), createErr: createErr, wantCreate: true, wantErr: createErr},
+		{
+			name: "physical creation",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			wantCreate:   true,
+			wantAffected: 1,
+			wantEvents:   []string{"lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:        "if not exists fast no-op",
+			ifNotExists: true,
+			lookups:     []lookupResult{{existing: true}},
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:        "strict duplicate fast failure",
+			lookups:     []lookupResult{{existing: true}},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:       "initial lookup failure is not absence",
+			lookups:    []lookupResult{{err: lookupFailure}},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup"},
+		},
+		{
+			name:       "lock failure stops before locked recheck",
+			lookups:    []lookupResult{{err: moerr.GetOkExpectedEOB()}},
+			lockErr:    lockErr,
+			wantErr:    lockErr,
+			wantEvents: []string{"lookup", "lock"},
+		},
+		{
+			name: "locked recheck failure is not absence",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: lookupFailure},
+			},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name:        "concurrent create becomes if not exists no-op",
+			ifNotExists: true,
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "concurrent create becomes strict duplicate",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "create failure has no affected row",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			createErr:  createErr,
+			wantCreate: true,
+			wantErr:    createErr,
+			wantEvents: []string{"lookup", "lock", "lookup", "create"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			eng := mock_frontend.NewMockEngine(ctrl)
-			lockCalled := false
+			events := make([]string, 0, 4)
 			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
 				require.Equal(t, "db1", name)
 				require.Equal(t, lock.LockMode_Exclusive, mode)
-				lockCalled = true
+				events = append(events, "lock")
 				return tc.lockErr
 			})
 			defer lockStub.Reset()
 
-			if tc.lockErr == nil {
-				var db engine.Database
-				if tc.existing {
-					db = mock_frontend.NewMockDatabase(ctrl)
-				}
+			if len(tc.lookups) != 0 {
+				db := mock_frontend.NewMockDatabase(ctrl)
+				lookup := 0
 				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
 					func(context.Context, string, client.TxnOperator) (engine.Database, error) {
-						require.True(t, lockCalled, "existence must be checked under the catalog lock")
-						return db, tc.lookupErr
+						events = append(events, "lookup")
+						result := tc.lookups[lookup]
+						lookup++
+						if result.existing {
+							return db, result.err
+						}
+						return nil, result.err
 					},
-				)
+				).Times(len(tc.lookups))
 			}
 			if tc.wantCreate {
-				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).Return(tc.createErr)
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return tc.createErr
+					},
+				)
 			}
 
 			proc := testutil.NewProcess(t)
@@ -133,6 +212,7 @@ func TestCreateDatabaseSerializesExistenceAndReportsPhysicalCreation(t *testing.
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantAffected, c.getAffectedRows())
+			require.Equal(t, tc.wantEvents, events)
 		})
 	}
 }
@@ -144,25 +224,34 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 		existsOnRetry bool
 		wantCreate    bool
 		wantAffected  uint64
+		wantLockCalls int
+		wantEvents    []string
 	}{
 		{
-			name:         "retry then physical create",
-			wantCreate:   true,
-			wantAffected: 1,
+			name:          "retry then physical create",
+			wantCreate:    true,
+			wantAffected:  1,
+			wantLockCalls: 2,
+			wantEvents:    []string{"lookup", "lock", "lookup", "lock", "lookup", "create"},
 		},
 		{
 			name:          "retry observes concurrent create as valid no-op",
 			ifNotExists:   true,
 			existsOnRetry: true,
+			wantLockCalls: 1,
+			wantEvents:    []string{"lookup", "lock", "lookup"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			eng := mock_frontend.NewMockEngine(ctrl)
 			lockCalls := 0
+			lookupCalls := 0
+			events := make([]string, 0, 6)
 			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
 				require.Equal(t, "retry_db", name)
 				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
 				lockCalls++
 				if lockCalls == 1 {
 					return moerr.NewTxnNeedRetryNoCtx()
@@ -171,20 +260,28 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 			})
 			defer lockStub.Reset()
 
-			var db engine.Database
-			var lookupErr error = moerr.GetOkExpectedEOB()
+			db := mock_frontend.NewMockDatabase(ctrl)
+			wantLookupCalls := 3
 			if tc.existsOnRetry {
-				db = mock_frontend.NewMockDatabase(ctrl)
-				lookupErr = nil
+				wantLookupCalls = 2
 			}
 			eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
 				func(context.Context, string, client.TxnOperator) (engine.Database, error) {
-					require.Equal(t, 2, lockCalls, "catalog lookup must occur in the retried, locked attempt")
-					return db, lookupErr
+					events = append(events, "lookup")
+					lookupCalls++
+					if tc.existsOnRetry && lookupCalls == 2 {
+						return db, nil
+					}
+					return nil, moerr.GetOkExpectedEOB()
 				},
-			).Times(1)
+			).Times(wantLookupCalls)
 			if tc.wantCreate {
-				eng.EXPECT().Create(gomock.Any(), "retry_db", gomock.Any()).Return(nil).Times(1)
+				eng.EXPECT().Create(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return nil
+					},
+				).Times(1)
 			}
 
 			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -207,9 +304,10 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 
 			result, err := c.Run(0)
 			require.NoError(t, err)
-			require.Equal(t, 2, lockCalls)
+			require.Equal(t, tc.wantLockCalls, lockCalls)
 			require.Equal(t, 1, c.retryTimes)
 			require.Equal(t, tc.wantAffected, result.AffectRows)
+			require.Equal(t, tc.wantEvents, events)
 			c.Release()
 			proc.GetSessionInfo().Buf.Free()
 		})
@@ -219,7 +317,15 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		eng := mock_frontend.NewMockEngine(ctrl)
 		lockErr := errors.New("catalog lock unavailable")
+		lookupCalled := false
+		eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+			func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+				lookupCalled = true
+				return nil, moerr.GetOkExpectedEOB()
+			},
+		).Times(1)
 		lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			require.True(t, lookupCalled)
 			return lockErr
 		})
 		defer lockStub.Reset()
