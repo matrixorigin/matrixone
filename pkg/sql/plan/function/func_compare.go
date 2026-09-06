@@ -858,69 +858,26 @@ func opBinaryBytesBytesToFixedNullSafe(
 
 type jsonComparisonValue struct {
 	value bytejson.ByteJson
-	valid bool
-}
-
-type jsonComparisonVector struct {
-	scalar jsonComparisonValue
-	values []jsonComparisonValue
-}
-
-func (v jsonComparisonVector) at(row uint64) jsonComparisonValue {
-	if v.values == nil {
-		return v.scalar
-	}
-	return v.values[row]
 }
 
 func prepareJSONComparisonValue(raw []byte) jsonComparisonValue {
 	if len(raw) == 0 {
 		return jsonComparisonValue{}
 	}
-	value := types.DecodeJson(raw)
-	return jsonComparisonValue{
-		value: value,
-		valid: bytejson.IsValidByteJson(value),
-	}
+	return jsonComparisonValue{value: types.DecodeJson(raw)}
 }
 
-func prepareJSONComparisonVector(
-	parameter vector.FunctionParameterWrapper[types.Varlena],
-	length int,
-	skipRows bool,
-	selectList *FunctionSelectList,
-) jsonComparisonVector {
-	if parameter.GetSourceVector().IsConst() {
-		raw, isNull := parameter.GetStrValue(0)
-		if isNull {
-			return jsonComparisonVector{}
-		}
-		return jsonComparisonVector{scalar: prepareJSONComparisonValue(raw)}
+func prepareJSONComparisonAt(
+	parameter vector.FunctionParameterWrapper[types.Varlena], row uint64,
+) (jsonComparisonValue, bool) {
+	raw, isNull := parameter.GetStrValue(row)
+	if isNull {
+		return jsonComparisonValue{}, true
 	}
-
-	values := make([]jsonComparisonValue, length)
-	for row := 0; row < length; row++ {
-		if skipRows && selectList.Contains(uint64(row)) {
-			continue
-		}
-		raw, isNull := parameter.GetStrValue(uint64(row))
-		if !isNull {
-			values[row] = prepareJSONComparisonValue(raw)
-		}
-	}
-	return jsonComparisonVector{values: values}
+	return prepareJSONComparisonValue(raw), false
 }
 
 func compareJSONComparisonValues(left, right jsonComparisonValue) int {
-	if left.valid {
-		if right.valid {
-			return bytejson.CompareByteJsonTrusted(left.value, right.value)
-		}
-		return -1
-	}
-	if right.valid {
-		return 1
-	}
 	return bytejson.CompareByteJson(left.value, right.value)
 }
 
@@ -939,20 +896,40 @@ func opBinaryJSONBytesBytesToFixedNullSafe(
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
-	left := prepareJSONComparisonVector(p1, length, false, nil)
-	right := prepareJSONComparisonVector(p2, length, false, nil)
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	var leftConst, rightConst jsonComparisonValue
+	var leftConstNull, rightConstNull bool
+	if c1 {
+		leftConst, leftConstNull = prepareJSONComparisonAt(p1, 0)
+	}
+	if c2 {
+		rightConst, rightConstNull = prepareJSONComparisonAt(p2, 0)
+	}
 	// Result of <=> is never NULL.
 	rsVec.GetNulls().Reset()
 
 	for row := uint64(0); row < uint64(length); row++ {
-		_, null1 := p1.GetStrValue(row)
-		_, null2 := p2.GetStrValue(row)
+		var leftRaw, rightRaw []byte
+		left, null1 := leftConst, leftConstNull
+		if !c1 {
+			leftRaw, null1 = p1.GetStrValue(row)
+		}
+		right, null2 := rightConst, rightConstNull
+		if !c2 {
+			rightRaw, null2 = p2.GetStrValue(row)
+		}
 		if null1 && null2 {
 			rss[row] = true
 		} else if null1 || null2 {
 			rss[row] = false
 		} else {
-			rss[row] = cmpFn(compareJSONComparisonValues(left.at(row), right.at(row)))
+			if !c1 {
+				left = prepareJSONComparisonValue(leftRaw)
+			}
+			if !c2 {
+				right = prepareJSONComparisonValue(rightRaw)
+			}
+			rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 		}
 	}
 	return nil
@@ -991,17 +968,13 @@ func opBinaryJSONBytesBytesToFixed(
 		}
 	}
 
-	skipRows := selectList != nil && !selectList.ShouldEvalAllRow()
-	left := prepareJSONComparisonVector(p1, length, skipRows, selectList)
-	right := prepareJSONComparisonVector(p2, length, skipRows, selectList)
-
 	if c1 && c2 {
-		_, null1 := p1.GetStrValue(0)
-		_, null2 := p2.GetStrValue(0)
+		left, null1 := prepareJSONComparisonAt(p1, 0)
+		right, null2 := prepareJSONComparisonAt(p2, 0)
 		if null1 || null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			r := cmpFn(compareJSONComparisonValues(left.at(0), right.at(0)))
+			r := cmpFn(compareJSONComparisonValues(left, right))
 			for row := 0; row < length; row++ {
 				rss[row] = r
 			}
@@ -1010,40 +983,54 @@ func opBinaryJSONBytesBytesToFixed(
 	}
 
 	if c1 {
-		_, null1 := p1.GetStrValue(0)
+		left, null1 := prepareJSONComparisonAt(p1, 0)
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
-		} else if p2.WithAnyNullValue() {
-			nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+		} else if p2.WithAnyNullValue() || rsAnyNull {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+			}
 			for row := 0; row < length; row++ {
 				if rsNull.Contains(uint64(row)) {
 					continue
 				}
-				rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+				right, null2 := prepareJSONComparisonAt(p2, uint64(row))
+				if null2 {
+					continue
+				}
+				rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 			}
 		} else {
 			for row := 0; row < length; row++ {
-				rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+				right, _ := prepareJSONComparisonAt(p2, uint64(row))
+				rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 			}
 		}
 		return nil
 	}
 
 	if c2 {
-		_, null2 := p2.GetStrValue(0)
+		right, null2 := prepareJSONComparisonAt(p2, 0)
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
-		} else if p1.WithAnyNullValue() {
-			nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		} else if p1.WithAnyNullValue() || rsAnyNull {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
 			for row := 0; row < length; row++ {
 				if rsNull.Contains(uint64(row)) {
 					continue
 				}
-				rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+				left, null1 := prepareJSONComparisonAt(p1, uint64(row))
+				if null1 {
+					continue
+				}
+				rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 			}
 		} else {
 			for row := 0; row < length; row++ {
-				rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+				left, _ := prepareJSONComparisonAt(p1, uint64(row))
+				rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 			}
 		}
 		return nil
@@ -1056,13 +1043,20 @@ func opBinaryJSONBytesBytesToFixed(
 			if rsNull.Contains(uint64(row)) {
 				continue
 			}
-			rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+			left, null1 := prepareJSONComparisonAt(p1, uint64(row))
+			right, null2 := prepareJSONComparisonAt(p2, uint64(row))
+			if null1 || null2 {
+				continue
+			}
+			rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 		}
 		return nil
 	}
 
 	for row := 0; row < length; row++ {
-		rss[row] = cmpFn(compareJSONComparisonValues(left.at(uint64(row)), right.at(uint64(row))))
+		left, _ := prepareJSONComparisonAt(p1, uint64(row))
+		right, _ := prepareJSONComparisonAt(p2, uint64(row))
+		rss[row] = cmpFn(compareJSONComparisonValues(left, right))
 	}
 	return nil
 }

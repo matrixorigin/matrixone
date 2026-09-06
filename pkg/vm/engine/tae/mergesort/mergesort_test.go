@@ -15,6 +15,7 @@
 package mergesort
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"slices"
@@ -150,6 +151,55 @@ func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) 
 	require.Equal(t, []int{0, 2, 1, 3}, mapping)
 	require.Equal(t,
 		[][]byte{rawJSON("true"), rawJSON("false"), rawJSON("0"), rawJSON("1")},
+		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
+}
+
+func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	pool := mocks.GetTestVectorPool()
+	rawJSON := func(text string) []byte {
+		bj, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return encoded
+	}
+
+	zeroZero := rawJSON(`[0,0]`)
+	hundred := rawJSON(`[100]`)
+	require.Less(t, bytes.Compare(hundred, zeroZero), 0,
+		"the raw varlena order must diverge from the legacy JSON relation")
+	require.Less(t,
+		bytejson.CompareByteJsonPhysical(types.DecodeJson(zeroZero), types.DecodeJson(hundred)),
+		0,
+	)
+
+	newInput := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	newInput.Append(hundred, false)
+	newInput.Append(zeroZero, false)
+	columns, err := SortBlockColumns([]containers.Vector{newInput}, 0, pool)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 0}, columns)
+	require.Equal(t, [][]byte{zeroZero, hundred},
+		vector.InefficientMustBytesCol(newInput.GetDownstreamVector()))
+
+	oldObject := containers.NewBatch()
+	oldVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	oldVector.Append(zeroZero, false)
+	oldObject.AddVector("j", oldVector)
+
+	newObject := containers.NewBatch()
+	newObject.AddVector("j", newInput)
+	defer oldObject.Close()
+	defer newObject.Close()
+
+	mergerPool := &testPool{pool: pool}
+	merged, release, mapping, err := MergeAObj(
+		context.Background(), mergerPool, []*containers.Batch{oldObject, newObject}, 0, []uint32{3})
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, []int{0, 1, 2}, mapping)
+	require.Equal(t, [][]byte{zeroZero, zeroZero, hundred},
 		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
 }
 

@@ -17,6 +17,7 @@ package sort
 import (
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,6 +105,16 @@ func IsSupportedType(typ types.T) bool {
 
 func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
+}
+
+// ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
+// JSON cluster keys. The varlena strings point into immutable vector storage;
+// converting them with UnsafeStringToBytes avoids a comparator allocation.
+func ByteJsonPhysicalLess(a, b string) bool {
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(util.UnsafeStringToBytes(a)),
+		types.DecodeJson(util.UnsafeStringToBytes(b)),
+	) < 0
 }
 
 func BoolLess(a, b bool) bool { return !a && b }
@@ -438,12 +449,12 @@ func sortByVector(
 		}{data: data, area: area}
 		if !sqlOrder {
 			// JSON cluster keys are persisted and merged in their serialized
-			// byte order. Changing this to the SQL relation would make old and
-			// newly written objects incompatible during physical merge.
+			// pre-SQL order. Changing this to the SQL relation would make old
+			// and newly written objects incompatible during physical merge.
 			if !desc {
-				genericSort(col, os, varlenaLess)
+				genericSort(col, os, byteJSONPhysicalLess)
 			} else {
-				genericSort(col, os, varlenaGreater)
+				genericSort(col, os, byteJSONPhysicalGreater)
 			}
 			break
 		}
@@ -685,6 +696,26 @@ func varlenaLess(vs struct {
 	area []byte
 }, i, j int64) bool {
 	return vs.data[i].UnsafeGetString(vs.area) < vs.data[j].UnsafeGetString(vs.area)
+}
+
+func byteJSONPhysicalLess(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(vs.data[i].GetByteSlice(vs.area)),
+		types.DecodeJson(vs.data[j].GetByteSlice(vs.area)),
+	) < 0
+}
+
+func byteJSONPhysicalGreater(vs struct {
+	data []types.Varlena
+	area []byte
+}, i, j int64) bool {
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(vs.data[i].GetByteSlice(vs.area)),
+		types.DecodeJson(vs.data[j].GetByteSlice(vs.area)),
+	) > 0
 }
 
 type jsonOrderValue struct {

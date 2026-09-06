@@ -747,6 +747,57 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 		}
 	}
 
+	runColumns := func(b *testing.B, left, right []byte) {
+		leftVector := vector.NewVec(types.T_json.ToType())
+		rightVector := vector.NewVec(types.T_json.ToType())
+		defer leftVector.Free(proc.Mp())
+		defer rightVector.Free(proc.Mp())
+		for row := 0; row < length; row++ {
+			require.NoError(b, vector.AppendBytes(leftVector, left, false, proc.Mp()))
+			require.NoError(b, vector.AppendBytes(rightVector, right, false, proc.Mp()))
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])
+		defer result.Free()
+		require.NoError(b, result.PreExtendAndReset(length))
+		b.ReportAllocs()
+		b.ReportMetric(length, "rows/op")
+		b.ResetTimer()
+		for b.Loop() {
+			if err := result.PreExtendAndReset(length); err != nil {
+				b.Fatal(err)
+			}
+			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length, nil); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	runConstantNull := func(b *testing.B, column []byte) {
+		leftVector := vector.NewVec(types.T_json.ToType())
+		rightVector := vector.NewConstNull(types.T_json.ToType(), length, proc.Mp())
+		defer leftVector.Free(proc.Mp())
+		defer rightVector.Free(proc.Mp())
+		for row := 0; row < length; row++ {
+			require.NoError(b, vector.AppendBytes(leftVector, column, false, proc.Mp()))
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])
+		defer result.Free()
+		require.NoError(b, result.PreExtendAndReset(length))
+		b.ReportAllocs()
+		b.ReportMetric(length, "rows/op")
+		b.ResetTimer()
+		for b.Loop() {
+			if err := result.PreExtendAndReset(length); err != nil {
+				b.Fatal(err)
+			}
+			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length, nil); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
 	wideLeft := encodeArray("0", false)
 	wideRight := encodeArray("1", false)
 	nestedLeft := encodeArray("0", true)
@@ -756,6 +807,12 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 	})
 	b.Run("nested_array_constant_vs_column_first_element", func(b *testing.B) {
 		run(b, nestedLeft, nestedRight, true)
+	})
+	b.Run("nested_array_column_vs_column_first_element", func(b *testing.B) {
+		runColumns(b, nestedLeft, nestedRight)
+	})
+	b.Run("wide_array_column_vs_constant_null", func(b *testing.B) {
+		runConstantNull(b, wideLeft)
 	})
 }
 
