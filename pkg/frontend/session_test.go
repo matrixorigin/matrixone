@@ -450,6 +450,74 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	})
 }
 
+func TestResolveIndexTableByRefUsesPublisherDatabaseAndAccount(t *testing.T) {
+	const (
+		service             = "resolve-index-publisher-context"
+		subscriberAccountID = uint32(7)
+		publisherAccountID  = uint32(42)
+		publisherDatabase   = "publisher_db"
+		indexTable          = "__mo_index_secondary_test"
+	)
+
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), subscriberAccountID)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+	indexRelation := mock_frontend.NewMockRelation(ctrl)
+	indexRelation.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
+	indexRelation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: indexTable})
+
+	assertPublisherContext := func(callCtx context.Context) {
+		accountID, err := defines.GetAccountId(callCtx)
+		require.NoError(t, err)
+		require.Equal(t, publisherAccountID, accountID)
+	}
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Relation(gomock.Any(), indexTable, nil).
+		DoAndReturn(func(callCtx context.Context, _ string, _ any) (engine.Relation, error) {
+			assertPublisherContext(callCtx)
+			return indexRelation, nil
+		})
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	eng.EXPECT().Database(gomock.Any(), publisherDatabase, txnOperator).
+		DoAndReturn(func(callCtx context.Context, _ string, _ client.TxnOperator) (engine.Database, error) {
+			assertPublisherContext(callCtx)
+			return db, nil
+		})
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
+	InitServerLevelVars(service)
+	setPu(service, pu)
+	setSessionAlloc(service, NewLeakCheckAllocator())
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	ioses, err := NewIOSession(&testConn{}, pu, service)
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	ses := NewSession(ctx, service, proto, nil)
+	defer ses.Close()
+	ses.GetTxnHandler().txnOp = txnOperator
+	ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, ses: ses}
+
+	ref := &plan.ObjectRef{
+		SchemaName: publisherDatabase,
+		PubInfo:    &plan.PubInfo{TenantId: int32(publisherAccountID)},
+	}
+	obj, tableDef, err := ses.GetTxnCompileCtx().ResolveIndexTableByRef(ref, indexTable, &plan2.Snapshot{})
+	require.NoError(t, err)
+	require.Equal(t, publisherDatabase, obj.SchemaName)
+	require.Equal(t, indexTable, obj.ObjName)
+	require.Equal(t, indexTable, tableDef.Name)
+
+	accountID, err := defines.GetAccountId(ctx)
+	require.NoError(t, err)
+	require.Equal(t, subscriberAccountID, accountID)
+}
+
 func TestSession_ResolveTempIndexTable(t *testing.T) {
 	convey.Convey("test resolve temp index table", t, func() {
 		ctrl := gomock.NewController(t)
