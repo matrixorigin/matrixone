@@ -7,18 +7,16 @@ Pipeline view when dashboard integration is deployed.
 
 ## Availability and rollback controls
 
-Arrow IPC File and Arrow IPC Stream from local/shared FileService paths are
-enabled by default. S3/stage sources and distributed execution are fail-closed
-until explicitly enabled in every participating CN. A CN needs no
-`[cn.frontend.arrow-load]` section for ordinary local Arrow LOAD use.
+Arrow LOAD is disabled by default. Local/shared FileService paths require
+`enabled=true`; S3/stage sources and distributed execution require their
+additional explicit opt-ins in every participating CN.
 
 The settings are availability gates; `enabled` is also a deployment kill switch.
-Specify the rollback needed for an incident; for example, this configuration
-stops new Arrow statements while leaving the implementation installed:
+Specify the explicit admission setting needed for a local-file rollout:
 
 ```toml
 [cn.frontend.arrow-load]
-enabled = false
+enabled = true
 ```
 
 `s3-enabled=true` admits direct S3-compatible and S3-backed stage sources.
@@ -26,7 +24,8 @@ enabled = false
 parallel Arrow LOAD executes serially. `force-materialize=true` retains Arrow
 LOAD but disables the borrowed Arrow backing optimization. Omitted `s3-enabled`
 and `distributed-enabled` fields default to `false`; explicit opt-ins survive
-repeated configuration validation and service restart.
+repeated configuration validation and service restart. Set `enabled=false` to
+roll back admission.
 
 The current implementation charges every raw range, cache pin, and decoded
 Arrow allocation to the shared statement account and limits each cache pin to

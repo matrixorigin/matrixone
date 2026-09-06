@@ -82,6 +82,9 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 		context.Background(), config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil),
 	)
+	_, err = compile.requireArrowLoadEnabled(param)
+	require.ErrorContains(t, err, "disabled by configuration")
+	frontend.ArrowLoad.Enabled = true
 	settings, err := compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
 	require.True(t, settings.Enabled)

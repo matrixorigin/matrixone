@@ -913,6 +913,9 @@ func newArrowLoadTestProc(t *testing.T) *process.Process {
 	proc := testutil.NewProc(t)
 	frontend := &config.FrontendParameters{}
 	frontend.SetDefaultValues()
+	// Reader tests exercise an admitted Arrow LOAD. Product defaults are
+	// fail-closed, so this fixture supplies the explicit local opt-in.
+	frontend.ArrowLoad.Enabled = true
 	proc.Ctx = context.WithValue(proc.Ctx, config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil))
 	return proc

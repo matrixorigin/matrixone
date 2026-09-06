@@ -41,6 +41,8 @@ func TestRequireArrowLoadEnabled(t *testing.T) {
 		context.Background(), config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil),
 	)
+	require.ErrorContains(t, requireArrowLoadGateError(proc, local), "disabled by configuration")
+	frontend.ArrowLoad.Enabled = true
 	require.NoError(t, requireArrowLoadGateError(proc, local))
 
 	directS3 := &tree.ExternParam{

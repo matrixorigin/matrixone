@@ -24,12 +24,13 @@ import (
 func TestArrowLoadDefaultsAndProgrammaticOptIn(t *testing.T) {
 	var frontend FrontendParameters
 	frontend.SetDefaultValues()
-	require.True(t, frontend.ArrowLoad.Enabled)
+	require.False(t, frontend.ArrowLoad.Enabled)
 	require.False(t, frontend.ArrowLoad.S3Enabled)
 	require.False(t, frontend.ArrowLoad.DistributedEnabled)
 	require.False(t, frontend.ArrowLoad.ForceMaterialize)
 
 	parameters := NewArrowLoadParameters()
+	parameters.Enabled = true
 	parameters.S3Enabled = true
 	parameters.DistributedEnabled = true
 	parameters.SetDefaultValues()
@@ -47,20 +48,21 @@ func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
 		distributedEnabled bool
 		forceMaterialize   bool
 	}{
-		{name: "section omitted", enabled: true},
+		{name: "section omitted"},
 		{
 			name: "enable fields omitted", input: "[arrow-load]\nforce-materialize = true\n",
-			enabled: true, forceMaterialize: true,
+			forceMaterialize: true,
 		},
 		{
 			name: "explicit opt in", input: `[arrow-load]
+	enabled = true
 s3-enabled = true
 distributed-enabled = true
 `,
 			enabled: true, s3Enabled: true, distributedEnabled: true,
 		},
 		{
-			name: "one case-insensitive opt in", input: "[arrow-load]\nS3-ENABLED = true\n",
+			name: "one case-insensitive opt in", input: "[arrow-load]\nENABLED = true\nS3-ENABLED = true\n",
 			enabled: true, s3Enabled: true,
 		},
 	} {

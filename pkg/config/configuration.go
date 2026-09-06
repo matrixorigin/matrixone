@@ -294,9 +294,8 @@ const (
 )
 
 // ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files are
-// available by default. S3-backed sources and distributed execution require an
-// explicit deployment opt-in until their aggregate resource admission and
-// release-readiness gates are accepted.
+// disabled by default. Each source and execution surface requires an explicit
+// deployment opt-in until its release-readiness gates are accepted.
 //
 // configuredFields distinguishes an omitted TOML key from an explicit false.
 // defaultsApplied makes repeated service validation idempotent, so a later
@@ -314,7 +313,7 @@ type ArrowLoadParameters struct {
 	defaultsApplied  bool
 }
 
-// NewArrowLoadParameters returns the default local-only Arrow LOAD settings.
+// NewArrowLoadParameters returns the default fail-closed Arrow LOAD settings.
 // Callers that adjust a programmatic service configuration should start from
 // this value so an explicit setting survives later validation and defaulting
 // passes.
@@ -369,15 +368,12 @@ func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
 	return nil
 }
 
-// SetDefaultValues enables local Arrow LOAD. S3-backed sources and distributed
-// execution remain fail-closed unless their corresponding TOML key explicitly
-// opts in.
+// SetDefaultValues preserves the zero-value fail-closed policy. Deployment
+// configuration must explicitly opt in to Arrow LOAD; S3-backed sources and
+// distributed execution require their corresponding opt-ins as well.
 func (parameters *ArrowLoadParameters) SetDefaultValues() {
 	if parameters.defaultsApplied {
 		return
-	}
-	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
-		parameters.Enabled = true
 	}
 	parameters.defaultsApplied = true
 }

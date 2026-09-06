@@ -34,7 +34,7 @@ import (
 // format='arrow'` (issue #23684, design doc sections 14 and 18). It runs every
 // subtest against one dedicated 1-CN cluster with S3 explicitly enabled and uses
 // the real MySQL protocol rather than the internal executor. Local File and Stream
-// remain available by default; S3/stage cases prove the explicit opt-in surface.
+// and explicitly opts in to every Arrow surface it exercises.
 // It proves type-matrix correctness, option/DDL rejection, multi-object
 // atomicity, explicit transactions, cross-session visibility, and local gate
 // behavior. Standard distributed CI, mixed binaries, and real cloud providers
@@ -123,7 +123,7 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 // before touching the file at all. This checks the client-visible opt-out
 // contract, but it does not replace a true mixed-binary-version rehearsal.
 func TestArrowLoadGateDisabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, false, false, false)
+	c := startArrowLoadClusterWithDefaults(t, 1)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_gate_off")
 	mustExec(t, db, "use arrow_gate_off")
@@ -141,7 +141,7 @@ func TestArrowLoadGateDisabled(t *testing.T) {
 // ordering: the statement must be rejected by configuration rather than
 // attempting HeadObject.
 func TestArrowLoadGateS3Disabled(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 1)
+	c := startArrowLoadCluster(t, 1, true, false, false)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_s3_gate_off")
 	mustExec(t, db, "use arrow_s3_gate_off")

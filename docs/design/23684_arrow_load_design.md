@@ -1,8 +1,9 @@
 # #23684 Arrow LOAD design
 
-Status: proposed; independent design approval is pending.  This is a versioned
-design artifact for implementation PR #28145, not evidence of approval.  The
-release-readiness matrix is maintained in
+Status: implementation proposal; independent design approval is pending. This
+is the stable, versioned design artifact for implementation PR #28145, not
+evidence of approval. Until approval is recorded, all Arrow LOAD modes are
+fail-closed by default. The release-readiness matrix is maintained in
 [`evidence/23684_arrow_load_release_readiness.md`](evidence/23684_arrow_load_release_readiness.md).
 
 ## Problem and scope
@@ -42,14 +43,14 @@ semantics mode.
 
 ## Configuration, rollout, and compatibility
 
-`frontend.arrow-load.enabled` defaults to true for local File/Stream LOAD.
-`s3-enabled` and `distributed-enabled` default to false.  Planning samples the
+`frontend.arrow-load.enabled`, `s3-enabled`, and `distributed-enabled` all
+default to false. Planning samples the
 settings for its scope, but every `External.Prepare` repeats the gate using the
 worker CN's `ParameterUnit` before constructing an Arrow reader:
 
 | Source/execution | Required worker settings | Default |
 | --- | --- | --- |
-| local File or Stream | `enabled` | enabled |
+| local File or Stream | `enabled` | rejected |
 | direct S3 or S3-backed stage | `enabled`, `s3-enabled` | rejected |
 | distributed Arrow scope | `enabled`, `distributed-enabled` | rejected |
 | distributed S3 scope | all three | rejected |
@@ -112,4 +113,4 @@ defaults above are the conservative rollback and failure-containment plan.
 
 Independent owners must approve the proposed remote rollout only after the
 listed acceptance evidence exists.  No product choice is needed to ship this
-documented local-only default: unapproved remote modes remain fail-closed.
+documented fail-closed default: every mode requires explicit deployment opt-in.
