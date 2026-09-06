@@ -716,8 +716,17 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	insertOnlyBaseStep := maintStep
 	// A changed-row derivative is useful only to affected indexes. Creating it
 	// for an insert-only maintenance plan leaves an orphan SINK step, which the
-	// compiler correctly rejects because it has no receiver.
-	if physicalChangedPos >= 0 && len(irregularIndexes) > 0 {
+	// compiler correctly rejects because it has no receiver. Value-aware logical
+	// indexes already consume their own marker-filtered source, so they do not
+	// need this fallback derivative either.
+	needsPhysicalChangedStep := false
+	for _, indexdef := range irregularIndexes {
+		if _, ok := valueChangeMarkerPosByGroup[irregularIndexGroupKey(indexdef)]; !ok {
+			needsPhysicalChangedStep = true
+			break
+		}
+	}
+	if physicalChangedPos >= 0 && needsPhysicalChangedStep {
 		changedScanID := builder.appendTaggedSinkScan(bindCtx, maintStep, finalProjTag)
 		changedScan := builder.qry.Nodes[changedScanID]
 		if int(physicalChangedPos) >= len(changedScan.ProjectList) ||
@@ -2383,12 +2392,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	updateExprs := make(map[string]*plan.Expr)
 	// Keep the executable assignment stream separate from updateExprs. SQL
 	// assignments are ordered and a target may occur more than once; the map is
-	// only the final per-column summary used by index/no-op planning.
+	// only the final per-column summary used by index planning and update checks.
 	updateColIdxList := make([]int32, 0, len(astUpdateExprs))
 	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
-	allExplicitAssignmentsSkipped := false
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -2469,8 +2477,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateColIdxList = append(updateColIdxList, colIdx)
 			updateColExprList = append(updateColExprList, updateExpr)
 		}
-		allExplicitAssignmentsSkipped = len(updateExprs) == 0
-
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
 				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
@@ -3476,115 +3482,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 
-		}
-	}
-
-	// ODKU no-op guard: drop rows where every column the update actually writes
-	// is NULL-safe-equal between the old image (scanTag) and the final written
-	// value the dedup-update join materialized into the new image (selectTag).
-	// MySQL returns affected-rows=0 for such rows.
-	// Placed before the final PROJECT so scanTag columns survive column remapping.
-	if onDupAction == plan.Node_UPDATE {
-		// Columns excluded from the no-op equality chain: implicit ON UPDATE
-		// columns (whose new value always advances) plus any generated column
-		// that transitively derives from such a column — otherwise the recomputed
-		// generated value would defeat the no-op guard even when the user's
-		// explicit update changed nothing. A generated column whose source is a
-		// user-updated column is still caught by that source column's own <=>.
-		noopSkipSeeds := make(map[string]struct{}, len(autoUpdateCols))
-		for name := range autoUpdateCols {
-			noopSkipSeeds[name] = struct{}{}
-		}
-		noopSkipCols, err := collectGeneratedColumnDependents(
-			builder.GetContext(), tableDef, noopSkipSeeds,
-		)
-		if err != nil {
-			return 0, err
-		}
-		var allColsEqual *plan.Expr
-		for i, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID || col.Hidden {
-				continue
-			}
-			if _, skipped := noopSkipCols[col.Name]; skipped {
-				continue
-			}
-			// Only compare columns the update actually writes. A column absent from
-			// updateExprs keeps its old value and is trivially unchanged, so it must
-			// be excluded — otherwise an immutable key column resolved through a
-			// secondary UNIQUE conflict (where the incoming PK differs from the
-			// existing row's PK) would spuriously fail the equality chain and turn a
-			// no-op update into a counted one.
-			if _, written := updateExprs[col.Name]; !written {
-				continue
-			}
-			// Compare the old value against the FINAL written value already
-			// materialized by the dedup-update join, not a fresh evaluation of the
-			// assignment expression. The join evaluates each update expression once
-			// and writes the result back into the new-image (selectTag) column at
-			// colName2Idx; re-executing it here would double-evaluate non-
-			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
-			// check could disagree with the value actually stored.
-			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
-			if !ok {
-				continue
-			}
-			oldColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: int32(i),
-					},
-				},
-			}
-			newColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: newColPos,
-					},
-				},
-			}
-			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
-			if allColsEqual == nil {
-				allColsEqual = eqExpr
-			} else {
-				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
-			}
-		}
-		if allColsEqual != nil || allExplicitAssignmentsSkipped {
-			// The dedup-join output also carries non-conflicting rows, whose old
-			// image is all-NULL. Such a row must always be inserted. Conversely, if
-			// every explicit assignment was removed as a semantic no-op, an existing
-			// row must be dropped without evaluating implicit ON UPDATE expressions.
-			// The old rowid distinguishes those two cases without comparing incoming
-			// values that are not physically updated.
-			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
-			oldRowIDExpr := &plan.Expr{
-				Typ: tableDef.Cols[rowIDIdx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: rowIDIdx,
-					},
-				},
-			}
-			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
-			keepExpr := noOldRowExpr
-			if allColsEqual != nil {
-				// NULL-safe equality is true for an all-NULL new-row image too, so
-				// retain the rowid branch while keeping genuine updates whose compared
-				// columns differ.
-				notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
-				keepExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
-			}
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{lastNodeID},
-				FilterList: []*plan.Expr{keepExpr},
-			}, bindCtx)
 		}
 	}
 
