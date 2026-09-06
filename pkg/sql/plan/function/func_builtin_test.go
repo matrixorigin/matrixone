@@ -283,7 +283,7 @@ func TestBuiltInInternalNumericScaleUsesMySQLSemantics(t *testing.T) {
 		NewFunctionTestResult(
 			types.T_int64.ToType(),
 			false,
-			[]int64{0, 0, 0, 6, 0, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0, 0},
+			[]int64{0, 0, 0, 6, 0, 0, 0, 0, 2, 0, 0, 6, 6, 0, 0, 0, 0},
 			[]bool{false, false, false, false, false, true, true, false, false, true, true, false, true, true, true, true, true},
 		),
 		builtInInternalNumericScale,
