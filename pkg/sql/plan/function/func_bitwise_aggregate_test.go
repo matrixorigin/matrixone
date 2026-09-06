@@ -85,4 +85,45 @@ func TestBitwiseAggregateAcceptsBoundedBinaryExpressions(t *testing.T) {
 			require.Equal(t, int32(16), resolved.GetReturnType().Width)
 		})
 	}
+
+	for _, test := range []struct {
+		name      string
+		operator  string
+		left      types.Type
+		right     types.Type
+		wantWidth int32
+		tooWide   bool
+	}{
+		{
+			name:      "bounded result",
+			operator:  "|",
+			left:      types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
+			right:     types.NewWithCharset(types.T_varbinary, 24, 0, types.CharsetBinary),
+			wantWidth: 24,
+		},
+		{
+			name:      "oversized result",
+			operator:  "^",
+			left:      types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
+			right:     types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary),
+			wantWidth: 512,
+			tooWide:   true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, test.operator, []types.Type{test.left, test.right})
+			require.NoError(t, err)
+			require.Equal(t, types.T_varbinary, resolved.GetReturnType().Oid)
+			require.Equal(t, test.wantWidth, resolved.GetReturnType().Width)
+
+			_, err = GetFunctionByName(ctx, "bit_or", []types.Type{resolved.GetReturnType()})
+			if test.tooWide {
+				require.Error(t, err)
+				moErr := moerr.DowncastError(err)
+				require.Equal(t, moerr.ErrInvalidBitwiseAggregateOperandsSize, moErr.ErrorCode())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

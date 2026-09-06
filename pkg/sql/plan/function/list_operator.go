@@ -26,7 +26,10 @@ func bitwiseBinaryReturnType(parameters []types.Type) types.Type {
 	if result, ok := binaryStringCommonType(parameters); ok {
 		return result
 	}
-	return types.T_varbinary.ToType()
+	// A generic binary capacity is not a derived-expression bound. Preserve
+	// the binary domain, but make an unknown bound explicit so downstream
+	// consumers cannot mistake it for a bounded VARBINARY result.
+	return binaryStringResultType(unknownStringResultBound())
 }
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {

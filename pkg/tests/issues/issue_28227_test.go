@@ -54,9 +54,10 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 			v510 varbinary(510),
 			v511 varbinary(511),
 			v512 varbinary(512),
-			v600 varbinary(600))`, tableName))
+			v600 varbinary(600),
+			vblob blob)`, tableName))
 		execSQLRequire(t, ctx, db, fmt.Sprintf(
-			"insert into %s values (1,1,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF')),(2,1,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F')),(3,2,null,null,null,null)",
+			"insert into %s values (1,1,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF')),(2,1,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F')),(3,2,null,null,null,null,null)",
 			tableName))
 
 		expectedAggregate := map[string]string{
@@ -69,15 +70,20 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 			"bit_or":  {"00FF", "0FFF"},
 			"bit_xor": {"00FF", "0FF0"},
 		}
+		uuidExpression := "uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db')"
 
 		for _, derived := range []struct {
 			name       string
 			expression string
 			hexLength  int
 		}{
-			{name: "uuid_to_bin", expression: "uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db')", hexLength: 32},
+			{name: "uuid_to_bin", expression: uuidExpression, hexLength: 32},
 			{name: "inet6_aton", expression: "inet6_aton('2001:db8::1')", hexLength: 32},
 			{name: "substring", expression: "substring(v512, 1, 511)", hexLength: 4},
+			{name: "substring_blob", expression: "substring(vblob, 1, 511)", hexLength: 4},
+			{name: "binary_and", expression: uuidExpression + " & " + uuidExpression, hexLength: 32},
+			{name: "binary_or", expression: uuidExpression + " | " + uuidExpression, hexLength: 32},
+			{name: "binary_xor", expression: uuidExpression + " ^ " + uuidExpression, hexLength: 32},
 		} {
 			t.Run("bounded "+derived.name, func(t *testing.T) {
 				for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
@@ -166,6 +172,9 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					fmt.Sprintf("select %s(substring(v512, 1, 512)) from %s where g=1", functionName, tableName),
 					fmt.Sprintf("select g,%s(substring(v512, 1, 512)) from %s where g=1 group by g", functionName, tableName),
 					fmt.Sprintf("select id,%s(substring(v512, 1, 512)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
+					fmt.Sprintf("select %s(substring(vblob, 1, 512)) from %s where g=1", functionName, tableName),
+					fmt.Sprintf("select g,%s(substring(vblob, 1, 512)) from %s where g=1 group by g", functionName, tableName),
+					fmt.Sprintf("select id,%s(substring(vblob, 1, 512)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
 				} {
 					_, err := db.ExecContext(ctx, statement)
 					require.Error(t, err, "%s must be rejected", statement)

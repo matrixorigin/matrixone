@@ -159,7 +159,7 @@ func binaryStringResultType(bound stringResultBound) types.Type {
 }
 
 func fixedBinaryResultType(width int32) types.Type {
-	return types.NewWithCharset(types.T_varbinary, width, 0, types.CharsetBinary)
+	return binaryStringResultType(stringResultBound{bytes: uint64(width)})
 }
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
