@@ -264,9 +264,9 @@ func newApplyBatchInfo(
 	return &applyBatchInfo{
 		dbName:                 tblStuff.baseRel.GetTableDef(ctx).DbName,
 		baseTable:              tblStuff.baseRel.GetTableName(),
-		deleteTable:            fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
-		insertTable:            fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
-		updateTable:            fmt.Sprintf("__mo_diff_upd_%s_%d", sessionTag, seq),
+		deleteTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
+		insertTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
+		updateTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
 		deleteKeyNames:         deleteKeyNames,
 		deleteStageNames:       deleteStageNames,
 		deleteKeyTypes:         deleteKeyTypes,
@@ -2846,6 +2846,27 @@ func execSQLStatements(
 	writeFile func([]byte) error,
 	stmts []string,
 ) error {
+	return execSQLStatementsWithMode(ctx, ses, bh, writeFile, stmts, false)
+}
+
+func execRetryableSQLStatements(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	writeFile func([]byte) error,
+	stmts []string,
+) error {
+	return execSQLStatementsWithMode(ctx, ses, bh, writeFile, stmts, true)
+}
+
+func execSQLStatementsWithMode(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	writeFile func([]byte) error,
+	stmts []string,
+	retryable bool,
+) error {
 	for _, stmt := range stmts {
 		if stmt == "" {
 			continue
@@ -2856,7 +2877,15 @@ func execSQLStatements(
 			}
 			continue
 		}
-		ret, err := runSql(ctx, ses, bh, stmt, nil, nil)
+		var (
+			ret executor.Result
+			err error
+		)
+		if retryable {
+			ret, err = runSqlWithBackExec(ctx, ses, bh, stmt)
+		} else {
+			ret, err = runSql(ctx, ses, bh, stmt, nil, nil)
+		}
 		if len(ret.Batches) > 0 && ret.Mp != nil {
 			ret.Close()
 		}
@@ -2923,7 +2952,7 @@ func initApplyTables(
 		)
 	}
 
-	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+	return execRetryableSQLStatements(ctx, ses, bh, writeFile, stmts)
 }
 
 func dropApplyTables(
@@ -2950,7 +2979,7 @@ func dropApplyTables(
 			fmt.Sprintf("drop table if exists %s", updateTable),
 		)
 	}
-	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+	return execRetryableSQLStatements(ctx, ses, bh, writeFile, stmts)
 }
 
 func flushStagedUpdateValues(
@@ -2987,7 +3016,7 @@ func flushStagedUpdateValues(
 	}
 	stmts = append(stmts, specialUpdateStmts...)
 	stmts = append(stmts, clearStmt)
-	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+	return execRetryableSQLStatements(ctx, ses, bh, writeFile, stmts)
 }
 
 // if `writeFile` is not nil, the sql will be flushed down into this file, or
@@ -3041,7 +3070,7 @@ func flushSqlValues(
 				return err
 			}
 			clearStmt := fmt.Sprintf("delete from %s", deleteTable)
-			return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, deleteStmt, clearStmt})
+			return execRetryableSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, deleteStmt, clearStmt})
 		}
 
 		if !batchInfo.disableInsertStage {
@@ -3052,7 +3081,7 @@ func flushSqlValues(
 				baseTable, cols, cols, insertTable,
 			)
 			clearStmt := fmt.Sprintf("delete from %s", insertTable)
-			return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, applyStmt, clearStmt})
+			return execRetryableSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, applyStmt, clearStmt})
 		}
 	}
 
