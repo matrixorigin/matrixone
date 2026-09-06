@@ -141,8 +141,8 @@ func TestBuildCTASPreservesBinaryDateTimeFormatHeadings(t *testing.T) {
 		},
 		{
 			name: "time format direct",
-			sql:  "create table time02 as select time_format(col2, _binary '%H') from time01",
-			want: "time_format(col2, _binary '%H')",
+			sql:  "create table time02 as select time_format(time_col, _binary '%H') from time01",
+			want: "time_format(time_col, _binary '%H')",
 		},
 		{
 			name: "date format through concat",
@@ -151,8 +151,8 @@ func TestBuildCTASPreservesBinaryDateTimeFormatHeadings(t *testing.T) {
 		},
 		{
 			name: "time format through scalar subquery",
-			sql:  "create table time02 as select (select time_format(col2, _binary '%H') from time01 limit 1)",
-			want: "(select time_format(col2, _binary '%H') from time01 limit 1)",
+			sql:  "create table time02 as select (select time_format(time_col, _binary '%H') from time01 limit 1)",
+			want: "(select time_format(time_col, _binary '%H') from time01 limit 1)",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -286,6 +286,12 @@ func newDateFormatCompilerContext() *MockCompilerContext {
 				Name:       "col2",
 				OriginName: "col2",
 				Typ:        datetime,
+				Default:    &planpb.Default{NullAbility: true},
+			},
+			{
+				Name:       "time_col",
+				OriginName: "time_col",
+				Typ:        planpb.Type{Id: int32(types.T_time)},
 				Default:    &planpb.Default{NullAbility: true},
 			},
 			{
