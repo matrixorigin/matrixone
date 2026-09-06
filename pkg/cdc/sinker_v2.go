@@ -108,6 +108,12 @@ const (
 	v2TxnStateRolledBack int32 = 3
 )
 
+var (
+	errMysqlSinkerPaused          = moerr.NewInternalErrorNoCtx("CDC sinker paused")
+	errMysqlSinkerCancelled       = moerr.NewInternalErrorNoCtx("CDC sinker cancelled")
+	errMysqlSinkerConsumerStopped = moerr.NewInternalErrorNoCtx("CDC sinker consumer stopped")
+)
+
 // Compile-time check that mysqlSinker2 implements Sinker interface
 var _ Sinker = (*mysqlSinker2)(nil)
 
@@ -397,10 +403,10 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 		case <-s.closeCh:
 			return
 		case <-ar.Pause:
-			s.setErrorIfNil(fmt.Errorf("CDC sinker paused"))
+			s.setErrorIfNil(errMysqlSinkerPaused)
 			return
 		case <-ar.Cancel:
-			s.setErrorIfNil(fmt.Errorf("CDC sinker cancelled"))
+			s.setErrorIfNil(errMysqlSinkerCancelled)
 			return
 		case cmd, ok := <-s.cmdCh:
 			if !ok {
@@ -989,7 +995,7 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 		// producer. Republish a terminal error here because rollback deliberately
 		// clears an earlier error before sending its recovery commands. Otherwise
 		// a command dropped after consumer exit could be mistaken for success.
-		s.setErrorIfNil(fmt.Errorf("CDC sinker consumer stopped"))
+		s.setErrorIfNil(errMysqlSinkerConsumerStopped)
 		cmd.Close()
 		return
 	}
