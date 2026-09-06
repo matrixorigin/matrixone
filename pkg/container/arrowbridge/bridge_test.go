@@ -2006,8 +2006,8 @@ func TestDictionaryGatherMaterializesAndPropagatesLogicalNulls(t *testing.T) {
 	alloc.AssertSize(t, 0)
 }
 
-func TestValidatedDictionaryWindowDoesNotRescanImmutableValues(t *testing.T) {
-	const dictionaryRows = 4096
+func TestValidatedDictionaryWindowsDoNotRescanImmutableValues(t *testing.T) {
+	const dictionaryRows = 1024
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	indicesBuilder := array.NewInt32Builder(alloc)
 	valuesBuilder := array.NewStringBuilder(alloc)
@@ -2028,17 +2028,22 @@ func TestValidatedDictionaryWindowDoesNotRescanImmutableValues(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, plan.ValidateRecord(context.Background(), record))
 
-	view := record.NewSlice(0, 1)
-	budget := &contextCheckBudget{Context: context.Background(), limit: 6}
+	// Arrow slices retain the full dictionary values array. Convert every row as
+	// its own output window, as ReadBatch does under a small wire budget. The
+	// context checkpoints are a deterministic work counter: rescanning all
+	// dictionary values for each window would exceed this linear bound.
+	budget := &contextCheckBudget{Context: context.Background(), limit: dictionaryRows * 8}
 	mp := mpool.MustNewZero()
-	converted, _, err := plan.ConvertValidatedRecordWindow(budget, view, mp, ConvertOptions{})
-	require.NoError(t, err)
-	require.LessOrEqual(t, budget.checks, 6,
-		"one output window must not revalidate all immutable dictionary values")
-	require.Equal(t, "dictionary-value", converted.Vecs[0].GetStringAt(0))
-
-	converted.Clean(mp)
-	view.Release()
+	for row := int64(0); row < dictionaryRows; row++ {
+		view := record.NewSlice(row, row+1)
+		converted, _, err := plan.ConvertValidatedRecordWindow(budget, view, mp, ConvertOptions{})
+		require.NoError(t, err)
+		require.Equal(t, "dictionary-value", converted.Vecs[0].GetStringAt(0))
+		converted.Clean(mp)
+		view.Release()
+	}
+	require.LessOrEqual(t, budget.checks, dictionaryRows*8,
+		"many output windows must not revalidate all immutable dictionary values")
 	record.Release()
 	dictionary.Release()
 	indices.Release()
