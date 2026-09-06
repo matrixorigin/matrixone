@@ -794,13 +794,16 @@ func forwardRemoteBatchWithContext(
 	return true, nil
 }
 
-// no matter how we stop the remote-run, we should get the final remote cost here.
-func (sender *messageSenderOnClient) waitingTheStopResponse() {
+// waitingTheStopResponse asks an unfinished remote stream to stop and waits for
+// its terminal response. The terminal error remains part of execution state:
+// cancellation may have won the caller's receive select immediately before the
+// remote pipeline reported its actual failure.
+func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	sender.stateMu.Lock()
 	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
 	sender.stateMu.Unlock()
 	if receiveClosed || safeToClose {
-		return
+		return nil
 	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
@@ -811,7 +814,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	if err := sender.streamSender.Send(
 		maxWaitingTime,
 		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return
+		return nil
 	}
 
 	// wait an EndMessage response.
@@ -820,7 +823,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
 				sender.markReceiveClosed()
-				return
+				return nil
 			}
 
 			message := val.(*pipeline.Message)
@@ -829,17 +832,21 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 				if len(message.GetAnalyse()) > 0 {
 					_ = sender.dealRemoteTerminal(message.GetAnalyse())
 				}
+				if terminalErr, ok := message.TryToGetMoErr(); ok {
+					sender.markTerminal(message, false)
+					return terminalErr
+				}
 				// StopSending is also a clean teardown when the original server
 				// worker answers with its negotiated terminal response. The later FIN
 				// still waits for the same server cleanup barrier. Unnegotiated or
 				// mismatched terminal responses remain poisoned.
-				sender.markTerminal(message, message.IsEndMessage())
+				sender.markTerminal(message, true)
 				// in fact, we should deal the cost analysis information here.
-				return
+				return nil
 			}
 
 		case <-maxWaitingTime.Done():
-			return
+			return nil
 		}
 	}
 }
@@ -974,7 +981,7 @@ func (sender *messageSenderOnClient) close() {
 		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-		sender.waitingTheStopResponse()
+		_ = sender.waitingTheStopResponse()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()

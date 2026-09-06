@@ -196,6 +196,35 @@ func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
 	return ErrPipelineEndSignalDeliveryFailed
 }
 
+// IsPipelineCancellationError reports whether every error leaf is cancellation
+// fallout rather than a substantive execution failure. A joined error is
+// cancellation-only only when all of its children are cancellation-shaped.
+func IsPipelineCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsPipelineCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return IsPipelineCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
 // EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
 func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
@@ -441,15 +470,11 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			start := time.Now()
 			chosen, msg = receiver.listenToAll()
 			analyzer.WaitStop(start)
-			if chosen == 0 {
-				return nil, nil
-			}
-
 		} else {
 			chosen, msg = receiver.listenToAll()
-			if chosen == 0 {
-				return nil, nil
-			}
+		}
+		if chosen == 0 {
+			return nil, receiver.contextDoneError()
 		}
 
 		// Handle typed terminal events: End, Error, Abort.
@@ -483,6 +508,34 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		}
 		return content, info
 	}
+}
+
+// contextDoneError resolves a canceled receiver against both sources of
+// terminal truth: its process CancelCause and the durable state of its input
+// edges. The latter closes the race where a sibling cancellation wakes the
+// receiver while a producer has already recorded a more specific failure but
+// could not enqueue every Error signal behind buffered data.
+//
+// A plain context.Canceled remains the intentional StopSending/early-stop path.
+// Query deadlines retain their classifiable sentinel even when
+// WithTimeoutCause carries a different diagnostic cause.
+func (receiver *PipelineSignalReceiver) contextDoneError() error {
+	if receiver == nil || receiver.usrCtx == nil {
+		return nil
+	}
+	if errors.Is(receiver.usrCtx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	cause := context.Cause(receiver.usrCtx)
+	if cause != nil && !IsPipelineCancellationError(cause) {
+		return cause
+	}
+	for _, reg := range receiver.srcReg {
+		if err := reg.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // idx is start from 0, this is the index of receiver at the receiver.regs.
