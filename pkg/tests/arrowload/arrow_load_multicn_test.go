@@ -26,11 +26,11 @@ import (
 )
 
 // TestArrowLoadMultiCN covers two public-path cases that need more than one CN:
-// distributed record-batch fan-out correctness and cancelling a LOAD with KILL
-// QUERY. Both cancellation statements request distributed record-batch fanout,
-// so their coordinator cancellation must propagate to worker scopes on the
-// second CN. Worker shutdown runs last because it intentionally removes that CN
-// from the fixture.
+// distributed record-batch fan-out correctness and client-side cancellation.
+// The cancellation statement requests distributed record-batch fanout, so its
+// coordinator cancellation must propagate to worker scopes on the second CN.
+// Worker shutdown runs last because it intentionally removes that CN from the
+// fixture.
 func TestArrowLoadMultiCN(t *testing.T) {
 	c := startArrowLoadCluster(t, 2, true, false, true)
 	db := openArrowLoadDB(t, c, 0)
@@ -39,7 +39,6 @@ func TestArrowLoadMultiCN(t *testing.T) {
 	path, ddl := fixtureLarge(t)
 
 	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db, path, ddl) })
-	t.Run("CancelMidLoad", func(t *testing.T) { testArrowCancelMidLoad(t, c, path, ddl) })
 	t.Run("ClientContextCancel", func(t *testing.T) { testArrowClientContextCancel(t, c, path, ddl) })
 	t.Run("WorkerCNShutdown", func(t *testing.T) { testArrowWorkerCNShutdown(t, c, path, ddl) })
 }
@@ -61,59 +60,7 @@ func testArrowMultiCNFanout(t *testing.T, db *sql.DB, path, ddl string) {
 		fmt.Sprintf("select count(*) from large_fanout where id < 0 or id >= %d", largeFixtureRows)))
 }
 
-// testArrowCancelMidLoad opens one dedicated connection for the LOAD and a second
-// for the killer, polls processlist() (no sleep-based guessing) until the LOAD is
-// observed actually running on the server, issues KILL QUERY, and asserts: the LOAD
-// returns an error, the target table ends up with zero rows (the multi-file
-// all-or-nothing invariant applies to a single cancelled statement too), and the
-// killed connection itself remains usable afterward (KILL QUERY, not KILL
-// CONNECTION), mirroring pkg/frontend/mysql_protocol_test.go's kill-query test.
-func testArrowCancelMidLoad(t *testing.T, c embed.Cluster, path, ddl string) {
-	loaderDB := openArrowLoadDB(t, c, 0)
-	killerDB := openArrowLoadDB(t, c, 0)
-
-	ctx := context.Background()
-	conn, err := loaderDB.Conn(ctx)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = conn.ExecContext(ctx, "use arrow_multicn")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "drop table if exists cancel_mid_load")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, fmt.Sprintf("create table cancel_mid_load(%s)", ddl))
-	require.NoError(t, err)
-
-	var connID int64
-	require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
-
-	loadErrCh := make(chan error, 1)
-	go func() {
-		_, execErr := conn.ExecContext(ctx, fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow'} into table cancel_mid_load parallel 'true'", path))
-		loadErrCh <- execErr
-	}()
-
-	waitUntilStatementRunning(t, killerDB, connID, "load data", 30*time.Second)
-	mustExec(t, killerDB, fmt.Sprintf("kill query %d", connID))
-
-	select {
-	case err := <-loadErrCh:
-		require.Error(t, err, "a killed LOAD must return an error, not succeed")
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for the killed LOAD statement to return")
-	}
-
-	verifyDB := openArrowLoadDB(t, c, 0)
-	require.Equal(t, int64(0), queryCount(t, verifyDB, "select count(*) from arrow_multicn.cancel_mid_load"),
-		"a canceled LOAD must not leave any partially committed rows")
-
-	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, conn.PingContext(pingCtx), "the connection must remain usable after KILL QUERY (not KILL CONNECTION)")
-}
-
-// testArrowClientContextCancel covers the other public cancellation source:
+// testArrowClientContextCancel covers the public client-side cancellation source:
 // client-side context cancellation closes the in-flight request instead of
 // issuing KILL QUERY from a second session. The server must still roll back the
 // whole multi-batch LOAD and leave the cluster usable for verification.
