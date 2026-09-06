@@ -32,9 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -79,6 +81,9 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 
 	param := external.Es
+	if err := validateParquetWholeFileFanoutProtocol(proc, param); err != nil {
+		return err
+	}
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
@@ -211,6 +216,33 @@ func (external *External) Prepare(proc *process.Process) error {
 			typ := makeType(&param.Cols[i].Typ, flag)
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
+	}
+	return nil
+}
+
+func validateParquetWholeFileFanoutProtocol(proc *process.Process, param *ExternalParam) error {
+	if param == nil || !param.ParquetWholeFileFanout {
+		return nil
+	}
+	if proc == nil || proc.Ctx == nil {
+		return moerr.NewNotSupportedNoCtx(
+			"Parquet whole-file fanout remote execution requires MORPC protocol version 45",
+		)
+	}
+	if remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool); !remote {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	protocolVersion, ok := version.(int64)
+	if !ok || protocolVersion < defines.MORPCVersion45 {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
 	}
 	return nil
 }

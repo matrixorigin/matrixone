@@ -24,6 +24,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -49,6 +50,12 @@ import (
 var maxParquetBatchCnt int64 = 100000
 
 const maxParquetS3PrefetchSize int64 = 128 * 1024 * 1024
+
+const (
+	parquetRangeReadAheadMaxRequest    int64 = 256 * 1024
+	parquetRangeReadAheadMaxBytes      int64 = 1024 * 1024
+	parquetRangeReadAheadAmplification       = 4
+)
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
@@ -201,7 +208,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
 
-		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0) {
+		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0, param.ParquetWholeFileFanout) {
 			data := make([]byte, int(fileSize))
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -222,17 +229,37 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 			})
 			r = bytes.NewReader(data)
 		} else {
-			r = &fsReaderAt{
+			baseReader := &fsReaderAt{
 				fs:       fs,
 				readPath: readPath,
 				ctx:      param.Ctx,
 				param:    param,
 			}
+			r = baseReader
+			if shouldReadAheadParquetRanges(param) {
+				r = &parquetRangeReadAheadReaderAt{
+					reader:   baseReader,
+					fileSize: fileSize,
+				}
+			}
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, fileSize)
+	h.file, err = parquet.OpenFile(r, fileSize, parquetLoadFileOptions(param)...)
 	return moerr.ConvertGoError(param.Ctx, err)
+}
+
+// parquetLoadFileOptions omits file-wide indexes in fanout scopes. They are
+// not consumed by LOAD's row-group selection or decoding, and opening them in
+// every scope multiplies otherwise unused object-store range reads.
+func parquetLoadFileOptions(param *ExternalParam) []parquet.FileOption {
+	if param == nil || (len(param.ParquetRowGroupShards) == 0 && !param.ParquetWholeFileFanout) {
+		return nil
+	}
+	return []parquet.FileOption{
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+	}
 }
 
 func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFileService, string, error) {
@@ -242,12 +269,21 @@ func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFile
 	return plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 }
 
-func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards bool) bool {
+func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards, parallelLoadFileFanout bool) bool {
 	return scanType == tree.S3 &&
 		prefetchS3 &&
 		!hasRowGroupShards &&
+		!parallelLoadFileFanout &&
 		fileSize >= 0 &&
 		fileSize <= maxParquetS3PrefetchSize
+}
+
+func shouldReadAheadParquetRanges(param *ExternalParam) bool {
+	return param != nil &&
+		param.Extern != nil &&
+		param.Extern.ScanType == tree.S3 &&
+		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		(len(param.ParquetRowGroupShards) > 0 || param.ParquetWholeFileFanout)
 }
 
 type parquetColumnLookup struct {
@@ -4401,6 +4437,69 @@ type fsReaderAt struct {
 	param    *ExternalParam
 }
 
+// parquetRangeReadAheadReaderAt coalesces adjacent small ReaderAt calls into a
+// single bounded fetch. Each miss reads at most 1 MiB and at most 4x the
+// requested bytes; one window is retained per active Parquet shard.
+type parquetRangeReadAheadReaderAt struct {
+	mu           sync.Mutex
+	reader       io.ReaderAt
+	fileSize     int64
+	windowOffset int64
+	window       []byte
+}
+
+func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(p) == 0 {
+		return 0, nil
+	}
+	requestSize := int64(len(p))
+	if off < 0 || off > r.fileSize || requestSize > r.fileSize-off ||
+		requestSize > parquetRangeReadAheadMaxRequest {
+		return r.reader.ReadAt(p, off)
+	}
+
+	if off >= r.windowOffset {
+		windowStart := off - r.windowOffset
+		if windowStart <= int64(len(r.window)) && requestSize <= int64(len(r.window))-windowStart {
+			copy(p, r.window[windowStart:windowStart+requestSize])
+			return len(p), nil
+		}
+	}
+
+	fetchSize := min(
+		r.fileSize-off,
+		min(parquetRangeReadAheadMaxBytes, requestSize*parquetRangeReadAheadAmplification),
+	)
+	if fetchSize <= requestSize {
+		return r.reader.ReadAt(p, off)
+	}
+	if int64(cap(r.window)) < fetchSize {
+		r.window = make([]byte, fetchSize)
+	} else {
+		r.window = r.window[:fetchSize]
+	}
+
+	n, err = r.reader.ReadAt(r.window, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.window = r.window[:0]
+		return min(n, len(p)), err
+	}
+	if n < len(p) {
+		r.window = r.window[:0]
+		if err == nil {
+			err = io.EOF
+		}
+		return n, err
+	}
+	r.windowOffset = off
+	r.window = r.window[:n]
+	copy(p, r.window[:len(p)])
+	return len(p), nil
+}
+
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
@@ -4419,7 +4518,7 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, err
 	}
 	n = int(vec.Entries[0].Size)
-	if n > 0 {
+	if n > 0 && r.param != nil {
 		r.param.addParquetProfile(process.ParquetProfileStats{BytesRead: int64(n)})
 	}
 	return n, nil

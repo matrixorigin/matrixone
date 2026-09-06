@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
@@ -637,13 +639,20 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	if req.GetStatsInfoRequest == nil {
+	if req.GetStatsInfoRequest == nil || req.GetStatsInfoRequest.StatsInfoKey == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	// The parameter sync is false, as the read request is from remote node,
 	// and we do not need wait for the data sync.
+	key := *req.GetStatsInfoRequest.StatsInfoKey
+	var info *statsinfo.StatsInfo
+	if exporter, ok := s.storeEngine.(engine.RemoteStatsExporter); ok {
+		info = exporter.StatsForRemote(ctx, key)
+	} else {
+		info = s.storeEngine.Stats(ctx, key, false)
+	}
 	resp.GetStatsInfoResponse = &query.GetStatsInfoResponse{
-		StatsInfo: s.storeEngine.Stats(ctx, *req.GetStatsInfoRequest.StatsInfoKey, false),
+		StatsInfo: info,
 	}
 	return nil
 }

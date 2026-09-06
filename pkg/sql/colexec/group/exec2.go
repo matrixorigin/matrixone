@@ -40,13 +40,28 @@ const (
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
 
-	// spill parameters.
-	spillNumBuckets = 32
-	spillMaskBits   = 5 // log2(spillNumBuckets)
-	spillMaxPass    = 3
-	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
-	spillWrBufSize  = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
+	// Aggregate spill keeps the historical fanout: aggregate state makes each
+	// record relatively expensive, while partial aggregation usually keeps a
+	// first-level bucket below the resident capacity. DISTINCT has no aggregate
+	// state and can retain almost every input row, so use a wider first pass to
+	// avoid rewriting every bucket at the next level. Its optional per-bucket
+	// writer buffers remain bounded to at most 4 MiB in total.
+	spillNumBuckets         = 32
+	spillMaskBits           = 5 // log2(spillNumBuckets)
+	spillDistinctNumBuckets = 64
+	spillDistinctMaskBits   = 6 // log2(spillDistinctNumBuckets)
+	spillMaxNumBuckets      = spillDistinctNumBuckets
+	spillMaxPass            = 3
+	spillIOBufSize          = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
+	spillWrBufSize          = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
 )
+
+func (ctr *container) spillPartitionCount() int {
+	if len(ctr.aggList) == 0 {
+		return spillDistinctNumBuckets
+	}
+	return spillNumBuckets
+}
 
 func hasInactiveGroupingColumn(flags []bool) bool {
 	for _, flag := range flags {
@@ -364,13 +379,30 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
+			if group.ctr.distinctSpill != nil {
+				if _, err = group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
 			}
+			if group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
+				if err = group.ctr.prepareGroupedDistinctContributions(proc); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if _, err = group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		if group.NeedEval && group.ctr.inputDone {
+			if err = group.ctr.finalizeExactCountDistinct(
+				proc, group.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -420,15 +452,37 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for offset := 0; offset < bat.RowCount(); offset += hashmap.UnitLimit {
 			n := min(hashmap.UnitLimit, bat.RowCount()-offset)
 			groups := oneGroup[:n]
-			for i, agg := range group.ctr.aggList {
-				if err = agg.PreflightBatchFill(
-					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
-					return false, err
+			for {
+				for i, agg := range group.ctr.aggList {
+					if err = agg.PreflightBatchFill(
+						offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+						break
+					}
 				}
+				if err != nil {
+					if retried, retryErr := group.retryBuildBatchAfterCapacity(
+						proc, err); retried {
+						err = nil
+						continue
+					} else {
+						return false, retryErr
+					}
+				}
+				for i, agg := range group.ctr.aggList {
+					if err = agg.BatchFill(
+						offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+						return false, err
+					}
+				}
+				break
 			}
-			for i, agg := range group.ctr.aggList {
-				if err = agg.BatchFill(
-					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+			shouldDrain, err := group.ctr.shouldDrainExactCountDistinct()
+			if err != nil {
+				return false, err
+			}
+			if shouldDrain {
+				if _, err := group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
 					return false, err
 				}
 			}
@@ -546,8 +600,36 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		} // end of mini batch for loop
 
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
-		// check size
-		return group.ctr.needSpill(group.OpAnalyzer), nil
+		// Prefer subdividing eligible exact DISTINCT keys before generic Group
+		// spill. A hot group's key set can make progress only on this axis.
+		shouldDrain, err := group.ctr.shouldDrainExactCountDistinct()
+		if err != nil {
+			return false, err
+		}
+		if shouldDrain {
+			if _, err := group.ctr.drainExactCountDistinct(
+				proc, group.OpAnalyzer); err != nil {
+				return false, err
+			}
+		}
+		// Compact group state may still require existing group-hash spill. Before
+		// its first record is written, move every eligible exact key to the
+		// independent spool so no pre-activation hot-group record can survive.
+		needSpill := group.ctr.needSpill(group.OpAnalyzer)
+		if needSpill && group.ctr.distinctSpill == nil {
+			hasDistinct, err := group.ctr.hasExactCountDistinctArguments()
+			if err != nil {
+				return false, err
+			}
+			if hasDistinct {
+				if _, err := group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
+					return false, err
+				}
+				needSpill = group.ctr.needSpill(group.OpAnalyzer)
+			}
+		}
+		return needSpill, nil
 	}
 }
 
@@ -576,8 +658,16 @@ func (group *Group) retryBuildBatchAfterCapacity(
 	cause error,
 ) (bool, error) {
 	if group == nil || group.ctr.allocationAccount == nil ||
-		!mpool.IsRetryableAllocationCapacity(cause) ||
-		group.ctr.mtyp == H0 || group.ctr.hr.IsEmpty() ||
+		!mpool.IsRetryableAllocationCapacity(cause) {
+		return false, cause
+	}
+	if drained, err := group.ctr.drainExactCountDistinct(
+		proc, group.OpAnalyzer); err != nil {
+		return false, err
+	} else if drained {
+		return true, nil
+	}
+	if group.ctr.mtyp == H0 || group.ctr.hr.IsEmpty() ||
 		group.ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}
@@ -958,6 +1048,20 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
+		// The previous partial batch has returned to the caller. Only now may we
+		// release its state and materialize the next exact-key leaf.
+		if group.ctr.inputDone &&
+			group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
+			group.ctr.distinctSpill != nil {
+			loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if !loaded {
+				group.ctr.state = vm.End
+				return vm.CancelResult, nil
+			}
+		}
 		// no need to eval, we are in streaming mode.  spill never happen
 		// here.
 		res, hasMore, err := group.getNextIntermediateResult(proc)
@@ -966,7 +1070,13 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 		}
 		if !hasMore {
 			if group.ctr.inputDone {
-				group.ctr.state = vm.End
+				if group.ctr.distinctSpill != nil {
+					// Keep Eval so the next Call can safely retire this returned
+					// batch before loading another exact-key leaf.
+					group.ctr.state = vm.Eval
+				} else {
+					group.ctr.state = vm.End
+				}
 			} else {
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us

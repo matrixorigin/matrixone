@@ -37,13 +37,15 @@ import (
 )
 
 var _ plan.CompilerContext = new(compilerContext)
+var _ plan.TableDefStatsCompilerContext = new(compilerContext)
 
 type compilerContext struct {
-	ctx        context.Context
-	defaultDB  string
-	engine     engine.Engine
-	proc       *process.Process
-	statsCache *plan.StatsCache
+	ctx                context.Context
+	defaultDB          string
+	engine             engine.Engine
+	proc               *process.Process
+	statsCache         *plan.StatsCache
+	statsCacheVersions map[uint64]uint32
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -148,6 +150,26 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
+	return c.statsWithTableDefVersion(obj, snapshot, nil)
+}
+
+func (c *compilerContext) StatsWithTableDef(
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if tableDef == nil {
+		return c.statsWithTableDefVersion(obj, snapshot, nil)
+	}
+	version := tableDef.Version
+	return c.statsWithTableDefVersion(obj, snapshot, &version)
+}
+
+func (c *compilerContext) statsWithTableDefVersion(
+	obj *plan.ObjectRef,
+	snapshot *plan.Snapshot,
+	tableDefVersion *uint32,
+) (*pb.StatsInfo, error) {
 	stats := statistic.StatsInfoFromContext(c.GetContext())
 	start := time.Now()
 	defer func() {
@@ -155,13 +177,19 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	}()
 
 	tableID := uint64(obj.Obj)
+	cachedVersion, versioned := c.statsCacheVersions[tableID]
+	if (tableDefVersion == nil && versioned) ||
+		(tableDefVersion != nil && (!versioned || cachedVersion != *tableDefVersion)) {
+		c.GetStatsCache().Delete(tableID)
+		delete(c.statsCacheVersions, tableID)
+	}
 
-	// Fast path: return cached result if visited within 3 seconds AND stats is valid
-	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	// Fast path: return a recent real observation. An explicit table-wide scan
+	// can observe committed rows before the first object is flushed.
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if s != nil && s.AccurateObjectNumber > 0 {
+			if plan.StatsInfoUsable(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -175,7 +203,15 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	}
 
 	// Cache the result
-	c.GetStatsCache().Set(tableID, result)
+	if c.GetStatsCache().SetAndReportReset(tableID, result) {
+		clear(c.statsCacheVersions)
+	}
+	if tableDefVersion != nil {
+		if c.statsCacheVersions == nil {
+			c.statsCacheVersions = make(map[uint64]uint32)
+		}
+		c.statsCacheVersions[tableID] = *tableDefVersion
+	}
 
 	return result, nil
 }
@@ -202,7 +238,7 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	if err != nil {
 		return nil, err
 	}
-	if stats != nil && stats.AccurateObjectNumber > 0 {
+	if plan.StatsInfoUsable(stats) {
 		return stats, nil
 	}
 	// Return nil for empty table, calcScanStats will use DefaultStats()

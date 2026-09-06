@@ -511,6 +511,7 @@ func (c *Compile) clear() {
 	c.ignorePublish = false
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
+	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
@@ -883,28 +884,29 @@ func (c *Compile) printPipeline() {
 // for example
 // 1. lock table.
 // 2. init data source.
-func (c *Compile) prePipelineInitializer() (err error) {
+func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.lockTable(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// init data source.
 	for _, s := range c.scopes {
 		if err = s.InitAllDataSource(c); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var spillBudget materialized.SpillBudget
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
 	}
+	startedSources = make([]*materialized.Source, 0, len(c.materializedSources))
 	for _, source := range c.materializedSources {
 		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
@@ -913,10 +915,30 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
 		}, Budget: spillBudget}); err != nil {
-			return err
+			return startedSources, err
 		}
+		startedSources = append(startedSources, source)
 	}
-	return nil
+	return startedSources, nil
+}
+
+func closeMaterializedSourceGenerations(sources []*materialized.Source) {
+	for _, source := range sources {
+		source.Close()
+	}
+}
+
+// runPipelineAttempt owns every materialized-source generation opened by its
+// initializer. The callback may start no scopes, return an error, or panic;
+// after it returns, all submitted scope goroutines have quiesced and the
+// attempt closes both executed and statically planned-but-unstarted owners.
+func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	startedSources, err := c.prePipelineInitializer()
+	defer closeMaterializedSourceGenerations(startedSources)
+	if err != nil {
+		return err
+	}
+	return run()
 }
 
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
@@ -2731,6 +2753,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if param.ExternType == int32(plan.ExternType_LOAD) &&
 		param.Format == tree.PARQUET &&
 		param.Parallel {
+		// A file is already the smallest independently executable unit when
+		// the matched files fill every available load scope.  Do not pay one
+		// serial footer round trip per file merely to discover that row-group
+		// fanout cannot add useful execution parallelism.
+		if c.parquetLoadFileFanoutSaturates(param, len(fileList)) {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
 		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
 		if err != nil {
 			return nil, err
@@ -3320,6 +3349,12 @@ type parquetRowGroupScopeShard struct {
 	originalToLocal map[int32]int32
 }
 
+type parquetRowGroupSegment struct {
+	fileIndex int32
+	rowGroups []parquetRowGroupMeta
+	load      int64
+}
+
 type icebergDataFileScopeShard struct {
 	node      engine.Node
 	fileList  []string
@@ -3341,14 +3376,14 @@ type icebergExternalScanRuntime struct {
 }
 
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
 }
 
 func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
-	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
 }
 
-func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
@@ -3379,6 +3414,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			makeWholeFileOffsets(len(shard.fileList)),
 			strictSqlMode,
 		)
+		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		ss = append(ss, scope)
@@ -3526,7 +3562,10 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 		}
 		stats.Bytes += size
 
-		f, err := parquet.OpenFile(reader, size)
+		// Planning only needs the schema, row count, and row-group boundaries.
+		// Loading page indexes and bloom-filter headers here is unused work, and
+		// row-group fanout would repeat it in every execution scope.
+		f, err := openParquetLoadMetadataFile(reader, size)
 		if footerReader != nil {
 			stats.ReadCalls += footerReader.readCalls
 			stats.ReadBytes += footerReader.readBytes
@@ -3556,6 +3595,13 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	}
 	stats.Duration = time.Since(start)
 	return metas, stats, nil
+}
+
+func openParquetLoadMetadataFile(reader io.ReaderAt, size int64) (*parquet.File, error) {
+	return parquet.OpenFile(reader, size,
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+	)
 }
 
 func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
@@ -3662,6 +3708,36 @@ func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
 		files[meta.fileIndex] = struct{}{}
 	}
 	return len(files)
+}
+
+// parquetLoadFileFanoutSaturates reports whether whole-file fanout can fill
+// every bounded execution scope.  It deliberately uses the uncapped execution
+// DOP rather than getHiveFileFanoutNodes(fileCount): the latter is capped by
+// fileCount and therefore cannot tell whether additional row-group scopes
+// would be useful.
+func (c *Compile) parquetLoadFileFanoutSaturates(param *tree.ExternParam, fileCount int) bool {
+	return fileCount > 1 && fileCount >= c.parquetLoadFileFanoutDOP(param)
+}
+
+func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
+	stageNodes := c.queryWorkerStageNodes()
+	if param != nil && param.ScanType == tree.S3 && len(stageNodes) > 0 {
+		dop := 0
+		for _, node := range stageNodes {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			dop += min(mcpu, external.S3ParallelMaxnum)
+		}
+		if dop > 0 {
+			return dop
+		}
+	}
+	if c.ncpu > 0 {
+		return c.ncpu
+	}
+	return 1
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -4012,24 +4088,8 @@ func splitParquetRowGroupShards(
 		shards[i].originalToLocal = make(map[int32]int32)
 	}
 
-	indices := make([]int, len(rowGroups))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(a, b int) int {
-		left := rowGroups[a]
-		right := rowGroups[b]
-		if c := cmp.Compare(parquetRowGroupLoad(right), parquetRowGroupLoad(left)); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
-			return c
-		}
-		return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
-	})
-
-	for _, rowGroupIdx := range indices {
-		meta := rowGroups[rowGroupIdx]
+	rowGroupsByFile := make(map[int32][]parquetRowGroupMeta)
+	for _, meta := range rowGroups {
 		if meta.fileIndex < 0 || int(meta.fileIndex) >= len(fileList) {
 			return nil, moerr.NewInternalErrorNoCtxf(
 				"invalid parquet row group file index %d for %d files",
@@ -4042,6 +4102,34 @@ func splitParquetRowGroupShards(
 				meta.rowGroupIndex, meta.fileIndex,
 			)
 		}
+		rowGroupsByFile[meta.fileIndex] = append(rowGroupsByFile[meta.fileIndex], meta)
+	}
+
+	fileIndexes := make([]int32, 0, len(rowGroupsByFile))
+	for fileIndex := range rowGroupsByFile {
+		fileIndexes = append(fileIndexes, fileIndex)
+	}
+	slices.Sort(fileIndexes)
+	segments := make([]parquetRowGroupSegment, 0, shardCount)
+	for _, fileIndex := range fileIndexes {
+		fileRowGroups := rowGroupsByFile[fileIndex]
+		slices.SortStableFunc(fileRowGroups, func(left, right parquetRowGroupMeta) int {
+			return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
+		})
+		segments = append(segments, splitContiguousParquetRowGroups(
+			fileIndex, fileRowGroups, min(shardCount, len(fileRowGroups)))...)
+	}
+	slices.SortStableFunc(segments, func(left, right parquetRowGroupSegment) int {
+		if c := cmp.Compare(right.load, left.load); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
+			return c
+		}
+		return cmp.Compare(left.rowGroups[0].rowGroupIndex, right.rowGroups[0].rowGroupIndex)
+	})
+
+	for _, segment := range segments {
 
 		shardIdx := 0
 		for i := 1; i < shardCount; i++ {
@@ -4051,15 +4139,17 @@ func splitParquetRowGroupShards(
 			}
 		}
 
-		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, meta.fileIndex)
-		shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
-			FileIndex:     localFileIndex,
-			RowGroupStart: meta.rowGroupIndex,
-			RowGroupEnd:   meta.rowGroupIndex + 1,
-			NumRows:       meta.numRows,
-			Bytes:         meta.bytes,
-		})
-		loads[shardIdx] += parquetRowGroupLoad(meta)
+		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, segment.fileIndex)
+		for _, meta := range segment.rowGroups {
+			shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
+				FileIndex:     localFileIndex,
+				RowGroupStart: meta.rowGroupIndex,
+				RowGroupEnd:   meta.rowGroupIndex + 1,
+				NumRows:       meta.numRows,
+				Bytes:         meta.bytes,
+			})
+		}
+		loads[shardIdx] = addParquetLoad(loads[shardIdx], segment.load)
 	}
 
 	nonEmpty := shards[:0]
@@ -4078,6 +4168,77 @@ func splitParquetRowGroupShards(
 		nonEmpty = append(nonEmpty, shard)
 	}
 	return nonEmpty, nil
+}
+
+func splitContiguousParquetRowGroups(
+	fileIndex int32,
+	rowGroups []parquetRowGroupMeta,
+	partCount int,
+) []parquetRowGroupSegment {
+	if len(rowGroups) == 0 || partCount <= 0 {
+		return nil
+	}
+	partCount = min(partCount, len(rowGroups))
+	remainingLoad := int64(0)
+	for _, meta := range rowGroups {
+		remainingLoad = addParquetLoad(remainingLoad, parquetRowGroupLoad(meta))
+	}
+
+	segments := make([]parquetRowGroupSegment, 0, partCount)
+	start := 0
+	for part := 0; part < partCount; part++ {
+		partsLeft := partCount - part
+		if partsLeft == 1 {
+			segments = append(segments, makeParquetRowGroupSegment(fileIndex, rowGroups[start:]))
+			break
+		}
+
+		target := remainingLoad / int64(partsLeft)
+		if remainingLoad%int64(partsLeft) != 0 {
+			target++
+		}
+		endLimit := len(rowGroups) - (partsLeft - 1)
+		end := start
+		load := int64(0)
+		for end < endLimit {
+			nextLoad := addParquetLoad(load, parquetRowGroupLoad(rowGroups[end]))
+			if end > start && parquetLoadDistance(load, target) <= parquetLoadDistance(nextLoad, target) {
+				break
+			}
+			load = nextLoad
+			end++
+		}
+		if end == start {
+			end++
+		}
+		segment := makeParquetRowGroupSegment(fileIndex, rowGroups[start:end])
+		segments = append(segments, segment)
+		remainingLoad -= min(remainingLoad, segment.load)
+		start = end
+	}
+	return segments
+}
+
+func makeParquetRowGroupSegment(fileIndex int32, rowGroups []parquetRowGroupMeta) parquetRowGroupSegment {
+	segment := parquetRowGroupSegment{fileIndex: fileIndex, rowGroups: rowGroups}
+	for _, meta := range rowGroups {
+		segment.load = addParquetLoad(segment.load, parquetRowGroupLoad(meta))
+	}
+	return segment
+}
+
+func addParquetLoad(left, right int64) int64 {
+	if right > math.MaxInt64-left {
+		return math.MaxInt64
+	}
+	return left + right
+}
+
+func parquetLoadDistance(left, right int64) int64 {
+	if left >= right {
+		return left - right
+	}
+	return right - left
 }
 
 func appendParquetShardFile(shard *parquetRowGroupScopeShard, fileList []string, fileSize []int64, originalFileIndex int32) int32 {
@@ -6120,6 +6281,14 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH && c.supportsRemoteHashPartition() {
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -6137,6 +6306,12 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		// A mixed-version cluster cannot understand the HASH pipeline field.
+		// Keep both its prerequisite local orders and its coordinator algorithm
+		// on the legacy path.
+		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_SORT
+	}
 	if node.PartitionByCount > 0 {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
@@ -6808,6 +6983,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	return ok && protocolVersion >= defines.MORPCVersion19
 }
 
+func (c *Compile) supportsRemoteHashPartition() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion47
+}
+
 func supportsRemoteTextCollationAggregates(service string) bool {
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -6954,6 +7139,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
+func supportsRemoteParquetWholeFileFanout(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion45
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

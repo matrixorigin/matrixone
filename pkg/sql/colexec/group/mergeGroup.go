@@ -140,13 +140,30 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		if mergeGroup.ctr.isSpilling() {
+			if mergeGroup.ctr.distinctSpill != nil {
+				if _, err := mergeGroup.ctr.drainExactCountDistinct(
+					proc, mergeGroup.OpAnalyzer); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				mergeGroup.OpAnalyzer.Spill(bytes)
 				mergeGroup.OpAnalyzer.SpillRows(rows)
 			}
+			if mergeGroup.ctr.distinctSpill != nil && mergeGroup.ctr.mtyp != H0 {
+				if err := mergeGroup.ctr.prepareGroupedDistinctContributions(proc); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		if mergeGroup.ctr.inputDone {
+			if err := mergeGroup.ctr.finalizeExactCountDistinct(
+				proc, mergeGroup.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -310,7 +327,31 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
-	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
+	shouldDrain, err := mergeGroup.ctr.shouldDrainExactCountDistinct()
+	if err != nil {
+		return false, err
+	}
+	if shouldDrain {
+		if _, err := mergeGroup.ctr.drainExactCountDistinct(
+			proc, mergeGroup.OpAnalyzer); err != nil {
+			return false, err
+		}
+	}
+	needSpill := mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+	if needSpill && mergeGroup.ctr.distinctSpill == nil {
+		hasDistinct, err := mergeGroup.ctr.hasExactCountDistinctArguments()
+		if err != nil {
+			return false, err
+		}
+		if hasDistinct {
+			if _, err := mergeGroup.ctr.drainExactCountDistinct(
+				proc, mergeGroup.OpAnalyzer); err != nil {
+				return false, err
+			}
+			needSpill = mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+		}
+	}
+	return needSpill, nil
 }
 
 // prepareBuildBatch decodes one immutable partial. The caller subsequently
@@ -587,8 +628,16 @@ func (mergeGroup *MergeGroup) retryBuildBatchAfterCapacity(
 	cause error,
 ) (bool, error) {
 	if mergeGroup == nil || mergeGroup.ctr.allocationAccount == nil ||
-		!mpool.IsRetryableAllocationCapacity(cause) ||
-		mergeGroup.ctr.mtyp == H0 || mergeGroup.ctr.hr.IsEmpty() ||
+		!mpool.IsRetryableAllocationCapacity(cause) {
+		return false, cause
+	}
+	if drained, err := mergeGroup.ctr.drainExactCountDistinct(
+		proc, mergeGroup.OpAnalyzer); err != nil {
+		return false, err
+	} else if drained {
+		return true, nil
+	}
+	if mergeGroup.ctr.mtyp == H0 || mergeGroup.ctr.hr.IsEmpty() ||
 		mergeGroup.ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}

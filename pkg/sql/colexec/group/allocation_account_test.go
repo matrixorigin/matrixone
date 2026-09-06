@@ -1930,7 +1930,7 @@ func TestAccountedDistinctAggregateSpillsAcrossInputWaves(t *testing.T) {
 	second.Clean(proc.Mp())
 }
 
-func TestAccountedGroupMaxSpillDepthReturnsControlledErrorAndCleans(t *testing.T) {
+func TestAccountedGroupMaxSpillDepthFinishesAdmittedLeafAndCleans(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	input := batch.NewWithSize(1)
@@ -1945,17 +1945,108 @@ func TestAccountedGroupMaxSpillDepthReturnsControlledErrorAndCleans(t *testing.T
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
 
+	got := make(map[int32]int64)
 	for {
 		result, err := vm.Exec(g, proc)
-		if err != nil {
-			require.ErrorContains(t, err, "maximum partition depth")
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
 			break
 		}
-		if result.Status == vm.ExecStop {
-			t.Fatal("expected max-depth resource error")
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		for row, key := range keys {
+			got[key] = counts[row]
 		}
 	}
-	g.Free(proc, true, nil)
+	require.Equal(t, map[int32]int64{7: 2}, got)
+	require.Equal(t, int64(spillMaxPass),
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillMaxLevel"])
+	require.Positive(t,
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, g, allocation)
+	input.Clean(proc.Mp())
+}
+
+func TestAccountedGroupByteThresholdBelowResidentFloorFinishes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	const groups = 4
+	keys := make([]int64, 0, groups*2)
+	for pass := 0; pass < 2; pass++ {
+		for group := range groups {
+			keys = append(keys, int64(group))
+		}
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(keys, nil, proc.Mp())
+	input.SetRowCount(len(keys))
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int64)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 64 << 10
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	got := make(map[int64]int64, groups)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		resultKeys := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		for row, key := range resultKeys {
+			got[key] = counts[row]
+		}
+	}
+	require.Len(t, got, groups)
+	for _, count := range got {
+		require.Equal(t, int64(2), count)
+	}
+	require.Equal(t, int64(spillMaxPass),
+		g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillMaxLevel"])
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+	finalizeGroupTestAllocation(t, g, allocation)
+	input.Clean(proc.Mp())
+}
+
+func TestAccountedGroupMaxSpillDepthPreservesCapacityError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	input.SetRowCount(1)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+	_, err := g.buildOneBatch(proc, input)
+	require.NoError(t, err)
+
+	retry, err := g.ctr.retrySpillReloadRecord(
+		proc,
+		g.OpAnalyzer,
+		g.OpAnalyzer.GetOpStats(),
+		&spillBucket{lv: spillMaxPass},
+		&groupSpillReader{disabled: true},
+		0,
+		mpool.ErrAllocationAccountCapacity,
+	)
+	require.False(t, retry)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, g.ctr.currentSpillBkt)
+
+	g.Free(proc, true, err)
 	require.Zero(t, allocation.account.Snapshot().Used)
 	require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
 	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
@@ -2568,10 +2659,14 @@ func TestAccountedGroupRetriesAggregateAreaPreflightBeforePublishingValues(t *te
 	second.Clean(proc.Mp())
 }
 
-func TestAccountedMergeGroupSpillsAndReleasesResources(t *testing.T) {
+func runAccountedMergeGroupSpill(
+	t *testing.T,
+	groups int,
+	spillMem int64,
+) int64 {
+	t.Helper()
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	const groups = 128
 	makeSource := func() *batch.Batch {
 		keys := make([]int32, groups)
 		payloads := make([]int32, groups)
@@ -2590,7 +2685,7 @@ func TestAccountedMergeGroupSpillsAndReleasesResources(t *testing.T) {
 	second.Clean(proc.Mp())
 
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
-	merge.SpillMem = 64
+	merge.SpillMem = spillMem
 	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
 	allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
 	require.NoError(t, merge.Prepare(proc))
@@ -2608,6 +2703,7 @@ func TestAccountedMergeGroupSpillsAndReleasesResources(t *testing.T) {
 	}
 	require.Equal(t, groups, rows)
 	require.Positive(t, merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+	maxLevel := merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillMaxLevel"]
 
 	merge.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -2617,6 +2713,16 @@ func TestAccountedMergeGroupSpillsAndReleasesResources(t *testing.T) {
 	for _, partial := range partials {
 		partial.Clean(proc.Mp())
 	}
+	return maxLevel
+}
+
+func TestAccountedMergeGroupSpillsAndReleasesResources(t *testing.T) {
+	runAccountedMergeGroupSpill(t, 128, 64)
+}
+
+func TestAccountedMergeGroupMaxSpillDepthFinishesAdmittedLeaves(t *testing.T) {
+	require.Equal(t, int64(spillMaxPass),
+		runAccountedMergeGroupSpill(t, 4, 1))
 }
 
 func TestAccountedMergeGroupRetriesResidentStringSourcePreflight(t *testing.T) {

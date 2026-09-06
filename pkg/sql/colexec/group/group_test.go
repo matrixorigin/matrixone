@@ -2313,6 +2313,33 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestGroupSpillPartitionFanoutFollowsStateShape(t *testing.T) {
+	ctr := container{}
+	require.Equal(t, spillDistinctNumBuckets, ctr.spillPartitionCount())
+
+	ctr.aggList = make([]aggexec.GroupAggFuncExec, 1)
+	require.Equal(t, spillNumBuckets, ctr.spillPartitionCount())
+}
+
+func TestGroupSpillPartitionFanoutStaysStableAcrossWaves(t *testing.T) {
+	ctr := container{
+		// Aggregate state is released between spill waves, but an active bucket
+		// set remains authoritative for the record format of that spill pass.
+		currentSpillBkt: make([]*spillBucket, spillNumBuckets),
+	}
+	hashes := []uint64{0, 1, 1 << 32, ^uint64(0)}
+	original := append([]uint64(nil), hashes...)
+	ctr.computeBucketIndex(hashes, 2)
+
+	multiplier := uint64(0x9e3779b97f4a7c15) + 2*2
+	for i := range hashes {
+		require.Equal(t,
+			(original[i]*multiplier)>>(64-spillMaskBits),
+			hashes[i],
+		)
+	}
+}
+
 func TestGroupSpillReloadHonorsCancellationAfterInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

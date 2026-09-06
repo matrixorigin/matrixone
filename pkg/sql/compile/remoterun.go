@@ -114,6 +114,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -197,6 +200,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -741,6 +747,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionAlgorithm = t.Algorithm
+		in.SpillMem = t.SpillMem
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -839,6 +847,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ParallelLoad:                t.Es.ParallelLoad,
 			LoadEmptyNumericAsZero:      t.Es.LoadEmptyNumericAsZero,
 			ParquetRowGroupShards:       t.Es.ParquetRowGroupShards,
+			ParquetWholeFileFanout:      t.Es.ParquetWholeFileFanout,
 			IcebergDataTasks:            t.Es.IcebergDataTasks,
 			IcebergDeleteTasks:          t.Es.IcebergDeleteTasks,
 			IcebergColumns:              t.Es.IcebergColumns,
@@ -1324,6 +1333,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.Algorithm = opr.PartitionAlgorithm
+		arg.SpillMem = opr.SpillMem
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
@@ -1437,6 +1448,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					ParallelLoad:                t.ParallelLoad,
 					LoadEmptyNumericAsZero:      t.LoadEmptyNumericAsZero,
 					ParquetRowGroupShards:       t.ParquetRowGroupShards,
+					ParquetWholeFileFanout:      t.ParquetWholeFileFanout,
 					IcebergDataTasks:            t.IcebergDataTasks,
 					IcebergDeleteTasks:          t.IcebergDeleteTasks,
 					IcebergColumns:              t.IcebergColumns,
@@ -2033,6 +2045,36 @@ func validateRemotePadSpacePipelineProtocol(
 	return moerr.NewNotSupportedNoCtx(
 		"PAD SPACE remote execution requires MORPC protocol version 40",
 	)
+}
+
+// validateRemoteParquetWholeFileFanoutPipelineProtocol keeps the scope-shape
+// marker from being silently ignored by a receiver from before v45. That
+// receiver would otherwise re-enable object-sized S3 prefetch for a fanout
+// scope, violating the bounded-memory contract.
+func validateRemoteParquetWholeFileFanoutPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetExternalScan()
+		if scan == nil || !scan.ParquetWholeFileFanout {
+			continue
+		}
+		if proc == nil || !supportsRemoteParquetWholeFileFanout(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"Parquet whole-file fanout remote execution requires MORPC protocol version 45",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {

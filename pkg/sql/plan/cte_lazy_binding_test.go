@@ -805,8 +805,8 @@ func TestInformationSchemaMetadataPlansShareCurrentRolesOnce(t *testing.T) {
 		name string
 		ddl  string
 	}{
-		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
-		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesV41DDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV41DDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
 		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},

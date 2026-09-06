@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -460,8 +461,13 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stubCheckPitr.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(user, password string, ip string, port int, timeout string) (*sql.DB, error) {
-		return nil, nil
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, user, password string, ip string, port int, timeout string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
 	})
 	defer stubOpenDbConn.Reset()
 
@@ -504,8 +510,13 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	})
 	defer stubCheckPitr.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
-		return nil, nil
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
 	})
 	defer stubOpenDbConn.Reset()
 
@@ -557,12 +568,175 @@ type testTaskData struct {
 var _ taskservice.TaskService = new(testTaskService)
 
 type testTaskService struct {
-	data       []testTaskData
-	db         *sql.DB
-	dTask      []task.DaemonTask
-	curDTaskId int
-	taskKeyMap map[taskservice.CDCTaskKey]struct{}
-	sqlExec    taskservice.SqlExecutor
+	data                  []testTaskData
+	db                    *sql.DB
+	dTask                 []task.DaemonTask
+	curDTaskId            int
+	taskKeyMap            map[taskservice.CDCTaskKey]struct{}
+	sqlExec               taskservice.SqlExecutor
+	heartbeatDaemonTaskFn func(context.Context, task.DaemonTask) error
+}
+
+func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
+	var (
+		mu           sync.Mutex
+		seen         []time.Time
+		seenStatuses []task.TaskStatus
+	)
+	service := &testTaskService{
+		heartbeatDaemonTaskFn: func(_ context.Context, claim task.DaemonTask) error {
+			mu.Lock()
+			seen = append(seen, claim.LastRun)
+			seenStatuses = append(seenStatuses, claim.TaskStatus)
+			mu.Unlock()
+			return nil
+		},
+	}
+	exec := &CDCTaskExecutor{taskService: service}
+	first := task.DaemonTask{LastRun: time.Unix(100, 0), TaskStatus: task.TaskStatus_Running}
+	second := task.DaemonTask{LastRun: time.Unix(200, 0), TaskStatus: task.TaskStatus_RestartRequested}
+
+	exec.UpdateDaemonTaskClaim(first)
+	firstFence := exec.currentDaemonClaimFence()
+	exec.UpdateDaemonTaskClaim(second)
+	secondFence := exec.currentDaemonClaimFence()
+	second.TaskStatus = task.TaskStatus_Running
+	exec.UpdateDaemonTaskClaim(second)
+
+	require.NotSame(t, firstFence, secondFence)
+	require.Same(t, secondFence, exec.currentDaemonClaimFence())
+	require.True(t, cdc.IsOwnerFenceLostError(firstFence.Check(context.Background())))
+	require.NoError(t, secondFence.Check(context.Background()))
+	require.Equal(t, []time.Time{second.LastRun}, seen,
+		"retired local generations must fail before a taskservice round trip")
+	require.Equal(t, []task.TaskStatus{task.TaskStatus_Running}, seenStatuses,
+		"the same fence must advance from startup request authority to Running")
+}
+
+func TestClassifyStableSnapshotRestart(t *testing.T) {
+	epoch := types.BuildTS(200, 1)
+	tests := []struct {
+		name            string
+		watermark       types.TS
+		watermarkGen    uint64
+		sourceTableID   uint64
+		state           cdc.InitialSnapshotEpochState
+		incomplete      bool
+		resetTarget     bool
+		metadataMissing bool
+		generationAhead bool
+	}{
+		{
+			name:          "same generation partial snapshot",
+			watermark:     types.BuildTS(100, 1),
+			watermarkGen:  11,
+			sourceTableID: 11,
+			state:         cdc.InitialSnapshotEpochState{Epoch: epoch},
+			incomplete:    true,
+		},
+		{
+			name:          "recreated table before first completed snapshot",
+			watermark:     types.BuildTS(100, 1),
+			watermarkGen:  10,
+			sourceTableID: 11,
+			state: cdc.InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: true, Created: true,
+			},
+			incomplete: true, resetTarget: true,
+		},
+		{
+			name:          "recreated generation already complete",
+			watermark:     types.BuildTS(300, 1),
+			watermarkGen:  11,
+			sourceTableID: 11,
+			state: cdc.InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: true,
+			},
+		},
+		{
+			name:            "nonempty watermark with newly reconstructed metadata",
+			watermark:       types.BuildTS(300, 1),
+			watermarkGen:    11,
+			sourceTableID:   11,
+			state:           cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
+			metadataMissing: true,
+		},
+		{
+			name:          "retired epoch already compacted",
+			watermark:     types.BuildTS(300, 1),
+			watermarkGen:  10,
+			sourceTableID: 11,
+			state:         cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
+			incomplete:    true,
+			resetTarget:   true,
+		},
+		{
+			name:            "stale detector cannot move generation backwards",
+			watermark:       types.BuildTS(300, 1),
+			watermarkGen:    12,
+			sourceTableID:   11,
+			state:           cdc.InitialSnapshotEpochState{Epoch: epoch},
+			incomplete:      true,
+			generationAhead: true,
+		},
+		{
+			name:          "future epoch also proves stale detector",
+			watermark:     types.BuildTS(300, 1),
+			watermarkGen:  11,
+			sourceTableID: 11,
+			state: cdc.InitialSnapshotEpochState{
+				Epoch: epoch, HasOtherGeneration: true, HasNewerGeneration: true,
+			},
+			generationAhead: true,
+		},
+		{
+			name:          "brand new task",
+			watermarkGen:  0,
+			sourceTableID: 11,
+			state:         cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
+			incomplete:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
+				tt.watermark, tt.watermarkGen, tt.sourceTableID, tt.state)
+			require.Equal(t, tt.incomplete, incomplete)
+			require.Equal(t, tt.resetTarget, resetTarget)
+			require.Equal(t, tt.metadataMissing, metadataMissing)
+			require.Equal(t, tt.generationAhead, generationAhead)
+		})
+	}
+}
+
+func TestCapInitialSnapshotEpoch(t *testing.T) {
+	candidate := types.BuildTS(200, 1)
+	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.TS{}))
+	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.BuildTS(300, 1)))
+	require.Equal(t, types.BuildTS(100, 1), capInitialSnapshotEpoch(candidate, types.BuildTS(100, 1)))
+}
+
+func TestShouldCompactStableSnapshotEpochs(t *testing.T) {
+	require.True(t, shouldCompactStableSnapshotEpochs(true, true, true),
+		"capture target-reset cleanup before NewSinker clears IdChanged")
+	require.True(t, shouldCompactStableSnapshotEpochs(false, false, true),
+		"a completed current generation repairs cleanup interrupted by a crash")
+	require.False(t, shouldCompactStableSnapshotEpochs(false, true, true),
+		"an incomplete generation must retain its predecessor until target reset succeeds")
+	require.False(t, shouldCompactStableSnapshotEpochs(false, false, false),
+		"the steady state has nothing to compact")
+}
+
+func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
+	require.NoError(t, validateStableInitialSnapshotProtocol(
+		context.Background(), false, defines.MORPCVersion46))
+	require.NoError(t, validateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
+	err := validateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion47)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }
 
 func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
@@ -651,6 +825,10 @@ func (ts *testTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	panic("implement me")
 }
 
+func (ts *testTaskService) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
+	panic("unexpected UpdateDaemonTaskError")
+}
+
 func (ts *testTaskService) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,
@@ -664,7 +842,16 @@ func (ts *testTaskService) UpdateDaemonTaskStatus(
 }
 
 func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
-	//TODO implement me
+	if ts.heartbeatDaemonTaskFn != nil {
+		return ts.heartbeatDaemonTaskFn(ctx, task)
+	}
+	panic("implement me")
+}
+
+func (ts *testTaskService) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	if ts.heartbeatDaemonTaskFn != nil {
+		return ts.heartbeatDaemonTaskFn(ctx, task)
+	}
 	panic("implement me")
 }
 
@@ -747,7 +934,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			startTs := ""
 			endTs := ""
 			noFull := ""
-			splitTxn := ""
+			additionalConfig := ""
 			err = rows.Scan(
 				&sinkUri,
 				&sinkType,
@@ -757,7 +944,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 				&startTs,
 				&endTs,
 				&noFull,
-				&splitTxn)
+				&additionalConfig)
 			if err != nil {
 				panic(err)
 			}
@@ -769,7 +956,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, startTs)
 			rowValues = append(rowValues, endTs)
 			rowValues = append(rowValues, noFull)
-			rowValues = append(rowValues, splitTxn)
+			rowValues = append(rowValues, additionalConfig)
 		} else if idx == mSqlIdx2 {
 			dbId := uint64(0)
 			tableId := uint64(0)
@@ -1060,6 +1247,27 @@ const (
 	mSqlIdx50
 )
 
+func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
+	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
+
+	stableOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+		cdc.CDCInitialSnapshotProtocolStableEpoch,
+	)
+	stable := (&CDCCreateTaskOptions{
+		TaskId:    "stable",
+		ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+
+	noFull := (&CDCCreateTaskOptions{
+		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+}
+
 func TestRegisterCdcExecutor(t *testing.T) {
 	type args struct {
 		logger       *zap.Logger
@@ -1267,6 +1475,34 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	}
 }
 
+func TestCDCFactoryRejectsSupersededClaim(t *testing.T) {
+	claim := task.DaemonTask{ID: 1, TaskRunner: "cn1", LastRun: time.Now()}
+	for _, change := range []string{"generation", "owner", "wrong-local-CN"} {
+		t.Run(change, func(t *testing.T) {
+			current := claim
+			cn := "cn1"
+			switch change {
+			case "generation":
+				current.LastRun = current.LastRun.Add(time.Microsecond)
+			case "owner":
+				current.TaskRunner = "cn2"
+			case "wrong-local-CN":
+				cn = "cn2"
+			}
+			ts := &testTaskService{dTask: []task.DaemonTask{current}}
+			factory := CDCTaskExecutorFactory(nil, func() ie.InternalExecutor {
+				t.Fatal("obsolete factory must not initialize resources")
+				return nil
+			}, func(context.Context, uint64, taskservice.ActiveRoutine) error {
+				t.Fatal("obsolete factory must not attach")
+				return nil
+			}, cn, ts, nil, nil, nil)
+			err := factory(context.Background(), &claim)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+		})
+	}
+}
+
 func Test_updateCdcTask_cancel(t *testing.T) {
 	type args struct {
 		ctx          context.Context
@@ -1290,6 +1526,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 
 	sql9 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql9).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql7, err := regexp.MatchString(sql7, sql)
@@ -1365,6 +1602,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 
 	sql14 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql14).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql10, err := regexp.MatchString(sql10, sql)
@@ -1595,6 +1833,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 
 	sql27 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql27).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql25, err := regexp.MatchString(sql25, sql)
@@ -1707,6 +1946,7 @@ func Test_updateCdc_cancel_all(t *testing.T) {
 
 	sql30 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql30).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql28, err := regexp.MatchString(sql28, sql)
@@ -1811,6 +2051,7 @@ func Test_updateCdc_pause(t *testing.T) {
 
 	sql32 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql32).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql30, err := regexp.MatchString(sql30, sql)
@@ -1904,6 +2145,7 @@ func Test_updateCdc_pause_all(t *testing.T) {
 
 	sql39 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql39).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql35, err := regexp.MatchString(sql35, sql)
@@ -2003,6 +2245,7 @@ func Test_updateCdc_restart(t *testing.T) {
 
 	sql44 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql44).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	sql43 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql43).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -2101,6 +2344,7 @@ func Test_updateCdc_resume(t *testing.T) {
 
 	sql48 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql48).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM `mo_catalog`.`mo_cdc_snapshot` WHERE account_id = 0 AND task_id = 'taskID-1'").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	sql49 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql49).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -2444,6 +2688,15 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
+	var timeoutReports atomic.Int32
+	previousReporter := errutil.GetReportErrorFunc()
+	errutil.SetErrorReporter(func(ctx context.Context, err error, depth int) {
+		if strings.Contains(err.Error(), "CDC restart startup timed out") {
+			timeoutReports.Add(1)
+		}
+		previousReporter(ctx, err, depth)
+	})
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
@@ -2469,34 +2722,43 @@ func TestCdcTask_Restart(t *testing.T) {
 
 	err := cdcTask.Restart()
 	assert.NoErrorf(t, err, "Restart()")
-
-	// Wait a bit for the goroutine to start
-	time.Sleep(10 * time.Millisecond)
+	require.Zero(t, timeoutReports.Load(), "successful restart must not report a timeout")
 }
 
 func TestCdcTask_Pause(t *testing.T) {
-	// Note: GetTableDetector is already stubbed globally in init()
-	holdCh := make(chan int, 1)
-	go func() {
-		<-holdCh
-	}()
-
-	executor := &CDCTaskExecutor{
-		activeRoutine:  cdc.NewCdcActiveRoutine(),
-		cnUUID:         "test-cn",
-		runningReaders: &sync.Map{},
-		spec: &task.CreateCdcDetails{
-			TaskId:   "task1",
-			TaskName: "task1",
-		},
-		stateMachine: NewExecutorStateMachine(),
-		holdCh:       holdCh,
+	for _, failed := range []bool{false, true} {
+		name := "running"
+		if failed {
+			name = "failed"
+		}
+		t.Run(name, func(t *testing.T) {
+			executor := &CDCTaskExecutor{
+				activeRoutine:  cdc.NewCdcActiveRoutine(),
+				cnUUID:         "test-cn",
+				runningReaders: &sync.Map{},
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+				},
+				stateMachine: NewExecutorStateMachine(),
+				holdCh:       make(chan int, 1),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			if failed {
+				require.NoError(t, executor.stateMachine.SetFailed("startup or table failure"))
+			}
+			var closeCalls, waitCalls atomic.Int32
+			executor.runningReaders.Store("db.table", &mockChangeReader{closeCalls: &closeCalls, waitCalls: &waitCalls})
+			oldGeneration := executor.callbackGeneration.Load()
+			require.NoError(t, executor.Pause())
+			require.NoError(t, executor.Pause())
+			require.Equal(t, StatePaused, executor.stateMachine.State())
+			require.Equal(t, int32(1), closeCalls.Load())
+			require.Equal(t, int32(1), waitCalls.Load())
+			require.Equal(t, oldGeneration+1, executor.callbackGeneration.Load())
+		})
 	}
-	// Transition to Running state
-	_ = executor.stateMachine.Transition(TransitionStart)
-	_ = executor.stateMachine.Transition(TransitionStartSuccess)
-	err := executor.Pause()
-	assert.NoErrorf(t, err, "Pause()")
 }
 
 func TestCdcTask_PauseAlreadyPausedIsIdempotent(t *testing.T) {
@@ -3166,6 +3428,401 @@ func TestCdcTask_Cancel(t *testing.T) {
 	assert.NoErrorf(t, err, "Cancel()")
 }
 
+func TestCdcTaskCancelFinalizesWatermarks(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		name := "running"
+		if paused {
+			name = "paused"
+		}
+		t.Run(name, func(t *testing.T) {
+			capture := &cdcCatalogStateExecutor{}
+			updater := cdc.NewCDCWatermarkUpdater(
+				t.Name(),
+				capture,
+				cdc.WithCronJobInterval(time.Hour),
+			)
+			updater.Start()
+			defer updater.Stop()
+
+			key := cdc.WatermarkKey{
+				AccountId: 1,
+				TaskId:    "task-finalize",
+				DBName:    "db",
+				TableName: "table",
+			}
+			watermark := types.BuildTS(10, 1)
+			require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), &key, &watermark))
+
+			executor := &CDCTaskExecutor{
+				activeRoutine:    cdc.NewCdcActiveRoutine(),
+				watermarkUpdater: updater,
+				cnUUID:           "test-cn",
+				runningReaders:   &sync.Map{},
+				spec: &task.CreateCdcDetails{
+					TaskId:   key.TaskId,
+					TaskName: "task-finalize",
+					Accounts: []*task.Account{{Id: key.AccountId}},
+				},
+				stateMachine: NewExecutorStateMachine(),
+				holdCh:       make(chan int, 1),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			if paused {
+				require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+				require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+			}
+
+			require.NoError(t, executor.Cancel())
+			require.Equal(t, StateCancelled, executor.stateMachine.State())
+			_, err := updater.GetFromCache(context.Background(), &key)
+			require.ErrorIs(t, err, cdc.ErrNoWatermarkFound)
+
+			sqls := capture.capturedExecSQLs()
+			require.NotEmpty(t, sqls)
+			require.Equal(t, cdc.CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), sqls[len(sqls)-1])
+		})
+	}
+}
+
+func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-callback-drain",
+			TaskName: "task-callback-drain",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	// Hold the production publication lock so the real callback can complete
+	// admission but cannot reach its second generation check.
+	executor.Lock()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- executor.handleNewTablesForGeneration(
+			executor.callbackGeneration.Load(), nil)
+	}()
+	require.Eventually(t, func() bool {
+		executor.callbackMu.Lock()
+		defer executor.callbackMu.Unlock()
+		return executor.callbackCount == 1
+	}, time.Second, time.Millisecond)
+
+	cancelDone := make(chan error, 1)
+	go func() {
+		cancelDone <- executor.Cancel()
+	}()
+	require.Eventually(t, func() bool {
+		return executor.callbackGeneration.Load() == 1
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-cancelDone:
+		require.Failf(t, "Cancel returned before callback drain", "err: %v", err)
+	default:
+	}
+
+	executor.Unlock()
+	require.NoError(t, <-callbackDone)
+	require.NoError(t, <-cancelDone)
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+}
+
+func TestCdcTaskPauseDrainsInFlightTableCallback(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-pause-callback-drain",
+			TaskName: "task-pause-callback-drain",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	// Hold the publication lock after admission. Pause must not take its reader
+	// snapshot, publish Paused, or release the old generation until this real
+	// callback has observed the generation fence and exited.
+	executor.Lock()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- executor.handleNewTablesForGeneration(
+			executor.callbackGeneration.Load(), nil)
+	}()
+	require.Eventually(t, func() bool {
+		executor.callbackMu.Lock()
+		defer executor.callbackMu.Unlock()
+		return executor.callbackCount == 1
+	}, time.Second, time.Millisecond)
+
+	pauseDone := make(chan error, 1)
+	go func() {
+		pauseDone <- executor.Pause()
+	}()
+	require.Eventually(t, func() bool {
+		return executor.callbackGeneration.Load() == 1 &&
+			executor.stateMachine.State() == StatePausing
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-pauseDone:
+		require.Failf(t, "Pause returned before callback drain", "err: %v", err)
+	default:
+	}
+
+	executor.Unlock()
+	require.NoError(t, <-callbackDone)
+	require.NoError(t, <-pauseDone)
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
+func TestCdcTaskCancelFromPausingStillStopsReaders(t *testing.T) {
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	executor := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		cnUUID:        "test-cn",
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-cancel-pausing-reader",
+			TaskName: "task-cancel-pausing-reader",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		holdCh:         make(chan int, 1),
+	}
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	})
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+
+	require.NoError(t, executor.Cancel())
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	_, exists := executor.runningReaders.Load("db.table")
+	require.False(t, exists)
+}
+
+func TestCdcTaskStopAllReadersRetainsEarlierIncompleteOwner(t *testing.T) {
+	previous := make(chan struct{})
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task-reader-owner",
+		},
+		runningReaders: &sync.Map{},
+	}
+	executor.setReaderShutdownCompletion(previous)
+
+	allStopped, allDone := executor.stopAllReaders()
+	require.False(t, allStopped)
+	select {
+	case <-allDone:
+		t.Fatal("a later empty snapshot must not hide an earlier reader still stopping")
+	default:
+	}
+
+	close(previous)
+	require.Eventually(t, func() bool {
+		return completionReady(allDone)
+	}, time.Second, time.Millisecond)
+}
+
+func TestCdcTaskStopAllReadersReportsImmediateCompletion(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		spec:           &task.CreateCdcDetails{TaskId: "task-no-readers"},
+		runningReaders: &sync.Map{},
+	}
+
+	allStopped, allDone := executor.stopAllReaders()
+	require.True(t, allStopped)
+	require.True(t, completionReady(allDone))
+}
+
+func TestCdcTaskReaderShutdownDoesNotHideLaterPublication(t *testing.T) {
+	oldReaderDone := make(chan struct{})
+	var oldCloseCalls atomic.Int32
+	var lateCloseCalls atomic.Int32
+	executor := &CDCTaskExecutor{
+		spec:           &task.CreateCdcDetails{TaskId: "task-reader-publication-race"},
+		runningReaders: &sync.Map{},
+	}
+	oldReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		waitCh:     oldReaderDone,
+		closeCalls: &oldCloseCalls,
+	}
+	lateReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &lateCloseCalls,
+	}
+	executor.runningReaders.Store("db.table", oldReader)
+
+	allDone, count := executor.initiateReaderShutdown()
+	require.Equal(t, 1, count)
+	require.Eventually(t, func() bool { return oldCloseCalls.Load() == 1 }, time.Second, time.Millisecond)
+	repeatedDone, repeatedCount := executor.initiateReaderShutdown()
+	require.Zero(t, repeatedCount)
+	require.Equal(t, allDone, repeatedDone)
+	require.False(t, completionReady(repeatedDone))
+	require.Equal(t, int32(1), oldCloseCalls.Load())
+
+	// Model a callback admitted before the lifecycle fence publishing a successor
+	// after the first reader snapshot. Completion of the older reader must not
+	// delete this newer instance from the shared ownership map.
+	_, loaded := executor.runningReaders.LoadOrStore("db.table", lateReader)
+	require.False(t, loaded)
+	close(oldReaderDone)
+	require.Eventually(t, func() bool { return completionReady(allDone) }, time.Second, time.Millisecond)
+
+	actual, ok := executor.runningReaders.Load("db.table")
+	require.True(t, ok)
+	require.Same(t, lateReader, actual)
+	require.Zero(t, lateCloseCalls.Load())
+
+	allStopped, lateDone := executor.stopAllReaders()
+	require.True(t, allStopped)
+	require.True(t, completionReady(lateDone))
+	require.Equal(t, int32(1), lateCloseCalls.Load())
+	_, ok = executor.runningReaders.Load("db.table")
+	require.False(t, ok)
+}
+
+func TestCdcTaskRecoveryRejectsIncompletePreviousReaderGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action func(*CDCTaskExecutor) error
+	}{
+		{name: "resume", action: func(exec *CDCTaskExecutor) error { return exec.Resume() }},
+		{name: "restart", action: func(exec *CDCTaskExecutor) error { return exec.Restart() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readerDone := make(chan struct{})
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task-incomplete-reader-generation",
+					TaskName: "task-incomplete-reader-generation",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				stateMachine: NewExecutorStateMachine(),
+			}
+			require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+			require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+			require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+			require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+			executor.setReaderShutdownCompletion(readerDone)
+
+			err := tc.action(executor)
+			require.ErrorContains(t, err, "previous CDC reader generation is still stopping")
+			require.Equal(t, StatePaused, executor.stateMachine.State())
+			close(readerDone)
+		})
+	}
+}
+
+func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) {
+	callbackDone := make(chan struct{})
+	readerDone := make(chan struct{})
+	var releaseReaderOnce sync.Once
+	releaseReader := func() { releaseReaderOnce.Do(func() { close(readerDone) }) }
+	t.Cleanup(releaseReader)
+	executor := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		cnUUID:        "test-cn",
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-restart-callback-timeout",
+			TaskName: "task-restart-callback-timeout",
+		},
+		runningReaders:        &sync.Map{},
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		callbackDone:          callbackDone,
+		callbackCount:         1,
+		restartStartupTimeout: 20 * time.Millisecond,
+	}
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:   &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		waitCh: readerDone,
+	})
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	err := executor.Restart()
+	require.ErrorContains(t, err, "timed out waiting for table detector callbacks")
+	require.Equal(t, StateFailed, executor.stateMachine.State())
+	require.True(t, executor.stateMachine.CanTransition(TransitionRestart),
+		"the durable restart retry owner must be able to retry locally")
+	close(callbackDone)
+
+	err = executor.Restart()
+	require.ErrorContains(t, err, "previous CDC reader generation is still stopping")
+	require.Equal(t, StateFailed, executor.stateMachine.State())
+	releaseReader()
+	require.Eventually(t, func() bool {
+		return completionReady(executor.readerShutdownCompletion())
+	}, time.Second, time.Millisecond)
+}
+
+func TestCdcTaskReclaimDeletedWatermarkStopsReaderPublishedAfterFirstSnapshot(t *testing.T) {
+	updater := cdc.NewCDCWatermarkUpdater(t.Name(), nil)
+	const taskID = "task-late-reader-reclaim"
+	updater.MarkTaskDeleted(taskID)
+
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	callbacksDone := make(chan struct{})
+	earlierReadersDone := closedChan()
+	executor := &CDCTaskExecutor{
+		watermarkUpdater: updater,
+		spec: &task.CreateCdcDetails{
+			TaskId: taskID,
+		},
+		runningReaders: &sync.Map{},
+	}
+	executor.reclaimDeletedWatermark(taskID, callbacksDone, earlierReadersDone)
+	key := &cdc.WatermarkKey{AccountId: 1, TaskId: taskID, DBName: "db", TableName: "table"}
+	watermark := types.BuildTS(1, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), key, &watermark))
+	_, err := updater.GetFromCache(context.Background(), key)
+	require.ErrorIs(t, err, cdc.ErrNoWatermarkFound)
+
+	// A callback admitted before the generation fence publishes only after
+	// Cancel's bounded first snapshot. Closing callbacksDone models the real
+	// RegistrationDone -> callback completion ordering.
+	executor.runningReaders.Store("db.table", &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	})
+	close(callbacksDone)
+
+	require.Eventually(t, func() bool {
+		if closeCalls.Load() != 1 || waitCalls.Load() != 1 {
+			return false
+		}
+		if updateErr := updater.UpdateWatermarkOnly(context.Background(), key, &watermark); updateErr != nil {
+			return false
+		}
+		_, cacheErr := updater.GetFromCache(context.Background(), key)
+		return cacheErr == nil
+	}, time.Second, time.Millisecond)
+	_, exists := executor.runningReaders.Load("db.table")
+	require.False(t, exists)
+}
+
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	fault.EnableDomain(fault.DomainFrontend)
 	type fields struct {
@@ -3241,7 +3898,11 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		"2006-01-02T15:04:05-07:00",
 		"2006-01-02T15:04:05-07:00",
 		true,
-		"{\"InitSnapshotSplitTxn\": false}",
+		fmt.Sprintf(
+			"{\"InitSnapshotSplitTxn\": false,\"%s\":\"%s\"}",
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+			cdc.CDCInitialSnapshotProtocolStableEpoch,
+		),
 	),
 	)
 
@@ -3307,6 +3968,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			}
 			err := cdc.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
+			assert.True(t, cdc.stableInitialSnapshot)
 		})
 	}
 }
@@ -3747,9 +4409,12 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 				},
 			},
 		},
-		exclude:        regexp.MustCompile("db1.tb1"),
-		cnEngine:       eng,
-		runningReaders: &sync.Map{},
+		exclude:               regexp.MustCompile("db1.tb1"),
+		cnEngine:              eng,
+		runningReaders:        &sync.Map{},
+		stableInitialSnapshot: true,
+		claimFence: cdc.NewOwnerFenceForGeneration(
+			time.UnixMicro(123), func(context.Context) error { return nil }),
 	}
 
 	mp := map[uint32]cdc.TblMap{
@@ -4166,6 +4831,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
+			context.Context,
 			cdc.UriInfo,
 			uint64,
 			string,
@@ -5033,6 +5699,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
+			context.Context,
 			cdc.UriInfo,
 			uint64,
 			string,
@@ -5057,7 +5724,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator))
+	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
 
 	// Get the created reader from runningReaders and wait for it to complete
 	// This ensures the goroutine finishes before test cleanup

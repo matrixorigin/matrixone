@@ -85,6 +85,42 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 	require.Equal(t, uint64(22), prevStatuses[1].LSN)
 }
 
+func TestGetJobSpecsEscapesJobNameLiteral(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() {
+		ExecWithResult = oldExecWithResult
+	}()
+
+	jobName := `index_'idx\01`
+	result, mp := newISCPLogResult(t, []iscpLogBatch{
+		{
+			jobNames:   []string{jobName},
+			jobIDs:     []uint64{3},
+			jobSpecs:   []string{mustMarshalJobSpec(t, "idx01")},
+			jobStatuss: []string{mustMarshalJobStatus(t, 33, JobStage_Running)},
+		},
+	})
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	var capturedSQL string
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		capturedSQL = sql
+		return result, nil
+	}
+
+	jobSpecs, _, err := GetJobSpecs(
+		context.Background(), "", nil, nil, nil, 0, 42,
+		[]string{jobName}, []uint64{101}, types.TS{},
+		[]*JobStatus{{}}, []uint64{3},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "idx01", jobSpecs[0].IndexName)
+	require.Contains(t, capturedSQL, `job_name = 'index_''idx\\01'`)
+}
+
 func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing.T) {
 	oldExecWithResult := ExecWithResult
 	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
@@ -397,6 +433,32 @@ func mustMarshalJobStatus(t *testing.T, lsn uint64, stage int8) string {
 	return string(jobStatus)
 }
 
+func TestAtomicInitCompletionStatusCarriesDurableEvidence(t *testing.T) {
+	previous := &JobStatus{
+		LSN:              7,
+		Stage:            JobStage_Init,
+		LifecycleVersion: atomicInitLifecycleVersion + 1,
+		TaskID:           9,
+		ErrorCode:        2,
+		ErrorMsg:         "old error",
+	}
+
+	completed := atomicInitCompletionStatus(previous, 8)
+
+	require.Equal(t, uint64(8), completed.LSN)
+	require.Equal(t, int8(JobStage_Running), completed.Stage)
+	require.Equal(t, atomicInitLifecycleVersion+1, completed.LifecycleVersion)
+	require.Equal(t, uint64(9), completed.TaskID)
+	require.Zero(t, completed.ErrorCode)
+	require.Empty(t, completed.ErrorMsg)
+	// Building the completion must not mutate the snapshot read from catalog.
+	require.Equal(t, uint64(7), previous.LSN)
+	require.Equal(t, int8(JobStage_Init), previous.Stage)
+
+	legacy := atomicInitCompletionStatus(&JobStatus{}, 1)
+	require.Equal(t, atomicInitLifecycleVersion, legacy.LifecycleVersion)
+}
+
 func encodeJSONRows(t *testing.T, rows []string) [][]byte {
 	t.Helper()
 	encodedRows := make([][]byte, len(rows))
@@ -459,6 +521,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		0,
 	)
 	require.Error(t, err)
+	require.ErrorIs(t, err, errISCPStatusCASLost)
 	require.False(t, isPermanentError(err))
 	require.Contains(t, err.Error(), "affected 0 rows")
 }

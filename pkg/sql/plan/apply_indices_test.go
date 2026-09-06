@@ -8380,6 +8380,80 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
 }
 
+func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
+	makeScan := func(t *testing.T, columnType planpb.Type, filters []*planpb.Expr) (*QueryBuilder, int32, *planpb.IndexDef) {
+		t.Helper()
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		ctx := NewBindContext(builder, nil)
+		bindTag := builder.genNewBindTag()
+		idxDef := &planpb.IndexDef{
+			IndexName:      "idx_price",
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_idx_price",
+			Parts:          []string{"price", "id"},
+			Unique:         false,
+			TableExist:     true,
+		}
+		registerMockIndexTable(t, builder, idxDef.IndexTableName)
+		for _, filter := range filters {
+			filter.GetF().Args[0].GetCol().RelPos = bindTag
+			setIndexRangeArgumentType(filter, columnType)
+			filter.Selectivity = 0.2
+		}
+		node := &planpb.Node{
+			NodeType:    planpb.Node_TABLE_SCAN,
+			ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+			BindingTags: []int32{bindTag},
+			TableDef: &planpb.TableDef{
+				Name: "t",
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "price", Typ: columnType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "price": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 4, Selectivity: 0.04, Cost: 100},
+			FilterList: filters,
+		}
+		return builder, builder.appendNode(node, ctx), idxDef
+	}
+
+	t.Run("closed fixed-width bounds become one prefix_between", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeRangeFilterExpr(0, 1, ">=", 20),
+			makeRangeFilterExpr(0, 1, "<=", 50),
+		}
+		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_int64)}, filters)
+		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+
+		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+		require.NotEqual(t, int32(-1), idxNodeID)
+		indexScan := builder.qry.Nodes[idxNodeID]
+		require.Len(t, indexScan.FilterList, 1)
+		require.Equal(t, "prefix_between", indexScan.FilterList[0].GetF().Func.ObjName)
+	})
+
+	t.Run("byte-string bounds retain exact residuals", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeStringRangeFilterExpr(0, 1, ">", "a"),
+			makeStringRangeFilterExpr(0, 1, "<=", "b"),
+		}
+		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_varbinary), Width: 8}, filters)
+		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+
+		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+		require.NotEqual(t, int32(-1), idxNodeID)
+		indexScan := builder.qry.Nodes[idxNodeID]
+		require.Len(t, indexScan.FilterList, 3)
+		require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
+		require.Equal(t, ">", indexScan.FilterList[1].GetF().Func.ObjName)
+		require.Equal(t, "<=", indexScan.FilterList[2].GetF().Func.ObjName)
+	})
+}
+
 func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
