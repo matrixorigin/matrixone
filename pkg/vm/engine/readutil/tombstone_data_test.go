@@ -32,7 +32,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+func tombstoneStatsForBlockRange(minBlock, maxBlock objectio.Blockid) objectio.ObjectStats {
+	minRow := types.NewRowid(&minBlock, 0)
+	maxRow := types.NewRowid(&maxBlock, objectio.BlockMaxRows-1)
+	zm := index.NewZM(types.T_Rowid, 0)
+	if err := zm.Update(minRow); err != nil {
+		panic(err)
+	}
+	if err := zm.Update(maxRow); err != nil {
+		panic(err)
+	}
+	stats := objectio.NewObjectStats()
+	if err := objectio.SetObjectStatsSortKeyZoneMap(stats, zm); err != nil {
+		panic(err)
+	}
+	return *stats
+}
+
+func TestBlockScopedTombstoneData(t *testing.T) {
+	objectID := objectio.NewObjectid()
+	irrelevantBlock := objectio.NewBlockidWithObjectID(&objectID, 1)
+	selectedBlock := objectio.NewBlockidWithObjectID(&objectID, 2)
+	afterSelectedBlock := objectio.NewBlockidWithObjectID(&objectID, 3)
+
+	tombstones := NewBlockScopedTombstoneData([]objectio.Blockid{
+		selectedBlock,
+		selectedBlock,
+	})
+	rowids := make([]types.Rowid, 0, 10_002)
+	for row := range uint32(10_000) {
+		rowids = append(rowids, types.NewRowid(&irrelevantBlock, row))
+	}
+	rowids = append(
+		rowids,
+		types.NewRowid(&selectedBlock, 7),
+		types.NewRowid(&selectedBlock, 9),
+	)
+	require.NoError(t, tombstones.AppendInMemory(rowids...))
+	require.Len(t, tombstones.rowids, 2)
+
+	irrelevant := tombstoneStatsForBlockRange(irrelevantBlock, irrelevantBlock)
+	relevant := tombstoneStatsForBlockRange(selectedBlock, selectedBlock)
+	afterSelected := tombstoneStatsForBlockRange(afterSelectedBlock, afterSelectedBlock)
+	spanning := tombstoneStatsForBlockRange(irrelevantBlock, afterSelectedBlock)
+	for range 1_000 {
+		require.NoError(t, tombstones.AppendFiles(irrelevant, afterSelected))
+	}
+	// A broad or unusable zone map must fail open.
+	require.NoError(t, tombstones.AppendFiles(relevant, spanning, objectio.ObjectStats{}))
+	require.Equal(t, 3, tombstones.files.Len())
+
+	tombstones.SortInMemory()
+	left := tombstones.ApplyInMemTombstones(
+		&selectedBlock,
+		[]int64{7, 8, 9},
+		nil,
+	)
+	require.Equal(t, []int64{8}, left)
+	left = tombstones.ApplyInMemTombstones(
+		&irrelevantBlock,
+		[]int64{0, 1},
+		nil,
+	)
+	require.Equal(t, []int64{0, 1}, left)
+}
 
 func TestTombstoneData1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
@@ -110,7 +176,7 @@ func TestTombstoneData1(t *testing.T) {
 
 	deleteMask := objectio.GetReusableBitmap()
 	defer deleteMask.Release()
-	tombstones1.PrefetchTombstones(name, fs, nil)
+	tombstones1.PrefetchTombstones(ctx, name, fs, nil)
 	for i := range tombstoneRowIds {
 		sIdx := i / int(stats1.Rows())
 		if sIdx == 2 {
@@ -133,6 +199,24 @@ func TestTombstoneData1(t *testing.T) {
 		require.Equal(t, 1, deleteMask.Count())
 		deleteMask.Clear()
 	}
+
+	selectedPersistedBlock := tombstoneRowIds[0].CloneBlockID()
+	scopedPersisted := NewBlockScopedTombstoneData([]objectio.Blockid{selectedPersistedBlock})
+	require.NoError(t, scopedPersisted.AppendFiles(stats1))
+	require.Equal(t, 1, scopedPersisted.files.Len())
+	maxTS := types.MaxTs()
+	left, err := scopedPersisted.ApplyPersistedTombstones(
+		ctx,
+		fs,
+		&maxTS,
+		&selectedPersistedBlock,
+		[]int64{int64(tombstoneRowIds[0].GetRowOffset())},
+		&deleteMask,
+	)
+	require.NoError(t, err)
+	require.Empty(t, left)
+	require.Equal(t, 1, deleteMask.Count())
+	deleteMask.Clear()
 
 	tombstones1.SortInMemory()
 	last := tombstones1.rowids[0]
@@ -188,7 +272,7 @@ func TestTombstoneData1(t *testing.T) {
 	// expect: left is [0, 1, 2, 3]. no rows are deleted
 	target := types.NewBlockidWithObjectID(&obj1, 3)
 	rowsOffset := []int64{0, 1, 2, 3}
-	left := tombstones1.ApplyInMemTombstones(
+	left = tombstones1.ApplyInMemTombstones(
 		&target,
 		rowsOffset,
 		nil,

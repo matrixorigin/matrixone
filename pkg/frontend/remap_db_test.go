@@ -450,6 +450,54 @@ func TestApplyRemapDbDMLExpressionContainers(t *testing.T) {
 	}
 }
 
+func TestApplyRemapDbDMLWithAndReturning(t *testing.T) {
+	remap := map[string]string{"src": "dst"}
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "insert",
+			sql:  "with ext_t as (select 1 as n) insert into src.sink select n from ext_t returning src.sink.id",
+		},
+		{
+			name: "replace",
+			sql:  "replace into src.sink values (1) returning src.sink.id",
+		},
+		{
+			name: "update",
+			sql:  "with ext_t as (select 1 as n) update src.sink set id = id where id in (select n from ext_t) returning src.sink.id",
+		},
+		{
+			name: "delete",
+			sql:  "with ext_t as (select 1 as n) delete from src.sink where id in (select n from ext_t) returning src.sink.id",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := applyRemapDbToSQL(t, test.sql, remap)
+			require.Contains(t, out, "dst.sink.id")
+			require.NotContains(t, out, "src.sink.id")
+			require.Contains(t, out, "dst.sink")
+		})
+	}
+
+	qualifiedFunction := tree.NewUnresolvedName(
+		tree.NewCStr("src", 1), tree.NewCStr("f_external", 1),
+	)
+	remapDbInStmt(&tree.Update{
+		Returning: tree.SelectExprs{{Expr: &tree.FuncExpr{
+			Func:     tree.FuncName2ResolvableFunctionReference(qualifiedFunction),
+			FuncName: tree.NewCStr("f_external", 1),
+		}}},
+	}, remapDbContext{
+		databases:           remap,
+		lowerCaseTableNames: 1,
+	})
+	require.Equal(t, "dst", qualifiedFunction.TblNameOrigin())
+}
+
 func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 	remap := remapDbContext{
 		databases:           map[string]string{"src": "dst"},

@@ -841,7 +841,7 @@ func bindWindowSpec(
 ) (*plan.WindowSpec, error) {
 	w := &plan.WindowSpec{}
 
-	if consumerSpecific && function.GetFunctionIsWinValueFunByName(funcName) && !ws.HasFrame {
+	if consumerSpecific && function.GetFunctionIgnoresWindowFrameByName(funcName) && !ws.HasFrame {
 		ws.Frame = &tree.FrameClause{Type: tree.Rows}
 		ws.Frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
 		ws.Frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}

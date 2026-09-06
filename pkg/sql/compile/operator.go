@@ -204,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
+		op.DynamicGrouping = t.DynamicGrouping
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -314,6 +315,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.GroupingSetCount = t.GroupingSetCount
+		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -341,6 +344,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.Algorithm = t.Algorithm
+		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
 		return op
 	case vm.Window:
@@ -1350,6 +1355,10 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
+		arg.GroupingSetCount = count
+		arg.GroupingFlags = node.GroupingFlag
+	}
 	return arg
 }
 
@@ -1810,6 +1819,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.NeedEval = needEval
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
+	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -2105,13 +2115,52 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) *group.MergeGroup {
+func constructMergeGroup(
+	node *plan.Node,
+	childNode *plan.Node,
+	aggs []aggexec.AggFuncExecExpression,
+	groupingAware bool,
+) *group.MergeGroup {
 	arg := group.NewArgumentMergeGroup()
 	// here the node is a Group node, merge group is "generated" by the
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
+	arg.GroupingAware = groupingAware
+	if groupingSetCount, ok := plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions); ok {
+		groupCount := len(childNode.GroupingFlag) / groupingSetCount
+		if groupCount > 0 && len(childNode.GroupingFlag) == groupingSetCount*groupCount &&
+			len(node.GroupBy) == groupCount+1 {
+			for set := 0; set < groupingSetCount; set++ {
+				active := false
+				for key := 0; key < groupCount; key++ {
+					if childNode.GroupingFlag[set*groupCount+key] {
+						active = true
+						break
+					}
+				}
+				if !active {
+					arg.EmptyGroupingSetIDs = append(arg.EmptyGroupingSetIDs, int64(set))
+				}
+			}
+		}
+	} else if len(node.GroupingFlag) == len(node.GroupBy) && len(node.GroupBy) > 0 {
+		arg.EmptyGroupingSet = true
+		for _, active := range node.GroupingFlag {
+			if active {
+				arg.EmptyGroupingSet = false
+				break
+			}
+		}
+	}
+	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
+		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
+		for i, expr := range node.GroupBy {
+			arg.GroupByTypes[i] = types.NewWithCharset(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+		}
+	}
 	return arg
 }
 
@@ -2134,6 +2183,8 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.Algorithm = node.PartitionAlgorithm
+	arg.SpillMem = node.SpillMem
 	return arg
 }
 

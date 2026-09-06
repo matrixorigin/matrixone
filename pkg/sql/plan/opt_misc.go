@@ -202,6 +202,9 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
 		return false
 	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		return false
+	}
 
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
@@ -2244,6 +2247,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "disableRightSingleRF":
 		builder.optimizerHints.disableRightSingleRF = value
+	case "sharedComputation":
+		builder.optimizerHints.sharedComputation = value
 	case "subqueryPredicatePlanning":
 		builder.optimizerHints.subqueryPredicatePlanning = value
 	case "printShuffle":
@@ -2253,6 +2258,10 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
 	}
+}
+
+func (builder *QueryBuilder) sharedComputationDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.sharedComputation == 1
 }
 
 func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {

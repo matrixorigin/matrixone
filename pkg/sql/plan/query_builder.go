@@ -2790,12 +2790,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
+		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
 		for i, expr := range node.ProjectList {
 			globalRef := [2]int32{projectTag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
+			// A grouping-set expansion PROJECT has positional execution metadata:
+			// its penultimate column marks synthetic empty-input rows and is
+			// consumed directly by Group rather than by a plan expression. Keep
+			// the complete row image so column pruning cannot remove or relocate
+			// that marker (or the trailing set id).
+			if !groupingSetExpand && colRefCnt[globalRef] == 0 {
 				continue
 			}
 
@@ -3615,6 +3621,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	if node.NodeType != plan.Node_PROJECT {
 		return nodeID
 	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		return nodeID
+	}
 	childNodeID := node.Children[0]
 	childNode := builder.qry.Nodes[childNodeID]
 	if len(childNode.ProjectList) != 0 {
@@ -3753,6 +3762,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -3837,7 +3847,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false, stmt.GeneratedByGroupingSet)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -3859,6 +3869,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// chain, applied by a DISTINCT node after PROJECT and before SORT. Used by the
 	// grouping-set SELECT DISTINCT path; ordinary UNION passes false.
 	distinct bool,
+	// shareGroupingInput is true only for the internal UNION ALL used to lower
+	// one grouping-set SELECT. It allows the branches to share one typed,
+	// deterministic input without changing ordinary UNION semantics.
+	shareGroupingInput bool,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -3967,6 +3981,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
+	}
+	if shareGroupingInput {
+		builder.registerGroupingSetInput(nodes, subCtxList)
 	}
 	// Type coercion below mutates branch project expressions in place, including
 	// the ENUM display expression and the type attached to a literal NULL.
@@ -4745,18 +4762,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	// CTE reuse currently rewrites consumers reachable from the main query
-	// root. A CTE referenced while another CTE is being bound can also have
-	// consumers in separately appended steps, especially recursive anchor and
-	// member steps. Keep such nested references inline until reuse can rewrite
-	// the complete step graph; otherwise the added producer and an unreplaced
-	// consumer share one mutable subtree and column remapping visits it twice.
-	if ctx.bindingCte() {
-		cteRef.hasNestedUse = true
-		if ctx.cteState.cte != nil {
-			ctx.cteState.cte.hasNestedRef = true
-		}
-	}
 	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
 	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
 		types[i] = expr.Typ
@@ -5426,6 +5431,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
+				leftClause.GeneratedByGroupingSet = true
 				if nodeID, err = builder.buildUnionWithResultLen(
 					leftClause,
 					unionOrderBy,
@@ -5436,6 +5442,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					hiddenResultLen,
 					groupingOrderResolve,
 					selectClause.Distinct,
+					true,
 				); err != nil {
 					return
 				}
@@ -6871,6 +6878,7 @@ func rewriteRollupWindowSelect(
 		}
 		leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 	}
+	leftClause.GeneratedByGroupingSet = true
 
 	derived := &tree.Select{Select: leftClause}
 	return &tree.Select{
@@ -12014,64 +12022,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
 			}
-			if currentAccountID != catalog.System_Account {
-				// add account filter for system table scan
-				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-					ctx.binder = NewWhereBinder(builder, ctx)
-					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
-					right := tree.NewNumVal(uint64(currentAccountID), strconv.Itoa(int(currentAccountID)), false, tree.P_uint64)
-					//account_id = the accountId of the non-sys account
-					accountFilter := &tree.ComparisonExpr{
-						Op:    tree.EQUAL,
-						Left:  left,
-						Right: right,
-					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+			if accountFilter := util.BuildTableScanAccountFilter(
+				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
+			); accountFilter != nil {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
+				if err != nil {
+					return 0, err
 				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return
@@ -12666,6 +12625,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildCheckConstraints(tbl, ctx, exprs, nil)
 		case "mo_current_roles":
 			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
+		case subscriptionTablesFunctionName:
+			nodeId, err = builder.buildSubscriptionTables(tbl, ctx, exprs, nil)
+		case subscriptionColumnsFunctionName:
+			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":
 			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
 		case "fulltext_index_tokenize":

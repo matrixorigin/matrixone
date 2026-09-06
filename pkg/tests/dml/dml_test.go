@@ -843,7 +843,7 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 	projectedFullRows := fetchDiffRowsAsStrings(t, ctx, db, projectedFullStmt)
 	require.GreaterOrEqual(t, len(projectedFullRows), 6)
 	for _, row := range projectedFullRows {
-		require.Len(t, row, 4, "projected diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected diff should include table, flag, primary key, and requested columns")
 	}
 
 	projectedLimitStmt := fmt.Sprintf("data branch diff %s against %s columns (val, note) output limit %d", branch, base, limit)
@@ -856,7 +856,7 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 		projectedFullSet[strings.Join(row, "||")] = struct{}{}
 	}
 	for _, row := range projectedLimitedRows {
-		require.Len(t, row, 4, "projected limited diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected limited diff should include table, flag, primary key, and requested columns")
 		_, ok := projectedFullSet[strings.Join(row, "||")]
 		require.Truef(t, ok, "projected limited diff row not contained in projected full diff: %v", row)
 	}

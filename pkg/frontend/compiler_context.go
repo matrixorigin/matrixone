@@ -51,6 +51,7 @@ import (
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+var _ plan2.TableDefStatsCompilerContext = &TxnCompilerContext{}
 var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
 
 // resolveUdfInCallerTxnKey asks ResolveUdf to use the transaction that is
@@ -165,12 +166,19 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 func (tcc *TxnCompilerContext) getStatsCacheVersion(
 	key optimizerStatsTableKey,
 ) (*Session, *plan2.StatsCache, uint64) {
+	return tcc.getStatsCacheForTableDefVersion(key, nil)
+}
+
+func (tcc *TxnCompilerContext) getStatsCacheForTableDefVersion(
+	key optimizerStatsTableKey,
+	tableDefVersion *uint32,
+) (*Session, *plan2.StatsCache, uint64) {
 	tcc.mu.Lock()
 	feSes := tcc.execCtx.ses
 	txnWrapper, _ := tcc.tcw.(*TxnComputationWrapper)
 	tcc.mu.Unlock()
 	if ses, ok := feSes.(*Session); ok {
-		cache, version := ses.getStatsCacheWithVersion(key)
+		cache, version := ses.getStatsCacheForTableDefVersion(key, tableDefVersion)
 		if txnWrapper != nil {
 			txnWrapper.recordOptimizerStatsVersion(key, version)
 		}
@@ -1163,6 +1171,26 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
+	return tcc.statsWithTableDefVersion(obj, snapshot, nil)
+}
+
+func (tcc *TxnCompilerContext) StatsWithTableDef(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) (*pb.StatsInfo, error) {
+	if tableDef == nil {
+		return tcc.statsWithTableDefVersion(obj, snapshot, nil)
+	}
+	version := tableDef.Version
+	return tcc.statsWithTableDefVersion(obj, snapshot, &version)
+}
+
+func (tcc *TxnCompilerContext) statsWithTableDefVersion(
+	obj *plan2.ObjectRef,
+	snapshot *plan2.Snapshot,
+	tableDefVersion *uint32,
+) (*pb.StatsInfo, error) {
 	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
@@ -1172,14 +1200,14 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 
 	tableID := uint64(obj.Obj)
 	statsKey := tcc.optimizerStatsKey(obj, snapshot)
-	ses, statsCache, statsVersion := tcc.getStatsCacheVersion(statsKey)
+	ses, statsCache, statsVersion := tcc.getStatsCacheForTableDefVersion(statsKey, tableDefVersion)
 
-	// Fast path: return cached result if visited within 3 seconds AND stats is valid
-	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	// Fast path: return a recent real observation. An explicit table-wide scan
+	// can observe committed rows before the first object is flushed.
 	if w := statsCache.Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if s != nil && s.AccurateObjectNumber > 0 {
+			if plan2.StatsInfoUsable(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -1197,7 +1225,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	if ses == nil {
 		statsCache.Set(tableID, result)
 	} else {
-		ses.cacheStatsIfCurrent(statsKey, statsVersion, result)
+		ses.cacheStatsForTableDefVersionIfCurrent(
+			statsKey, statsVersion, tableDefVersion, result)
 	}
 
 	return result, nil
@@ -1245,7 +1274,7 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	if err != nil {
 		return nil, err
 	}
-	if stats != nil && stats.AccurateObjectNumber > 0 {
+	if plan2.StatsInfoUsable(stats) {
 		return stats, nil
 	}
 	// Return nil for empty table, calcScanStats will use DefaultStats()

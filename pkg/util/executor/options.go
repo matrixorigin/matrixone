@@ -456,6 +456,18 @@ func (opts StatementOption) WithDisableDropIncrStatement() StatementOption {
 	return opts
 }
 
+// WithSkipDataBranchReclaim leaves branch metadata intact for an internal
+// replacement DROP. The replacement path must publish its successor edge and
+// then invoke the shared reclaim routine itself in the same transaction.
+func (opts StatementOption) WithSkipDataBranchReclaim() StatementOption {
+	opts.skipDataBranchReclaim = true
+	return opts
+}
+
+func (opts StatementOption) SkipDataBranchReclaim() bool {
+	return opts.skipDataBranchReclaim
+}
+
 func (opts StatementOption) KeepAutoIncrement() uint64 {
 	return opts.keepAutoIncrement
 }

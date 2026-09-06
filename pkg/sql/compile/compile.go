@@ -441,6 +441,14 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	// Materialized sources own allocation-account-backed retained and decoded
+	// batches but are not VM operators. Close their compile-owned safety nets
+	// before sealing the execution account, especially on partial-run failures
+	// where producer/reader Reset did not release every source owner.
+	for k, source := range c.materializedSources {
+		source.Close()
+		delete(c.materializedSources, k)
+	}
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -511,6 +519,7 @@ func (c *Compile) clear() {
 	c.ignorePublish = false
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
+	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
@@ -531,10 +540,6 @@ func (c *Compile) clear() {
 	}
 	for k := range c.materializedSinkScanNodes {
 		delete(c.materializedSinkScanNodes, k)
-	}
-	for k, source := range c.materializedSources {
-		source.Close()
-		delete(c.materializedSources, k)
 	}
 	for k := range c.materializedReaderIDs {
 		delete(c.materializedReaderIDs, k)
@@ -883,46 +888,78 @@ func (c *Compile) printPipeline() {
 // for example
 // 1. lock table.
 // 2. init data source.
-func (c *Compile) prePipelineInitializer() (err error) {
+func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.lockTable(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// init data source.
 	for _, s := range c.scopes {
 		if err = s.InitAllDataSource(c); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var spillBudget materialized.SpillBudget
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
 	}
+	startedSources = make([]*materialized.Source, 0, len(c.materializedSources))
 	for _, source := range c.materializedSources {
+		if c.allocationAttempt == nil || c.allocationAttempt.account == nil {
+			return startedSources, mpool.ErrAllocationAccountInvariant
+		}
 		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}, Budget: spillBudget}); err != nil {
-			return err
+		}, Budget: spillBudget, AllocationAccount: c.allocationAttempt.account}); err != nil {
+			return startedSources, err
 		}
+		startedSources = append(startedSources, source)
 	}
-	return nil
+	return startedSources, nil
+}
+
+func closeMaterializedSourceGenerations(sources []*materialized.Source) {
+	for _, source := range sources {
+		source.Close()
+	}
+}
+
+// runPipelineAttempt owns every materialized-source generation opened by its
+// initializer. The callback may start no scopes, return an error, or panic;
+// after it returns, all submitted scope goroutines have quiesced and the
+// attempt closes both executed and statically planned-but-unstarted owners.
+func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	startedSources, err := c.prePipelineInitializer()
+	defer closeMaterializedSourceGenerations(startedSources)
+	if err != nil {
+		return err
+	}
+	return run()
 }
 
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
 	return materialized.SpillBudget{
 		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
-			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
+			budget, err := proc.GetExecutionResourceBudget()
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			reservation, err := budget.ReserveTransientMemory(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return reservation, nil
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetExecutionResourceBudget()
@@ -4940,6 +4977,13 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		for i := range ss {
+			c.setProjection(node, ss[i])
+		}
+		c.anal.isFirst = false
+		return ss
+	}
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -6259,6 +6303,14 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH && c.supportsRemoteHashPartition() {
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -6276,6 +6328,12 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		// A mixed-version cluster cannot understand the HASH pipeline field.
+		// Keep both its prerequisite local orders and its coordinator algorithm
+		// on the legacy path.
+		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_SORT
+	}
 	if node.PartitionByCount > 0 {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
@@ -6670,7 +6728,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -6811,7 +6869,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, op.Aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -6819,6 +6877,7 @@ func (c *Compile) compileMergeGroup(
 		return []*Scope{rs}
 	} else {
 		var aggs []aggexec.AggFuncExecExpression
+		groupingAware := false
 
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
@@ -6828,6 +6887,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
+				groupingAware = op.UsesGroupingAwareHash()
 			}
 		}
 		c.anal.isFirst = false
@@ -6836,7 +6896,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, aggs)
+		arg := constructMergeGroup(node, ns[node.Children[0]], aggs, groupingAware)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -6945,6 +7005,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemoteHashPartition() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion47
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {
@@ -7106,6 +7176,19 @@ func supportsRemoteParquetWholeFileFanout(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion45
+}
+
+func supportsRemoteGroupingSetExpansion(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion49
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

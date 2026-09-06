@@ -412,6 +412,34 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	require.Equal(t, uint64(17), longHashes[3])
 }
 
+func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	floatType := types.T_float32.ToType()
+	floatType.Scale = 2
+	floats := vector.NewVec(floatType)
+	doubles := vector.NewVec(types.T_float64.ToType())
+	jsonValues := vector.NewVec(types.T_json.ToType())
+	defer func() {
+		floats.Free(mp)
+		doubles.Free(mp)
+		jsonValues.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, vector.AppendFixed(floats, float32(1.234), false, mp))
+	require.NoError(t, vector.AppendFixed(floats, float32(1.23), false, mp))
+	require.NoError(t, vector.AppendFixed(doubles, float64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(doubles, math.Copysign(0, -1), false, mp))
+	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1"), false, mp))
+	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1.0"), false, mp))
+
+	for _, vec := range []*vector.Vector{floats, doubles, jsonValues} {
+		left, _ := CanonicalBytesAt(vec, 0, nil)
+		right, _ := CanonicalBytesAt(vec, 1, nil)
+		require.Equal(t, left, right)
+	}
+}
+
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	negativeZero := float32(math.Copysign(0, -1))

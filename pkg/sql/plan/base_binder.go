@@ -3530,6 +3530,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if coerceErr != nil {
 		return nil, coerceErr
 	}
+	if name == "avg" && len(astArgs) == 1 && len(args) == 1 {
+		// MySQL derives AVG's exact result from an integer literal/constant
+		// expression's decimal precision, not from the physical BIGINT container
+		// used for untyped literals. Columns and explicit integer casts deliberately
+		// keep their full declared domains.
+		b.setAvgIntegerLiteralPrecision(astArgs[0], args[0])
+	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		b.markVolatileInLeft(args[0])
@@ -3644,6 +3651,83 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) setAvgIntegerLiteralPrecision(astExpr tree.Expr, arg *plan.Expr) {
+	typ := makeTypeByPlan2Expr(arg)
+	if !typ.Oid.IsInteger() {
+		return
+	}
+	precision, ok := avgIntegerConstantPrecision(astExpr)
+	if !ok || precision <= 0 {
+		return
+	}
+	arg.Typ.Width = precision
+	// Integer casts use Scale == -1 to carry physical bit width. Mark the
+	// literal-derived precision as decimal metadata so AvgReturnType does
+	// not reinterpret it as a cast domain.
+	arg.Typ.Scale = 0
+}
+
+// AVG adds four fractional digits to an exact integer argument. Keep the
+// precision recorded for a constant expression bounded to the largest input
+// precision that can produce the public Decimal256(65,4) result. The executor
+// applies the same cap; without it a long multiplication/addition chain could
+// overflow int32 while constructing planner metadata.
+const maxAvgIntegerExpressionPrecision int32 = 65 - 4
+
+func capAvgIntegerExpressionPrecision(precision int32) int32 {
+	if precision > maxAvgIntegerExpressionPrecision {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return precision
+}
+
+func addAvgIntegerExpressionPrecision(left, right int32) int32 {
+	if left >= maxAvgIntegerExpressionPrecision || right >= maxAvgIntegerExpressionPrecision ||
+		left > maxAvgIntegerExpressionPrecision-right {
+		return maxAvgIntegerExpressionPrecision
+	}
+	return left + right
+}
+
+func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return 0, false
+		}
+		return avgIntegerConstantPrecision(expr.Expr)
+	case *tree.NumVal:
+		if expr.ValType != tree.P_int64 && expr.ValType != tree.P_uint64 {
+			return 0, false
+		}
+		literal := strings.TrimLeft(expr.String(), "+-")
+		if len(literal) > int(maxAvgIntegerExpressionPrecision) {
+			return maxAvgIntegerExpressionPrecision, true
+		}
+		return int32(len(literal)), true
+	case *tree.BinaryExpr:
+		left, leftOK := avgIntegerConstantPrecision(expr.Left)
+		right, rightOK := avgIntegerConstantPrecision(expr.Right)
+		if !leftOK || !rightOK {
+			return 0, false
+		}
+		switch expr.Op {
+		case tree.MULTI:
+			return addAvgIntegerExpressionPrecision(left, right), true
+		case tree.PLUS, tree.MINUS:
+			return capAvgIntegerExpressionPrecision(max(left, right) + 1), true
+		case tree.MOD:
+			return min(left, right), true
+		default:
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
 }
 
 func markPreparedResultCastsProvisional(

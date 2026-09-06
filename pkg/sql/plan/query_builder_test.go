@@ -5202,7 +5202,9 @@ func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testi
 
 func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	optimizer := NewMockOptimizer(true)
+	useLegacyGroupingSetPlan(t, optimizer)
+	logicPlan, err := runOneStmt(optimizer, t,
 		"select n_regionkey, count(distinct "+value+
 			") from nation group by rollup(n_regionkey)")
 	require.NoError(t, err)
@@ -7935,6 +7937,7 @@ func hasAggAboveUnionAll(p *Plan) bool {
 // The non-distinct form has no such de-dup step.
 func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	useLegacyGroupingSetPlan(t, mock)
 
 	distinctPlan, err := runOneStmt(mock, t,
 		"select distinct a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")

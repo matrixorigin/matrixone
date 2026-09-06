@@ -284,12 +284,70 @@ drop table cluster_table_4;
 -- @session:id=2&user=test_account1:test_user&password=111
 use mo_catalog;
 insert into cluster_table_4 values (3, 'c');
+insert ignore into cluster_table_4 values (4, 'd');
 update cluster_table_4 set col1=10 where col2='a';
 delete from cluster_table_4 where col1=2;
 truncate table cluster_table_4;
 -- @session
 
 drop table cluster_table_4;
+
+
+-- test generated columns and INSERT IGNORE on cluster tables
+drop table if exists cluster_table_generated_insert;
+create cluster table cluster_table_generated_insert(
+id int,
+base_value int,
+stored_value int generated always as (base_value * 2) stored,
+virtual_value int generated always as (base_value * 3) virtual,
+constraint ck_cluster_generated_base check (base_value > 0),
+primary key(id, account_id)
+);
+
+insert overwrite cluster_table_generated_insert (id, base_value) values (99, 99);
+insert into cluster_table_generated_insert partition(p = 1) (id, base_value) values (99, 99);
+insert into cluster_table_generated_insert (id, base_value) values (1, 4);
+insert into cluster_table_generated_insert (id, base_value, account_id) select 2, 6, 0;
+prepare cluster_generated_insert_stmt from 'insert into cluster_table_generated_insert (id, base_value) values (?, ?)';
+set @cluster_generated_id = 3, @cluster_generated_base = 7;
+execute cluster_generated_insert_stmt using @cluster_generated_id, @cluster_generated_base;
+deallocate prepare cluster_generated_insert_stmt;
+insert into cluster_table_generated_insert (id, base_value, account_id)
+select 1, 5, account_id from mo_account where account_name = 'test_account1';
+select id, base_value, stored_value, virtual_value from cluster_table_generated_insert order by account_id, id;
+select count(distinct account_id) from cluster_table_generated_insert where id = 1;
+
+-- @session:id=2&user=test_account1:test_user&password=111
+use mo_catalog;
+select id, base_value, stored_value, virtual_value from cluster_table_generated_insert order by id;
+insert into cluster_table_generated_insert (id, base_value) values (20, 20);
+insert ignore into cluster_table_generated_insert (id, base_value) values (21, 21);
+-- @session
+
+insert ignore into cluster_table_generated_insert (id, base_value, account_id) values (1, 99, 0), (4, 8, 0);
+insert ignore into cluster_table_generated_insert (id, base_value, account_id) values (1, 100, 0), (4, 100, 0);
+insert ignore into cluster_table_generated_insert (id, base_value, account_id)
+select id, base_value, account_id from (select 2 id, 100 base_value, 0 account_id union all select 5, 9, 0) src;
+prepare cluster_generated_ignore_stmt from 'insert ignore into cluster_table_generated_insert (id, base_value, account_id) values (?, ?, ?)';
+set @cluster_ignore_dup_id = 3, @cluster_ignore_dup_base = 100, @cluster_ignore_account = 0;
+execute cluster_generated_ignore_stmt using @cluster_ignore_dup_id, @cluster_ignore_dup_base, @cluster_ignore_account;
+set @cluster_ignore_new_id = 6, @cluster_ignore_new_base = 10;
+execute cluster_generated_ignore_stmt using @cluster_ignore_new_id, @cluster_ignore_new_base, @cluster_ignore_account;
+deallocate prepare cluster_generated_ignore_stmt;
+
+replace into cluster_table_generated_insert (id, base_value, account_id) values (4, 10, 0);
+insert into cluster_table_generated_insert (id, base_value, account_id) values (5, 11, 0)
+on duplicate key update base_value = values(base_value);
+update cluster_table_generated_insert set base_value = 12 where id = 6 and account_id = 0;
+load data inline format='csv', data='7,13,0' into table cluster_table_generated_insert fields terminated by ',' (id, base_value, account_id);
+select id, base_value, stored_value, virtual_value from cluster_table_generated_insert order by account_id, id;
+
+insert into cluster_table_generated_insert (id, base_value, stored_value, account_id) values (8, 4, 8, 0);
+select count(*) from cluster_table_generated_insert where id = 8 and account_id = 0;
+insert into cluster_table_generated_insert (id, base_value, account_id) values (8, 4, 0), (9, -1, 0);
+select count(*) from cluster_table_generated_insert where id in (8, 9) and account_id = 0;
+
+drop table cluster_table_generated_insert;
 
 
 -- test cluster table relevance query(join,union)

@@ -531,12 +531,28 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
-	t.Run("GroupByHashKey", func(t *testing.T) {
+	t.Run("GroupMetadata", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}
+		original.DynamicGrouping = true
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
+		require.True(t, restored.(*group.Group).DynamicGrouping)
+	})
+
+	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
+		original := projection.NewArgument()
+		original.ProjectList = []*planpb.Expr{plan.MakePlan2Int64ConstExprWithType(1)}
+		original.GroupingFlags = []bool{true, true, true, false, false, false}
+		original.GroupingSetCount = 3
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredProjection, ok := restored.(*projection.Projection)
+		require.True(t, ok)
+		require.Equal(t, original.ProjectList, restoredProjection.ProjectList)
+		require.Equal(t, original.GroupingFlags, restoredProjection.GroupingFlags)
+		require.Equal(t, original.GroupingSetCount, restoredProjection.GroupingSetCount)
 	})
 
 	t.Run("MergeGroupByHashKey", func(t *testing.T) {
@@ -545,6 +561,29 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}
+		original.EmptyGroupingSetIDs = []int64{1, 3}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.True(t, restored.(*group.MergeGroup).GroupingAware)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
+		require.Equal(t, original.EmptyGroupingSetIDs, restored.(*group.MergeGroup).EmptyGroupingSetIDs)
+	})
+
+	t.Run("MergeGroupLegacyEmptyGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_int32.ToType()}
+		original.EmptyGroupingSet = true
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.True(t, restored.(*group.MergeGroup).EmptyGroupingSet)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
 	})
 
 	t.Run("SharedTableLock", func(t *testing.T) {
@@ -1371,6 +1410,84 @@ func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundarie
 	require.ErrorContains(t, err, "MORPC protocol version 45")
 }
 
+func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+		}
+	})
+
+	projectionOp := projection.NewArgument()
+	projectionOp.GroupingFlags = []bool{true, false}
+	projectionOp.GroupingSetCount = 2
+	groupOp := group.NewArgument()
+	groupOp.DynamicGrouping = true
+	mergeGroupOp := group.NewArgumentMergeGroup()
+	mergeGroupOp.GroupingAware = true
+	legacyEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	legacyEmptyMergeGroupOp.EmptyGroupingSet = true
+	dynamicEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	dynamicEmptyMergeGroupOp.EmptyGroupingSetIDs = []int64{1}
+
+	for _, test := range []struct {
+		name string
+		op   vm.Operator
+	}{
+		{name: "projection", op: projectionOp},
+		{name: "group", op: groupOp},
+		{name: "merge group", op: mergeGroupOp},
+		{name: "legacy empty merge group", op: legacyEmptyMergeGroupOp},
+		{name: "dynamic empty merge group", op: dynamicEmptyMergeGroupOp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: test.op}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 49")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 49")
+		})
+	}
+}
+
+func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+
+	legacy := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Agg: &pipeline.Group{GroupingFlag: []bool{true, false}},
+	}}}
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, legacy))
+
+	nested := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{ProjectionGroupingSetCount: 2}},
+	}}}
+	require.ErrorContains(t,
+		validateRemoteGroupingSetPipelineProtocol(proc, nested),
+		"MORPC protocol version 49")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -1997,6 +2114,30 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
 		require.Len(t, restoredOp.OrderBySpecs, 1)
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
+	})
+
+	t.Run("HashPartition_AlgorithmAndSpillThreshold", func(t *testing.T) {
+		op := &partition.Partition{
+			Algorithm: planpb.Node_PARTITION_ALGORITHM_HASH,
+			SpillMem:  8192,
+			OrderBySpecs: []*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}},
+			}},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, pipeInstr.PartitionAlgorithm)
+		require.Equal(t, int64(8192), pipeInstr.SpillMem)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredPartition := restored.(*partition.Partition)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, restoredPartition.Algorithm)
+		require.Equal(t, int64(8192), restoredPartition.SpillMem)
 	})
 
 	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {

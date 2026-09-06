@@ -99,6 +99,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
+	if tableDef.TableType == catalog.SystemClusterRel {
+		if stmt.Overwrite {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
+		}
+		if len(stmt.PartitionValues) > 0 {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
+		}
+	}
 	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
 		return 0, err
 	}
@@ -1964,13 +1972,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// legacy ODKU operator used to handle. The legacy ODKU operator has been removed,
 	// so let such an ODKU through to the modern dedup+multi-update path: the metadata
 	// table is a normal real-PK table that the modern path handles correctly.
-	// Temporary tables are ordinary user DML targets even though their durable
-	// relkind is distinct; accept either the catalog marker or the session-scoped
-	// resolution bit without admitting any of the internal index table types.
+	// Cluster and temporary tables are ordinary user DML targets even though their
+	// durable relkind is distinct; accept their catalog markers (or the temporary
+	// table's session-scoped resolution bit) without admitting any of the internal
+	// index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
 	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
+		tableDef.TableType == catalog.SystemClusterRel ||
 		tableDef.TableType == catalog.SystemTemporaryTable ||
 		tableDef.IsTemporary
 	if !isOnDupUpdate &&

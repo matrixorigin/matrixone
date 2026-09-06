@@ -1135,6 +1135,15 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
+func TestGetFunctionIgnoresWindowFrameByName(t *testing.T) {
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lag"))
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lead"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("first_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("last_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("nth_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("not_a_function"))
+}
+
 func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))

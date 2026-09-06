@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -84,6 +86,7 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
+	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -1403,10 +1406,31 @@ func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
 }
 
+func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
+	if err := validateCNServiceUUID(serviceID); err != nil {
+		return "", err
+	}
+	if rootDir == "" {
+		return "", nil
+	}
+	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
+}
+
+func txnTraceDirectoryKey(serviceID string) string {
+	// A fixed-length lowercase hash keeps the directory component below common
+	// filesystem limits while remaining stable for the same CN service ID.
+	digest := sha256.Sum256([]byte(serviceID))
+	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
+}
+
 func (s *service) initTxnTraceService() {
+	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
+	if err != nil {
+		panic(err)
+	}
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	ts, err := trace.NewService(
-		s.options.traceDataPath,
+		traceDataPath,
 		s.cfg.UUID,
 		s._txnClient,
 		rt.Clock(),

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -138,7 +139,7 @@ func newViewMetadataAdmissionStartService(
 	discoveryTimeout time.Duration,
 ) *service {
 	t.Helper()
-	serviceID := t.Name()
+	serviceID := strings.ReplaceAll(t.Name(), "/", "-")
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
@@ -271,6 +272,7 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 		{name: "wrapped rollback join", err: fmt.Errorf("transaction failed: %w", errors.Join(missingDatabase, nil)), want: true},
 		{name: "deadline without owner", err: context.DeadlineExceeded, want: false},
 		{name: "deadline with owner", err: context.DeadlineExceeded, upgradeOwnerActive: true, want: true},
+		{name: "backend unavailable without owner", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner"), want: true},
 		{name: "txn retry without owner", err: txnRetry, want: false},
 		{name: "txn retry with owner", err: txnRetry, upgradeOwnerActive: true, want: true},
 		{
@@ -292,6 +294,14 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 			err:                errors.Join(txnRetry, rollbackErr),
 			upgradeOwnerActive: true,
 			want:               false,
+		},
+		{
+			name: "backend unavailable plus rollback failure",
+			err: errors.Join(
+				moerr.NewBackendCannotConnectNoCtx("departed lock owner"),
+				rollbackErr,
+			),
+			want: false,
 		},
 	}
 	for _, test := range tests {
@@ -693,6 +703,7 @@ func TestServiceStartRetriesTransientCatalogFenceErrors(t *testing.T) {
 		err  error
 	}{
 		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "backend unavailable", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner")},
 		{name: "txn retry", err: moerr.NewTxnNeedRetryNoCtx()},
 		{name: "txn retry with definition change", err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
 	}

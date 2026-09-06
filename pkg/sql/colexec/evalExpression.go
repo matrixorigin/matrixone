@@ -365,10 +365,11 @@ func newExpressionExecutorWithAllocation(
 			// init function information for evaluation.
 			executor.overloadID = overloadID
 			// String-to-numeric casts can emit one warning for every logical
-			// output row.  Do not constant-fold them: a folded vector has only
-			// one physical value, so warning generation would depend on the
-			// physical batch layout rather than the rows evaluated by the query.
-			executor.volatile = overload.CannotFold() || isStringToNumericCast(planExpr)
+			// output row. Do not fold ordinary text parameters, but retain the
+			// cast information so doFold can safely fold parameters whose
+			// protocol metadata proves that they originated as integers.
+			executor.stringToNumericCast = !overload.CannotFold() && isStringToNumericCast(planExpr)
+			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
@@ -1673,7 +1674,10 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	if vec.IsConstNull() {
+	// A grouping-set sentinel has no value payload and therefore also satisfies
+	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
+	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
+	if vec.IsConstNull() && !vec.IsGrouping() {
 		var err error
 		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {
