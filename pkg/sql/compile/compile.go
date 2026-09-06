@@ -8073,6 +8073,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 // connector writes this edge, so every receiver has exactly one producer.
 func (c *Compile) newMergeTopScope(node *plan.Node, topN *plan.Expr, ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
+	ss = c.groupOrderedTopRemoteRunDependenciesByCNIfNeeded(node, topN, ss, rs.NodeInfo)
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
 	if len(ss) > 0 {
@@ -8091,6 +8092,41 @@ func (c *Compile) newMergeTopScope(node *plan.Node, topN *plan.Expr, ss []*Scope
 		connArg := connector.NewArgument().WithReg(reg)
 		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(connArg)
+	}
+	return rs
+}
+
+// newMergeTopScopeByCN keeps all same-CN receiver dependencies in one remote
+// execution tree while preserving one ordered stream per child. A plain Merge
+// cannot be used here because interleaving sorted child batches would invalidate
+// the stream contract consumed by the coordinator MergeTop.
+func (c *Compile) newMergeTopScopeByCN(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+	nodeinfo engine.Node,
+) *Scope {
+	rs := newScope(Remote)
+	rs.NodeInfo = scopeNodeWithMcpu(nodeinfo, 1)
+	rs.PreScopes = ss
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	if len(ss) > 0 {
+		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
+	}
+
+	arg := constructMergeTop(node, topN).WithOrderedStreams()
+	c.hasMergeOp = true
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	rs.setRootOperator(arg)
+
+	for i := range ss {
+		reg := rs.Proc.Reg.MergeReceivers[i]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+		connArg := connector.NewArgument().WithReg(reg)
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+		ss[i].IsEnd = true
 	}
 	return rs
 }
@@ -8324,18 +8360,55 @@ func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(
 	ss []*Scope,
 	mergeNode engine.Node,
 ) []*Scope {
-	stageNodes := shuffleBucketStageNodes(ss)
-	if len(ss) <= len(stageNodes) {
+	stageNodes, needed := remoteRunDependenciesNeedGroupingByCN(ss, mergeNode)
+	if !needed {
 		return ss
 	}
+	return c.mergeScopesByStageNodes(ss, stageNodes)
+}
 
+func remoteRunDependenciesNeedGroupingByCN(
+	ss []*Scope,
+	mergeNode engine.Node,
+) (engine.Nodes, bool) {
+	stageNodes := shuffleBucketStageNodes(ss)
+	if len(ss) <= len(stageNodes) {
+		return stageNodes, false
+	}
 	for _, scope := range ss {
 		if !sameExecutionNode(scope.NodeInfo, mergeNode) &&
 			findPipelineExternalLocalReceiver(scope) != nil {
-			return c.mergeScopesByStageNodes(ss, stageNodes)
+			return stageNodes, true
 		}
 	}
-	return ss
+	return stageNodes, false
+}
+
+func (c *Compile) groupOrderedTopRemoteRunDependenciesByCNIfNeeded(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+	mergeNode engine.Node,
+) []*Scope {
+	stageNodes, needed := remoteRunDependenciesNeedGroupingByCN(ss, mergeNode)
+	if !needed {
+		return ss
+	}
+
+	rs := make([]*Scope, 0, len(stageNodes))
+	for i := range stageNodes {
+		cn := stageNodes[i]
+		currentSS := make([]*Scope, 0, cn.Mcpu)
+		for j := range ss {
+			if sameExecutionNode(ss[j].NodeInfo, cn) {
+				currentSS = append(currentSS, ss[j])
+			}
+		}
+		if len(currentSS) > 0 {
+			rs = append(rs, c.newMergeTopScopeByCN(node, topN, currentSS, cn))
+		}
+	}
+	return rs
 }
 
 // shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level

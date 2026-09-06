@@ -239,10 +239,25 @@ func TestCompileTopFallsBackWhenOrderKeyIsNotMaterialized(t *testing.T) {
 
 func newMergeTopFallbackTestCompile(t *testing.T) *Compile {
 	c := NewMockCompile(t)
+	enableDistributedOrderedTopForTest(t, c.proc)
 	c.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.isPrepare = true
 	return c
+}
+
+func enableDistributedOrderedTopForTest(t *testing.T, proc *process.Process) {
+	t.Helper()
+	rt := runtime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
 }
 
 func newMergeTopFallbackTestNode(limitExpr *plan.Expr) *plan.Node {

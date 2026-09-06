@@ -104,8 +104,8 @@ transport, accounting, and cleanup contracts. See the
 
 Implementation v1 uses the following deliberately narrow activation contract:
 
-- protocol version 53 and the serialized `Top.top_ordered_output` bit prove
-  that every participating CN understands the boundary;
+- protocol version 53 plus serialized Top output, MergeTop input, and receiver
+  edge bits prove that every participating CN understands the boundary;
 - the planner activates it only when every ORDER BY key is already a materialized
   input column. Non-column expressions retain the compatible MergeTop or
   MergeOrder plan until hidden-key materialization is implemented, so a

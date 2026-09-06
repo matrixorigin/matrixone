@@ -647,6 +647,9 @@ message Instruction {
   // TOP only: every runtime worker must be consolidated into one stream that
   // remains ordered across batch boundaries before leaving its CN.
   bool top_ordered_output = 62;
+  // MERGE_TOP only: consume one independently ordered stream from every
+  // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
+  bool merge_top_ordered_streams = 63;
 }
 
 message AnalysisList {
@@ -793,6 +796,9 @@ message Pipeline {
   repeated int32 nil_batch_cnt = 13;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 14;
+  // Per receiver, preserve the single-producer ordered-stream contract across
+  // RemoteRun. Empty means the legacy unordered default.
+  repeated bool ordered_stream = 15;
 }
 
 message WrapNode {
