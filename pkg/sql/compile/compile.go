@@ -700,33 +700,7 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 }
 
 func isScopeCancellationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// errors.Join must not turn a substantive execution failure into
-	// cancellation fallout merely because one of its siblings is a context
-	// error. Every leaf has to be cancellation-shaped before it is safe to
-	// suppress or replace the result.
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationError(child) {
-				return false
-			}
-		}
-		return true
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationError(child)
-		}
-	}
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+	return process.IsPipelineCancellationError(err)
 }
 
 // isScopeCancellationFrom reports whether every leaf in err can be attributed
