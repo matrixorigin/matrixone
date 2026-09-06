@@ -35,10 +35,14 @@ const (
 	// systemCatalogRestoreCopy is safe only for catalog rows whose identifiers
 	// retain their meaning in the target account.
 	systemCatalogRestoreCopy
-	// systemCatalogRestoreCopyThenTransform copies the table first, then lets the
-	// table owner rebind identity-bearing columns after every object is restored.
-	systemCatalogRestoreCopyThenTransform
+	// systemCatalogRestoreRebuild skips the generic table copy and lets the table
+	// owner rebuild its rows after every referenced object is restored.
+	systemCatalogRestoreRebuild
 )
+
+func (policy systemCatalogRestorePolicy) skipsBulkRestore() bool {
+	return policy == systemCatalogRestoreSkip || policy == systemCatalogRestoreRebuild
+}
 
 type systemCatalogRestoreContext struct {
 	ctx           context.Context
@@ -63,7 +67,7 @@ type systemCatalogPostRestoreHandler struct {
 
 // The slice is deliberately ordered. To add another identity-bearing catalog:
 //
-//  1. mark it systemCatalogRestoreCopyThenTransform in the policy table;
+//  1. mark it systemCatalogRestoreRebuild in the policy table;
 //  2. register its owner-specific handler here, after any catalog it consumes;
 //  3. test both its ID semantics and every account-restore entry point.
 //
@@ -153,18 +157,18 @@ func restoreSystemCatalogsAfterObjects(
 func validateSystemCatalogRestoreHandlers(ctx context.Context) error {
 	registered := make(map[string]struct{}, len(systemCatalogPostRestoreHandlers))
 	for _, entry := range systemCatalogPostRestoreHandlers {
-		if systemCatalogRestorePolicies[entry.tableName] != systemCatalogRestoreCopyThenTransform {
-			return moerr.NewInternalErrorf(ctx, "catalog restore handler for %s has no transform policy", entry.tableName)
+		if systemCatalogRestorePolicies[entry.tableName] != systemCatalogRestoreRebuild {
+			return moerr.NewInternalErrorf(ctx, "catalog restore handler for %s has no rebuild policy", entry.tableName)
 		}
 		if _, exists := registered[entry.tableName]; exists {
-			return moerr.NewInternalErrorf(ctx, "catalog restore transform for %s has multiple handlers", entry.tableName)
+			return moerr.NewInternalErrorf(ctx, "catalog restore rebuild for %s has multiple handlers", entry.tableName)
 		}
 		registered[entry.tableName] = struct{}{}
 	}
 	for tableName, policy := range systemCatalogRestorePolicies {
-		if policy == systemCatalogRestoreCopyThenTransform {
+		if policy == systemCatalogRestoreRebuild {
 			if _, ok := registered[tableName]; !ok {
-				return moerr.NewInternalErrorf(ctx, "catalog restore transform for %s has no handler", tableName)
+				return moerr.NewInternalErrorf(ctx, "catalog restore rebuild for %s has no handler", tableName)
 			}
 		}
 	}
