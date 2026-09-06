@@ -603,7 +603,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 
 			_, err := builder.appendOnDupIrregularMaintSource(
 				bindCtx, finalProjID, finalProjTag, 0, planpb.Type{}, -1, -1,
-				nil, nil, tc.newRowMarkerPos, map[string]int32{"ft": tc.valueMarkerPos},
+				-1, nil, nil, tc.newRowMarkerPos, map[string]int32{"ft": tc.valueMarkerPos},
 				&planpb.TableDef{}, nil,
 			)
 			require.ErrorContains(t, err, "cannot locate an irregular index value-change marker")
