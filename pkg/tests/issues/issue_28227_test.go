@@ -99,6 +99,7 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 						"select id,hex(%s(%s) over (order by id)) from %s where id <= 2 order by id",
 						functionName, derived.expression, tableName))
 					require.NoError(t, err)
+					defer rows.Close()
 					var windowValues []string
 					for rows.Next() {
 						var id int
@@ -107,7 +108,6 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 						require.Len(t, value, derived.hexLength)
 						windowValues = append(windowValues, value)
 					}
-					require.NoError(t, rows.Close())
 					require.NoError(t, rows.Err())
 					require.Len(t, windowValues, 2)
 				}

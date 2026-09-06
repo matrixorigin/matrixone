@@ -5458,6 +5458,15 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
+	// This refinement exists for byte-preserving binary expressions. Text
+	// SUBSTRING keeps its existing metadata contract; narrowing it here would
+	// change the overload's declared result width and make consumers that rely
+	// on the text semantic family reject an otherwise valid expression.
+	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
+	if !binary {
+		return
+	}
+
 	lengthLiteral := args[2].GetLit()
 	if lengthLiteral == nil || lengthLiteral.Isnull {
 		return
@@ -5476,7 +5485,6 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 
 	// Binary SUBSTRING is byte-preserving, so a constant length is a truthful
 	// stored-byte upper bound even when the source is an unbounded BLOB.
-	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
 	bound := length
 	if sourceBound, known := stringExprBound(args[0], binary); known && sourceBound < bound {
 		bound = sourceBound

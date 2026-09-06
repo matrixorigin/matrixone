@@ -4054,7 +4054,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith3Args
+					return SubStringWith3Args
 				},
 			},
 			{
@@ -4074,7 +4074,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith2Args
+					return SubStringWith2Args
 				},
 			},
 			{
