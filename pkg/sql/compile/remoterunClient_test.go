@@ -572,40 +572,81 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		cancelQuery                bool
 		remoteErr                  error
 		stopResponseErr            error
+		stopSendErr                error
+		closeStopResponse          bool
+		timeoutStopResponse        bool
 		assertTerminalBeforeCancel bool
 		wantErr                    error
+		wantErrCode                uint16
+		wantStopSendingCount       int
 	}{
 		{
-			name:        "substantive cancellation cause survives",
-			cancelCause: duplicateErr,
-			wantErr:     duplicateErr,
+			name:                 "substantive cancellation cause survives",
+			cancelCause:          duplicateErr,
+			wantErr:              duplicateErr,
+			wantStopSendingCount: 1,
 		},
 		{
-			name: "normal internal cancellation remains secondary",
+			name:                 "normal internal cancellation remains secondary",
+			wantStopSendingCount: 1,
 		},
 		{
-			name:        "query cancellation remains terminal",
-			cancelQuery: true,
-			wantErr:     context.Canceled,
+			name:                 "query cancellation remains terminal",
+			cancelQuery:          true,
+			wantErr:              context.Canceled,
+			wantStopSendingCount: 1,
 		},
 		{
 			name:                       "remote failure reaches receiver before scope cancellation",
 			remoteErr:                  duplicateErr,
 			assertTerminalBeforeCancel: true,
 			wantErr:                    duplicateErr,
+			wantErrCode:                moerr.ErrDuplicateEntry,
 		},
 		{
-			name:            "remote failure returned after internal cancellation survives",
-			stopResponseErr: duplicateErr,
-			wantErr:         duplicateErr,
+			name:                 "remote failure returned after internal cancellation survives",
+			stopResponseErr:      duplicateErr,
+			wantErr:              duplicateErr,
+			wantErrCode:          moerr.ErrDuplicateEntry,
+			wantStopSendingCount: 1,
 		},
 		{
-			name:            "remote cancellation returned after internal cancellation remains secondary",
-			stopResponseErr: moerr.NewQueryInterrupted(context.Background()),
+			name:                 "remote cancellation returned after internal cancellation remains secondary",
+			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "StopSending send failure is terminal",
+			stopSendErr:          moerr.NewBackendClosedNoCtx(),
+			wantErrCode:          moerr.ErrBackendClosed,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "canceled StopSending send is a closed stream",
+			stopSendErr:          context.Canceled,
+			wantErrCode:          moerr.ErrStreamClosed,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "StopSending response channel closure is terminal",
+			closeStopResponse:    true,
+			wantErrCode:          moerr.ErrStreamClosed,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "StopSending timeout is terminal and attempted once",
+			timeoutStopResponse:  true,
+			wantErrCode:          moerr.ErrRPCTimeout,
+			wantStopSendingCount: 1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.timeoutStopResponse {
+				oldTimeout := pipelineStopSendingClientTimeout
+				pipelineStopSendingClientTimeout = 10 * time.Millisecond
+				defer func() { pipelineStopSendingClientTimeout = oldTimeout }()
+			}
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
@@ -620,6 +661,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			stream := mock_morpc.NewMockStream(ctrl)
 			stream.EXPECT().Receive().Return(responses, nil)
 			stream.EXPECT().ID().Return(uint64(3)).AnyTimes()
+			stopSendingCount := 0
 			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, request morpc.Message) error {
 					message := request.(*pipeline.Message)
@@ -636,6 +678,17 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 							proc.Cancel(tt.cancelCause)
 						}
 					case pipeline.Method_StopSending:
+						stopSendingCount++
+						if tt.stopSendErr != nil {
+							return tt.stopSendErr
+						}
+						if tt.closeStopResponse {
+							close(responses)
+							return nil
+						}
+						if tt.timeoutStopResponse {
+							return nil
+						}
 						response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 						response.SetMessageType(pipeline.Method_PipelineMessage)
 						if tt.stopResponseErr != nil {
@@ -687,24 +740,25 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			}
 
 			err := s.RemoteRun(c)
-			if tt.wantErr == nil {
+			if tt.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tt.wantErrCode), err)
+			} else if tt.wantErr == nil {
 				require.NoError(t, err)
-			} else if tt.remoteErr != nil || tt.stopResponseErr != nil {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 			} else {
 				require.ErrorIs(t, err, tt.wantErr)
 			}
+			require.Equal(t, tt.wantStopSendingCount, stopSendingCount)
 
 			select {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
-				if tt.wantErr == nil {
+				if tt.wantErrCode == 0 && tt.wantErr == nil {
 					require.Equal(t, process.EventEnd, signal.EventType)
 					require.NoError(t, terminalErr)
 				} else {
 					require.Equal(t, process.EventError, signal.EventType)
-					if tt.remoteErr != nil || tt.stopResponseErr != nil {
-						require.True(t, moerr.IsMoErrCode(terminalErr, moerr.ErrDuplicateEntry))
+					if tt.wantErrCode != 0 {
+						require.True(t, moerr.IsMoErrCode(terminalErr, tt.wantErrCode), terminalErr)
 					} else {
 						require.ErrorIs(t, terminalErr, tt.wantErr)
 					}

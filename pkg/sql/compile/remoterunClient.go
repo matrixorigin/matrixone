@@ -47,7 +47,10 @@ import (
 // this is just a number I casually wrote, the purpose of doing this is that any message sent through rpc need a clear deadline.
 const MaxRpcTime = time.Hour * 24
 
-var pipelineStreamFinishClientTimeout = 30 * time.Second
+var (
+	pipelineStopSendingClientTimeout  = 30 * time.Second
+	pipelineStreamFinishClientTimeout = 30 * time.Second
+)
 
 // remoteRun sends a scope to remote node for running.
 // and keep receiving the back results.
@@ -455,6 +458,7 @@ type messageSenderOnClient struct {
 	receiveClosed      bool
 	reuseEligible      bool
 	terminalNegotiated bool
+	stopResponseTried  bool
 	expectedEnd        pipeline.Method
 	stateMu            sync.Mutex
 	closeOnce          sync.Once
@@ -618,6 +622,7 @@ func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
 	sender.receiveClosed = false
 	sender.reuseEligible = false
 	sender.terminalNegotiated = false
+	sender.stopResponseTried = false
 	sender.allowCleanupCancellation = false
 	sender.expectedEnd = method
 }
@@ -800,21 +805,35 @@ func forwardRemoteBatchWithContext(
 // remote pipeline reported its actual failure.
 func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	sender.stateMu.Lock()
-	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
-	sender.stateMu.Unlock()
-	if receiveClosed || safeToClose {
+	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
+		sender.stateMu.Unlock()
 		return nil
 	}
+	// RemoteRun and close share this teardown owner. Claim the handshake before
+	// doing I/O so a terminal-less attempt cannot be repeated by close and add a
+	// second full timeout to the same statement.
+	sender.stopResponseTried = true
+	sender.stateMu.Unlock()
 
 	// cannot use sender.ctx here, because ctx maybe done.
-	maxWaitingTime, cancel := context.WithTimeoutCause(context.TODO(), 30*time.Second, moerr.CauseWaitingTheStopResponse)
+	maxWaitingTime, cancel := context.WithTimeoutCause(
+		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.
 	if err := sender.streamSender.Send(
 		maxWaitingTime,
 		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return nil
+		if maxWaitingTime.Err() != nil {
+			return moerr.NewRPCTimeout(maxWaitingTime)
+		}
+		// The handshake owns an independent live context. A cancellation-shaped
+		// Send result therefore describes a closed transport, not successful
+		// pipeline cancellation, and must not be suppressible by RemoteRun.
+		if isScopeCancellationError(err) {
+			return moerr.NewStreamClosedNoCtx()
+		}
+		return err
 	}
 
 	// wait an EndMessage response.
@@ -823,7 +842,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
 				sender.markReceiveClosed()
-				return nil
+				return moerr.NewStreamClosedNoCtx()
 			}
 
 			message := val.(*pipeline.Message)
@@ -846,7 +865,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 			}
 
 		case <-maxWaitingTime.Done():
-			return nil
+			return moerr.NewRPCTimeout(maxWaitingTime)
 		}
 	}
 }
