@@ -590,12 +590,17 @@ func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *pr
 			}
 		}
 		for i := range processCount {
+			outputBytes, err := spillOutputRowBytes(bat, ctr.n, i)
+			if err != nil {
+				return err
+			}
 			position := baseSel + i
 			ctr.sels[position] = int64(position)
 			ctr.rowRefs[position] = rowRef{
-				offset: record.offset,
-				size:   record.size,
-				rowIdx: int64(i),
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      int64(i),
+				outputBytes: outputBytes,
 			}
 		}
 		ctr.bat.AddRowCount(processCount)
@@ -616,20 +621,48 @@ func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *pr
 	for i, j := processCount, rowCount; i < j; i++ {
 		rowIdx := int64(i)
 		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
+			outputBytes, err := spillOutputRowBytes(bat, ctr.n, i)
+			if err != nil {
+				return err
+			}
 			for idx := range ctr.cmps {
 				if err := ctr.cmps[idx].Copy(1, 0, rowIdx, ctr.sels[0], proc); err != nil {
 					return err
 				}
 			}
 			ctr.rowRefs[ctr.sels[0]] = rowRef{
-				offset: record.offset,
-				size:   record.size,
-				rowIdx: int64(i),
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      int64(i),
+				outputBytes: outputBytes,
 			}
 			heap.Fix(ctr, 0)
 		}
 	}
 	return nil
+}
+
+func spillOutputRowBytes(bat *batch.Batch, columnCount, row int) (uint64, error) {
+	if bat == nil || columnCount < 0 || columnCount > len(bat.Vecs) ||
+		row < 0 || row >= bat.RowCount() {
+		return 0, moerr.NewInternalErrorNoCtx("invalid top spill output row")
+	}
+	var total uint64
+	for col := 0; col < columnCount; col++ {
+		vec := bat.Vecs[col]
+		if vec == nil || vec.GetType() == nil {
+			return 0, moerr.NewInternalErrorNoCtx("invalid top spill output vector")
+		}
+		rowBytes := uint64(vec.GetType().TypeSize())
+		if vec.GetType().IsVarlen() && !vec.IsNull(uint64(row)) {
+			rowBytes += uint64(len(vec.GetBytesAt(row)))
+		}
+		if rowBytes > math.MaxUint64-total {
+			return 0, moerr.NewInvalidInputNoCtx("top spill output row size overflows")
+		}
+		total += rowBytes
+	}
+	return total, nil
 }
 
 func rowsToFill(limit uint64, currentRows int, batchRows int) int {
@@ -675,7 +708,44 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 	return nil
 }
 
-const evalSpillChunkSize = 8192
+const (
+	evalSpillChunkSize  = 8192
+	evalSpillChunkBytes = 64 * mpool.MB
+)
+
+func (ctr *container) nextSpillOutputChunkEnd(start int) (int, error) {
+	if start < 0 || start >= len(ctr.sels) {
+		return start, moerr.NewInternalErrorNoCtx("invalid top spill output cursor")
+	}
+	byteLimit := uint64(evalSpillChunkBytes)
+	if ctr.evalSpillOutputBytes != 0 {
+		byteLimit = ctr.evalSpillOutputBytes
+	}
+	endLimit := min(start+evalSpillChunkSize, len(ctr.sels))
+	end := start
+	var outputBytes uint64
+	for end < endLimit {
+		selection := ctr.sels[end]
+		if selection < 0 || selection >= int64(len(ctr.rowRefs)) {
+			return start, moerr.NewInternalErrorNoCtx("invalid top spill row reference")
+		}
+		rowBytes := ctr.rowRefs[selection].outputBytes
+		if rowBytes > math.MaxUint64-outputBytes {
+			return start, moerr.NewInvalidInputNoCtx("top spill output batch size overflows")
+		}
+		// One individually valid row must make progress even when it is larger
+		// than the normal batch budget. Subsequent rows wait for the next call.
+		if end > start && outputBytes+rowBytes > byteLimit {
+			break
+		}
+		outputBytes += rowBytes
+		end++
+		if outputBytes >= byteLimit {
+			break
+		}
+	}
+	return end, nil
+}
 
 func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
 	if err, canceled := vm.CancelCheck(proc); canceled {
@@ -726,7 +796,10 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 	}
 
 	chunkStart := ctr.evalCursor
-	chunkEnd := min(chunkStart+evalSpillChunkSize, len(ctr.sels))
+	chunkEnd, err := ctr.nextSpillOutputChunkEnd(chunkStart)
+	if err != nil {
+		return false, err
+	}
 	chunkSize := chunkEnd - chunkStart
 
 	type batchRow struct {

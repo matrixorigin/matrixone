@@ -74,10 +74,12 @@ This supports these invariants:
 1. Ordinary Top-K returns exactly min(K, S) rows in the existing SQL order.
 2. Global merging does not retain K payload rows or consume all P*K candidates
    before it can return output.
-3. Memory is bounded in physical bytes, including transport and allocation
-   overlap. Large result cardinality alone never requires one large allocation.
-4. Spill remains an executable path when the resident selection state does not
-   fit. Memory, disk, FD, metadata, and merge depth have separate bounds.
+3. Transport, reconstructed payload, and ordered-gather output are bounded in
+   physical bytes, including allocation overlap. Large result cardinality alone
+   never requires one large payload allocation.
+4. Local Top spills source payload, but v1 still retains O(K) row references
+   and ordering keys per producer. Those allocations remain query-accounted;
+   a fully external key-selection state is a separate follow-up boundary.
 5. Success, rejection, error, cancellation, and reuse have one cleanup owner.
 6. Early stop applies only to the exclusively owned pure read subtree. Shared
    producers, found-rows consumers, and required effects retain their semantics.
@@ -167,10 +169,21 @@ Implementation v1 uses the following deliberately narrow activation contract:
   publish prefix completion and stop further requests. Already admitted
   prefetch is finite and included in the accounting and cost model.
 
-### C. Complete the local Top resource contract
+### C. Local Top resource boundary
 
-The global change removes the reported P*K materialization. Local Top must
-also have a bounded response for wide keys and repeated candidate replacement.
+The global change removes the reported P*K payload materialization. This PR
+also makes spill reconstruction row-and-byte bounded: each selected row records
+its actual output width while the source batch is available, and evaluation
+uses that metadata to reconstruct at most 8,192 rows / 64 MiB per batch. A
+single individually valid row may exceed the normal batch target to guarantee
+progress. This closes the single-vector failure for a narrow ordering key with
+wide projected payload, including the #27968 shape.
+
+The remaining local selection state is not independent of K. Spill mode keeps
+O(K) row references and materialized ordering keys per producer. All of that
+state is allocation-accounted and fails with a controlled resource error, but
+v1 does not claim that an arbitrarily wide ordering key succeeds merely because
+disk is available. A future fully external key-selection implementation must:
 
 - Keep a resident heap fast path for fitting selection state. SQL row counts
   and estimated widths can guide policy, but exact allocation admission owns
@@ -194,13 +207,12 @@ also have a bounded response for wide keys and repeated candidate replacement.
 - Disk admission covers live input runs plus the new output run until commit.
   FD admission covers active readers and writer, not total run count. Exhausted
   disk, FDs, depth, or the minimal working set returns the appropriate error.
-- Output an ordered stream in chunks from either local mode. This permits
-  wide payloads and wide keys without a single K-row payload/key vector.
+- Output an ordered stream in chunks without a single K-row payload vector.
 
-Local external selection can still write substantial input data and require
-multiple passes. This proposal does not promise O(K) total spill or avoid the
-full scan of an unordered source. Further payload read-locality optimization
-requires separate measured evidence and is not a claimed benefit here.
+The current source-payload spill can still write substantial input data and
+requires a full scan of an unordered source. A future external key selector can
+require multiple merge passes; neither O(K) total spill nor payload read-locality
+improvements are claimed here.
 
 ## Ownership, errors, and generations
 
@@ -302,7 +314,7 @@ storage reads, and INSERT. No speedup multiplier is promised before measurement.
 | Raise threshold / trust row-width statistics | Reject as safety design: physical capacity and stale/unknown statistics differ |
 | Global spill Top on unordered candidates | Possible compatible algorithm, but existing implementation writes all candidates and can repeat local payload I/O |
 | Give existing MergeOrder a terminal LIMIT only | Insufficient: still receives/materializes every candidate before first output |
-| Ordered gather plus bounded local selection | Selected: uses order already established by producers, bounds global state, supports external local execution |
+| Ordered gather plus byte-bounded payload reconstruction | Selected: uses order already established by producers, bounds global state and output batches while retaining accounted O(K) local keys |
 
 ## Validation and delivery sequence
 
@@ -328,9 +340,9 @@ service configuration and data for fixed/main comparisons:
    receiver and runtime-DOP counterexamples, before large benchmarks.
 2. Implement ordered fan-in, byte-bounded output, and teardown as one closure.
    Include encode/decode/version/clone tests and public multi-CN execution.
-3. Close local variable-length reclamation and resident-to-external transition
-   with the common spill primitives. This is part of the full resource claim,
-   not optional if those counterexamples fail. Split commits by owner closure.
+3. Follow up with variable-length key reclamation and a resident-to-external
+   key-selection transition if workloads require K-independent local key state;
+   do not attribute that unimplemented guarantee to this PR.
 4. Run the combined implementation on 55 and review the complete change map.
    Functional partial delivery cannot be described as full #28285/#27968 closure.
 
@@ -341,7 +353,8 @@ service configuration and data for fixed/main comparisons:
 | K=0/1, 16383/16384/16385, K>=S, parameter K, OFFSET overflow | Exact result and cardinality; reuse behaves like a fresh query |
 | ASC/DESC, compound keys, NULLs, duplicates, NaN, expressions | Existing comparator semantics; full sort/reference with unique ties where required |
 | N fixed, replacement count grows, increasing/decreasing payload lengths | Accounted physical peak remains within byte budget; same correct survivors |
-| VECF32(1024) payload; large variable-length sort keys | Success with enough total resources despite a reduced per-allocation cap |
+| VECF32(1024) payload with narrow key | Byte-bounded multi-batch output succeeds despite a reduced per-allocation cap |
+| Large variable-length sort keys | Accounted success or controlled resource error; external key selection is outside v1 |
 | Pressure before/after candidate mutation and run publication | No lost/duplicate row; exact cleanup; external result equals resident reference |
 | Disk/FD failure, partial/truncated spill, allocation rejection | Correct error class; zero terminal ownership; healthy following query |
 | Full queue/held ACK, cancel, disconnect, stop racing real error | All owners quiesce; actual error is not masked; no producer drains unused output |

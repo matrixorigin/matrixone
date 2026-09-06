@@ -42,9 +42,10 @@ var _ interface {
 const topSpillThreshold uint64 = 8192 * 2
 
 type rowRef struct {
-	offset int64
-	size   int64
-	rowIdx int64
+	offset      int64
+	size        int64
+	rowIdx      int64
+	outputBytes uint64
 }
 
 type spillRecordRef struct {
@@ -93,6 +94,9 @@ type container struct {
 	spillOrdered bool         // sels backing contains the final ascending order
 	evalCursor   int          // next row index to output in sels
 	spillOutBat  *batch.Batch // current chunk output batch, freed on next call
+	// evalSpillOutputBytes overrides the production byte ceiling in focused
+	// tests. Zero selects evalSpillChunkBytes.
+	evalSpillOutputBytes uint64
 }
 
 type Top struct {

@@ -439,9 +439,10 @@ func TestAccountedTopCorruptSpillFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	op.ctr.sels[0] = 0
 	op.ctr.rowRefs[0] = rowRef{
-		offset: record.offset,
-		size:   record.size - 1,
-		rowIdx: 0,
+		offset:      record.offset,
+		size:        record.size - 1,
+		rowIdx:      0,
+		outputBytes: uint64(types.T_int64.ToType().TypeSize()),
 	}
 	op.ctr.spillOrdered = true
 	var result vm.CallResult

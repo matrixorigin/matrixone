@@ -305,6 +305,72 @@ func TestTopSpill(t *testing.T) {
 	}
 }
 
+func TestTopSpillOutputUsesRowAndByteBounds(t *testing.T) {
+	const (
+		payloadBytes = 200
+		batchRows    = 128
+		outputBytes  = 8 * 1024
+	)
+	limit := int(topSpillThreshold + 1)
+	inputRows := limit + 257
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		int64(limit),
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}},
+	)
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.True(t, tc.arg.ctr.spilling)
+	tc.arg.ctr.evalSpillOutputBytes = outputBytes
+
+	input := make([]*batch.Batch, 0, (inputRows+batchRows-1)/batchRows+1)
+	for highest := inputRows; highest > 0; {
+		rows := min(batchRows, highest)
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		for i := range rows {
+			key := int64(highest - i)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, tc.proc.Mp()))
+			payload := bytes.Repeat([]byte{byte('a' + key%26)}, payloadBytes+int(key%7))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], payload, false, tc.proc.Mp()))
+		}
+		bat.SetRowCount(rows)
+		input = append(input, bat)
+		highest -= rows
+	}
+	input = append(input, batch.EmptyBatch)
+	resetChildren(tc.arg, input)
+
+	got := make([]int64, 0, limit)
+	outputBatches := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		outputBatches++
+		require.LessOrEqual(t, uint64(result.Batch.Size()), uint64(outputBytes))
+		keys := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+		got = append(got, keys...)
+		for row := range result.Batch.RowCount() {
+			require.GreaterOrEqual(t, len(result.Batch.Vecs[1].GetBytesAt(row)), payloadBytes)
+		}
+	}
+	require.Greater(t, outputBatches, 1)
+	require.Len(t, got, limit)
+	for i, key := range got {
+		require.Equal(t, int64(i+1), key)
+	}
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
@@ -523,9 +589,10 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 			require.NoError(t, err)
 			arg.ctr.sels = []int64{0}
 			arg.ctr.rowRefs = []rowRef{{
-				offset: record.offset,
-				size:   record.size,
-				rowIdx: 0,
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      0,
+				outputBytes: uint64(types.T_int64.ToType().TypeSize()),
 			}}
 			arg.ctr.spillOrdered = true
 			src.Clean(proc.Mp())
