@@ -127,3 +127,9 @@ func TestBitwiseAggregateAcceptsBoundedBinaryExpressions(t *testing.T) {
 		})
 	}
 }
+
+func TestBitwiseBinaryReturnTypeRejectsUnknownOperandDomain(t *testing.T) {
+	result := bitwiseBinaryReturnType([]types.Type{types.T_blob.ToType(), types.T_blob.ToType()})
+	require.Equal(t, types.T_blob, result.Oid)
+	require.Zero(t, result.Width)
+}
