@@ -570,6 +570,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		name                       string
 		cancelCause                error
 		cancelQuery                bool
+		deadlineQuery              bool
 		remoteErr                  error
 		stopResponseErr            error
 		stopSendErr                error
@@ -594,6 +595,48 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			name:                 "query cancellation remains terminal",
 			cancelQuery:          true,
 			wantErr:              context.Canceled,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query cancellation survives StopSending send failure",
+			cancelQuery:          true,
+			stopSendErr:          moerr.NewBackendClosedNoCtx(),
+			wantErr:              context.Canceled,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query cancellation survives StopSending response closure",
+			cancelQuery:          true,
+			closeStopResponse:    true,
+			wantErr:              context.Canceled,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query cancellation survives StopSending timeout",
+			cancelQuery:          true,
+			timeoutStopResponse:  true,
+			wantErr:              context.Canceled,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query deadline survives StopSending send failure",
+			deadlineQuery:        true,
+			stopSendErr:          moerr.NewBackendClosedNoCtx(),
+			wantErr:              context.DeadlineExceeded,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query deadline survives StopSending response closure",
+			deadlineQuery:        true,
+			closeStopResponse:    true,
+			wantErr:              context.DeadlineExceeded,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "query deadline survives StopSending timeout",
+			deadlineQuery:        true,
+			timeoutStopResponse:  true,
+			wantErr:              context.DeadlineExceeded,
 			wantStopSendingCount: 1,
 		},
 		{
@@ -649,7 +692,13 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			}
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
-			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			queryParent := proc.GetTopContext()
+			if tt.deadlineQuery {
+				var cancelDeadline context.CancelFunc
+				queryParent, cancelDeadline = context.WithDeadline(queryParent, time.Now().Add(-time.Second))
+				t.Cleanup(cancelDeadline)
+			}
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(queryParent)
 			_, cancelQuery := process.GetQueryCtxFromProc(proc)
 			t.Cleanup(cancelQuery)
 			proc.BuildPipelineContext(queryCtx)
