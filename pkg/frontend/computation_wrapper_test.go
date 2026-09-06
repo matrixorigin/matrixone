@@ -326,6 +326,8 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
+		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		hasPaginationParams:        hasPaginationParams,
 		hasLagLeadParams:           hasLagLeadParams,
@@ -2473,14 +2475,17 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	require.Nil(t, params.GetArea())
 }
 
-func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T) {
+func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
-		t, 117, "select json_extract('18446744073709551615', '$') = ?")
+		t, 117, "select ? member of ('[18446744073709551615]')")
 	defer prepareStmt.Close()
 
 	prepareStmt.jsonComparisonParamPositions = plan2.PreparedJSONComparisonParamPositions(
 		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+	prepareStmt.jsonMemberOfParamPositions = plan2.PreparedJSONMemberOfParamPositions(
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+	require.Equal(t, []int32{0}, prepareStmt.jsonMemberOfParamPositions)
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
@@ -2498,6 +2503,23 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+}
+
+func TestInitExecuteStmtParamPreservesGenericJSONComparisonCompatibility(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 126, "select json_extract('true', '$') <=> ?")
+	defer prepareStmt.Close()
+
+	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+	require.Empty(t, prepareStmt.jsonMemberOfParamPositions)
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_any, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamBoolean, cw.proc.GetPrepareParamKind(0))
 }
 
 func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {

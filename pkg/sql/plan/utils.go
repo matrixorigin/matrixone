@@ -4591,7 +4591,29 @@ func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	// expression collector below owns tree recursion because owner walking stops
 	// at each expression root.
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen, nil)
+		return nil
+	})
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// PreparedJSONMemberOfParamPositions returns direct parameter markers used by
+// MEMBER OF operands. Unlike generic JSON comparisons, these positions need
+// the exact protocol SQL domain at binary EXECUTE time.
+func PreparedJSONMemberOfParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, nil, seen, positions)
 		return nil
 	})
 
@@ -4607,6 +4629,7 @@ func collectPreparedJSONComparisonParamPositions(
 	expr *plan.Expr,
 	positions map[int32]struct{},
 	seen map[*plan.Expr]struct{},
+	memberOfPositions map[int32]struct{},
 ) {
 	if expr == nil {
 		return
@@ -4620,40 +4643,63 @@ func collectPreparedJSONComparisonParamPositions(
 	case *plan.Expr_F:
 		functionName := impl.F.GetFunc().GetObjName()
 		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
-			if param := impl.F.Args[0].GetP(); param != nil {
-				positions[param.Pos] = struct{}{}
+			if positions != nil {
+				if param := impl.F.Args[0].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
 			}
 		}
 		if functionName == function.JsonMemberOfFunctionName && len(impl.F.Args) == 2 {
-			if param := impl.F.Args[0].GetP(); param != nil {
-				positions[param.Pos] = struct{}{}
+			if positions != nil {
+				if param := impl.F.Args[0].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
+				if param := impl.F.Args[1].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
 			}
-			if param := impl.F.Args[1].GetP(); param != nil {
-				positions[param.Pos] = struct{}{}
-			}
+			addPreparedJSONMemberOfParamPosition(impl.F.Args[0], memberOfPositions)
+			addPreparedJSONMemberOfParamPosition(impl.F.Args[1], memberOfPositions)
 		}
 		for _, arg := range impl.F.Args {
-			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_W:
 		window := impl.W
-		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen, memberOfPositions)
 		for _, item := range window.GetPartitionBy() {
-			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+			collectPreparedJSONComparisonParamPositions(item, positions, seen, memberOfPositions)
 		}
 		for _, order := range window.GetOrderBy() {
-			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen, memberOfPositions)
 		}
 		if frame := window.GetFrame(); frame != nil {
-			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
-			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen, memberOfPositions)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_List:
 		for _, item := range impl.List.List {
-			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+			collectPreparedJSONComparisonParamPositions(item, positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_Sub:
-		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen, memberOfPositions)
+	}
+}
+
+func addPreparedJSONMemberOfParamPosition(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil || positions == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != function.JsonComparisonParamFunctionName || len(fn.Args) != 1 {
+		return
+	}
+	if param := fn.Args[0].GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
 	}
 }
 

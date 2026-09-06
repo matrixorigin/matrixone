@@ -2788,6 +2788,8 @@ func createPrepareStmtInSession(
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
+		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
+			prepareControl.Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		hasPaginationParams:        hasPaginationParams,
 		hasLagLeadParams:           hasLagLeadParams,

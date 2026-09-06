@@ -99,6 +99,7 @@ func TestPreparedJSONComparisonParamPositionsIncludesMemberOfLeftParam(t *testin
 		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{memberOf}}},
 	}}}
 	require.Equal(t, []int32{3, 7}, PreparedJSONComparisonParamPositions(preparePlan))
+	require.Equal(t, []int32{3, 7}, PreparedJSONMemberOfParamPositions(preparePlan))
 }
 
 func TestHasTrailingZeros(t *testing.T) {

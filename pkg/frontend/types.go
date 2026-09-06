@@ -367,9 +367,12 @@ type PrepareStmt struct {
 	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
 	binaryStringMetadata []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation for generic JSON comparison adapters and EXECUTE USING
+	// metadata. jsonMemberOfParamPositions is the narrower set that may use
+	// exact binary-protocol SQL domains; paramConcreteTypes is a reusable
+	// execution buffer.
 	jsonComparisonParamPositions []int32
+	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose

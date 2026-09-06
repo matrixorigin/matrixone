@@ -1382,6 +1382,8 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
+		prepareStmt.jsonMemberOfParamPositions =
+			plan2.PreparedJSONMemberOfParamPositions(executionPlan)
 		prepareStmt.refreshNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
@@ -1525,17 +1527,24 @@ func initExecuteStmtParamWithResolverInSession(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
 			if _, relevant := slices.BinarySearch(
 				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
+				_, memberOfParam := slices.BinarySearch(
+					prepareStmt.jsonMemberOfParamPositions, int32(i))
 				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
 				if !supported {
 					concreteType = runtimeParamTypes[i].Oid
 				}
-				if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported {
-					// For JSON comparison operands, the protocol type is the
-					// source of truth. In particular, TINYINT 0/1 must not inherit
-					// the generic driver Boolean compatibility heuristic.
-					kind = expectedKind
-					prepareStmt.paramConcreteTypes[i] = concreteType
-					hasConcreteType = true
+				// Generic JSON comparisons retain their legacy Boolean, Decimal,
+				// and text conversion paths. MEMBER OF has its own protocol-domain
+				// contract and must not inherit those fallbacks.
+				if preparedJSONConcreteTypeAllowed(concreteType, kind, memberOfParam) {
+					if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported {
+						// For JSON comparison operands, the protocol type is the
+						// source of truth. In particular, TINYINT 0/1 must not inherit
+						// the generic driver Boolean compatibility heuristic.
+						kind = expectedKind
+						prepareStmt.paramConcreteTypes[i] = concreteType
+						hasConcreteType = true
+					}
 				}
 			}
 			prepareStmt.paramKinds[i] = kind
@@ -1607,8 +1616,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
-			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions)
+		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
+			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
+			prepareStmt.jsonMemberOfParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -2391,6 +2401,7 @@ func executeUserParamConcreteType(
 	param any,
 	kind vector.PrepareParamKind,
 	position int,
+	memberOfParam bool,
 ) (types.T, error) {
 	if arg != nil {
 		concreteType := types.T(arg.Typ.Id)
@@ -2400,6 +2411,9 @@ func executeUserParamConcreteType(
 					proc.Ctx,
 					"EXECUTE parameter type %s does not match kind %d at parameter %d",
 					concreteType.String(), kind, position)
+			}
+			if !preparedJSONConcreteTypeAllowed(concreteType, kind, memberOfParam) {
+				return types.T_any, nil
 			}
 			return concreteType, nil
 		}
@@ -2413,6 +2427,25 @@ func executeUserParamConcreteType(
 		return concreteType, nil
 	}
 	return types.T_any, nil
+}
+
+func preparedJSONConcreteTypeAllowed(
+	concreteType types.T,
+	kind vector.PrepareParamKind,
+	memberOfParam bool,
+) bool {
+	if memberOfParam {
+		return true
+	}
+	if kind == vector.PrepareParamBoolean || kind == vector.PrepareParamDecimal {
+		return false
+	}
+	switch concreteType {
+	case types.T_char, types.T_varchar, types.T_text:
+		return false
+	default:
+		return true
+	}
 }
 
 func untypedUserParamKindForType(typ types.T) (vector.PrepareParamKind, bool) {
@@ -2431,6 +2464,22 @@ func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
 	typedPositions []int32,
+) (
+	*vector.Vector,
+	[]any,
+	[]bool,
+	[]vector.PrepareParamKind,
+	[]types.T,
+	error,
+) {
+	return buildExecuteUserParamsWithMemberOfPositions(proc, args, typedPositions, nil)
+}
+
+func buildExecuteUserParamsWithMemberOfPositions(
+	proc *process.Process,
+	args []*plan.Expr,
+	typedPositions []int32,
+	memberOfPositions []int32,
 ) (
 	params *vector.Vector,
 	paramVals []any,
@@ -2472,8 +2521,10 @@ func buildExecuteUserParams(
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
 		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
+			_, memberOfParam := slices.BinarySearch(memberOfPositions, int32(i))
 			var concreteType types.T
-			concreteType, err = executeUserParamConcreteType(proc, arg, param, paramKinds[i], i)
+			concreteType, err = executeUserParamConcreteType(
+				proc, arg, param, paramKinds[i], i, memberOfParam)
 			if err != nil {
 				return
 			}
