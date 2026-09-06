@@ -4931,6 +4931,7 @@ func bindFuncExprImplByPlanExpr(
 	case "pow":
 		name = "power"
 	}
+	refineBitwiseAggregateSubstringArg(name, args)
 	if name == "convert" {
 		if err := bindConvertUsingCharset(ctx, args); err != nil {
 			return nil, err
@@ -5323,7 +5324,7 @@ func bindFuncExprImplByPlanExpr(
 		refineRepeatLiteralReturnType(args, &returnType)
 
 	case "substring", "substr", "mid":
-		refineSubstringLiteralReturnType(args, &returnType)
+		refineSubstringLiteralReturnType(args, &returnType, false)
 
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
@@ -5453,8 +5454,41 @@ func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
 }
 
-func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+func refineBitwiseAggregateSubstringArg(name string, args []*plan.Expr) {
+	if (name != "bit_and" && name != "bit_or" && name != "bit_xor") || len(args) != 1 {
+		return
+	}
+
+	arg := args[0]
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 3 {
+		return
+	}
+	substringName := fn.Func.GetObjName()
+	if substringName != "substring" && substringName != "substr" && substringName != "mid" {
+		return
+	}
+	if types.T(fn.Args[0].Typ.Id) != types.T_blob {
+		return
+	}
+
+	refined := makeTypeByPlan2Expr(arg)
+	refineSubstringLiteralReturnType(fn.Args, &refined, true)
+	if refined.Oid == types.T_blob {
+		return
+	}
+	refinedPlanType := makePlan2Type(&refined)
+	refinedPlanType.NotNullable = arg.Typ.NotNullable
+	arg.Typ = refinedPlanType
+}
+
+func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type, allowBlob bool) {
 	if len(args) != 3 {
+		return
+	}
+
+	sourceType := makeTypeByPlan2Expr(args[0])
+	if sourceType.Oid == types.T_blob && !allowBlob {
 		return
 	}
 
@@ -5462,7 +5496,7 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	// SUBSTRING keeps its existing metadata contract; narrowing it here would
 	// change the overload's declared result width and make consumers that rely
 	// on the text semantic family reject an otherwise valid expression.
-	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
+	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if !binary {
 		return
 	}

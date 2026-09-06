@@ -58,11 +58,19 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 						makePlan2Int64ConstExprWithType(test.length),
 					})
 					require.NoError(t, err)
-					require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
-					require.Equal(t, test.wantWidth, substring.Typ.Width)
+					if source.typ.Oid == types.T_blob {
+						require.Equal(t, int32(types.T_blob), substring.Typ.Id)
+					} else {
+						require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
+						require.Equal(t, test.wantWidth, substring.Typ.Width)
+					}
 
 					for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
 						_, err = BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
+						if source.typ.Oid == types.T_blob {
+							require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
+							require.Equal(t, test.wantWidth, substring.Typ.Width)
+						}
 						if test.wantError {
 							require.Error(t, err, "%s must reject SUBSTRING(..., %d)", aggregateName, test.length)
 							moErr := moerr.DowncastError(err)
