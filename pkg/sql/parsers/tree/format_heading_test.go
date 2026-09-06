@@ -54,3 +54,31 @@ func TestFmtCtxCapturesDateFormatLiteralsThroughScalarSubquery(t *testing.T) {
 		require.Equal(t, byte('\''), ctx.String()[position.End-1])
 	}
 }
+
+func TestFmtCtxCapturesBinaryDateFormatLiteral(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select date_format(col2, _binary '%M') from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	expr := selectClause.Exprs[0].Expr
+
+	var positions []tree.StringLiteralPosition
+	ctx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithDateTimeFormatDetection(),
+		tree.WithStringLiteralPositions(&positions),
+	)
+	expr.Format(ctx)
+
+	require.True(t, ctx.HasDateTimeFormatFunction())
+	require.Equal(t, "date_format(col2, _binary '%M')", ctx.String())
+	require.Len(t, positions, 1)
+	position := positions[0]
+	require.Equal(t, "_binary '%M'", ctx.String()[position.Start:position.End])
+}

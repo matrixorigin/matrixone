@@ -128,6 +128,39 @@ func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
 	require.True(t, visible[0].Default.NullAbility)
 }
 
+func TestBuildCTASPreservesBinaryDateTimeFormatHeadings(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "date format direct",
+			sql:  "create table time02 as select date_format(col2, _binary '%M') from time01",
+			want: "date_format(col2, _binary '%M')",
+		},
+		{
+			name: "time format direct",
+			sql:  "create table time02 as select time_format(col2, _binary '%H') from time01",
+			want: "time_format(col2, _binary '%H')",
+		},
+		{
+			name: "date format through concat",
+			sql:  "create table time02 as select concat(date_format(col2, _binary '%M'), 'X') from time01",
+			want: "concat(date_format(col2, _binary '%M'), 'X')",
+		},
+		{
+			name: "time format through scalar subquery",
+			sql:  "create table time02 as select (select time_format(col2, _binary '%H') from time01 limit 1)",
+			want: "(select time_format(col2, _binary '%H') from time01 limit 1)",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requireCTASColumnName(t, newDateFormatCompilerContext(), test.sql, test.want)
+		})
+	}
+}
+
 func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 	ctx := newDateFormatCompilerContext()
 

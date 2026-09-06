@@ -228,12 +228,16 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		default:
 			n, err = ctx.WriteString(v)
 		}
-	} else if ctx.singleQuoteString && t == P_char {
-		n, err = ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+	} else if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) {
+		if t == P_ScoreBinary {
+			n, err = ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
+		} else {
+			n, err = ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		}
 	} else {
 		n, err = ctx.WriteString(v)
 	}
-	if err == nil && t == P_char && ctx.stringLiteralPositions != nil {
+	if err == nil && (t == P_char || t == P_ScoreBinary) && ctx.stringLiteralPositions != nil {
 		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{
 			Start: start,
 			End:   ctx.Len(),
