@@ -39,6 +39,8 @@ const MaxBitwiseAggregateOperandBytes int32 = 511
 
 // IsBitwiseAggregateOperandTooWide reports whether a binary-string operand
 // exceeds the width accepted by MySQL's bitwise aggregate functions.
+// The caller must provide a type whose Width is a proven maximum result size;
+// generic VARBINARY capacity is not such a proof.
 func IsBitwiseAggregateOperandTooWide(param types.Type) bool {
 	return (param.Oid == types.T_binary || param.Oid == types.T_varbinary) &&
 		param.Width > MaxBitwiseAggregateOperandBytes

@@ -5322,6 +5322,9 @@ func bindFuncExprImplByPlanExpr(
 	case "repeat":
 		refineRepeatLiteralReturnType(args, &returnType)
 
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -5448,6 +5451,37 @@ func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 		return
 	}
 	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
+}
+
+func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 3 {
+		return
+	}
+
+	lengthLiteral := args[2].GetLit()
+	if lengthLiteral == nil || lengthLiteral.Isnull {
+		return
+	}
+
+	var length uint64
+	if signed, ok := literalSignedValue(lengthLiteral); ok {
+		if signed > 0 {
+			length = uint64(signed)
+		}
+	} else if unsigned, ok := literalUnsignedValue(lengthLiteral); ok {
+		length = unsigned
+	} else {
+		return
+	}
+
+	// Binary SUBSTRING is byte-preserving, so a constant length is a truthful
+	// stored-byte upper bound even when the source is an unbounded BLOB.
+	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
+	bound := length
+	if sourceBound, known := stringExprBound(args[0], binary); known && sourceBound < bound {
+		bound = sourceBound
+	}
+	refineKnownStringResultType(returnType, bound, binary)
 }
 
 func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {

@@ -19,6 +19,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// bitwiseBinaryReturnType carries the proven maximum width of bytewise
+// operators into the next expression.  The generic VARBINARY capacity is not
+// a result bound when both operands are narrower.
+func bitwiseBinaryReturnType(parameters []types.Type) types.Type {
+	if result, ok := binaryStringCommonType(parameters); ok {
+		return result
+	}
+	return types.T_varbinary.ToType()
+}
+
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
 	if isDatetimeTimestampComparison(left, right) {
 		return false, left, right
@@ -3209,7 +3219,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_binary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitAndStrFn
@@ -3219,7 +3229,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitAndStrFn
@@ -3268,7 +3278,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_binary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitOrStrFn
@@ -3278,7 +3288,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitOrStrFn
@@ -3327,7 +3337,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_binary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitXorStrFn
@@ -3337,7 +3347,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return bitwiseBinaryReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitXorStrFn

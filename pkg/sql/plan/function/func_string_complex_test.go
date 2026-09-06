@@ -363,6 +363,36 @@ func Test_SubStringWith3Args(t *testing.T) {
 	}
 }
 
+func TestSubStringBinaryWith3ArgsPreservesBytes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	resultType := types.NewWithCharset(types.T_varbinary, 3, 0, types.CharsetBinary)
+	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
+
+	for _, test := range []struct {
+		name   string
+		start  int64
+		length int64
+		want   string
+	}{
+		{name: "from left", start: 1, length: 3, want: raw[:3]},
+		{name: "from right", start: -2, length: 2, want: raw[2:]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(inputType, []string{raw}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.start}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.length}, []bool{false}),
+				},
+				NewFunctionTestResult(resultType, false, []string{test.want}, []bool{false}),
+				SubStringBinaryWith3Args)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 // Test_BuiltInDateDiff tests DATEDIFF function
 // This tests date arithmetic which calls many date handling functions
 func Test_BuiltInDateDiff(t *testing.T) {

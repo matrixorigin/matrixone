@@ -158,6 +158,10 @@ func binaryStringResultType(bound stringResultBound) types.Type {
 	return types.NewWithCharset(types.T_varbinary, int32(bound.bytes), 0, types.CharsetBinary)
 }
 
+func fixedBinaryResultType(width int32) types.Type {
+	return types.NewWithCharset(types.T_varbinary, width, 0, types.CharsetBinary)
+}
+
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarcharLen) {
 		result := types.T_text.ToType()

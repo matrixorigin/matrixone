@@ -49,3 +49,40 @@ func TestBitwiseAggregateBinaryOperandWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestBitwiseAggregateAcceptsBoundedBinaryExpressions(t *testing.T) {
+	ctx := context.Background()
+	textInput := types.New(types.T_varchar, 64, 0)
+
+	for _, producer := range []struct {
+		name string
+		args []types.Type
+	}{
+		{name: "uuid_to_bin", args: []types.Type{textInput}},
+		{name: "inet6_aton", args: []types.Type{textInput}},
+	} {
+		t.Run(producer.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, producer.name, producer.args)
+			require.NoError(t, err)
+			resultType := resolved.GetReturnType()
+			require.Equal(t, types.T_varbinary, resultType.Oid)
+			require.Equal(t, int32(16), resultType.Width)
+
+			for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
+				aggregate, err := GetFunctionByName(ctx, aggregateName, []types.Type{resultType})
+				require.NoError(t, err, "%s(%s(...))", aggregateName, producer.name)
+				require.Equal(t, resultType, aggregate.GetReturnType())
+			}
+		})
+	}
+
+	operand := types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary)
+	for _, operatorName := range []string{"&", "|", "^"} {
+		t.Run("binary operator "+operatorName, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, operatorName, []types.Type{operand, operand})
+			require.NoError(t, err)
+			require.Equal(t, types.T_varbinary, resolved.GetReturnType().Oid)
+			require.Equal(t, int32(16), resolved.GetReturnType().Width)
+		})
+	}
+}
