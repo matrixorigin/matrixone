@@ -124,18 +124,18 @@ func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *test
 	interruptedErr := moerr.NewQueryInterrupted(context.Background())
 
 	for _, test := range []struct {
-		name              string
-		errs              []error
+		name               string
+		errs               []error
 		wantSubstantiveErr bool
 	}{
 		{
-			name:              "cancellation before execution failure",
-			errs:              []error{interruptedErr, duplicateErr},
+			name:               "cancellation before execution failure",
+			errs:               []error{interruptedErr, duplicateErr},
 			wantSubstantiveErr: true,
 		},
 		{
-			name:              "execution failure before cancellation",
-			errs:              []error{duplicateErr, interruptedErr},
+			name:               "execution failure before cancellation",
+			errs:               []error{duplicateErr, interruptedErr},
 			wantSubstantiveErr: true,
 		},
 		{
