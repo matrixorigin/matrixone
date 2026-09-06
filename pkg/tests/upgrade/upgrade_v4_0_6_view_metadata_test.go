@@ -17,15 +17,18 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -47,6 +50,42 @@ func (txn *failViewMetadataRefreshCreateTxn) Exec(
 		return executor.Result{}, errInjectedViewMetadataUpgrade
 	}
 	return txn.TxnExecutor.Exec(sql, opts)
+}
+
+type blockViewMetadataRefreshCreateTxn struct {
+	executor.TxnExecutor
+	executed chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (txn *blockViewMetadataRefreshCreateTxn) Exec(
+	sql string,
+	opts executor.StatementOption,
+) (executor.Result, error) {
+	result, err := txn.TxnExecutor.Exec(sql, opts)
+	if err == nil && sql == catalog.MoViewRefreshDDL {
+		txn.once.Do(func() { close(txn.executed) })
+		<-txn.release
+	}
+	return result, err
+}
+
+func isExpectedViewMetadataFenceOverlapError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var moErr *moerr.Error
+	if !errors.As(err, &moErr) {
+		return false
+	}
+	switch moErr.ErrorCode() {
+	case moerr.ErrNoSuchTable, moerr.ErrBadDB,
+		moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged:
+		return true
+	default:
+		return false
+	}
 }
 
 func TestV406UpgradeCreatesViewMetadataCatalogTables(t *testing.T) {
@@ -109,6 +148,61 @@ func TestV406UpgradeCreatesViewMetadataCatalogTables(t *testing.T) {
 				})
 			})
 		}
+
+		t.Run("catalog fence overlaps uncommitted upgrade", func(t *testing.T) {
+			deleteViewMetadataCatalogTables(
+				t, ctx, service, catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH)
+
+			executed := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseUpgrade := func() { releaseOnce.Do(func() { close(release) }) }
+			blocked := &blockViewMetadataRefreshCreateTxn{executed: executed, release: release}
+			upgradeDone := make(chan error, 1)
+			upgradeFinished := false
+			go func() {
+				upgradeDone <- runV406ClusterUpgradeWithTxn(
+					ctx, sqlExecutor, func(txn executor.TxnExecutor) executor.TxnExecutor {
+						blocked.TxnExecutor = txn
+						return blocked
+					})
+			}()
+			t.Cleanup(func() {
+				releaseUpgrade()
+				if !upgradeFinished {
+					<-upgradeDone
+				}
+			})
+
+			select {
+			case <-executed:
+			case upgradeErr := <-upgradeDone:
+				upgradeFinished = true
+				t.Fatalf("catalog upgrade ended before the overlap fence: %v", upgradeErr)
+			case <-time.After(time.Second):
+				t.Fatal("catalog upgrade did not reach the uncommitted refresh-table barrier")
+			}
+
+			fenceCtx, cancelFence := context.WithTimeout(ctx, 200*time.Millisecond)
+			fenceErr := compile.RequireViewMetadataRevalidation(fenceCtx, sqlExecutor)
+			cancelFence()
+			require.Error(t, fenceErr)
+			require.True(t, isExpectedViewMetadataFenceOverlapError(fenceErr), fenceErr)
+
+			releaseUpgrade()
+			select {
+			case upgradeErr := <-upgradeDone:
+				upgradeFinished = true
+				require.NoError(t, upgradeErr)
+			case <-time.After(time.Second):
+				t.Fatal("catalog upgrade did not commit after releasing the overlap barrier")
+			}
+			require.NoError(t, compile.RequireViewMetadataRevalidation(ctx, sqlExecutor))
+			requireViewMetadataCatalogState(t, ctx, sqlExecutor, map[string]bool{
+				catalog.MO_VIEW_DEPENDENCIES: true,
+				catalog.MO_VIEW_REFRESH:      true,
+			})
+		})
 
 		t.Run("failed attempt rolls back and retry converges", func(t *testing.T) {
 			deleteViewMetadataCatalogTables(

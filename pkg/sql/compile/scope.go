@@ -457,7 +457,7 @@ func cleanLazyScopeStartFailure(s *Scope, c *Compile, err error) {
 		}
 		return nil
 	})
-	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 }
 
 func installSequentialBranchStarter(root vm.Operator, start func(int) error) (func(), error) {
@@ -507,10 +507,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
 	startedPreScopeCount := 0
-	startedPreScopes := make([]bool, len(s.PreScopes))
+	claimedPreScopes := make([]bool, len(s.PreScopes))
 
 	startPreScope := func(i int) error {
-		if i < 0 || i >= len(s.PreScopes) || startedPreScopes[i] {
+		if i < 0 || i >= len(s.PreScopes) || claimedPreScopes[i] {
 			return moerr.NewInternalErrorNoCtx("invalid lazy union all branch activation")
 		}
 		scope := s.PreScopes[i]
@@ -518,10 +518,11 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			// The union installs this branch's receiver before invoking us. Complete
 			// the unsubmitted scope through the ordinary start-failure cleanup so
 			// that receiver has a terminal signal to drain.
-			cleanPipelineWitchStartFail(scope, cause, c.isPrepare)
+			claimedPreScopes[i] = true
+			cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
 			return cause
 		}
-		startedPreScopes[i] = true
+		claimedPreScopes[i] = true
 		startedPreScopeCount++
 		wg.Add(1)
 
@@ -539,7 +540,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = scope.RemoteRun(c)
 				default:
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
+					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
 				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
@@ -548,7 +549,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
@@ -568,6 +569,18 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			return installErr
 		}
 		defer clearStarter()
+		defer func() {
+			cause := context.Cause(s.Proc.Ctx)
+			if cause == nil {
+				cause = context.Canceled
+			}
+			for i := range claimedPreScopes {
+				if !claimedPreScopes[i] {
+					claimedPreScopes[i] = true
+					cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+				}
+			}
+		}()
 		// Submission failures are delivered through the first branch receiver,
 		// matching the ordinary MergeRun start-failure protocol.
 		_ = startPreScope(0)
@@ -680,6 +693,20 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p.Cleanup(sp.Proc, true, isPrepare, fail)
 }
 
+// cleanScopeTreeWithStartFail retires a scope tree that was never submitted.
+// Children must publish their terminal signals before a parent Merge cleanup
+// waits on them. This also releases materialized readers owned by lazy UNION
+// ALL branches that an early LIMIT never starts.
+func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
+	if sp == nil {
+		return
+	}
+	for _, preScope := range sp.PreScopes {
+		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+	}
+	cleanPipelineWitchStartFail(sp, fail, isPrepare)
+}
+
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
 	s.resourceExecutedLocally = false
@@ -738,7 +765,7 @@ func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
 	if c != nil && c.proc != nil && c.proc.Cancel != nil {
 		c.proc.Cancel(err)
 	}
-	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 	return err
 }
 

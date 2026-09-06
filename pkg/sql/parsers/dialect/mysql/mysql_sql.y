@@ -490,7 +490,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -750,6 +750,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
 %type <analyzeTableEntry> analyze_table_entry
+%type <boolVal> analyze_fullscan_opt
 %type <checkTableOption> check_table_option_opt
 %type <int64Val> for_query_opt
 
@@ -931,10 +932,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <startWithOption> start_with_opt
 %type <cycleOption> alter_cycle_opt
 %type <alterTypeOption> alter_as_datatype_opt
-
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
+%type <unsignedOpt> unsigned_opt header_opt
+%type <int64Val> parallel_opt
+%type <unsignedOpt> strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -951,7 +953,6 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
-
 %type <boolVal> local_opt
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
@@ -1975,7 +1976,7 @@ load_data_stmt:
             Table: $8,
         }
         $$.(*tree.Load).Param.Tail = $9
-        $$.(*tree.Load).Param.Parallel = $10
+		setLoadParallelOption($$.(*tree.Load).Param, $10)
         $$.(*tree.Load).Param.Strict = $11
     }
 
@@ -2040,15 +2041,15 @@ load_set_item:
 
 parallel_opt:
     {
-        $$ = false
+		$$ = -1
     }
 |   PARALLEL STRING
     {
         str := strings.ToLower($2)
         if str == "true" {
-            $$ = true
+			$$ = 1
         } else if str == "false" {
-            $$ = false
+			$$ = 0
         } else {
             yylex.Error("error strict flag")
             goto ret1
@@ -3762,9 +3763,21 @@ utility_option_arg:
 |   STRING                      { $$ = $1 }
 
 analyze_stmt:
-    ANALYZE TABLE analyze_table_list
+    ANALYZE TABLE analyze_table_list analyze_fullscan_opt
     {
-        $$ = tree.NewAnalyzeStmt($3)
+        stmt := tree.NewAnalyzeStmt($3)
+        stmt.FullScan = $4
+        $$ = stmt
+    }
+
+analyze_fullscan_opt:
+    /* empty */
+    {
+        $$ = false
+    }
+|   FULLSCAN
+    {
+        $$ = true
     }
 
 analyze_table_list:
@@ -15971,6 +15984,7 @@ non_reserved_keyword:
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE
+|   FULLSCAN
 |   KEYS
 |   LANGUAGE
 |   LESS

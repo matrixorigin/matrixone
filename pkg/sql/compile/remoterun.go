@@ -114,6 +114,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -197,6 +203,12 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -682,12 +694,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			NeedEval:       t.NeedEval,
-			SpillMem:       t.SpillMem,
-			GroupingFlag:   t.GroupingFlag,
-			Exprs:          t.GroupBy,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			NeedEval:        t.NeedEval,
+			SpillMem:        t.SpillMem,
+			GroupingFlag:    t.GroupingFlag,
+			DynamicGrouping: t.DynamicGrouping,
+			Exprs:           t.GroupBy,
+			Aggs:            convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:  t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 	case *sample.Sample:
@@ -741,6 +754,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionAlgorithm = t.Algorithm
+		in.SpillMem = t.SpillMem
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -760,6 +775,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
+		in.ProjectionGroupingFlags = t.GroupingFlags
+		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
 	case *filter.Filter:
 		in.Filters = t.FilterExprs
 		in.RuntimeFilters = t.RuntimeFilterExprs
@@ -792,9 +809,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			SpillMem:       t.SpillMem,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			SpillMem:            t.SpillMem,
+			Aggs:                convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:      t.GroupByHashKey,
+			DynamicGrouping:     t.GroupingAware,
+			Types:               convertToPlanTypes(t.GroupByTypes),
+			EmptyGroupingSetIds: t.EmptyGroupingSetIDs,
+			EmptyGroupingSet:    t.EmptyGroupingSet,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -839,6 +860,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ParallelLoad:                t.Es.ParallelLoad,
 			LoadEmptyNumericAsZero:      t.Es.LoadEmptyNumericAsZero,
 			ParquetRowGroupShards:       t.Es.ParquetRowGroupShards,
+			ParquetWholeFileFanout:      t.Es.ParquetWholeFileFanout,
 			IcebergDataTasks:            t.Es.IcebergDataTasks,
 			IcebergDeleteTasks:          t.Es.IcebergDeleteTasks,
 			IcebergColumns:              t.Es.IcebergColumns,
@@ -1265,6 +1287,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.NeedEval = t.NeedEval
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
+		arg.DynamicGrouping = t.DynamicGrouping
 		arg.GroupBy = t.Exprs
 		arg.GroupByHashKey = t.GroupByHashKey
 		arg.Aggs = convertToAggregates(t.Aggs)
@@ -1324,6 +1347,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.Algorithm = opr.PartitionAlgorithm
+		arg.SpillMem = opr.SpillMem
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
@@ -1343,6 +1368,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.ProjectList = opr.ProjectList
+		arg.GroupingFlags = opr.ProjectionGroupingFlags
+		arg.GroupingSetCount = int(opr.ProjectionGroupingSetCount)
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
@@ -1395,6 +1422,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillMem = t.SpillMem
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.GroupByHashKey = t.GroupByHashKey
+		arg.GroupingAware = t.DynamicGrouping
+		arg.GroupByTypes = convertToTypes(t.Types)
+		arg.EmptyGroupingSetIDs = t.EmptyGroupingSetIds
+		arg.EmptyGroupingSet = t.EmptyGroupingSet
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
@@ -1437,6 +1468,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					ParallelLoad:                t.ParallelLoad,
 					LoadEmptyNumericAsZero:      t.LoadEmptyNumericAsZero,
 					ParquetRowGroupShards:       t.ParquetRowGroupShards,
+					ParquetWholeFileFanout:      t.ParquetWholeFileFanout,
 					IcebergDataTasks:            t.IcebergDataTasks,
 					IcebergDeleteTasks:          t.IcebergDeleteTasks,
 					IcebergColumns:              t.IcebergColumns,
@@ -2033,6 +2065,72 @@ func validateRemotePadSpacePipelineProtocol(
 	return moerr.NewNotSupportedNoCtx(
 		"PAD SPACE remote execution requires MORPC protocol version 40",
 	)
+}
+
+// validateRemoteParquetWholeFileFanoutPipelineProtocol keeps the scope-shape
+// marker from being silently ignored by a receiver from before v45. That
+// receiver would otherwise re-enable object-sized S3 prefetch for a fanout
+// scope, violating the bounded-memory contract.
+func validateRemoteParquetWholeFileFanoutPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetExternalScan()
+		if scan == nil || !scan.ParquetWholeFileFanout {
+			continue
+		}
+		if proc == nil || !supportsRemoteParquetWholeFileFanout(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"Parquet whole-file fanout remote execution requires MORPC protocol version 45",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteGroupingSetPipelineProtocol is the final sender/receiver
+// compatibility fence for v49 grouping-set execution metadata. Planning can
+// happen at v49 before a cached/prepared plan is transmitted after a rollback;
+// an older receiver would silently ignore these append-only fields and execute
+// ordinary Projection/Group semantics.
+func validateRemoteGroupingSetPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction == nil {
+			continue
+		}
+		agg := instruction.GetAgg()
+		requiresV49 := len(instruction.ProjectionGroupingFlags) > 0 ||
+			instruction.ProjectionGroupingSetCount != 0 ||
+			agg != nil && (agg.DynamicGrouping || agg.EmptyGroupingSet ||
+				len(agg.EmptyGroupingSetIds) > 0)
+		if requiresV49 &&
+			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"grouping-set remote execution requires MORPC protocol version 49",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {

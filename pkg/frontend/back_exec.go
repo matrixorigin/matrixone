@@ -1036,12 +1036,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession               *backSession
-	effectiveMatrixOneNativeMode    bool
-	hasEffectiveMatrixOneNativeMode bool
-	forcePessimisticRC              bool
-	cloneSnapshotUsesBackgroundTxn  bool
-	cancelTxnCreateWithRequest      bool
+	parentBackSession                 *backSession
+	effectiveMatrixOneNativeMode      bool
+	hasEffectiveMatrixOneNativeMode   bool
+	forcePessimisticRC                bool
+	cloneSnapshotUsesBackgroundTxn    bool
+	cancelTxnCreateWithRequest        bool
+	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1136,6 +1137,7 @@ func (backSes *backSession) Close() {
 	if backSes == nil {
 		return
 	}
+	backSes.lineageOwnerLifecycleWritePending = false
 	txnHandler := backSes.GetTxnHandler()
 	if txnHandler != nil {
 		tempExecCtx := ExecCtx{

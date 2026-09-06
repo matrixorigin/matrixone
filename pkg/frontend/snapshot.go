@@ -95,8 +95,8 @@ var (
 
 	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
 	// restore semantics. Most catalog tables are either rebuilt by normal DDL or
-	// can be copied verbatim. Tables containing object IDs must opt into a
-	// post-copy transform instead of relying on incidental physical-ID equality.
+	// can be copied verbatim. Tables containing object IDs must opt into an
+	// owner rebuild instead of relying on incidental physical-ID equality.
 	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
 		"mo_database":         systemCatalogRestoreSkip,
 		"mo_tables":           systemCatalogRestoreSkip,
@@ -117,7 +117,7 @@ var (
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
 		"mo_role_grant":                 systemCatalogRestoreCopy,
-		"mo_role_privs":                 systemCatalogRestoreCopyThenTransform,
+		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
 		"mo_stored_procedure":           systemCatalogRestoreCopy,
@@ -129,6 +129,7 @@ var (
 		catalog.MOShardsMetadata:        systemCatalogRestoreCopy,
 		catalog.MO_CDC_TASK:             systemCatalogRestoreCopy,
 		catalog.MO_CDC_WATERMARK:        systemCatalogRestoreCopy,
+		catalog.MO_CDC_SNAPSHOT:         systemCatalogRestoreCopy,
 		catalog.MO_TABLE_STATS:          systemCatalogRestoreCopy,
 		catalog.MO_ACCOUNT_LOCK:         systemCatalogRestoreCopy,
 		catalog.MO_MERGE_SETTINGS:       systemCatalogRestoreCopy,
@@ -1955,11 +1956,11 @@ func needSkipDb(dbName string) bool {
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblName]
-		return dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		if dbName == moCatalog {
 			if policy, ok := systemCatalogRestorePolicies[tblName]; ok {
-				return policy == systemCatalogRestoreSkip
+				return policy.skipsBulkRestore()
 			} else {
 				return true
 			}
@@ -1971,10 +1972,10 @@ func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return tblinfo.dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy == systemCatalogRestoreSkip)
+		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy.skipsBulkRestore())
 	}
 }
 
@@ -1983,6 +1984,7 @@ func isExternalTable(tblInfo *tableInfo) bool {
 }
 
 func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
+	// Database clone follows the same bulk-restore policy as snapshot and PITR.
 	return isExternalTable(tblInfo)
 }
 

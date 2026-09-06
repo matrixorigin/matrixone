@@ -2065,15 +2065,15 @@ create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col
 show create table agg01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 agg01  ¦  CREATE TABLE `agg01` (
-  `avgcol` double DEFAULT NULL,
+  `avgcol` decimal(14,4) DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL DEFAULT 0,
   `maxcol` double DEFAULT NULL,
   `mincol` double DEFAULT NULL
 )
 select * from agg01;
-➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
-7571.333333333333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
+➤ avgcol[3,14,4]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
+7571.3333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
 drop table agg01;
 drop table math01;
 drop database db8;

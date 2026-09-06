@@ -1420,14 +1420,29 @@ install-static-check-tools:
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-.PHONY: static-check
+.PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 static-check: config err-check
-	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+	$(STATIC_CHECK_GOLANGCI)
+
+# Keep the complete local/release entry point above. PR CI owns license scope
+# selection, but still analyzes the full package graph through content-addressed
+# Go and golangci-lint caches.
+static-check-analysis: config err-check
+	$(STATIC_CHECK_MOLINT)
+	$(STATIC_CHECK_GOLANGCI)
+
+# Trusted cache producers only need to populate golangci-lint's analysis
+# cache. This is not a reduced validation gate; PR and local SCA continue to
+# use static-check-analysis or static-check above.
+static-check-golangci:
+	$(STATIC_CHECK_GOLANGCI)
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

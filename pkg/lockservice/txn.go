@@ -1390,6 +1390,27 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 	return true
 }
 
+func (txn *activeTxn) fenceByExactBindLocked(bind pb.LockTable, logger *log.MOLogger) bool {
+	if txn.bindChanged {
+		return false
+	}
+	h, ok := txn.lockHolders[bind.Group]
+	if !ok {
+		return false
+	}
+	key := makeRemoteBindKey(bind)
+	actual, actualOK := h.tableBinds[bind.Table]
+	intent, intentOK := h.tableBindIntents[bind.Table]
+	actualMatches := actualOK && makeRemoteBindKey(actual) == key
+	intentMatches := intentOK && makeRemoteBindKey(intent) == key
+	if !actualMatches && !intentMatches {
+		return false
+	}
+
+	txn.markBindChangedLocked(logger)
+	return true
+}
+
 // markBindChangedLocked fences every in-flight operation of this transaction,
 // not only the operation that observed the generation/protocol transition.
 // The caller holds txn's mutex.

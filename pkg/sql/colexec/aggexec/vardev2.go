@@ -59,7 +59,9 @@ func fToDec128(f float64, scale int32) (types.Decimal128, error) {
 func VarStdDevReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_decimal64, types.T_decimal128:
-		return AvgReturnType(typs)
+		scale := max(int32(12), typs[0].Scale)
+		scale = min(scale, typs[0].Scale+6)
+		return types.New(types.T_decimal128, 38, scale)
 	default:
 		return types.T_float64.ToType()
 	}

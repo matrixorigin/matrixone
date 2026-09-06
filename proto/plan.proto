@@ -1011,6 +1011,14 @@ message Node {
     FUZZY_BUILD_SIDE_SINK = 2;
   }
 
+  // Physical implementation for ordinary window PARTITION nodes. SORT is the
+  // zero value so plans produced before this field existed retain the legacy
+  // execution path.
+  enum PartitionAlgorithm {
+    PARTITION_ALGORITHM_SORT = 0;
+    PARTITION_ALGORITHM_HASH = 1;
+  }
+
   NodeType node_type = 1;
   int32 node_id = 2;
   Stats stats = 3;
@@ -1196,6 +1204,10 @@ message Node {
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
   int32 asof_right_col = 86;
+
+  // PARTITION only: optimizer-selected implementation for ordinary window
+  // partitioning. Partition Top-N ignores this field.
+  PartitionAlgorithm partition_algorithm = 90;
 }
 
 message SnapshotExtraInfo {

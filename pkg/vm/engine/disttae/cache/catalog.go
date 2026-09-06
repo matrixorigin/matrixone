@@ -341,37 +341,67 @@ func (cc *CatalogCache) GetTableByIdAndTime(accountID uint32, databaseId, tblId 
 	return rel
 }
 
-func (cc *CatalogCache) scanThrough(aid uint32, did uint64, f func(*TableItem) bool) (ret *TableItem) {
-	key := &TableItem{
-		AccountId:  aid,
-		DatabaseId: did,
-	}
-	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.AccountId != aid || item.DatabaseId != did {
-			return false
-		}
-		// delete entry has incomplete information for tableitem
-		if !item.deleted && f(item) {
-			ret = item
-			return false
-		}
-		return true
-	})
-	return
-}
-
-// GetTableById's complexicity is O(n), where n is the number of all items of the database.
+// GetTableById scans retained catalog versions. A latest DROP tombstone hides
+// every older incarnation of that name, so historical rows cannot make a
+// dropped or truncated table appear current.
 func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *TableItem {
-	return cc.scanThrough(aid, databaseId, func(item *TableItem) bool {
-		return item.Id == tblId
-	})
+	return cc.GetTableByIdAndTime(
+		aid, databaseId, tblId, types.MaxTs().ToTimestamp())
 }
 
-// GetTableByName's complexicity is O(n), where n is the number of all items of the database.
+// WithTableVersion runs fn only when the current table identity still has the
+// expected schema version. The table-change read lock remains held through fn,
+// making the version check and the caller's publication one linearizable
+// operation with respect to InsertTable, DeleteTable, and setTableItem.
+//
+// fn must be bounded and must not mutate this CatalogCache.
+func (cc *CatalogCache) WithTableVersion(
+	aid uint32,
+	databaseID uint64,
+	tableID uint64,
+	expectedVersion uint32,
+	fn func(),
+) (actualVersion uint32, found bool, matched bool) {
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+
+	item := cc.GetTableById(aid, databaseID, tableID)
+	if item == nil {
+		return 0, false, false
+	}
+	actualVersion = item.Version
+	if actualVersion != expectedVersion {
+		return actualVersion, true, false
+	}
+	if fn != nil {
+		fn()
+	}
+	return actualVersion, true, true
+}
+
+// GetTableByName's complexity is O(log n) plus the newest item lookup. The
+// first item for a name is authoritative; if it is a tombstone, older live
+// rows are historical and must remain hidden.
 func (cc *CatalogCache) GetTableByName(aid uint32, databaseID uint64, tableName string) *TableItem {
-	return cc.scanThrough(aid, databaseID, func(item *TableItem) bool {
-		return item.Name == tableName
+	probe := cc.tableQueryProbePool.Get().(*TableItem)
+	*probe = TableItem{
+		AccountId:  aid,
+		DatabaseId: databaseID,
+		Name:       tableName,
+		Ts:         types.MaxTs().ToTimestamp(),
+	}
+	var current *TableItem
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != aid || item.DatabaseId != databaseID || item.Name != tableName {
+			return false
+		}
+		if !item.deleted {
+			current = item
+		}
+		return false
 	})
+	releaseTableQueryProbe(&cc.tableQueryProbePool, probe)
+	return current
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {

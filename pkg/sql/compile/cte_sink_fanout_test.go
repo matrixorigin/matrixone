@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -58,10 +60,15 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
-	require.True(t, memory.Release())
-
 	processBudget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
+	require.Equal(t, uint64(1), processBudget.Used())
+	_, cteUsed, _ := proc.GetCTEMemoryBudget().Snapshot()
+	require.Zero(t, cteUsed,
+		"non-recursive materialized spill scratch must not consume the recursive CTE quota")
+	require.True(t, memory.Release())
+	require.Zero(t, processBudget.Used())
+
 	fdLimit := processBudget.SpillFDCap()
 	require.NotZero(t, fdLimit)
 	_, err = budget.ReserveFD(fdLimit + 1)
@@ -127,6 +134,96 @@ func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
 	require.Equal(t, dispatch.SendToAllLocalFunc, fanout.FuncId)
 	require.Len(t, fanout.LocalRegs, 2)
 	require.Same(t, leftScan.MaterializedSource, fanout.MaterializedSource)
+}
+
+func TestPipelineAttemptAlwaysClosesMaterializedSources(t *testing.T) {
+	wantErr := moerr.NewInternalErrorNoCtx("execution failed before operator cleanup")
+	tests := []struct {
+		name    string
+		run     func(*Compile, *materialized.Source) error
+		wantErr error
+	}{
+		{
+			name: "lazy branch leaves one reader unstarted",
+			run: func(c *Compile, source *materialized.Source) error {
+				// The producer and one reader completed, while LIMIT stopped a
+				// lazy UNION ALL before its later reader branch was submitted.
+				source.Finish(nil)
+				source.ReleaseReader(0)
+				return c.runOnce()
+			},
+		},
+		{
+			name: "execution fails before operators reset",
+			run: func(_ *Compile, _ *materialized.Source) error {
+				return wantErr
+			},
+			wantErr: wantErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+			c.lockMeta = NewLockMeta()
+			c.MessageBoard = message.NewMessageBoard()
+			source := materialized.NewSource(2)
+			c.materializedSources = map[int32]*materialized.Source{0: source}
+			require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+				mpool.AllocationAccountTerminalSnapshot,
+			) {
+			}))
+			_, err := c.beginAllocationAccountAttempt()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, c.finishAllocationAccountAttempt())
+			})
+
+			err = c.runPipelineAttempt(func() error { return test.run(c, source) })
+			if test.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, test.wantErr)
+			}
+			require.NoError(t, c.finishAllocationAccountAttempt())
+
+			// A prepared compile reuses this Source. Every attempt outcome must
+			// leave the next generation equivalent to a fresh source.
+			require.NoError(t, source.Begin(c.proc.Mp()))
+			source.Finish(nil)
+			source.ReleaseReader(0)
+			source.ReleaseReader(1)
+		})
+	}
+}
+
+func TestPipelineAttemptClosesMaterializedSourcesAfterPanic(t *testing.T) {
+	c := NewMockCompile(t)
+	c.lockMeta = NewLockMeta()
+	c.MessageBoard = message.NewMessageBoard()
+	source := materialized.NewSource(1)
+	c.materializedSources = map[int32]*materialized.Source{0: source}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	}))
+	_, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, c.finishAllocationAccountAttempt())
+	})
+	wantPanic := "pipeline panic"
+
+	func() {
+		defer func() { require.Equal(t, wantPanic, recover()) }()
+		_ = c.runPipelineAttempt(func() error { panic(wantPanic) })
+	}()
+	require.NoError(t, c.finishAllocationAccountAttempt())
+
+	require.NoError(t, source.Begin(c.proc.Mp()))
+	source.Finish(nil)
+	source.ReleaseReader(0)
 }
 
 func TestMaterializedCTESinkGroupsShuffleBucketsByCN(t *testing.T) {

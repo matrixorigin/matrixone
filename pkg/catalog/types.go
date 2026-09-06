@@ -331,6 +331,7 @@ const (
 
 	MO_CDC_TASK      = "mo_cdc_task"
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
+	MO_CDC_SNAPSHOT  = "mo_cdc_snapshot"
 
 	MO_DATA_KEY = "mo_data_key"
 
