@@ -256,8 +256,11 @@ func TestBuiltInInternalNumericScaleUsesMySQLSemantics(t *testing.T) {
 		types.T_uint64.ToType(),
 		types.New(types.T_decimal128, 20, 6),
 		types.New(types.T_decimal128, 20, -1),
+		types.T_float32.ToType(),
 		types.New(types.T_float32, -1, -1),
+		types.New(types.T_float32, 8, 0),
 		types.New(types.T_float32, 8, 2),
+		types.T_float64.ToType(),
 		types.New(types.T_float64, -1, -1),
 		types.New(types.T_float64, 18, 6),
 		types.New(types.T_bit, 5, 0),
@@ -280,8 +283,8 @@ func TestBuiltInInternalNumericScaleUsesMySQLSemantics(t *testing.T) {
 		NewFunctionTestResult(
 			types.T_int64.ToType(),
 			false,
-			[]int64{0, 0, 0, 6, 0, 0, 2, 0, 6, 0, 0, 0, 0},
-			[]bool{false, false, false, false, false, true, false, true, false, true, true, true, true},
+			[]int64{0, 0, 0, 6, 0, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0, 0},
+			[]bool{false, false, false, false, false, true, true, false, false, true, true, false, true, true, true, true, true},
 		),
 		builtInInternalNumericScale,
 	)

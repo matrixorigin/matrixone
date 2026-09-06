@@ -59,6 +59,17 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 			"c_year year, "+
 			"c_time time(6), c_datetime datetime(3), c_timestamp timestamp(6), "+
 			"constraint fk_parent foreign key (pid) references `"+dbName+"`.parent(id))")
+		// Scientific literals and their function results use the ordinary
+		// FLOAT/DOUBLE type shape (width 0, scale 0), not FLOAT(M,D).
+		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.derived_float as "+
+			"select abs(1e0) as expression_double from `"+dbName+"`.child limit 0")
+
+		var derivedScale sql.NullInt64
+		require.NoError(t, db.QueryRowContext(ctx, `
+select numeric_scale
+from information_schema.columns
+where table_schema = ? and table_name = 'derived_float' and column_name = 'expression_double'`, schemaName).Scan(&derivedScale))
+		require.False(t, derivedScale.Valid, "CTAS expression-derived FLOAT/DOUBLE must keep NUMERIC_SCALE NULL")
 
 		rows, err := db.QueryContext(ctx, `
 select column_name, character_maximum_length, numeric_precision, numeric_scale, datetime_precision

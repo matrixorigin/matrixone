@@ -854,7 +854,10 @@ func internalNumericScale(typ types.Type) (int64, bool) {
 	case types.T_float32, types.T_float64:
 		// MySQL exposes scale for the non-standard FLOAT(M,D)/DOUBLE(M,D)
 		// forms, but leaves it NULL when D is omitted.
-		if typ.Scale >= 0 {
+		// Ordinary expression types use Scale=0 as an internal default. A
+		// positive display width is the evidence that the type came from an
+		// explicit FLOAT(M,D)/DOUBLE(M,D) declaration.
+		if typ.Width > 0 && typ.Scale >= 0 {
 			return int64(typ.Scale), true
 		}
 	}
