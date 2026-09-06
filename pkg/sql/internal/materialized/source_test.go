@@ -210,6 +210,32 @@ func TestSharedMaterializedSourceCancellationAndReuse(t *testing.T) {
 	source.ReleaseReader(0)
 }
 
+func TestSharedMaterializedSourceReuseErrorIdentifiesOwners(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	source := NewSource(2)
+	require.NoError(t, source.Begin(mp))
+
+	err := source.Begin(mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "generation=1")
+	require.Contains(t, err.Error(), "producer_released=false")
+	require.Contains(t, err.Error(), "unreleased_readers=[0 1]")
+
+	source.Finish(nil)
+	source.ReleaseReader(0)
+	err = source.Begin(mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "producer_released=true")
+	require.Contains(t, err.Error(), "unreleased_readers=[1]")
+
+	source.Close()
+	require.NoError(t, source.Begin(mp))
+	source.Finish(nil)
+	source.ReleaseReader(0)
+	source.ReleaseReader(1)
+}
+
 func TestSharedMaterializedSourceCancellationWhileWaiting(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })

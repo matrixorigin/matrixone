@@ -130,7 +130,9 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active && !s.allReleasedLocked() {
-		return moerr.NewInternalErrorNoCtx("materialized sink source reused before all owners released")
+		return moerr.NewInternalErrorNoCtxf(
+			"materialized sink source reused before all owners released: generation=%d producer_released=%t unreleased_readers=%v",
+			s.generation, s.producerReleased, s.unreleasedReaderIDsLocked())
 	}
 	s.cleanLocked()
 	s.generation++
@@ -486,6 +488,9 @@ func (s *Source) Close() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.active {
+		return
+	}
 	s.cleanLocked()
 	s.generation++
 	s.active = false
@@ -495,6 +500,16 @@ func (s *Source) Close() {
 		s.readerReleased[i] = true
 	}
 	s.wakeLocked()
+}
+
+func (s *Source) unreleasedReaderIDsLocked() []int {
+	unreleased := make([]int, 0, len(s.readerReleased))
+	for readerID, released := range s.readerReleased {
+		if !released {
+			unreleased = append(unreleased, readerID)
+		}
+	}
+	return unreleased
 }
 
 func (s *Source) wakeLocked() {

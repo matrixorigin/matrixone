@@ -884,28 +884,29 @@ func (c *Compile) printPipeline() {
 // for example
 // 1. lock table.
 // 2. init data source.
-func (c *Compile) prePipelineInitializer() (err error) {
+func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.lockTable(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// init data source.
 	for _, s := range c.scopes {
 		if err = s.InitAllDataSource(c); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var spillBudget materialized.SpillBudget
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
 	}
+	startedSources = make([]*materialized.Source, 0, len(c.materializedSources))
 	for _, source := range c.materializedSources {
 		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
@@ -914,10 +915,30 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
 		}, Budget: spillBudget}); err != nil {
-			return err
+			return startedSources, err
 		}
+		startedSources = append(startedSources, source)
 	}
-	return nil
+	return startedSources, nil
+}
+
+func closeMaterializedSourceGenerations(sources []*materialized.Source) {
+	for _, source := range sources {
+		source.Close()
+	}
+}
+
+// runPipelineAttempt owns every materialized-source generation opened by its
+// initializer. The callback may start no scopes, return an error, or panic;
+// after it returns, all submitted scope goroutines have quiesced and the
+// attempt closes both executed and statically planned-but-unstarted owners.
+func (c *Compile) runPipelineAttempt(run func() error) (err error) {
+	startedSources, err := c.prePipelineInitializer()
+	defer closeMaterializedSourceGenerations(startedSources)
+	if err != nil {
+		return err
+	}
+	return run()
 }
 
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
