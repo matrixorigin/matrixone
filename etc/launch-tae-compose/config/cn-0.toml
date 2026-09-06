@@ -56,13 +56,6 @@ type = "distributed-tae"
 port = 6001
 proxy-enabled = true
 
-[cn.frontend.arrow-load]
-# The Arrow LOAD BVT exercises an explicitly configured test rollout only; the
-# product default remains fail-closed until the release-readiness gates close.
-enabled = true
-s3-enabled = true
-distributed-enabled = true
-
 [cn.frontend.iceberg]
 enable = true
 enable-write = true

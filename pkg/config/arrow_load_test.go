@@ -15,6 +15,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -37,6 +39,28 @@ func TestArrowLoadDefaultsAndProgrammaticOptIn(t *testing.T) {
 	require.True(t, parameters.Enabled)
 	require.True(t, parameters.S3Enabled)
 	require.True(t, parameters.DistributedEnabled)
+}
+
+func TestLaunchTAEComposeProfileKeepsArrowLoadFailClosed(t *testing.T) {
+	for _, name := range []string{"cn-0.toml", "cn-1.toml"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "..", "etc", "launch-tae-compose", "config", name))
+			require.NoError(t, err)
+
+			var decoded struct {
+				CN struct {
+					Frontend FrontendParameters `toml:"frontend"`
+				} `toml:"cn"`
+			}
+			_, err = toml.Decode(string(data), &decoded)
+			require.NoError(t, err)
+			decoded.CN.Frontend.SetDefaultValues()
+
+			require.False(t, decoded.CN.Frontend.ArrowLoad.Enabled)
+			require.False(t, decoded.CN.Frontend.ArrowLoad.S3Enabled)
+			require.False(t, decoded.CN.Frontend.ArrowLoad.DistributedEnabled)
+		})
+	}
 }
 
 func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
