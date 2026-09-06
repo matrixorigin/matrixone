@@ -33,7 +33,6 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 		{name: "varbinary", typ: types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)},
 		{name: "blob", typ: types.T_blob.ToType()},
 	} {
-		source := source
 		t.Run(source.name, func(t *testing.T) {
 			sourceExpr := &planpb.Expr{
 				Typ: makePlan2Type(&source.typ),

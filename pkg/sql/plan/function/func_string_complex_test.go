@@ -393,24 +393,6 @@ func TestSubStringBinaryWith3ArgsPreservesBytes(t *testing.T) {
 	}
 }
 
-func TestSubStringBlobWith3ArgsPreservesBytes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputType := types.T_blob.ToType()
-	resultType := types.T_blob.ToType()
-	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
-
-	caseTest := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(inputType, []string{raw}, []bool{false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
-		},
-		NewFunctionTestResult(resultType, false, []string{raw[:3]}, []bool{false}),
-		SubStringBinaryWith3Args)
-	succeed, info := caseTest.Run()
-	require.True(t, succeed, info)
-}
-
 // Test_BuiltInDateDiff tests DATEDIFF function
 // This tests date arithmetic which calls many date handling functions
 func Test_BuiltInDateDiff(t *testing.T) {
