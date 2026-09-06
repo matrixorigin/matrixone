@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -2061,6 +2062,21 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
+		if node.JoinType == plan.Node_INNER {
+			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[0], make(map[int32]bool))
+			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[1], make(map[int32]bool))
+			if leftMarked || rightMarked {
+				// CTE drain admission marked one exact equality-hash build.
+				// Preserve it as the physical right/build child even if ordinary
+				// cardinality costing would choose the opposite orientation.
+				if leftMarked && !rightMarked {
+					node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+				}
+				break
+			}
+		}
 		// UPDATE rewrites deliberately put an unfiltered hidden index on the probe
 		// side so a selective target can publish a runtime filter before scanning
 		// the index. Cardinality alone is not sufficient for the opposite,
@@ -2108,6 +2124,15 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		// Some shared CTE readers are admitted only because a LEFT or equality
+		// SEMI join must fully consume their build input. Preserve that proof: a
+		// right-sided choice would turn the marked reader into the probe input,
+		// which may stop without draining it.
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
+			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
+			node.IsRightJoin = false
+			break
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
@@ -2490,6 +2515,24 @@ func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
 		return math.MaxFloat64, true
 	}
 	return rows * rowSize, true
+}
+
+func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK_SCAN &&
+		node.ExtraOptions == materialized.CTEHashBuildScanOption {
+		return true
+	}
+	for _, childID := range node.Children {
+		if builder.subtreeContainsCTEHashBuildScan(childID, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
