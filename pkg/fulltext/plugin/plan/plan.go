@@ -39,23 +39,35 @@ var _ planplugin.DMLMaintenanceNoOpHook = Hooks{}
 type Hooks struct{}
 
 // DMLMaintenanceNoOpColumns declares when an old fulltext posting set is
-// provably identical to the final one. VARCHAR and TEXT preserve the bytes that
-// determine tokenization. CHAR, JSON, and DATALINK stay conservative because
-// SQL NULL-safe equality is not a proof of identical tokenizer input for them.
+// provably identical to the final one. FULLTEXT input includes the row
+// identity/doc_id as well as the indexed values. VARCHAR and TEXT preserve the
+// bytes that determine tokenization. CHAR, JSON, and DATALINK stay conservative
+// because SQL NULL-safe equality is not a proof of identical tokenizer input for
+// them.
 func (Hooks) DMLMaintenanceNoOpColumns(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
 ) ([]string, bool, error) {
-	if tableDef == nil || indexDef == nil || len(indexDef.Parts) == 0 {
+	if tableDef == nil || tableDef.Pkey == nil || indexDef == nil || len(indexDef.Parts) == 0 {
+		return nil, false, nil
+	}
+	pkName := catalog.ResolveAlias(tableDef.Pkey.PkeyColName)
+	if pkName == "" {
+		return nil, false, nil
+	}
+	pkPos, ok := tableDef.Name2ColIndex[pkName]
+	if !ok || pkPos < 0 || int(pkPos) >= len(tableDef.Cols) || tableDef.Cols[pkPos] == nil {
 		return nil, false, nil
 	}
 
-	columns := make([]string, 0, len(indexDef.Parts))
-	seen := make(map[string]struct{}, len(indexDef.Parts))
+	columns := make([]string, 0, len(indexDef.Parts)+1)
+	seen := make(map[string]struct{}, len(indexDef.Parts)+1)
+	seen[pkName] = struct{}{}
+	columns = append(columns, pkName)
 	for _, part := range indexDef.Parts {
 		name := catalog.ResolveAlias(part)
 		pos, ok := tableDef.Name2ColIndex[name]
-		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
 			return nil, false, nil
 		}
 		switch types.T(tableDef.Cols[pos].Typ.Id) {

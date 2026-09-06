@@ -26,6 +26,7 @@ import (
 func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
 			{Name: "body", Typ: planpb.Type{Id: int32(types.T_text)}},
 			{Name: "summary", Typ: planpb.Type{Id: int32(types.T_varchar)}},
 			{Name: "metadata", Typ: planpb.Type{Id: int32(types.T_json)}},
@@ -34,7 +35,11 @@ func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 			{Name: "unsupported", Typ: planpb.Type{Id: int32(types.T_int64)}},
 		},
 		Name2ColIndex: map[string]int32{
-			"body": 0, "summary": 1, "metadata": 2, "resource": 3, "headline": 4, "unsupported": 5,
+			"id": 0, "body": 1, "summary": 2, "metadata": 3, "resource": 4, "headline": 5, "unsupported": 6,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
 		},
 	}
 
@@ -44,7 +49,7 @@ func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.True(t, supported)
-		require.Equal(t, []string{"body", "summary"}, columns)
+		require.Equal(t, []string{"id", "body", "summary"}, columns)
 	})
 
 	for _, tc := range []struct {

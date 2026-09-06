@@ -306,6 +306,14 @@ func buildIrregularIndexValueChangeFilters(
 	tableDef *plan.TableDef,
 	indexes []*plan.IndexDef,
 ) ([]irregularIndexValueChangeFilter, error) {
+	return buildIrregularIndexValueChangeFiltersWithResolver(tableDef, indexes, indexplugin.Get)
+}
+
+func buildIrregularIndexValueChangeFiltersWithResolver(
+	tableDef *plan.TableDef,
+	indexes []*plan.IndexDef,
+	resolvePlugin func(string) (indexplugin.AlgoPlugin, bool),
+) ([]irregularIndexValueChangeFilter, error) {
 	groups := make(map[string][]*plan.IndexDef, len(indexes))
 	groupOrder := make([]string, 0, len(indexes))
 	for _, indexdef := range indexes {
@@ -321,7 +329,7 @@ func buildIrregularIndexValueChangeFilters(
 		columnSet := make(map[string]struct{})
 		supported := true
 		for _, indexdef := range groups[key] {
-			plugin, ok := indexplugin.Get(indexdef.IndexAlgo)
+			plugin, ok := resolvePlugin(indexdef.IndexAlgo)
 			if !ok {
 				supported = false
 				break

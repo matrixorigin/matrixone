@@ -53,6 +53,19 @@ func (odkuNoOpTestPlugin) Compile() compileplugin.Hooks { return nil }
 func (p odkuNoOpTestPlugin) Plan() planplugin.Hooks     { return p.planHooks }
 func (odkuNoOpTestPlugin) Idxcron() idxcronplugin.Hooks { return nil }
 
+func scopedODKUPluginResolver(plugins ...indexplugin.AlgoPlugin) func(string) (indexplugin.AlgoPlugin, bool) {
+	byAlgo := make(map[string]indexplugin.AlgoPlugin, len(plugins))
+	for _, plugin := range plugins {
+		byAlgo[strings.ToLower(strings.TrimSpace(plugin.Algo()))] = plugin
+	}
+	return func(algo string) (indexplugin.AlgoPlugin, bool) {
+		if plugin, ok := byAlgo[strings.ToLower(strings.TrimSpace(algo))]; ok {
+			return plugin, true
+		}
+		return indexplugin.Get(algo)
+	}
+}
+
 func reachableODKUPlanNodes(query *planpb.Query) map[int32]struct{} {
 	reachable := make(map[int32]struct{}, len(query.Nodes))
 	var visit func(int32)
@@ -245,7 +258,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 		require.Zero(t, shape.newRowsOnlyFilter)
 		require.Len(t, shape.valueChangeFilter, 1,
 			"affected fulltext maintenance must receive only new rows or rows whose indexed value changed")
-		require.Equal(t, []string{"body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		require.Equal(t, []string{"id", "body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
 	})
 
 	t.Run("independent fulltext indexes use separate modes", func(t *testing.T) {
@@ -256,7 +269,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 		require.Equal(t, 2, shape.tokenizers, "affected and insert-only indexes both keep their insert leaf")
 		require.Equal(t, 1, shape.newRowsOnlyFilter, "all insert-only groups share one filtered source")
 		require.Len(t, shape.valueChangeFilter, 1, "only the affected fulltext index needs a value-change source")
-		require.Equal(t, []string{"body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		require.Equal(t, []string{"id", "body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
 	})
 
 	t.Run("plain insert with regular index keeps plain irregular source", func(t *testing.T) {
@@ -320,7 +333,7 @@ func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T)
 			"insert into constraint_test.docs_ft_dual(id, body, summary, payload) values (1, 'new body', 'new summary', 1) "+
 				"on duplicate key update body = values(body), summary = values(summary)")
 		require.Len(t, shape.valueChangeFilter, 1)
-		require.Equal(t, []string{"body", "summary"},
+		require.Equal(t, []string{"id", "body", "summary"},
 			nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
 	})
 
@@ -331,10 +344,10 @@ func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T)
 		require.Len(t, shape.valueChangeFilter, 2)
 		require.NotEqual(t, shape.valueChangeFilter[0].outputStep, shape.valueChangeFilter[1].outputStep)
 		columns := []string{
-			nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr)[0],
-			nullSafeEqualityColumns(t, shape.valueChangeFilter[1].markerExpr)[0],
+			strings.Join(nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr), ","),
+			strings.Join(nullSafeEqualityColumns(t, shape.valueChangeFilter[1].markerExpr), ","),
 		}
-		require.ElementsMatch(t, []string{"body", "summary"}, columns)
+		require.ElementsMatch(t, []string{"id,body", "id,summary"}, columns)
 	})
 }
 
@@ -372,7 +385,7 @@ func TestOnDuplicateGeneratedFulltextUsesDependencyClosure(t *testing.T) {
 				"on duplicate key update summary = values(summary)")
 		require.Equal(t, 1, shape.hiddenScans[catalog.FullTextIndexTableNamePrefix+"docs_ft_dual_body"])
 		require.Len(t, shape.valueChangeFilter, 1)
-		require.Equal(t, []string{"body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		require.Equal(t, []string{"id", "body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
 	})
 }
 
@@ -477,11 +490,16 @@ func TestSplitIrregularIndexesKeepsLogicalIndexGroupsTogether(t *testing.T) {
 func TestBuildIrregularIndexValueChangeFilters(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
 			{Name: "body", Typ: planpb.Type{Id: int32(types.T_text)}},
 			{Name: "summary", Typ: planpb.Type{Id: int32(types.T_varchar)}},
 			{Name: "resource", Typ: planpb.Type{Id: int32(types.T_datalink)}},
 		},
-		Name2ColIndex: map[string]int32{"body": 0, "summary": 1, "resource": 2},
+		Name2ColIndex: map[string]int32{"id": 0, "body": 1, "summary": 2, "resource": 3},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
 	}
 
 	t.Run("groups physical definitions and resolves aliases", func(t *testing.T) {
@@ -497,7 +515,7 @@ func TestBuildIrregularIndexValueChangeFilters(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, []irregularIndexValueChangeFilter{
-			{groupKey: "ft_text", columns: []string{"body", "summary"}},
+			{groupKey: "ft_text", columns: []string{"id", "body", "summary"}},
 		}, filters)
 	})
 
@@ -517,49 +535,46 @@ func TestBuildIrregularIndexValueChangeFilters(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, []irregularIndexValueChangeFilter{
-			{groupKey: catalog.MOIndexFullTextAlgo.ToString() + "\x00hidden_a", columns: []string{"body"}},
-			{groupKey: catalog.MOIndexFullTextAlgo.ToString() + "\x00hidden_b", columns: []string{"summary"}},
+			{groupKey: catalog.MOIndexFullTextAlgo.ToString() + "\x00hidden_a", columns: []string{"id", "body"}},
+			{groupKey: catalog.MOIndexFullTextAlgo.ToString() + "\x00hidden_b", columns: []string{"id", "summary"}},
 		}, filters)
 	})
 
 	t.Run("missing plugin and plugin without hook are conservative", func(t *testing.T) {
 		const noHookAlgo = "odku_noop_test_no_hook"
-		indexplugin.Register(odkuNoOpTestPlugin{algo: noHookAlgo})
-		filters, err := buildIrregularIndexValueChangeFilters(tableDef, []*planpb.IndexDef{
+		filters, err := buildIrregularIndexValueChangeFiltersWithResolver(tableDef, []*planpb.IndexDef{
 			{IndexName: "missing", IndexAlgo: "odku_noop_test_missing", Parts: []string{"body"}},
 			{IndexName: "no_hook", IndexAlgo: noHookAlgo, Parts: []string{"body"}},
 			{IndexName: "fulltext2", IndexAlgo: catalog.MoIndexFullText2Algo.ToString(), Parts: []string{"body"}},
-		})
+		}, scopedODKUPluginResolver(odkuNoOpTestPlugin{algo: noHookAlgo}))
 		require.NoError(t, err)
 		require.Empty(t, filters)
 	})
 
 	t.Run("unresolvable proof column is conservative", func(t *testing.T) {
 		const unresolvedAlgo = "odku_noop_test_unresolved"
-		indexplugin.Register(odkuNoOpTestPlugin{
+		filters, err := buildIrregularIndexValueChangeFiltersWithResolver(tableDef, []*planpb.IndexDef{
+			{IndexName: "unresolved", IndexAlgo: unresolvedAlgo, Parts: []string{"body"}},
+		}, scopedODKUPluginResolver(odkuNoOpTestPlugin{
 			algo: unresolvedAlgo,
 			planHooks: odkuNoOpTestPlanHooks{
 				columns: []string{"missing"}, supported: true,
 			},
-		})
-		filters, err := buildIrregularIndexValueChangeFilters(tableDef, []*planpb.IndexDef{
-			{IndexName: "unresolved", IndexAlgo: unresolvedAlgo, Parts: []string{"body"}},
-		})
+		}))
 		require.NoError(t, err)
 		require.Empty(t, filters)
 	})
 
 	t.Run("hook error fails closed", func(t *testing.T) {
 		const errorAlgo = "odku_noop_test_error"
-		indexplugin.Register(odkuNoOpTestPlugin{
+		_, err := buildIrregularIndexValueChangeFiltersWithResolver(tableDef, []*planpb.IndexDef{
+			{IndexName: "error", IndexAlgo: errorAlgo, Parts: []string{"body"}},
+		}, scopedODKUPluginResolver(odkuNoOpTestPlugin{
 			algo: errorAlgo,
 			planHooks: odkuNoOpTestPlanHooks{
 				err: moerr.NewInternalErrorNoCtx("proof failed"),
 			},
-		})
-		_, err := buildIrregularIndexValueChangeFilters(tableDef, []*planpb.IndexDef{
-			{IndexName: "error", IndexAlgo: errorAlgo, Parts: []string{"body"}},
-		})
+		}))
 		require.ErrorContains(t, err, "proof failed")
 	})
 }
