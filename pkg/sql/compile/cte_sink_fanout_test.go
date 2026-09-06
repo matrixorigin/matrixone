@@ -129,6 +129,74 @@ func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
 	require.Same(t, leftScan.MaterializedSource, fanout.MaterializedSource)
 }
 
+func TestPipelineAttemptAlwaysClosesMaterializedSources(t *testing.T) {
+	wantErr := moerr.NewInternalErrorNoCtx("execution failed before operator cleanup")
+	tests := []struct {
+		name    string
+		run     func(*Compile, *materialized.Source) error
+		wantErr error
+	}{
+		{
+			name: "lazy branch leaves one reader unstarted",
+			run: func(c *Compile, source *materialized.Source) error {
+				// The producer and one reader completed, while LIMIT stopped a
+				// lazy UNION ALL before its later reader branch was submitted.
+				source.Finish(nil)
+				source.ReleaseReader(0)
+				return c.runOnce()
+			},
+		},
+		{
+			name: "execution fails before operators reset",
+			run: func(_ *Compile, _ *materialized.Source) error {
+				return wantErr
+			},
+			wantErr: wantErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+			c.lockMeta = NewLockMeta()
+			source := materialized.NewSource(2)
+			c.materializedSources = map[int32]*materialized.Source{0: source}
+
+			err := c.runPipelineAttempt(func() error { return test.run(c, source) })
+			if test.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, test.wantErr)
+			}
+
+			// A prepared compile reuses this Source. Every attempt outcome must
+			// leave the next generation equivalent to a fresh source.
+			require.NoError(t, source.Begin(c.proc.Mp()))
+			source.Finish(nil)
+			source.ReleaseReader(0)
+			source.ReleaseReader(1)
+		})
+	}
+}
+
+func TestPipelineAttemptClosesMaterializedSourcesAfterPanic(t *testing.T) {
+	c := NewMockCompile(t)
+	c.lockMeta = NewLockMeta()
+	source := materialized.NewSource(1)
+	c.materializedSources = map[int32]*materialized.Source{0: source}
+	wantPanic := "pipeline panic"
+
+	func() {
+		defer func() { require.Equal(t, wantPanic, recover()) }()
+		_ = c.runPipelineAttempt(func() error { panic(wantPanic) })
+	}()
+
+	require.NoError(t, source.Begin(c.proc.Mp()))
+	source.Finish(nil)
+	source.ReleaseReader(0)
+}
+
 func TestMaterializedCTESinkGroupsShuffleBucketsByCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.cnList = engine.Nodes{
