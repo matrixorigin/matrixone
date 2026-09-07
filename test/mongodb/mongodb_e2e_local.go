@@ -259,6 +259,11 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		"64b000000000000000000005"); err != nil {
 		return err
 	}
+	initialUnwindQuery := `{"pipeline":[{"$unwind":"$site_id"}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+initialUnwindQuery+"'", "5"); err != nil {
+		return err
+	}
 	unwindQuery := `{"pipeline":[{"$set":{"fanout":["$site_id","$device_id"]}},{"$unwind":"$fanout"}]}`
 	if err := expectScalar(ctx, db,
 		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindQuery+"'", "10"); err != nil {

@@ -435,6 +435,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "64b000000000000000000005")
+	expectMongoDBE2EScalar(mock, "5")
 	expectMongoDBE2EScalar(mock, "10")
 	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
 		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
