@@ -124,15 +124,17 @@ func TestIssue28313EmptyRemoteDispatch(t *testing.T) {
 				exec("insert into dwd_bw_1cpmb_bkgd4b76 select '200000','' where not exists (select 1 from dwd_bw_1cpmb_bkgd4b76 where cpmb_kgd4b76='200000')")
 			}
 			for iteration := 0; iteration < 3; iteration++ {
-				rows, err := conn.QueryContext(ctx, query)
-				require.NoError(t, err, "expected %d rows, iteration %d", want, iteration)
-				count := 0
-				for rows.Next() {
-					count++
-				}
-				err = rows.Err()
-				require.NoError(t, rows.Close())
-				require.NoError(t, err)
+				count := func() int {
+					rows, err := conn.QueryContext(ctx, query)
+					require.NoError(t, err, "expected %d rows, iteration %d", want, iteration)
+					defer func() { require.NoError(t, rows.Close()) }()
+					count := 0
+					for rows.Next() {
+						count++
+					}
+					require.NoError(t, rows.Err())
+					return count
+				}()
 				require.Equal(t, want, count)
 				if want == 500 {
 					require.Greater(t, remoteAttaches(), before, "query must exercise remote receiver attachment")
