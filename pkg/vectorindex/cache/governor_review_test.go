@@ -940,3 +940,34 @@ func TestAFreshMemoDoesNotOutrankALoweredTenantCap(t *testing.T) {
 	require.WithinDuration(t, time.Now(), v.(acctLimitEntry).fetched, 5*time.Second,
 		"and stamps it, so the next housekeeping pass trusts it for one TTL")
 }
+
+// Housekeeping reads the catalog with the CN uuid a miss remembered. That uuid can outlive the
+// service it names -- a CN shutting down, and, in a test binary, any embedded cluster torn down
+// while this process-wide cache keeps ticking. moruntime.ServiceRuntime returns a nil Runtime for
+// a service it does not know, so the read used to dereference nil and take the process with it,
+// from a goroutine no test could recover.
+//
+// It must degrade to "unavailable", keeping the last known caps, exactly as a failed read does.
+func TestHousekeepingSurvivesACnUuidWhoseServiceIsGone(t *testing.T) {
+	c := newBoundCache(t)
+
+	// The REAL reader, not the unit stub: the panic was inside it.
+	orig := runSysSql
+	runSysSql = sqlexec.RunSqlAutoCommit
+	t.Cleanup(func() { runSysSql = orig })
+
+	c.gov().sysLimit.mu.Lock()
+	c.gov().sysLimit.value = hostCap(4096)
+	c.gov().sysLimit.service = "a-cn-that-has-gone-away"
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	c.gov().sysLimit.mu.Unlock()
+
+	require.NotPanics(t, func() { houseKeepingSync(t, c) },
+		"a dead service is an error, not a crash")
+
+	c.gov().sysLimit.mu.Lock()
+	kept := c.gov().sysLimit.value
+	c.gov().sysLimit.mu.Unlock()
+	require.EqualValues(t, 4096, kept.host,
+		"and an unreachable service must not silently unbound the cache")
+}

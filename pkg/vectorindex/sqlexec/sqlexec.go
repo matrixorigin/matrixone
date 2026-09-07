@@ -419,7 +419,17 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 // query's txn is gone; it captures cnUUID+accountID at load and re-queries here. The caller
 // owns ctx (deadline/cancel) and must Close the returned Result.
 func RunSqlAutoCommit(ctx context.Context, cnUUID string, accountID uint32, db, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	// ServiceRuntime returns a nil Runtime for a service it does not know, so calling through it
+	// panics rather than failing. That happens whenever a caller holds a CN uuid that has since
+	// gone away -- a background loop that outlives the CN it first saw, and, in a test binary,
+	// any cluster torn down while a process-wide caller keeps ticking. An unreachable service is
+	// an error, not a crash.
+	rt := moruntime.ServiceRuntime(cnUUID)
+	if rt == nil {
+		return executor.Result{}, moerr.NewInternalErrorNoCtxf(
+			"RunSqlAutoCommit: no runtime for service %q", cnUUID)
+	}
+	v, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("RunSqlAutoCommit: missing internal sql executor")
 	}
