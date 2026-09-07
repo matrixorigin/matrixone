@@ -16,6 +16,7 @@ package mongodb
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,6 +81,13 @@ func TestParseUserQueryAcceptsSortAndUnwind(t *testing.T) {
 		require.NoError(t, err, source)
 		require.Equal(t, query.Pipeline, restored.Pipeline, source)
 	}
+
+	sortFields := make([]string, MaxUserSortKeys)
+	for i := range sortFields {
+		sortFields[i] = fmt.Sprintf(`"field_%d":1`, i)
+	}
+	_, err := ParseUserQuery(t.Context(), `{"pipeline":[{"$sort":{`+strings.Join(sortFields, ",")+`}}]}`)
+	require.NoError(t, err)
 }
 
 func TestRedactSQLForDiagnostics(t *testing.T) {
@@ -122,8 +130,8 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "limit negative", source: `{"pipeline":[{"$limit":-1}]}`, want: "non-negative integer"},
 		{name: "count field path", source: `{"pipeline":[{"$count":"a.b"}]}`, want: "valid output field"},
 		{name: "unset empty", source: `{"pipeline":[{"$unset":[]}]}`, want: "field name"},
-		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires a non-empty object"},
-		{name: "sort is empty", source: `{"pipeline":[{"$sort":{}}]}`, want: "$sort requires a non-empty object"},
+		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort is empty", source: `{"pipeline":[{"$sort":{}}]}`, want: "$sort requires 1 to 32 fields"},
 		{name: "sort direction is zero", source: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "1 or -1 directions"},
 		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind string is not path", source: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
@@ -138,7 +146,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		})
 	}
 
-	_, err := ParseUserQuery(t.Context(), `{"filter":{"value":"`+strings.Repeat("x", MaxUserQueryBytes)+`"}}`)
+	sortFields := make([]string, MaxUserSortKeys+1)
+	for i := range sortFields {
+		sortFields[i] = fmt.Sprintf(`"field_%d":1`, i)
+	}
+	_, err := ParseUserQuery(t.Context(), `{"pipeline":[{"$sort":{`+strings.Join(sortFields, ",")+`}}]}`)
+	require.ErrorContains(t, err, "$sort requires 1 to 32 fields")
+
+	_, err = ParseUserQuery(t.Context(), `{"filter":{"value":"`+strings.Repeat("x", MaxUserQueryBytes)+`"}}`)
 	require.ErrorContains(t, err, "size limit")
 	_, err = ParseUserQuery(t.Context(), strings.Repeat(" ", MaxUserQueryBytes+1)+`{"filter":{}}`)
 	require.ErrorContains(t, err, "size limit")

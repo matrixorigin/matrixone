@@ -37,6 +37,9 @@ const (
 	// protects planning, plan transport, and recursive validation as well as the
 	// remote server.
 	MaxUserPipelineStages = 16
+	// MaxUserSortKeys matches MongoDB's compound-sort key limit and bounds the
+	// per-stage validation and server sort specification.
+	MaxUserSortKeys = 32
 	// MaxUserQueryDepth bounds recursive JSON/BSON validation independently of
 	// the byte limit so adversarial nesting cannot exhaust the planner stack.
 	MaxUserQueryDepth = 32
@@ -346,7 +349,7 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 		}
 	case "$sort":
 		if !isValidSortDocument(value) {
-			return moerr.NewInvalidInput(ctx, "MongoDB $sort requires a non-empty object with 1 or -1 directions")
+			return moerr.NewInvalidInputf(ctx, "MongoDB $sort requires 1 to %d fields with 1 or -1 directions", MaxUserSortKeys)
 		}
 	case "$limit", "$skip":
 		if !isNonNegativeInteger(value) {
@@ -470,7 +473,7 @@ func isZeroInteger(value any) bool {
 
 func isValidSortDocument(value any) bool {
 	document, ok := asBSONDocument(value)
-	if !ok || len(document) == 0 || len(document) > 32 {
+	if !ok || len(document) == 0 || len(document) > MaxUserSortKeys {
 		return false
 	}
 	for _, element := range document {
