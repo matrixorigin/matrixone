@@ -279,7 +279,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
 }
 
-func informationSchemaColumnsV52DDL() string {
+func informationSchemaColumnsV53DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
@@ -404,7 +404,7 @@ var (
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaColumnsV46DDL = informationSchemaSubscriptionColumnsDDL()
-	InformationSchemaColumnsDDL    = informationSchemaColumnsV52DDL()
+	InformationSchemaColumnsDDL    = informationSchemaColumnsV53DDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +

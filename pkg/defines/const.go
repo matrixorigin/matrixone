@@ -87,8 +87,9 @@ const (
 	MORPCVersion49     int64 = 49 // vector-level grouping-set projection expansion
 	MORPCVersion50     int64 = 50 // ordered ODKU evaluation and logical affected-row metadata
 	MORPCVersion51     int64 = 51 // per-action ODKU validation and statement-local target arbitration
-	MORPCVersion52     int64 = 52 // binary-string function semantics and runtime-domain metadata
-	MORPCLatestVersion       = MORPCVersion52
+	MORPCVersion52     int64 = 52 // MySQL binary JSON subtype tags
+	MORPCVersion53     int64 = 53 // binary-string function semantics and runtime-domain metadata
+	MORPCLatestVersion       = MORPCVersion53
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

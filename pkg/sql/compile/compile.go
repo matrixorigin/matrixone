@@ -145,6 +145,7 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	c.retryTimes = 0
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -289,6 +290,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
@@ -469,6 +471,7 @@ func (c *Compile) clear() {
 	c.fill = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
 	c.db = ""
@@ -700,33 +703,7 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 }
 
 func isScopeCancellationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// errors.Join must not turn a substantive execution failure into
-	// cancellation fallout merely because one of its siblings is a context
-	// error. Every leaf has to be cancellation-shaped before it is safe to
-	// suppress or replace the result.
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationError(child) {
-				return false
-			}
-		}
-		return true
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationError(child)
-		}
-	}
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+	return process.IsPipelineCancellationError(err)
 }
 
 // isScopeCancellationFrom reports whether every leaf in err can be attributed

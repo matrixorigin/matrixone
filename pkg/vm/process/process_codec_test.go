@@ -845,7 +845,7 @@ func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
 
 func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T) {
 	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{uint32(types.RuntimeStringText)})
-	require.ErrorContains(t, err, "protocol version 52")
+	require.ErrorContains(t, err, "protocol version 53")
 	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{3})
 	require.ErrorContains(t, err, "invalid runtime string domain")
 	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 2, []uint32{uint32(types.RuntimeStringText)})

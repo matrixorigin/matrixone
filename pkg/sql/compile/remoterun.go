@@ -2059,7 +2059,7 @@ func validateRemoteODKUAffectedRowsProtocol(proc *process.Process, required bool
 	}
 	if proc == nil || !supportsRemoteODKUAffectedRows(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"ODKU logical affected-row metadata requires MORPC protocol version 52",
+			"ODKU logical affected-row metadata requires MORPC protocol version 53",
 		)
 	}
 	return nil
@@ -2203,7 +2203,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 		value, ok := moruntime.ServiceRuntime(proc.GetService()).
 			GetGlobalVariables(moruntime.MOProtocolVersion)
 		version, versionOK := value.(int64)
-		if ok && versionOK && version >= defines.MORPCVersion52 {
+		if ok && versionOK && version >= defines.MORPCVersion53 {
 			return nil
 		}
 	}
@@ -2214,7 +2214,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"binary string function semantics require MORPC protocol version %d",
-		defines.MORPCVersion52)
+		defines.MORPCVersion53)
 }
 
 func validateRemotePadSpacePipelineProtocol(
