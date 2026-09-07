@@ -1978,7 +1978,7 @@ func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
 	releaseSend := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseSend) }) }
-	defer release()
+	var workers sync.WaitGroup
 	stream := newStream(
 		nil,
 		make(chan Message, 1),
@@ -1993,12 +1993,20 @@ func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
 		func() {},
 	)
 	stream.init(1, false)
-	defer func() { require.NoError(t, stream.Close(false)) }()
+	defer func() {
+		// Send holds the stream read lock while waiting on our barrier. Release
+		// it before joining workers or closing, including after FailNow.
+		release()
+		workers.Wait()
+		require.NoError(t, stream.Close(false))
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sendDone := make(chan error, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		sendDone <- stream.Send(ctx, newTestMessage(stream.ID()))
 	}()
 	select {
@@ -2009,7 +2017,11 @@ func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
 
 	message := RPCMessage{stream: true}
 	assigned := make(chan bool, 1)
-	go func() { assigned <- stream.assignSendSequence(&message) }()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		assigned <- stream.assignSendSequence(&message)
+	}()
 	select {
 	case ok := <-assigned:
 		require.True(t, ok)
