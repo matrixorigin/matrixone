@@ -482,7 +482,10 @@ func ConvertToProcessSessionInfo(
 	return sessionInfo, nil
 }
 
-func resolveSqlMode(proc *Process) string {
+// ResolveSqlMode returns the effective sql_mode for execution and forwarding.
+// A non-frontend process must retain its captured session snapshot when an
+// inherited resolver only exposes the compiled empty default.
+func ResolveSqlMode(proc *Process) string {
 	if proc == nil {
 		return ""
 	}

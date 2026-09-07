@@ -450,3 +450,54 @@ func TestStatementDigestSettings(t *testing.T) {
 	fallback.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 	require.Equal(t, "", statementDigestSQLMode(fallback))
 }
+
+func TestStatementDigestTextPreservesBackgroundSQLModeSnapshot(t *testing.T) {
+	inputSQL := []byte(`SELECT "column" FROM t`)
+	for _, test := range []struct {
+		name       string
+		isFrontend bool
+		want       string
+	}{
+		{
+			name:       "background empty resolver keeps captured ANSI quotes",
+			isFrontend: false,
+			want:       "SELECT `column` FROM `t`",
+		},
+		{
+			name:       "frontend empty resolver explicitly clears mode",
+			isFrontend: true,
+			want:       "SELECT ? FROM `t`",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.IsFrontend = test.isFrontend
+			proc.GetSessionInfo().SqlMode = "ANSI_QUOTES"
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				switch name {
+				case "sql_mode":
+					require.True(t, system)
+					require.False(t, global)
+					return "", nil
+				case "max_digest_length":
+					require.True(t, system)
+					require.True(t, global)
+					return int64(process.DefaultMaxDigestLength), nil
+				default:
+					return nil, fmt.Errorf("unexpected variable %s", name)
+				}
+			})
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), inputSQL, 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}

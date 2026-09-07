@@ -162,17 +162,7 @@ func statementDigestMaxLength(proc *process.Process) int {
 }
 
 func statementDigestSQLMode(proc *process.Process) string {
-	if proc == nil || proc.Base == nil {
-		return ""
-	}
-	mode := proc.GetSessionInfo().SqlMode
-	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
-		if value, err := resolver("sql_mode", true, false); err == nil {
-			if sessionMode, ok := value.(string); ok {
-				mode = sessionMode
-			}
-		}
-	}
+	mode := process.ResolveSqlMode(proc)
 	if mode == process.EmptySqlModeSentinel {
 		return ""
 	}

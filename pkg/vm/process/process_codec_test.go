@@ -210,14 +210,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 	})
 
 	t.Run("sql mode resolution", func(t *testing.T) {
-		require.Equal(t, "", resolveSqlMode(nil))
+		require.Equal(t, "", ResolveSqlMode(nil))
 
 		// Resolver present: its value wins.
 		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "STRICT_TRANS_TABLES", nil
 		})
-		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_TRANS_TABLES", ResolveSqlMode(proc))
 
 		// A frontend resolver returning an explicit empty string means the
 		// session is intentionally non-strict.
@@ -225,14 +225,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "", nil
 		})
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(proc))
 
 		// A background resolver may return its empty compiled default, but the
 		// captured strict snapshot must survive the first serialization.
 		proc.Base.IsFrontend = false
-		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_ALL_TABLES", ResolveSqlMode(proc))
 		proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc),
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(proc),
 			"an already-captured explicit empty mode must remain non-strict")
 		proc.Base.SessionInfo.SqlMode = "STRICT_ALL_TABLES"
 
@@ -240,18 +240,18 @@ func TestProcessCodecHelpers(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		})
-		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_ALL_TABLES", ResolveSqlMode(proc))
 
 		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
 		// forward preserves the upstream mode instead of defaulting to strict.
 		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}
-		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(strictProc))
+		require.Equal(t, "STRICT_TRANS_TABLES", ResolveSqlMode(strictProc))
 
 		sentinelProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: EmptySqlModeSentinel}}}
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(sentinelProc))
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(sentinelProc))
 
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
-		require.Equal(t, "", resolveSqlMode(emptyProc))
+		require.Equal(t, "", ResolveSqlMode(emptyProc))
 	})
 }
 
