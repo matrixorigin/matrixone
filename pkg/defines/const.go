@@ -89,7 +89,9 @@ const (
 	MORPCVersion51     int64 = 51 // per-action ODKU validation and statement-local target arbitration
 	MORPCVersion52     int64 = 52 // MySQL binary JSON subtype tags
 	MORPCVersion53     int64 = 53 // ordered-stream distributed Top-N merge
-	MORPCLatestVersion       = MORPCVersion53
+	MORPCVersion54     int64 = 54 // catalog-authenticated proxy cache reuse
+	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
+	MORPCLatestVersion       = MORPCVersion55
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

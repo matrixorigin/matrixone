@@ -16,14 +16,18 @@ package function
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,4 +105,181 @@ func TestSequenceHiddenOverloadExecutors(t *testing.T) {
 			require.NotNil(t, overload.newOp())
 		})
 	}
+}
+
+type sequenceRelationStub struct {
+	engine.Relation
+	defs []engine.TableDef
+	err  error
+}
+
+func (s *sequenceRelationStub) TableDefs(context.Context) ([]engine.TableDef, error) {
+	return s.defs, s.err
+}
+
+func sequenceProperties(properties ...engine.Property) *engine.PropertiesDef {
+	return &engine.PropertiesDef{Properties: properties}
+}
+
+func TestRequireSequence(t *testing.T) {
+	var typedNil *engine.PropertiesDef
+
+	tests := []struct {
+		name string
+		defs []engine.TableDef
+		want bool
+	}{
+		{
+			name: "kind is not positional",
+			defs: []engine.TableDef{
+				&engine.VersionDef{Version: 1},
+				sequenceProperties(
+					engine.Property{Key: "unrelated", Value: catalog.SystemSequenceRel},
+					engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel},
+				),
+			},
+			want: true,
+		},
+		{
+			name: "ordinary relation",
+			defs: []engine.TableDef{
+				sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+			},
+		},
+		{
+			name: "missing kind",
+			defs: []engine.TableDef{
+				sequenceProperties(engine.Property{Key: "not-relkind", Value: catalog.SystemSequenceRel}),
+			},
+		},
+		{
+			name: "empty definitions",
+		},
+		{
+			name: "empty properties",
+			defs: []engine.TableDef{sequenceProperties()},
+		},
+		{
+			name: "non-property definitions only",
+			defs: []engine.TableDef{&engine.VersionDef{Version: 1}},
+		},
+		{
+			name: "typed nil properties",
+			defs: []engine.TableDef{typedNil},
+		},
+		{
+			name: "nil definition",
+			defs: []engine.TableDef{nil},
+		},
+		{
+			name: "conflicting markers",
+			defs: []engine.TableDef{
+				sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+				sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+			},
+		},
+		{
+			name: "reversed conflicting markers",
+			defs: []engine.TableDef{
+				sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+				sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := requireSequence(context.Background(), &sequenceRelationStub{defs: test.defs})
+			if test.want {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, "internal error: Table input is not a sequence")
+			}
+		})
+	}
+}
+
+func TestRequireSequencePropagatesTableDefsError(t *testing.T) {
+	want := errors.New("table definitions unavailable")
+	err := requireSequence(context.Background(), &sequenceRelationStub{err: want})
+	require.ErrorIs(t, err, want)
+}
+
+type countingSequenceSQLHelper struct {
+	calls int
+}
+
+func (h *countingSequenceSQLHelper) GetCompilerContext() any {
+	return nil
+}
+
+func (h *countingSequenceSQLHelper) ExecSql(string) ([][]interface{}, error) {
+	h.calls++
+	return nil, nil
+}
+
+func (h *countingSequenceSQLHelper) ExecSqlWithCtx(context.Context, string) ([][]interface{}, error) {
+	h.calls++
+	return nil, nil
+}
+
+func (h *countingSequenceSQLHelper) GetSubscriptionMeta(string) (*plan.SubscriptionMeta, error) {
+	h.calls++
+	return nil, nil
+}
+
+func TestNextvalRejectsNonSequenceBeforeSQL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.InitSeq()
+	proc.Base.TxnOperator = txn
+	proc.Base.SessionInfo.SeqAddValues[7] = "sentinel"
+	proc.Base.SessionInfo.SeqLastValue[0] = "last"
+	sql := new(countingSequenceSQLHelper)
+	proc.Base.SessionInfo.SqlHelper = sql
+
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "fake", nil).Return(rel, nil)
+	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+	}, nil)
+
+	_, err := nextval("fake", "db", proc, eng, txn)
+	require.EqualError(t, err, "internal error: Table input is not a sequence")
+	require.Zero(t, sql.calls)
+	require.Equal(t, "sentinel", proc.Base.SessionInfo.SeqAddValues[7])
+	require.Equal(t, "last", proc.Base.SessionInfo.SeqLastValue[0])
+}
+
+func TestSetvalRejectsNonSequenceBeforeSQL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.InitSeq()
+	proc.Base.TxnOperator = txn
+	proc.Base.SessionInfo.SeqAddValues[7] = "sentinel"
+	proc.Base.SessionInfo.SeqLastValue[0] = "last"
+	sql := new(countingSequenceSQLHelper)
+	proc.Base.SessionInfo.SqlHelper = sql
+
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "fake", nil).Return(rel, nil)
+	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+	}, nil)
+
+	_, err := setval("fake", "20", true, "db", proc, txn, eng)
+	require.EqualError(t, err, "internal error: Table input is not a sequence")
+	require.Zero(t, sql.calls)
+	require.Equal(t, "sentinel", proc.Base.SessionInfo.SeqAddValues[7])
+	require.Equal(t, "last", proc.Base.SessionInfo.SeqLastValue[0])
 }
