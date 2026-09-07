@@ -1349,6 +1349,15 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 	}
 }
 
+func TestRemoteExpressionMemberOfDoesNotRequireDigest(t *testing.T) {
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: int64(planfunction.INTERNAL_JSON_MEMBER_OF) << 32},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.False(t, features.StatementDigestText)
+}
+
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
 		"the v36 remote-expression capability must remain available after later protocol increments")

@@ -185,7 +185,7 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
-	statementDigestTextFunctionID    int32 = 578
+	statementDigestTextFunctionID    int32 = 579
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 )
