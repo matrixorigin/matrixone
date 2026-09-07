@@ -28,7 +28,7 @@ import (
 )
 
 func TestIssue28327FulltextScorePreservesBaseRows(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
 
