@@ -1,4 +1,4 @@
-- Status: in progress — original design approved; capacity amendment pending owner approval
+- Status: in progress — original design and capacity amendment approved
 - Start Date: 2026-08-26
 - Authors: iamlinjunhong
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27553
@@ -21,11 +21,14 @@ client lifetime, digest-only diagnostics, compatibility fencing, ownership
 model, rollout/fallback, and validation map. This status update records that
 decision; it does not self-approve the implementation.
 
-**Capacity amendment (2026-09-07): PROPOSED.** Issue #28337 proposes admitting
-`$sort` and `$unwind` to the collection-scoped stage allowlist without changing the existing
-operation, concurrency, spill, timeout, or output budgets. `$sort` is a blocking
-stage in the same bounded MongoDB aggregation-memory envelope already accepted
-for `$group`; `allowDiskUse=false` makes excess memory fail instead of spilling.
+**Capacity amendment (2026-09-07): ACCEPTED.** MongoDB connector policy owner
+`iamlinjunhong` approved the #28337 amendment at reviewed revision
+`d0e98149bc9ef507d7d49e96f775c1255a23b870`. The approval scope is limited to
+admitting `$sort` and `$unwind` to the collection-scoped stage allowlist without
+changing the existing operation, concurrency, spill, timeout, or output budgets.
+The rationale is that `$sort` is a blocking stage in the same bounded MongoDB
+aggregation-memory envelope already accepted for `$group`; `allowDiskUse=false`
+makes excess memory fail instead of spilling.
 `$unwind` is a streaming fan-out stage whose returned rows and bytes remain
 subject to the existing cursor batch, statement row, statement raw-byte, value,
 and decoded-batch limits. Both stages remain bounded by one operation at
@@ -300,14 +303,12 @@ rechecking only changed base-side contracts.
 
 1. **Operator allowlist evolution:** every added MongoDB operator/stage requires
    a new security/resource semantics decision and regression before admission.
-2. **Capacity expansion:** the amended envelope and unchanged 30-second cap
-   require approval from the MongoDB connector policy owner. Any broader
-   stage/operator set or budget is a separate design decision with an attached
-   workload measurement.
+2. **Capacity expansion:** the amended envelope and unchanged 30-second cap are
+   approved only for the scope recorded above. Any broader stage/operator set
+   or budget is a separate design decision with an attached workload
+   measurement.
 
 The independent PASS above names the reviewed revision for the original
-capability and does not cover this capacity amendment. The RFC remains `in
-progress` for that original capability; delivery of the #28337 amendment stays
-blocked until the policy owner records the approving identity, scope, rationale,
-and exact reviewed revision. Implementation approval remains a separate review
-decision.
+capability, and the capacity decision names its policy owner, scope, rationale,
+and reviewed revision. The RFC is therefore `in progress`; implementation
+approval remains a separate review decision.
