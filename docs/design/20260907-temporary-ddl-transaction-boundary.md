@@ -1,8 +1,8 @@
 # Temporary-table DDL transaction boundary
 
 - Issue: https://github.com/matrixorigin/matrixone/issues/28255
-- Status: Design reviewed; implementation and validation pending.
-- Revision: 2 (2026-09-07)
+- Status: Implemented; final acceptance evidence recorded below.
+- Revision: 3 (2026-09-07)
 - Inspected base/head: `6eee64625e7e2cefd0f3dfeb61606f637111e057`, freshly fetched `up/main`.
 - Workspace: `m-28255`; implementation PR: none.
 
@@ -15,8 +15,9 @@ same transaction retains its existing isolation and atomicity.
 
 MySQL documents this distinction in
 [Statements That Cause an Implicit Commit](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html).
-The issue supplies observations from MySQL 8.3.0 and MatrixOne; these have not
-been independently rerun in this worktree.
+The issue supplies observations from MySQL 8.3.0 and MatrixOne. The fixed MO
+behavior was independently exercised in this worktree; no local MySQL comparison
+server was started.
 
 ## Verified source evidence
 
@@ -51,11 +52,11 @@ The failure is therefore not confined to alias undo bookkeeping. A change
 that only deletes the transaction journal would retain dangling aliases after
 CREATE rollback and orphan physical tables after DROP rollback.
 
-## Approved design, revision 2
+## Approved design, revision 3
 
 The user requested completion of the design and its implementation on 2026-09-07.
 This revision resolves the ownership decisions before production editing. Design
-review: PASS for the architecture below; implementation evidence remains required.
+review: PASS for the architecture below; implementation evidence is recorded below.
 The review is local, not an external GitHub approval.
 
 ### CREATE and CTAS
@@ -68,7 +69,9 @@ one independent transaction. A statement-local staging session retains aliases;
 it does not publish changes into the real session during physical creation.
 The internal executor owns rollback/commit and a committed-logtail barrier.
 The original compile plan, process transaction, session and internal flag are
-restored on every return, including panic. No SQL text replay is involved.
+restored on every return, including panic. The schema callback converts panic
+to an error because ExecTxn rolls back callback errors, but does not recover
+callback panics itself. No SQL text replay is involved.
 
 After confirmed commit and visibility, the session publishes the root alias
 outside the parent transaction's undo journal. CTAS then executes the existing
@@ -108,6 +111,17 @@ transactional behavior. No protobuf or on-disk schema changes are introduced.
 Upgrade TN and CN before activating the gate; drain active sessions before a
 protocol downgrade. Old physical temporary names and migrated tables remain valid.
 
+Revision 3 review: the physical name is
+`__mo_tmp_<session>_<database>_<generation>_<alias>`. Keeping the original
+hidden-index alias at the end preserves existing UUID-based index classification
+and nullable UNIQUE semantics. GC still extracts only the owning session prefix.
+The frontend resolves the current session's exact physical root identity as
+temporary, including CTAS INSERT targets. Such references and their hidden-index
+references use the existing NotLockMeta capability: their schema is already
+committed and their name cannot be accessed by another user session. Permanent
+source references retain normal metadata locks. This avoids retrying CTAS against
+its own independently committed catalog row without advancing the data snapshot.
+
 ### DROP, generations and cleanup
 
 DROP resolves and validates the real relation first. A successful temporary DROP
@@ -119,19 +133,19 @@ outside the transaction-handler mutex. Both COMMIT and ROLLBACK then reclaim the
 same retired root using the existing physical DROP path, which owns its indexes.
 
 A new CREATE uses the existing session-prefixed physical name format with a fresh
-UUID suffix on the alias portion. GC can still extract the same owning session.
+UUID prefix on the alias portion. GC can still extract the same owning session.
 No name is reused by another generation. Retryable cleanup cannot delete a
 replacement or reinsert an old alias. Retired roots are omitted from migration,
 but reset and disconnect retain their cleanup ownership. Reset failure must not
 restore a retired root as a live alias.
 
-The session admits at most 1024 live plus retired user-created roots on the new
+The session admits at most 1024 live aliases plus retired roots on the new
 path, checked before CREATE; inherited legacy excess can drain but cannot grow.
 Thus an arbitrarily long transaction cannot accumulate an unbounded retirement
 queue. Each root's data continues to use existing transaction resource controls.
 No new background worker or retry loop is added. Failed cleanup retains identity
-for the next idle boundary/reset/close and returns an error rather than claiming
-successful reclamation. Existing disconnect GC is the final orphan owner after
+for the next idle boundary/reset/close and logs the deferred reclamation. It must
+not return a retryable SQL error after an already successful data COMMIT. Existing disconnect GC is the final orphan owner after
 process failure. Successful physical creation is never replayed.
 
 ### Publication, rollback and exceptional outcomes
@@ -155,7 +169,7 @@ alias undo (dangling names), advancing the parent snapshot (persistent-table
 isolation change), committing all DDL/data independently (CTAS and DML mismatch),
 and recreating schemas at rollback (late failure and replay semantics).
 
-ALTER, TRUNCATE, internal data-branch temp tables, durable catalog formats and
+ALTER, TRUNCATE, CLONE/data-branch extensions, durable catalog formats and
 index algorithm dispatch are not redesigned. Their existing paths and tests are
 retained. Concurrent mutation of one session is already serialized by frontend;
 metadata and session helpers additionally preserve their existing lock discipline.
@@ -179,8 +193,68 @@ metadata and session helpers additionally preserve their existing lock disciplin
 - Final self-review must inspect every changed hunk, owner and reverse consumer,
   including retired identity cleanup, all terminal outcomes and delivery scope.
 
-## Evidence status
+## Change map and final review
 
-Source inspection and existing-test inventory completed at the recorded base.
-Design revision 2 closes the implementation direction; runtime acceptance is
-pending. No production implementation or test pass is claimed by this document.
+| Closure | Risk / owners and reverse consumers | Evidence |
+|---|---|---|
+| Independent CREATE and CTAS | R3: compile stages schema, executor finalizes its transaction, Session owns the published root; cloned plans/process state are restored on success/error/panic | Compile failure/commit/CTAS/panic tests; SQL rollback, CTAS source workspace, CTAS duplicate failure + immediate reuse |
+| Alias retirement and physical reclamation | R3: Session removes logical identity, existing physical DROP owns root + children; idle transaction boundary, reset, migration and disconnect consume distinct live/retired state | Session rollback/replacement/capacity/reset/retry tests; DROP after pending DML then COMMIT and ROLLBACK |
+| Schema visibility and binding | R3: CN name/ID cache and TN schema access admit only newer committed temporary schema for the same tenant; physical roots bind through exact session ownership, hidden references inherit metadata-lock exemption | CN marker/name/tenant controls, TN uncommitted/dropped/tenant/persistent controls; SI two-session SQL and nullable UNIQUE regression |
+| Rollout and delivery | R2: protocol 54 enables top-level behavior; old gate and internal sessions keep transactional DDL; native/protobuf formats unchanged | Protocol 53/54 unit control, owning-package normal/race, native build, existing temporary-table suite |
+
+All changed hunks, including untracked new source/tests, were reviewed against
+base `6eee64625e7e2cefd0f3dfeb61606f637111e057` and design commit `4a8b609ba6`.
+The delivery scope includes the design and all local changes, not only the commit.
+No PR or push is part of this request.
+
+Q1: schema transaction owns all uncommitted catalog/index/autoincrement writes;
+a committed or ambiguous root transfers to the Session. Parent DML retains its
+original workspace owner. Retirement never makes a physical generation name
+reusable. Existing DROP owns child-index cleanup, including partial retry.
+
+Q2: no storage operation holds the session mutex or transaction-handler mutex.
+Independent schema work uses the request context and executor transaction
+finalization. Schema callback panic becomes a rollback error; CTAS panic retires
+the root before frontend recovery finalizes the parent. Idle reclamation has a
+one-minute independent deadline and preserves ownership on failure. An
+uncommitted parent database is rejected before independent DDL lock acquisition.
+
+Q3: admission is bounded by 1024 live aliases plus retired roots. The new path
+publishes only roots; existing internal/legacy hidden aliases also count against
+admission. There is no worker, unbounded retry or per-row state addition. CREATE
+adds one independent schema transaction and a logtail barrier; DROP moves its
+physical work to transaction completion. Catalog fallback runs only on misses.
+Physical-ownership lookup adds one existing session-mutex critical section per
+resolved table. Data memory/disk usage remains under existing transaction controls.
+
+Operator signal/pipeline, persistent formats, protobuf, allocator and index-plugin
+registration interfaces are unchanged. The index-name compatibility counterexample
+was fixed at the naming producer; no new algorithm dispatch was added. Session
+serialization plus existing map/catalog locks remain the concurrency model.
+
+## Validation record (2026-09-07)
+
+Environment: Go 1.26.4, macOS arm64. `make cgo` rebuilt worktree-native artifacts;
+all Go evidence uses `.agents/skills/mo-dev/scripts/mo-cgo-test`. `make build`
+produced the final service binary. Duplicate native library/rpath warnings were
+non-fatal. Tests use an isolated CN/TN/logservice at SQL port 28455 and an isolated
+mo-tester directory; other local services were not modified.
+
+- Owning normal: `-count=1 ./pkg/sql/compile ./pkg/frontend ./pkg/vm/engine/disttae ./pkg/vm/engine/tae/catalog`.
+- Owning race: same four packages with `-race -count=1`; compile/frontend rerun after final failure-path edits.
+- Exact lifecycle stress: `TestSessionTemporaryDDLLifetime` and `TestSessionResetTempTablesIsSynchronousAndRetryable`, each separately under `-race -count=100`. Individual JSON measurement was below timer resolution, selecting the capped count 100.
+- Real-service regression: full `test/distributed/cases/table/temporary_table` directory in normal comparison mode. Existing tests and expected results are unchanged. New CTAS failure expectations were derived from duplicate-PK semantics, not accepted from result generation.
+- Initial full regression exposed a real nullable-UNIQUE failure caused by the generation suffix. Generation-prefix correction passed the unchanged case. Initial CTAS regression exposed metadata-lock retries; exact physical ownership binding fixed it.
+- The focused new SQL covers permanent DML atomicity, definition survival/removal, same-name generations, prepared CREATE, inline indexes, CTAS data ownership/failure, and SI snapshot preservation. Existing fixtures cover session isolation, aliases, fulltext and IVF indexes.
+
+Final review decision: PASS, with the documented protocol and uncommitted-database
+boundaries. Owning normal and race commands completed successfully. The final
+service passed the full temporary-table suite twice on the same instance:
+281/281 SQL statements each time, zero failures/ignored/abnormal. Catalog checks
+confirmed zero fixture tables after teardown and zero root/hidden-index tables
+immediately after DROP + ROLLBACK while the fixture database was still present.
+The test-owned service was stopped after verification.
+
+Local logs
+are under `/tmp/m-28255-*.log`; service logs/config/data are under
+`/tmp/m-28255-service`, and tester reports under `/tmp/m-28255-tester`.

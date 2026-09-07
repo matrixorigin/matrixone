@@ -599,6 +599,12 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		if cacheItem == nil {
+			latest := cache.GetTableById(accountId, 0, tableId)
+			if latest != nil && latest.Kind == catalog.SystemTemporaryTable && defines.IsTempTableName(latest.Name) {
+				cacheItem = latest
+			}
+		}
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName

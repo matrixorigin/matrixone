@@ -412,6 +412,9 @@ func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool)
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.GetVisibleNodeLocked(txn)
+	if node == nil {
+		node = entry.sessionTemporarySchemaLocked(txn)
+	}
 	if node != nil {
 		if isTombstone {
 			return node.BaseNode.GetTombstoneSchema()
@@ -419,6 +422,23 @@ func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool)
 		return node.BaseNode.Schema
 	}
 	return nil
+}
+
+// sessionTemporarySchemaLocked allows an independently committed empty schema
+// in an older user data transaction. It never changes data visibility and never
+// substitutes another tenant, an uncommitted schema, or a dropped generation.
+// Callers hold entry.RLock.
+func (entry *TableEntry) sessionTemporarySchemaLocked(txn txnif.TxnReader) *MVCCNode[*TableMVCCNode] {
+	node := entry.GetLatestCommittedNodeLocked()
+	if node == nil || node.HasDropCommitted() {
+		return nil
+	}
+	schema := node.BaseNode.Schema
+	owner, ok := txn.(interface{ GetTenantID() uint32 })
+	if !ok || schema.Relkind != pkgcatalog.SystemTemporaryTable || schema.AcInfo.TenantID != owner.GetTenantID() {
+		return nil
+	}
+	return node
 }
 
 func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
