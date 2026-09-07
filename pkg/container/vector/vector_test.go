@@ -5504,14 +5504,17 @@ func TestPrepareParamKindForType(t *testing.T) {
 		kind PrepareParamKind
 		ok   bool
 	}{
-		{types.T_bool, PrepareParamNone, false},
+		{types.T_bool, PrepareParamBoolean, true},
 		{types.T_int64, PrepareParamInteger, true},
 		{types.T_uint32, PrepareParamInteger, true},
 		{types.T_float32, PrepareParamFloat, true},
-		{types.T_float64, PrepareParamNone, false},
-		{types.T_decimal128, PrepareParamNone, false},
-		{types.T_text, PrepareParamNone, false},
-		{types.T_timestamp, PrepareParamNone, false},
+		{types.T_float64, PrepareParamFloat, true},
+		{types.T_decimal128, PrepareParamDecimal, true},
+		{types.T_geometry32, PrepareParamNone, true},
+		{types.T_uuid, PrepareParamNone, true},
+		{types.T_array_float32, PrepareParamNone, true},
+		{types.T_text, PrepareParamNone, true},
+		{types.T_timestamp, PrepareParamNone, true},
 	} {
 		kind, ok := PrepareParamKindForType(test.typ)
 		require.Equal(t, test.kind, kind)
