@@ -77,6 +77,7 @@ select count(*) as n from ta;
 0
 start transaction;
 create temporary table tf (id int primary key) as select 1 as id union all select 1 as id;
+-- @regex("Duplicate entry", true)
 Duplicate entry '1' for key 'id'
 create temporary table tf (id int primary key);
 rollback;

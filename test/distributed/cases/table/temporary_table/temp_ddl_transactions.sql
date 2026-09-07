@@ -64,6 +64,7 @@ select count(*) as n from ta;
 
 -- CTAS data failure retires the failed generation and permits immediate retry.
 start transaction;
+-- @regex("Duplicate entry",true)
 create temporary table tf (id int primary key) as select 1 as id union all select 1 as id;
 create temporary table tf (id int primary key);
 rollback;

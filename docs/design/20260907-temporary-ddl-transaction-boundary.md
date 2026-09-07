@@ -3,7 +3,10 @@
 - Issue: https://github.com/matrixorigin/matrixone/issues/28255
 - Status: Implemented; final acceptance evidence recorded below.
 - Revision: 3 (2026-09-07)
-- Inspected base/head: `6eee64625e7e2cefd0f3dfeb61606f637111e057`, freshly fetched `up/main`.
+- Implementation base: `6eee64625e7e2cefd0f3dfeb61606f637111e057`, the
+  freshly fetched `up/main` when the worktree was created. Third-round review
+  fetched `up/main` at `3d67664696e48cec0efc84308fb7de1cfda2f7db`;
+  the two newer commits do not change this feature's ownership contracts.
 - Workspace: `m-28255`; implementation PR: none.
 
 ## Contract
@@ -247,9 +250,17 @@ mo-tester directory; other local services were not modified.
 - Initial full regression exposed a real nullable-UNIQUE failure caused by the generation suffix. Generation-prefix correction passed the unchanged case. Initial CTAS regression exposed metadata-lock retries; exact physical ownership binding fixed it.
 - The focused new SQL covers permanent DML atomicity, definition survival/removal, same-name generations, prepared CREATE, inline indexes, CTAS data ownership/failure, and SI snapshot preservation. Existing fixtures cover session isolation, aliases, fulltext and IVF indexes.
 
+Three requested branch-review rounds were completed after the implementation
+commit. Round 1 made an invalid internal-executor capability a diagnostic error
+instead of a type-assertion panic. Round 2 aligned TN with CN by requiring both
+the temporary catalog marker and physical-name identity. Round 3 made the CTAS
+failure BVT assert the stable duplicate-entry category rather than full error
+rendering. Each finding was fixed in its review round and committed separately.
+
 Final review decision: PASS, with the documented protocol and uncommitted-database
-boundaries. Owning normal and race commands completed successfully. The final
-service passed the full temporary-table suite twice on the same instance:
+boundaries. Owning normal and race commands completed successfully. Before the
+three reviews, the service passed the full temporary-table suite twice on the
+same instance; after all review fixes, the final binary passed it once more:
 281/281 SQL statements each time, zero failures/ignored/abnormal. Catalog checks
 confirmed zero fixture tables after teardown and zero root/hidden-index tables
 immediately after DROP + ROLLBACK while the fixture database was still present.
