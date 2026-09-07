@@ -1093,6 +1093,17 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return bj.Unquote()
 	}
 
+	// Binary-domain values are rejected only when a non-NULL row reaches the
+	// kernel.  opUnaryBytesToStrWithErrorCheck checks NULLs before invoking the
+	// callback, which preserves MySQL's NULL propagation for typed BINARY/BLOB
+	// expressions while keeping their byte domain intact through binding.
+	if types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary {
+		binarySingle := func([]byte) (string, error) {
+			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
+		}
+		return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, binarySingle, selectList)
+	}
+
 	stringSingle := func(v []byte) (string, error) {
 		if !utf8.Valid(v) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_unquote")

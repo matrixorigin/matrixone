@@ -137,12 +137,33 @@ func jsonUnquoteReturnType(parameters []types.Type) types.Type {
 	source := parameters[0]
 	switch source.Oid {
 	case types.T_char, types.T_varchar:
-		return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
+		// JSON_UNQUOTE always produces utf8mb4_bin text.  The source width is
+		// still the correct persistent bound for the passthrough path, but the
+		// input collation must not leak into the result metadata.
+		return types.NewWithCharset(types.T_varchar, source.Width, 0, types.CharsetUTF8MB4Bin)
 	case types.T_text:
-		return types.NewWithCharset(types.T_text, source.Width, 0, source.Charset)
+		return types.NewWithCharset(types.T_text, source.Width, 0, types.CharsetUTF8MB4Bin)
 	default:
-		return types.T_varchar.ToType()
+		return types.NewWithCharset(types.T_varchar, types.T_varchar.ToType().Width, 0, types.CharsetUTF8MB4Bin)
 	}
+}
+
+// jsonUnquoteTypeMatch keeps the original string domain visible to the
+// executor.  In particular, a binary value must reach JsonUnquote unchanged
+// so a NULL binary row can propagate NULL while a non-NULL binary row gets the
+// charset error at execution time.  Non-string scalar values are rejected
+// before the generic string cast path can turn DATE/TIME/etc. into text.
+func jsonUnquoteTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	input := inputs[0]
+	if input.Oid != types.T_any && input.Oid != types.T_json && !input.Oid.IsMySQLString() {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool {
+		return oid.IsMySQLString()
+	})
 }
 
 func replacementStringReturnType(parameters []types.Type) types.Type {
@@ -1331,20 +1352,13 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: JSON_UNQUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 && types.StaticStringDomain(inputs[0]) == types.StringDomainBinary {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			return collatedTextFixedTypeMatch(overloads, inputs)
-		},
+		checkFn:    jsonUnquoteTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_json},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},

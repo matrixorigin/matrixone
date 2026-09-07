@@ -3643,13 +3643,30 @@ func TestJsonUnquoteTextTypeContract(t *testing.T) {
 			require.Equal(t, input.Oid, result.Oid)
 		}
 		require.Equal(t, input.Width, result.Width)
-		require.Equal(t, input.Charset, result.Charset)
+		require.Equal(t, types.CharsetUTF8MB4Bin, result.Charset)
 		_, needCast := resolved.ShouldDoImplicitTypeCast()
 		require.False(t, needCast)
 	}
+	for _, input := range []types.Type{types.T_json.ToType(), types.T_any.ToType()} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		require.Equal(t, types.CharsetUTF8MB4Bin, resolved.GetReturnType().Charset)
+	}
 }
 
-func TestJsonUnquoteRejectsBinaryDomain(t *testing.T) {
+func TestJsonUnquoteRejectsNonStringDomain(t *testing.T) {
+	for _, input := range []types.Type{
+		types.T_date.ToType(),
+		types.T_time.ToType(),
+		types.T_datetime.ToType(),
+		types.T_int64.ToType(),
+	} {
+		_, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.Error(t, err, input.String())
+	}
+}
+
+func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 	inputs := []types.Type{
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 32, 0),
@@ -3657,8 +3674,29 @@ func TestJsonUnquoteRejectsBinaryDomain(t *testing.T) {
 		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
 	}
 	for _, input := range inputs {
-		_, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
-		require.Error(t, err, input.String())
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err, input.String())
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast, input.String())
+
+		proc := testutil.NewProcess(t)
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			JsonUnquote)
+		succeed, info := nullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
+
+		nonNullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+			JsonUnquote)
+		succeed, info = nonNullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
 	}
 }
 

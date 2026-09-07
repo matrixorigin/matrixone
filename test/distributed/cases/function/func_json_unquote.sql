@@ -52,6 +52,10 @@ select length(json_unquote(mt)), length(json_unquote(lt)) from json_unquote_text
 create table json_unquote_text_ctas as select json_unquote(mt) as mt, json_unquote(lt) as lt from json_unquote_text_types;
 select column_name, data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_unquote_text_ctas' order by ordinal_position;
 select length(mt), length(lt) from json_unquote_text_ctas;
+select json_unquote(cast(null as binary));
+select json_unquote(cast('2021-02-01' as date));
+insert into json_unquote_text_types values ('null', 'null', 'null', null, null, null, null, null);
+select json_unquote(bl) from json_unquote_text_types where bl is null;
 select json_unquote(b) from json_unquote_text_types;
 select json_unquote(vb) from json_unquote_text_types;
 select json_unquote(bl) from json_unquote_text_types;
