@@ -1391,10 +1391,25 @@ func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasNoUnsignedSubtraction() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasNoUnsignedSubtractionValue(value)
+	return ok && has
+}
+
 // updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
 // the plan changes membership. Every token the planner reads at bind time
 // must be compared here: the cache is keyed by SQL text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
+func (ses *Session) updateSqlModeCaches(
+	oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldNoUnsignedSubtraction bool,
+	val interface{},
+) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1408,8 +1423,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSu
 	if !ok {
 		return
 	}
+	newNoUnsignedSubtraction, ok := sqlModeHasNoUnsignedSubtractionValue(val)
+	if !ok {
+		return
+	}
 	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg {
+		oldBoolSumAvg != newBoolSumAvg || oldNoUnsignedSubtraction != newNoUnsignedSubtraction {
 		ses.cleanCache()
 	}
 }

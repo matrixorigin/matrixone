@@ -461,6 +461,25 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	// NO_UNSIGNED_SUBTRACTION changes the result type of unsigned subtraction
+	// at bind time. The ordinary COM_QUERY cache is keyed by SQL text, so both
+	// enabling and disabling the mode must evict an otherwise identical query.
+	const unsignedSubtractionSQL = "SELECT CAST(0 AS UNSIGNED)-1"
+	stmt = &trackedStatement{}
+	ses.cachePlan(unsignedSubtractionSQL, []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,NO_UNSIGNED_SUBTRACTION"))
+	require.False(t, ses.isCached(unsignedSubtractionSQL))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan(unsignedSubtractionSQL, []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_UNSIGNED_SUBTRACTION,MATRIXONE_NATIVE,STRICT_TRANS_TABLES"))
+	require.True(t, ses.isCached(unsignedSubtractionSQL), "reordering the same tokens keeps the cache")
+	require.Zero(t, stmt.freed)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached(unsignedSubtractionSQL))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -521,6 +540,17 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, has)
 
+	has, ok = sqlModeHasNoUnsignedSubtractionValue("STRICT_TRANS_TABLES, NO_UNSIGNED_SUBTRACTION")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasNoUnsignedSubtractionValue("STRICT_TRANS_TABLES, NO_UNSIGNED_SUBTRACTION_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
 	_, ok = sqlModeHasEnableBoolSumAvgValue(int64(0))
+	require.False(t, ok)
+
+	_, ok = sqlModeHasNoUnsignedSubtractionValue(int64(0))
 	require.False(t, ok)
 }
