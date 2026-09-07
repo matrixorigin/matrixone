@@ -26,5 +26,44 @@ select st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), 99);
 invalid input: ST_PointAtDistance: distance is out of range
 select st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), 0);
 invalid input: ST_LineInterpolatePoints: fraction must be in (0, 1]
+select st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('NaN' as double));
+invalid input: ST_LineInterpolatePoint: fraction must be finite
+select st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('Inf' as double));
+invalid input: ST_LineInterpolatePoint: fraction must be finite
+select st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('-Inf' as double));
+invalid input: ST_LineInterpolatePoint: fraction must be finite
+select st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('NaN' as double));
+invalid input: ST_LineInterpolatePoints: fraction must be finite
+select st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('Inf' as double));
+invalid input: ST_LineInterpolatePoints: fraction must be finite
+select st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('-Inf' as double));
+invalid input: ST_LineInterpolatePoints: fraction must be finite
+select st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('NaN' as double));
+invalid input: ST_PointAtDistance: distance must be finite
+select st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('Inf' as double));
+invalid input: ST_PointAtDistance: distance must be finite
+select st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('-Inf' as double));
+invalid input: ST_PointAtDistance: distance must be finite
+drop table if exists geo_lineref_params_28188;
+create temporary table geo_lineref_params_28188(id int primary key, g geometry, fraction double, distance double);
+insert into geo_lineref_params_28188 values (1, st_geomfromtext('LINESTRING(0 0, 10 0)'), 0.5, 3);
+insert into geo_lineref_params_28188 values (2, st_geomfromtext('LINESTRING(0 0, 10 0)'), null, null);
+insert into geo_lineref_params_28188 values (3, null, 0.5, 3);
+insert into geo_lineref_params_28188 values (4, st_geomfromtext('LINESTRING(0 0, 10 0)'), cast('NaN' as double), cast('NaN' as double));
+select id, st_astext(st_lineinterpolatepoint(g, fraction)) as interp_point, st_astext(st_lineinterpolatepoints(g, fraction)) as interp_points, st_astext(st_pointatdistance(g, distance)) as at_distance from geo_lineref_params_28188 where id in (1, 2, 3) order by id;
+id    interp_point    interp_points    at_distance
+1    POINT(5 0)    MULTIPOINT(5 0,10 0)    POINT(3 0)
+2    null    null    null
+3    null    null    null
+select st_lineinterpolatepoint(g, fraction) from geo_lineref_params_28188 where id = 4;
+invalid input: ST_LineInterpolatePoint: fraction must be finite
+select st_lineinterpolatepoints(g, fraction) from geo_lineref_params_28188 where id = 4;
+invalid input: ST_LineInterpolatePoints: fraction must be finite
+select st_pointatdistance(g, distance) from geo_lineref_params_28188 where id = 4;
+invalid input: ST_PointAtDistance: distance must be finite
+drop table if exists geo_lineref_params_28188;
+select st_astext(st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), 3)) as finite_after_errors;
+finite_after_errors
+POINT(3 0)
 select st_lineinterpolatepoint(st_geomfromtext('POINT(1 1)'), 0.5);
 invalid input: geometry is not a LINESTRING
