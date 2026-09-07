@@ -204,24 +204,25 @@ the shorter configured socket timeout or 30 seconds; that context also bounds
 every `getMore` and the MatrixOne-side lifetime of the operation. MongoDB may
 return a document already buffered locally without consulting the context, so
 the scan checks the deadline again before consuming each buffered document.
-consume CPU until it observes cancellation, so this is not represented as a
-server CPU quota. With `allowDiskUse=false`, a grouping operation that exceeds
-the server aggregation-memory limit fails rather than spilling. The accepted
-rollout envelope is one operation per `max_parallelism=1` mapping, bounded
-input/plan memory, the existing source-concurrency limiter, and this
-client-facing 30-second budget. Final projection
-limits transferred fields; a zero-column scan uses a bounded row carrier.
+A MongoDB server may continue to consume CPU until it observes cancellation,
+so this is not represented as a server CPU quota. With `allowDiskUse=false`, a
+grouping or sorting operation that exceeds the server aggregation-memory limit
+fails rather than spilling. The existing runtime envelope is one operation per
+`max_parallelism=1` mapping, bounded input/plan memory, the existing
+source-concurrency limiter, and this client-facing 30-second budget. Final
+projection limits transferred fields; a zero-column scan uses a bounded row
+carrier.
 Metrics add only fixed labels (`find`/`aggregate` and lifecycle phases), never
 query content.
 
 This does not claim that a MongoDB aggregation has a universal fixed CPU or
 memory cost: `$match`, `$group`, `$sort`, `$unwind`, and `$count` may scan an
 operator's collection until cancellation or a MongoDB resource limit. The
-rollout is therefore opt-in and admits only the above envelope. Any expansion
-to array accumulators, larger input/stage/depth limits, a higher mapping
-parallelism, a longer timeout, disk spill, or user-controlled resource options
-requires a new capacity decision, workload measurement, and regression before
-allowlisting it.
+proposed amendment remains within the feature's opt-in SQL surface and the
+runtime envelope above. Any further expansion to array accumulators, larger
+input/stage/depth limits, a higher mapping parallelism, a longer timeout, disk
+spill, or user-controlled resource options requires a new capacity decision,
+workload measurement, and regression before allowlisting it.
 
 Cancellation before admission returns without a lease; cancellation after
 admission reaches the driver context and cleanup.  A stale/disabled or
