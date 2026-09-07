@@ -586,6 +586,24 @@ func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
 	require.Equal(t, []bool{true, true, true, true, true}, bh.systemCTELimits)
 }
 
+func TestLockViewMetadataLifecycleUsesSystemContextWithoutMutatingCaller(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	callerAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, lockViewMetadataLifecycle(callerCtx, bh))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL},
+		bh.executedSQLs)
+	require.Equal(t, []uint32{uint32(sysAccountID), uint32(sysAccountID)}, bh.executionAccountIDs)
+
+	afterAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+	require.Equal(t, callerAccountID, afterAccountID)
+}
+
 type failViewMutationBackgroundExec struct {
 	*backgroundExecTest
 	err error

@@ -5,6 +5,12 @@
 // You may obtain a copy of the License at
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package issues
 
@@ -12,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +82,79 @@ func TestIssue28317ViewSnapshotGateOrderSQL(t *testing.T) {
 				runIssue28317(t, ctx, db0, db1, services, snapshotTableID, dbA, dbB, tc.mode, tc.want)
 			})
 		}
+		t.Run("ordinary tenant SNAPSHOT and PITR restore", func(t *testing.T) {
+			runIssue28317OrdinaryTenantRestores(t, ctx, db0, cn0.GetServiceConfig().CN.Frontend.Port)
+		})
 	})
+}
+
+func runIssue28317OrdinaryTenantRestores(t *testing.T, parent context.Context, sysDB *sql.DB, port int64) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+	defer cancel()
+
+	const (
+		accountName  = "issue_28317_tenant"
+		databaseName = "issue_28317_tenant_db"
+		snapshotName = "issue_28317_tenant_snapshot"
+		pitrName     = "issue_28317_tenant_pitr"
+	)
+
+	execSQLMaybe(t, ctx, sysDB, "drop snapshot if exists "+snapshotName)
+	execSQLMaybe(t, ctx, sysDB, "drop account if exists `"+accountName+"`")
+	execSQLRequire(t, ctx, sysDB,
+		"create account `"+accountName+"` admin_name 'admin' identified by '111'")
+
+	openTenant := func() *sql.DB {
+		tenantDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port,
+		))
+		require.NoError(t, err)
+		return tenantDB
+	}
+	tenantDB := openTenant()
+	defer tenantDB.Close()
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		execSQLMaybe(t, cleanupCtx, tenantDB, "drop pitr if exists "+pitrName)
+		execSQLMaybe(t, cleanupCtx, tenantDB, "drop snapshot if exists "+snapshotName)
+		execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+accountName+"`")
+	}()
+
+	execSQLRequire(t, ctx, tenantDB, "create database `"+databaseName+"`")
+	execSQLRequire(t, ctx, tenantDB,
+		"create table `"+databaseName+"`.t (id int primary key)")
+	execSQLRequire(t, ctx, tenantDB,
+		"insert into `"+databaseName+"`.t values (1)")
+
+	execSQLRequire(t, ctx, tenantDB,
+		"create snapshot "+snapshotName+" for account")
+	execSQLRequire(t, ctx, tenantDB,
+		"insert into `"+databaseName+"`.t values (2)")
+	execSQLRequire(t, ctx, tenantDB,
+		"restore account `"+accountName+"`{snapshot='"+snapshotName+"'}")
+
+	afterSnapshot := openTenant()
+	defer afterSnapshot.Close()
+	var rows int
+	require.NoError(t, afterSnapshot.QueryRowContext(ctx,
+		"select count(*) from `"+databaseName+"`.t").Scan(&rows))
+	require.Equal(t, 1, rows)
+
+	execSQLRequire(t, ctx, afterSnapshot,
+		"create pitr "+pitrName+" for account range 1 'h'")
+	var restoreAt string
+	require.NoError(t, afterSnapshot.QueryRowContext(ctx,
+		"select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s.%f')").Scan(&restoreAt))
+	execSQLRequire(t, ctx, afterSnapshot,
+		"restore from pitr "+pitrName+" '"+restoreAt+"'")
+
+	afterPitr := openTenant()
+	defer afterPitr.Close()
+	require.NoError(t, afterPitr.QueryRowContext(ctx,
+		"select count(*) from `"+databaseName+"`.t").Scan(&rows))
+	require.Equal(t, 1, rows)
 }
 
 func runIssue28317(t *testing.T, parent context.Context, db0, db1 *sql.DB, services []lockservice.LockService, snapshotID uint64, dbA, dbB, mode string, wantTypes []string) {

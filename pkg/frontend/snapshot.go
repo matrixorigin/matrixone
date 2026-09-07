@@ -3348,8 +3348,11 @@ func reconcileAccountViewMetadataEnabled(
 }
 
 func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The gates are global catalog rows; mo_feature_registry exists only in sys.
+	// Change resolution for these reads without changing the caller's transaction.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	return catalog.LockViewMetadataLifecycle(func(sql string) error {
-		return bh.Exec(ctx, sql)
+		return bh.Exec(systemCtx, sql)
 	})
 }
 
