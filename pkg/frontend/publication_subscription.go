@@ -692,7 +692,7 @@ func invalidatePublicationViewMetadata(
 		return err
 	}
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx), compile.PublicationViewMetadataInvalidationSQL(

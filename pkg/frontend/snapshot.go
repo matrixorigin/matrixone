@@ -687,7 +687,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				return err
 			}
 			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+			if err = lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 				return err
 			}
 			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
@@ -774,7 +774,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	// Serialize catalog restore with View metadata recovery before either path
 	// locks a target View. The gate row belongs to a preserved catalog table, so
 	// it remains stable while relation identities are rebuilt.
-	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
 		return stats, err
 	}
 
@@ -3310,7 +3310,7 @@ func invalidateAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx),
@@ -3336,7 +3336,7 @@ func reconcileAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
@@ -3345,6 +3345,12 @@ func reconcileAccountViewMetadataEnabled(
 		}
 	}
 	return nil
+}
+
+func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
+	return catalog.LockViewMetadataLifecycle(func(sql string) error {
+		return bh.Exec(ctx, sql)
+	})
 }
 
 func prepareViewMetadataMutation(
