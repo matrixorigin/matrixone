@@ -157,10 +157,10 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		top.ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
 	}
 
-	// Ordered output is consumed as a byte-bounded stream. Use the external
-	// path even for a small row limit so wide payloads never have to be
-	// reconstructed as one resident result batch.
-	if top.OrderedOutput || top.ctr.limit > topSpillThreshold {
+	// OrderedOutput is a topology contract, not a storage policy. Both eval
+	// paths produce sorted rows. Small results use type/actual-byte admission
+	// in build and migrate only under payload pressure; large K still spills.
+	if top.ctr.limit > topSpillThreshold {
 		top.ctr.spilling = true
 	}
 

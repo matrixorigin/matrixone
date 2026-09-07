@@ -336,8 +336,18 @@ func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
 }
 
 func TestAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T) {
+	testAccountedTopSmallVarlenSpillRejectionCleans(t, false)
+}
+
+func TestAccountedTopOrderedSmallVarlenSpillRejectionCleans(t *testing.T) {
+	testAccountedTopSmallVarlenSpillRejectionCleans(t, true)
+}
+
+func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool) {
+	t.Helper()
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(3)
+	op.OrderedOutput = ordered
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	// Exhaust disk before actual winner pressure triggers resident migration.
 	op.ctr.residentByteLimit = 512 << 10

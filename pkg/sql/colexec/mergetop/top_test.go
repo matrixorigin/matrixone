@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -158,33 +159,55 @@ func TestMergeTopOrderedStreamsMergesWithoutRetainingLimitRows(t *testing.T) {
 		process.NewPipelineEdge(4, 1),
 	}
 
-	for i, values := range [][]int64{{1, 3, 5}, {2, 4, 6}} {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		for _, value := range values {
-			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
-		}
-		bat.SetRowCount(len(values))
-		require.True(t, proc.Reg.MergeReceivers[i].SendDataDirect(proc.Ctx, bat, proc.Mp()))
-		require.True(t, proc.Reg.MergeReceivers[i].SendEnd())
-	}
-
 	arg := NewArgument().
 		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(4)).
 		WithFs([]*plan.OrderBySpec{{Expr: newExpression(0)}}).
 		WithOrderedStreams()
 	require.NoError(t, arg.Prepare(proc))
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, reg := range proc.Reg.MergeReceivers {
+				reg.Abort(context.Canceled)
+			}
+		}
+		arg.Reset(proc, t.Failed(), nil)
+		arg.Free(proc, t.Failed(), nil)
+		arg.Release()
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// Exercise the actual producer/consumer boundary, including resident Top
+	// output: an ordered edge must not depend on the producer's storage mode.
+	for i, values := range [][]int64{{5, 1, 3}, {6, 2, 4}} {
+		func() {
+			bat := batch.NewWithSize(1)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+			defer child.Free(proc, false, nil)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			for _, value := range values {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+			}
+			bat.SetRowCount(len(values))
+			producer := top.NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(3)).
+				WithFs(arg.Fs).WithOrderedOutput()
+			producer.AppendChild(child)
+			defer producer.Release()
+			defer producer.Free(proc, false, nil)
+			require.NoError(t, producer.Prepare(proc))
+			result, err := producer.Call(proc)
+			require.NoError(t, err)
+			copied, err := result.Batch.Dup(proc.Mp())
+			require.NoError(t, err)
+			require.True(t, proc.Reg.MergeReceivers[i].SendDataDirect(proc.Ctx, copied, proc.Mp()))
+			require.True(t, proc.Reg.MergeReceivers[i].SendEnd())
+		}()
+	}
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 2, 3, 4},
 		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
 	require.Less(t, result.Batch.Size(), mergeTopStreamBatchBytes)
-
-	arg.Reset(proc, false, nil)
-	arg.Free(proc, false, nil)
-	arg.Release()
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func TestMergeTopOrderedStreamsAcrossBatchBoundariesDescending(t *testing.T) {

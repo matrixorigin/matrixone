@@ -125,15 +125,20 @@ func TestTopPrepareSpillBoundary(t *testing.T) {
 			limit: int64(topSpillThreshold),
 		},
 		{
-			name:          "ordered threshold uses bounded output",
+			name:          "ordered threshold remains resident",
 			limit:         int64(topSpillThreshold),
 			orderedOutput: true,
-			wantSpill:     true,
 		},
 		{
 			name:      "above threshold spills",
 			limit:     int64(topSpillThreshold + 1),
 			wantSpill: true,
+		},
+		{
+			name:          "ordered above threshold spills",
+			limit:         int64(topSpillThreshold + 1),
+			orderedOutput: true,
+			wantSpill:     true,
 		},
 	}
 
@@ -393,7 +398,7 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 		tc.arg.WithOrderedOutput()
 	}
 	require.NoError(t, tc.arg.Prepare(tc.proc))
-	require.Equal(t, orderedOutput || uint64(limit) > topSpillThreshold, tc.arg.ctr.spilling)
+	require.Equal(t, uint64(limit) > topSpillThreshold, tc.arg.ctr.spilling)
 	tc.arg.ctr.evalSpillOutputBytes = outputBytes
 	// Force actual resident pressure independently of output reconstruction.
 	tc.arg.ctr.residentByteLimit = outputBytes / 2

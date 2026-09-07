@@ -29,8 +29,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -44,6 +46,23 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		// Service startup does not imply that the query coordinator's cached
+		// inventory contains both workers. Establish that precondition before
+		// asserting the distributed Top topology.
+		cluster := clusterservice.GetMOCluster(cn.ServiceID())
+		refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+		require.True(t, ok)
+		require.Eventually(t, func() bool {
+			if refresher.Refresh(ctx) != nil {
+				return false
+			}
+			workers := 0
+			cluster.GetCNService(clusterservice.NewSelector(), func(metadata.CNService) bool {
+				workers++
+				return true
+			})
+			return workers == 2
+		}, 30*time.Second, 100*time.Millisecond, "both CN workers must be discoverable")
 		internalExec := testutils.GetSQLExecutor(cn)
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
@@ -85,10 +104,15 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 
 		t.Run("remote top gathers workers before write back", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "use `"+castDB+"`")
-			// Varlen payload selects the ordered hierarchy; enough source rows
-			// exercise DOP expansion, unlike the five-row control below.
-			rows, queryErr := db.QueryContext(ctx,
-				"select id,k,payload from forced_top_src order by k limit 1000")
+			// Varlen payload selects the ordered hierarchy. Assert the actual
+			// gather topology, not just the MULTICN execution-mode header.
+			query := "select id,k,payload from forced_top_src order by k limit 1000"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			require.Contains(t, strings.ToLower(physical.Text), "merge top")
+			rows, queryErr := db.QueryContext(ctx, query)
 			require.NoError(t, queryErr)
 			defer rows.Close()
 			count := 0
@@ -113,7 +137,9 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 			require.NoError(t, planErr)
 			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
 			require.Contains(t, physical.Text, "Magic: Remote")
-			require.Contains(t, strings.ToLower(physical.Text), "merge top")
+			// A tiny source can collapse to one remote worker. The larger case
+			// above proves the gather topology; this control proves exact rows
+			// and prepared reuse without requiring an unnecessary merge.
 			readRows := func(rows *sql.Rows) [][2]string {
 				t.Helper()
 				var got [][2]string
