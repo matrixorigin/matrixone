@@ -492,11 +492,9 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 			continue
 		}
 
-		if value, exists := object["$ref"]; exists {
-			stringValue, isString := value.(string)
-			if !isString {
-				return nil, moerr.NewInvalidArg(ctx, fnName, mysqlJSONSchemaRefStringReason)
-			}
+		// Only string references replace a Draft 4 schema. Non-string $ref
+		// values are ignored by MySQL; keep traversing their sibling schemas.
+		if _, isString := object["$ref"].(string); isString {
 			ref, ok := refs[item.pointer]
 			if !ok {
 				return nil, moerr.NewInvalidArg(ctx, fnName, mysqlJSONSchemaRefSyntaxReason)
@@ -512,7 +510,6 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 				effectiveTargets[ref.target] = struct{}{}
 				stack = append(stack, mysqlEffectiveSchemaPending{pointer: ref.target, value: target.value})
 			}
-			_ = stringValue
 			// Draft 4 ignores siblings of $ref. The full-tree scan above has
 			// already inspected them for external references and budgets.
 			continue

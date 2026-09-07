@@ -144,3 +144,8 @@ create table json_schema_draft4_rows (id int primary key, s varchar(1024), d jso
 insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
 select id, json_schema_valid(s, d), json_schema_validation_report(s, d) from json_schema_draft4_rows order by id;
 drop table json_schema_draft4_rows;
+
+-- Non-string references must not suppress local references or target constraints.
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":1}') as valid_local;
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":"bad"}') as invalid_local;
+select json_schema_validation_report('{"$ref":"#/$defs/value","$defs":{"value":{"$ref":false,"type":"integer"}}}', '1') as report_local;

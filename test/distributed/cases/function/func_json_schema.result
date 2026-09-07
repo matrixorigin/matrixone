@@ -237,3 +237,12 @@ id	json_schema_valid(s, d)	json_schema_validation_report(s, d)
 1	1	{"valid": true}
 2	0	{"document-location": "$", "reason": "Must be greater than or equal to 5", "schema-failed-keyword": "minimum", "schema-location": "#/minimum", "valid": false}
 drop table json_schema_draft4_rows;
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":1}') as valid_local;
+valid_local
+1
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":"bad"}') as invalid_local;
+invalid_local
+0
+select json_schema_validation_report('{"$ref":"#/$defs/value","$defs":{"value":{"$ref":false,"type":"integer"}}}', '1') as report_local;
+report_local
+{"valid": true}
