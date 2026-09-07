@@ -15,7 +15,7 @@ approval.
 | Default admission and flag rollback | no-config Arrow LOAD rejection plus explicit enable/disable/drain/restart coverage | fail-closed pending approval |
 | S3/stage and distributed admission | explicit per-CN opt-in is required | fail-closed pending aggregate quota, provider, and owner gates |
 | Mixed-version upgrade | default-disabled Arrow does not advertise the new remote pipeline capability | rerun required before enabling distributed execution |
-| Commit failure/CN shutdown/cancellation | deterministic fault injection, 2-CN BVT, and blocked S3 request cancellation passed | local complete |
+| Commit failure/CN shutdown/cancellation | deterministic commit fault injection, cluster lifecycle, and blocked S3 request cancellation passed | local complete |
 | Aggregate pin quota/range planner/deployment stress | deliberately deferred | blocker for S3/distributed production |
 | Real AWS/OSS/COS | delegated to provider test owners | external blocker |
 | A/B, alerts, rollout/rollback | local E2E A/B and reference gates recorded in runbook | deployment acceptance pending |
@@ -54,8 +54,11 @@ off makes `parallel 'true'` fall back to serial execution and commit all rows.
   then verifies request-context cancellation, statement failure, and zero
   committed rows. The prior 2-CN processlist observer is not evidence: the
   local fixture can complete before an observer establishes a stable point.
-- `WorkerCNShutdown` closes the worker only after the coordinator exposes the
-  active LOAD. Completion is accepted only as all fixture rows or zero rows.
+- The former 2-CN processlist-based worker-shutdown observer is not evidence:
+  the local fixture can complete before an observer establishes a stable point.
+  `TestArrowLoadRolloutRollbackDrain` instead exercises cluster lifecycle with
+  an admitted statement, and its complete-or-empty assertion preserves the
+  transaction-boundary contract.
 - Existing File/Stream, transaction/isolation, malformed input, object-change,
   MinIO, race, fuzz, and formal distributed SQL cases remain part of the branch
   evidence described by the design and shared-substrate records.
@@ -85,7 +88,7 @@ deployment owner.
 | Owner | Review surface | Evidence | Decision |
 | --- | --- | --- | --- |
 | SQL/Planner/Compile | LOAD-only syntax, binding, shard plan, additive protobuf, mixed version | planner/compile UT, remote roundtrip, mixed binary rehearsal | pending owner |
-| Execution | External lifecycle, fanout, cancellation, shutdown | Arrow E2E, 2-CN cancellation/shutdown, race/fuzz | pending owner |
+| Execution | External lifecycle, fanout, cancellation, shutdown | Arrow E2E, deterministic lifecycle/cancellation, race/fuzz | pending owner |
 | Container/Resource | leases, borrowed vectors/nulls, COW, accounting | owning-package UT/race and consumer inventory | pending owner |
 | FileService/S3 | conditional range, cache pin, identity, credentials, request policy | provider UT and local MinIO; aggregate quota/provider cloud gaps explicit | pending owner |
 | Transaction/Storage | statement atomicity, retry, encoding boundary | transaction BVT and post-workspace-dump commit fault | pending owner |

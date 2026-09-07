@@ -131,11 +131,9 @@ func queryCount(t testing.TB, db *sql.DB, query string, args ...any) int64 {
 }
 
 // waitUntilStatementRunning polls information_schema.processlist from a second
-// connection until the target connection's current statement text contains needle,
-// proving the statement is actually mid-execution before the caller acts on it (e.g.
-// issues KILL QUERY). This is a deterministic synchronization point, not a
-// fixed-duration sleep: it returns as soon as the condition holds, and fails the
-// test if it never does within deadline.
+// connection until the target connection's current statement text contains
+// needle. Callers use it only when the test fixture keeps the statement blocked
+// at a deterministic lifecycle boundary before taking its next action.
 func waitUntilStatementRunning(t testing.TB, observer *sql.DB, connID int64, needle string, deadline time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
