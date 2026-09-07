@@ -48,6 +48,7 @@ type CDCStatementBuilder struct {
 
 	// Column types (excluding internal columns like __mo_rowid)
 	insertColTypes []*types.Type
+	insertColNames []string
 
 	// Primary key information
 	pkColNames []string
@@ -90,6 +91,7 @@ func NewCDCStatementBuilder(
 			Width: col.Typ.Width,
 			Scale: col.Typ.Scale,
 		})
+		b.insertColNames = append(b.insertColNames, col.Name)
 	}
 
 	// Extract primary key information
@@ -114,7 +116,8 @@ func NewCDCStatementBuilder(
 //
 // Format:
 //
-//	/* [fromTs, toTs) */ REPLACE INTO `db`.`table` VALUES (row1),(row2),...;
+//	/* [fromTs, toTs) */ INSERT INTO `db`.`table` VALUES (row1),(row2),...
+//	ON DUPLICATE KEY UPDATE `col1`=VALUES(`col1`),...;
 func (b *CDCStatementBuilder) BuildInsertSQL(
 	ctx context.Context,
 	bat *batch.Batch,
@@ -154,7 +157,7 @@ func (b *CDCStatementBuilder) buildInsertSQL(
 
 	// Prepare SQL prefix with timestamp comment
 	prefix := b.buildInsertPrefix(fromTs, toTs)
-	suffix := []byte(";")
+	suffix := b.buildInsertSuffix()
 
 	// Initialize first SQL statement
 	currentSQL = make([]byte, v2SQLBufReserved, b.maxSQLSize)
@@ -325,8 +328,25 @@ func (b *CDCStatementBuilder) BuildDeleteSQL(
 // buildInsertPrefix builds the INSERT statement prefix with timestamp comment
 func (b *CDCStatementBuilder) buildInsertPrefix(fromTs, toTs types.TS) []byte {
 	tsComment := fmt.Sprintf("/* [%s, %s) */ ", fromTs.ToString(), toTs.ToString())
-	prefix := fmt.Sprintf("%sREPLACE INTO `%s`.`%s` VALUES ", tsComment, b.dbName, b.tableName)
+	prefix := fmt.Sprintf("%sINSERT INTO `%s`.`%s` VALUES ", tsComment, b.dbName, b.tableName)
 	return []byte(prefix)
+}
+
+func (b *CDCStatementBuilder) buildInsertSuffix() []byte {
+	suffix := make([]byte, 0, 32*len(b.insertColNames)+1)
+	suffix = append(suffix, " ON DUPLICATE KEY UPDATE "...)
+	for i, name := range b.insertColNames {
+		if i > 0 {
+			suffix = append(suffix, ',')
+		}
+		suffix = append(suffix, '`')
+		suffix = append(suffix, name...)
+		suffix = append(suffix, "`=VALUES(`"...)
+		suffix = append(suffix, name...)
+		suffix = append(suffix, "`)"...)
+	}
+	suffix = append(suffix, ';')
+	return suffix
 }
 
 // buildDeletePrefix builds the DELETE statement prefix with timestamp comment

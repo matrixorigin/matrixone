@@ -157,7 +157,8 @@ func TestCDCStatementBuilder_BuildInsertSQL(t *testing.T) {
 
 		// Verify SQL structure
 		assert.Contains(t, sql, "/* [100-0, 200-0) */")
-		assert.Contains(t, sql, "REPLACE INTO `test_db`.`users` VALUES")
+		assert.Contains(t, sql, "INSERT INTO `test_db`.`users` VALUES")
+		assert.Contains(t, sql, "ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`),`age`=VALUES(`age`)")
 		assert.Contains(t, sql, "(1,'Alice',25)")
 		assert.True(t, strings.HasSuffix(sql, ";"))
 	})
@@ -366,7 +367,8 @@ func TestCDCStatementBuilder_BuildInsertSQL_SizeLimit(t *testing.T) {
 			sqlStr := string(sql[v2SQLBufReserved:])
 			t.Logf("SQL %d (len=%d): %s", i+1, len(sql), sqlStr)
 
-			assert.Contains(t, sqlStr, "REPLACE INTO")
+			assert.Contains(t, sqlStr, "INSERT INTO")
+			assert.Contains(t, sqlStr, "ON DUPLICATE KEY UPDATE")
 			assert.True(t, strings.HasSuffix(sqlStr, ";"))
 
 			// Each SQL should be within size limit

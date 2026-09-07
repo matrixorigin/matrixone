@@ -616,7 +616,8 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 		require.Len(t, sinker.executor.debugTxnRecorder.txnSQL, 2)
 		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[0], "DELETE FROM")
-		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[1], "REPLACE INTO")
+		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[1], "INSERT INTO")
+		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[1], "ON DUPLICATE KEY UPDATE")
 	})
 }
 
