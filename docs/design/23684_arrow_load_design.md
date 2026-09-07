@@ -61,8 +61,8 @@ scope remains a positive compile authorization. Arrow fanout additionally
 serializes `arrow_distributed_execution`; it is independent of the requested
 `Parallel` flag because already-planned shard scopes must clear that flag to
 avoid a second split. `External.Prepare` applies the worker's distributed gate
-to this execution fact before it opens I/O. MORPC v50 remains the receiver
-compatibility gate. v50 is `up/main` v49 plus one on the delivery
+to this execution fact before it opens I/O. MORPC v53 remains the receiver
+compatibility gate. v53 is `up/main` v52 plus one on the delivery
 rebase; older peers reject the additive Arrow pipeline fields, so mixed-version
 deployments must drain or keep remote Arrow modes disabled.  Downgrade is safe
 under the same gates because local Arrow does not advertise a remote capability.
@@ -101,7 +101,7 @@ compile scope propagation, conditional read success plus close-only
 propagation, malformed IPC/schema/null cases, and budget behavior.  Existing
 Arrow File/Stream, identity, MinIO, multi-CN, rollback, and SQL BVT cases cover
 the consumer and public paths.  The immediate predecessor compatibility test
-is retained with the MORPC v50 gate.
+is retained with the MORPC v53 gate.
 
 Before remote production enablement, the readiness record requires a bounded
 cross-worker aggregate admission design, real-provider evidence, exact-release
