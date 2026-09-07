@@ -123,6 +123,8 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	closeOnce           sync.Once
+	closeErr            error
 	quiesced            atomic.Bool
 	localHandlers       localHandlerLifecycle
 	heartbeatInFlight   atomic.Bool
@@ -242,7 +244,7 @@ func (s *store) drainLocalHandlers(ctx context.Context) error {
 	case <-zero:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Join(rpc.ErrTxnDrainTimeout, ctx.Err())
 	}
 }
 
@@ -342,6 +344,11 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	s.closeOnce.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
+
+func (s *store) drainHandlers(ctx context.Context) error {
 	// Stop accepting new RPCs first, but keep replicas, WAL and storage alive
 	// while already accepted handlers finish. This prevents an in-flight commit
 	// from observing a cancelled replica context before WAL durability settles.
@@ -355,16 +362,19 @@ func (s *store) Close() error {
 		if err := lifecycle.Quiesce(); err != nil {
 			return err
 		}
-		drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-		err := lifecycle.Drain(drainCtx)
-		cancel()
-		if err != nil {
+		if err := lifecycle.Drain(ctx); err != nil {
 			return err
 		}
 	}
-	localDrainCtx, localDrainCancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	err := s.drainLocalHandlers(localDrainCtx)
-	localDrainCancel()
+	return s.drainLocalHandlers(ctx)
+}
+
+func (s *store) close() error {
+	// Both network and cached local dispatch share the same drain budget.
+	// Starting a fresh local deadline after network drain could double it.
+	drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	err := s.drainHandlers(drainCtx)
+	cancel()
 	if err != nil {
 		return err
 	}

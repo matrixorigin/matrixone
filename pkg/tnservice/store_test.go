@@ -65,6 +65,66 @@ type storeTxnServer struct {
 	beforeClose   func()
 }
 
+type failingDrainServer struct {
+	rpc.TxnServer
+	quiesce func() error
+	drain   func(context.Context) error
+}
+
+func (s *failingDrainServer) Quiesce() error                  { return s.quiesce() }
+func (s *failingDrainServer) Drain(ctx context.Context) error { return s.drain(ctx) }
+
+func TestStoreCloseConcurrentSharesDrainFailure(t *testing.T) {
+	expected := errors.New("drain failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var calls atomic.Int32
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(context.Context) error {
+			calls.Add(1)
+			close(entered)
+			<-release
+			return expected
+		},
+	}}
+	results := make(chan error, 2)
+	go func() { results <- s.Close() }()
+	<-entered
+	go func() { results <- s.Close() }()
+	unblock()
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, s.Close(), expected)
+	require.Equal(t, int32(1), calls.Load())
+	// Replica/storage dependencies are deliberately absent: a failed drain
+	// must return without entering their destruction path.
+}
+
+func TestStoreDrainSharesContextWithLocalHandlers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(actual context.Context) error {
+			require.Equal(t, ctx, actual)
+			cancel()
+			return nil
+		},
+	}}
+	release, ok := s.acquireLocalHandler()
+	require.True(t, ok)
+	defer release()
+	err := s.drainHandlers(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, rpc.ErrTxnDrainTimeout)
+	_, accepted := s.acquireLocalHandler()
+	require.False(t, accepted)
+}
+
 func (s *storeTxnServer) Quiesce() error {
 	if s.beforeQuiesce != nil {
 		s.beforeQuiesce()
@@ -291,6 +351,12 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 		realClient := s.queryClient
 		s.queryClient = sharedClient
 		require.NoError(t, realClient.Close())
+		results := make(chan error, 2)
+		go func() { results <- s.Close() }()
+		go func() { results <- s.Close() }()
+		require.NoError(t, <-results)
+		require.NoError(t, <-results)
+		// runTNStoreTest calls Close once more on return.
 		t.Cleanup(func() {
 			require.Equal(t, 1, sharedClient.closeCalls)
 		})

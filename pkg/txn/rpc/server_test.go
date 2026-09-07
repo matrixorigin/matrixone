@@ -344,6 +344,11 @@ func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		started := make(chan struct{})
 		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		// The helper closes the server when this callback returns, including
+		// FailNow. Release the handler before that close can begin draining.
+		defer unblock()
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
 			close(started)
 			<-release
@@ -366,7 +371,7 @@ func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
 		require.ErrorIs(t, err, ErrTxnDrainTimeout)
 		cancel()
 
-		close(release)
+		unblock()
 		require.Eventually(t, func() bool {
 			return s.Drain(context.Background()) == nil
 		}, time.Second, time.Millisecond)

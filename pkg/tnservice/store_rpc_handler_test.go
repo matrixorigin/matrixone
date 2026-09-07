@@ -281,23 +281,14 @@ func TestCachedLocalDispatchIsRejectedAfterQuiesce(t *testing.T) {
 
 func TestLocalHandlerDrainWaitsForCachedDispatch(t *testing.T) {
 	s := &store{}
-	release := make(chan struct{})
 	releaseHandler, ok := s.acquireLocalHandler()
 	require.True(t, ok)
 	s.quiesceLocalHandlers()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.drainLocalHandlers(context.Background())
-	}()
-	select {
-	case <-done:
-		t.Fatal("local drain returned before active handler released")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.drainLocalHandlers(ctx), context.Canceled)
 	releaseHandler()
-	require.NoError(t, <-done)
+	require.NoError(t, s.drainLocalHandlers(context.Background()))
 }
 
 func TestHandleRead(t *testing.T) {
