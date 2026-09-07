@@ -172,8 +172,9 @@ must be representable at that anchor and every witness join must have at least
 one ordinary equijoin key. This version chooses the original middle relation
 when both anchors are legal; otherwise it chooses the sole legal anchor. It
 does not assume that NDV/cost statistics are ready during binding. After
-lowering, ordinary statistics and existing SEMI build/probe selection operate
-on the emitted plan. No competing-plan cloning/search or INNER/product
+lowering, ordinary statistics and SEMI/ANTI build/probe selection apply. The
+executor correction below bounds repeated pure-equality RIGHT SEMI/ANTI matches
+without forcing a larger hash build on selective outer inputs. No competing-plan cloning/search or INNER/product
 fallback is added. The performance gates below can reject an implementation
 whose stable choice is measurably worse than the equivalent SEMI reference.
 
@@ -207,8 +208,12 @@ they are not moved to a global outer filter across another arm or a negation.
 Local I/J predicates remain attached to their own input.
 
 For a single positive arm, outer-local gates may filter O before its SEMI.
-For a single NOT EXISTS arm, keep T(outer-local predicate) in the final ANTI
-ON condition alongside an actual hash equality key; do **not** filter O first.
+For a single NOT EXISTS arm, keep T(outer-local predicate) as a hash gate in
+the final ANTI ON condition; do **not** filter O first. Project an additional
+constant TRUE column on the build input and join it to T(all outer gates),
+alongside the correlation keys. FALSE/NULL gates cannot enter a matching
+hash bucket. An ANTI residual is insufficient: the existing executor can walk
+every duplicate-key match even though the residual is outer-only.
 For example, with outer `flag=0`, NOT EXISTS with an inner `o.flag=1` predicate
 must retain that outer row. For multiple arms, combine each gate outside that
 arm's MARK as `T(gate) AND IS TRUE(marker)` before OR/negation. Do not put a
@@ -346,6 +351,93 @@ ordinary scalar subquery takes only the existing fast checks and allocations.
 - Snapshot, account and scan metadata must survive any per-arm cloning.
   `FOR UPDATE` and side-effecting relations are outside the new path.
 
+### Implementation performance correction (2026-09-07)
+
+The first implementation passed 150 MySQL differential cases and the planner
+package tests, but 250,000 independent I/J rows with eight repeated keys took
+5,103 ms versus 29.8 ms for the equivalent forward SEMI SQL. A redundant
+anchor self-equality reduced estimated cardinality and induced RIGHT SEMI.
+Output stayed at 250,000 and no LoopJoin appeared; neither check detected the
+CPU enumeration. Remove a substituted self-equality only when the retained
+outer/anchor key is that exact original constraint (so it still rejects NULL).
+
+A prototype fixed new SEMI/ANTI probe directions, but a million-row selective
+outer query took 116 ms versus 99.6 ms, and a skewed variant 239 ms versus
+151 ms. Pinning loses small-build and reverse-runtime-filter opportunities,
+so the final design **retains ordinary build/probe costing** and fixes the
+specific repeated-group work in `hashjoin` instead.
+
+For a non-PK, pure-equality RIGHT SEMI/RIGHT ANTI, `psBatchRow` obtains the
+complete immutable match-group selection. If its first build row is already
+set in this worker's existing `rightRowsMatched` bitmap, skip that group for
+this probe row. The first matching probe still visits and marks every build
+row in the group. A later probe cannot enter `psBatchRow` until the previous
+`psSelsForOneRow` finishes all chunks, including across Call yields. Thus the
+first bit certifies the complete group only at this state boundary. No new
+bitmap, cached state, allocation, synchronization or ownership is added.
+
+The certificate is scoped to one worker and JoinMap/spill generation.
+Work is O(P + sum of each worker's first-visited build groups), worst-case
+O(P + W*B), not P*B for repeated keys. Worker bitmaps merge only after probing;
+ANTI negation happens after merging. Reset/spill free the old bitmap before
+reuse. Do not use the shortcut for residual predicates, LEFT joins, SINGLE,
+OUTER, MARK or unique-key probing. SINGLE must still detect duplicates;
+residuals may match different build rows on a later probe.
+
+Single-arm ANTI outer gates use the boolean hash-key construction above, not
+a residual. The constant TRUE build slot is a materialized PROJECT protected
+from canRemoveProject by a lazy QueryBuilder-owned set, propagated by copyNode.
+Final remapped plans must retain a two-input equality, not an inlined constant.
+A forward ANTI residual can also enumerate a duplicate-key bucket, so removing
+the direction pin does not remove this gate requirement.
+
+The independent reviewer checked the proposed certificate against probe,
+SyncBitmap/Finalize, Reset and spill ownership before implementation and found
+no correctness/concurrency counterexample within these exact guards. Validation
+adds a group larger than two output batches, repeat probes, second-generation
+Reset, residual/SINGLE controls, multiple workers, and duplicate-key scaling.
+
+
+
+## Multi-CN receiver stop closure (implementation validation finding)
+
+A repeated two-CN OR case exposed a separate execution prerequisite. The final
+COUNT query returned no row, although the equivalent existing SQL returned the
+expected count. Pipeline tracing showed a remote consumer retiring its unused
+summary receiver, then `ReserveBatch` returning QueryInterrupted from a flow
+whose `wasStoppedByReceiver` was true while both message and connection
+contexts remained live. Broadcast propagated that receiver-local stop to the
+other consumer and final aggregate; subsequent cancellation normalization
+suppressed the error. This is not an error in the existential algebra.
+
+The reviewed repair is confined to the existing StopSending protocol boundary:
+
+- Expose a read-only `WrapCs.ReceiverStopped` certificate backed by the existing
+  flow mutex, also requiring live registration message and connection contexts.
+- On ReceiverDone or a cancellation-shaped ReserveBatch failure, a certified
+  receiver stop with live sender context retires only that receiver. Complete
+  its registration handler through the existing buffered Err notification
+  before removing it; Reset can no longer find a removed receiver.
+- Do not classify Write errors, connection loss, message cancellation, query
+  cancellation, or an ordinary ReceiverDone without the certificate as a
+  successful broadcast. Preserve first-abort-wins and credit rollback.
+- The last remote receiver stopping does not end a mixed local/remote
+  broadcast. Remaining receivers must receive this batch and later batches;
+  only exhaustion of all receivers ends it.
+- StopSending means no more data is wanted, not query success. A consumer's
+  substantive execution error remains owned by its main pipeline terminal and
+  must survive query-level error arbitration. Shuffle's strict target-removal
+  error remains unchanged.
+
+No wire/protobuf extension, extra goroutine, background lifetime, new producer
+owner or change to summary joins is needed. Normal successful sends do not
+consult the new certificate; it is evaluated only on retirement/error paths.
+The independent reviewer Kepler accepted this boundary subject to deterministic
+retirement/handler completion, remaining-receiver delivery, cancel/connection/
+write-error and substantive-remote-error controls, followed by the reproduced
+multi-CN integration test. Trace evidence is retained in the local validation
+artifacts; its temporary instrumentation is not part of the implementation.
+
 ## Change map
 
 | Owner | Proposed change | Invariant/evidence |
@@ -354,11 +446,12 @@ ordinary scalar subquery takes only the existing fast checks and allocations.
 | New `pkg/sql/plan/deep_existential.go` | Typed region analysis, truth rules, anchor/arm lowering | Logical counterexamples and typed graph assertions |
 | QueryBuilder/BindContext definitions and `query_builder.go` | Scoped pending ownership and pre-optimizer finalization check | No pending/correlated references escape; cancellation/reprepare tests |
 | Existing scan cloning and expression/project helpers | Reuse with full metadata, fresh tags | Independent tables, aliases, snapshots, tenant tests |
+| `hashjoin/join.go` pure equality RIGHT SEMI/ANTI | Skip an already-completed match group using existing worker bitmap | Chunk/yield/reset/residual controls and duplicate-key scaling |
 | Planner UT and distributed subquery BVT | Result, reject-control and plan-shape coverage | Exact matched cases and original issue inventory |
 
-No colexec, protobuf, wire, catalog or on-disk format change is planned. If
-implementation requires one to meet this design, review the expanded scope
-before delivering it. There is no mixed-version format migration.
+The only colexec change is the reviewed pure-equality RIGHT SEMI/ANTI shortcut
+above. No protobuf, wire, catalog or on-disk format changes are planned; no
+mixed-version format migration or new execution-state owner is needed.
 
 ## Validation and performance acceptance
 
