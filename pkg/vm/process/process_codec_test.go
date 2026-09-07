@@ -333,6 +333,9 @@ func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32,
+		types.T_bool, types.T_bit, types.T_enum, types.T_geometry, types.T_geometry32, types.T_uuid,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	}
 	params := proc.GetPrepareParams()
 	for params.Length() < len(concreteTypes) {
@@ -340,9 +343,10 @@ func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
 	}
 	kinds := make([]vector.PrepareParamKind, len(concreteTypes))
 	for i := range kinds {
-		kinds[i] = vector.PrepareParamInteger
+		var supported bool
+		kinds[i], supported = vector.PrepareParamKindForType(concreteTypes[i])
+		require.True(t, supported)
 	}
-	kinds[len(kinds)-1] = vector.PrepareParamFloat
 	binaryString := make([]bool, len(concreteTypes))
 	binaryString[1] = true
 	proc.SetPrepareParamsWithTypedMeta(
