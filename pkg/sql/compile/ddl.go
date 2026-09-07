@@ -675,6 +675,27 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	tblName := qry.GetTableDef().GetName()
 	isTemp := qry.GetTableDef().GetIsTemporary()
+	aliasName := tblName
+	if isTemp {
+		var err error
+		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
+		if err != nil {
+			return err
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+		defer func() { c.proc.Ctx = originalCtx }()
+
+		executionPlan := *qry
+		qry = &executionPlan
+		qry.TableDef = plan2.DeepCopyTableDef(qry.TableDef, true)
+		qry.CopyTableDef = plan2.DeepCopyTableDef(qry.CopyTableDef, true)
+		qry.TableDef.Name = tblName
+		if qry.CopyTableDef != nil {
+			qry.CopyTableDef.Name = tblName
+		}
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
@@ -685,6 +706,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	if err != nil {
 		return err
 	}
+	if isTemp && rel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+
 	tblId := rel.GetTableID(c.proc.Ctx)
 	extra := rel.GetExtraInfo()
 
@@ -1271,10 +1296,19 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				return err
 			}
 		case *plan.AlterTable_Action_AlterName:
+			oldName, newName := act.AlterName.OldName, act.AlterName.NewName
+			if isTemp {
+				if _, exists := c.proc.GetSession().GetTempTable(dbName, newName); exists {
+					return moerr.NewTableAlreadyExists(c.proc.Ctx, newName)
+				}
+				oldName = tblName
+				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			}
+
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
-				act.AlterName.OldName,
-				act.AlterName.NewName,
+				oldName,
+				newName,
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
@@ -1357,6 +1391,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	if isTemp {
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil {
+				c.proc.GetSession().RemoveTempTable(dbName, aliasName)
+				c.proc.GetSession().AddTempTable(dbName, rename.NewName,
+					physicalTemporaryTableName(c.proc, dbName, rename.NewName))
+			}
+		}
 	}
 
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
