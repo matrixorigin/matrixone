@@ -92,9 +92,7 @@ type Fulltext2Search struct {
 	preloadNdoc int64
 	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
 	preloadBytes int64
-	// preloadTailBytes is the peak the CDC tail costs to load. See tailPeakBytes.
-	preloadTailBytes int64
-	preloaded        bool
+	preloaded    bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -117,16 +115,7 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	// The CDC tail is loaded too, and it is pure Go heap -- several copies of the stored
-	// bytes at their peak. An index with only a tail counts ZERO base docs, so without this
-	// the arrival published (0,0), makeRoom took its "nothing to account for" exit BEFORE
-	// registering a reservation, and concurrent cold misses for distinct snapshot keys each
-	// materialized a full tail against the same free-memory reading.
-	tail, err := tailPeakBytes(sqlproc, s.cfg)
-	if err != nil {
-		return err
-	}
-	s.preloadNdoc, s.preloadBytes, s.preloadTailBytes, s.preloaded = ndoc, bytes, tail, true
+	s.preloadNdoc, s.preloadBytes, s.preloaded = ndoc, bytes, true
 	return nil
 }
 
@@ -186,7 +175,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
 		// Between Preload and Load: report what Load is about to cost, mapping included.
-		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0) + max(s.preloadTailBytes, 0), 0
+		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0), 0
 	}
 	var ndoc, mapped int64
 	for _, seg := range s.idx.segments {
