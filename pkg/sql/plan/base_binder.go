@@ -6030,6 +6030,16 @@ func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []
 	default:
 		return nil
 	}
+	if name != "-" && b.builder != nil && b.builder.isPrepareStatement &&
+		(preparedExprContainsParam(args[0]) || preparedExprContainsParam(args[1])) {
+		// A marker's signedness is an execute-time property. Freezing the
+		// unsigned peer's physical type into the prepared marker makes a later
+		// signed value (for example, u16 + -2) fail before arithmetic runs.
+		// Preserve the existing deferred prepared-numeric contract here; literal
+		// and explicitly typed operands still receive the per-node boundary cast
+		// below.
+		return nil
+	}
 
 	leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(astArgs[0], args[0])
 	rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(astArgs[1], args[1])

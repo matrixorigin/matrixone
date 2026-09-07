@@ -496,6 +496,20 @@ func TestSQLPrepareUnsignedSubtractionHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestSQLPrepareUnsignedArithmeticDefersSignedMarkerDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare unsigned_add from 'select cast(1 as unsigned) + ?'")
+	require.NoError(t, err)
+	prepared := logicPlan.GetDcl().GetPrepare().Plan
+	require.NotNil(t, prepared)
+	// The marker has no fixed signedness at prepare time. In particular, the
+	// affine-sum BVT later supplies -2 beside an unsigned SMALLINT column, so
+	// this prepared expression must retain the existing deferred domain instead
+	// of materializing the new UINT64 boundary cast.
+	require.False(t, hasArithmeticResultCast(firstProjectionExpr(t, prepared), "+", types.T_uint64))
+}
+
 func firstProjectionExpr(t *testing.T, built *Plan) *Expr {
 	t.Helper()
 	query := built.GetQuery()
