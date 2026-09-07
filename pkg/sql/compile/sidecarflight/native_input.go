@@ -31,21 +31,25 @@ import (
 var putStream = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
 
 // NativeInput is one single-use, acknowledged MO-batch stream for a StreamRead.
-// Send returns only after Sirius owns a complete copy of that frame. Keeping the
-// callback synchronous propagates a withheld acknowledgement through the native
-// output pipeline to its storage readers.
+// Send pipelines only a fixed frame/byte window. Once that window is full, a
+// withheld Sirius-consumed acknowledgement blocks the native output pipeline
+// and propagates backpressure to its storage readers.
 type NativeInput struct {
 	execution *Execution
 	streamRef []byte
 
-	mu          sync.Mutex
-	stream      grpc.ClientStream
-	sequence    uint64
-	rows        uint64
-	bytes       uint64
-	finished    bool
-	notNeeded   bool
-	terminalErr error
+	mu           sync.Mutex
+	stream       grpc.ClientStream
+	sequence     uint64
+	rows         uint64
+	bytes        uint64
+	pendingBytes uint64
+	pending      [maxNativeInputWindowFrames]nativeInputPendingFrame
+	pendingHead  int
+	pendingCount int
+	finished     bool
+	notNeeded    bool
+	terminalErr  error
 	// retired is the success-valued terminal signal published by result EOF.
 	// It is independent from mu so EOF can interrupt a DoPut acknowledgement
 	// wait before the producer has another frame to send.
@@ -56,13 +60,30 @@ type NativeInput struct {
 	// that RPC before it waits to publish terminal state under mu.
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
+
+	// Tests can lower these limits to exercise the blocking boundary without
+	// constructing a production-sized window.
+	windowBytes  uint64
+	windowFrames int
+}
+
+type nativeInputPendingFrame struct {
+	rows  uint64
+	bytes uint64
+	frame []byte
+	mp    *mpool.MPool
 }
 
 func (e *Execution) NewNativeInput(streamRef []byte) (*NativeInput, error) {
 	if e == nil || e.runtime == nil || len(e.ticket) != ticketBytes || len(streamRef) != 32 {
 		return nil, internalErrorf("sidecar flight: invalid native input identity")
 	}
-	input := &NativeInput{execution: e, streamRef: append([]byte(nil), streamRef...)}
+	input := &NativeInput{
+		execution:    e,
+		streamRef:    append([]byte(nil), streamRef...),
+		windowBytes:  maxNativeInputWindowBytes,
+		windowFrames: maxNativeInputWindowFrames,
+	}
 	e.mu.Lock()
 	if e.started || e.cleanupRunning || e.terminal || e.quiesced {
 		e.mu.Unlock()
@@ -158,8 +179,9 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 		return errors.Join(internalErrorf("sidecar flight: native input is terminal"), n.terminalErr)
 	}
 	if mp == nil {
-		n.terminalErr = internalErrorf("sidecar flight: native input has no query memory pool")
-		return n.terminalErr
+		err := internalErrorf("sidecar flight: native input has no query memory pool")
+		n.failPendingLocked(err)
+		return err
 	}
 	if err := n.open(ctx); err != nil {
 		if n.retired.Load() {
@@ -169,98 +191,171 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 		return err
 	}
 	if err := bat.CheckLength(); err != nil {
-		n.terminalErr = err
+		n.failPendingLocked(err)
 		return err
 	}
 	if (len(bat.Attrs) != 0 && len(bat.Attrs) != len(bat.Vecs)) || len(bat.ExtraBuf) != 0 ||
 		bat.Recursive != 0 || bat.ShuffleIDX != 0 {
-		n.terminalErr = internalErrorf("sidecar flight: native input contains unsupported batch metadata")
-		return n.terminalErr
+		err := internalErrorf("sidecar flight: native input contains unsupported batch metadata")
+		n.failPendingLocked(err)
+		return err
 	}
 	size, err := bat.MarshalBinarySize()
 	if err != nil {
-		n.terminalErr = err
+		n.failPendingLocked(err)
 		return err
 	}
 	limit := min(maxNativeInputBatchBytes, n.execution.runtime.config.MaxBatchBytes)
 	if uint64(size) > limit {
 		err = n.sendSplitLocked(bat, limit, mp)
 		if err != nil {
-			n.terminalErr = err
+			n.failPendingLocked(err)
 		}
 		return err
 	}
 	frame, err := marshalNativeInputFrame(n.sequence+1, bat, size, mp)
 	if err != nil {
-		n.terminalErr = err
+		n.failPendingLocked(err)
 		return err
 	}
 	return n.sendFrameLocked(frame, uint64(bat.RowCount()), uint64(size), mp)
 }
 
 // sendFrameLocked takes ownership of frame and keeps it query-accounted until
-// the acknowledgement or a terminal send/receive outcome.
+// its cumulative consumed acknowledgement or a terminal send/receive outcome.
 func (n *NativeInput) sendFrameLocked(
 	frame []byte,
 	frameRows uint64,
 	payloadBytes uint64,
 	mp *mpool.MPool,
 ) error {
-	defer mp.Free(frame)
-	n.sequence++
-	if err := n.stream.SendMsg(&flightData{AppMetadata: frame}); err != nil {
-		if n.retired.Load() {
+	windowBytes := n.windowBytes
+	if windowBytes == 0 {
+		windowBytes = maxNativeInputWindowBytes
+	}
+	if payloadBytes > windowBytes {
+		mp.Free(frame)
+		err := internalErrorf("sidecar flight: native input frame exceeds the send window")
+		n.failPendingLocked(err)
+		return err
+	}
+	windowFrames := n.windowFrames
+	if windowFrames <= 0 || windowFrames > len(n.pending) {
+		windowFrames = maxNativeInputWindowFrames
+	}
+	for n.pendingCount != 0 &&
+		(n.pendingCount >= windowFrames || payloadBytes > windowBytes-n.pendingBytes) {
+		terminal, err := n.receiveConsumedLocked()
+		if err != nil {
+			mp.Free(frame)
+			n.failPendingLocked(err)
+			return err
+		}
+		if terminal {
+			mp.Free(frame)
 			return nil
 		}
-		n.terminalErr = internalErrorf("sidecar flight: send native input batch: %w", err)
-		return n.terminalErr
 	}
+	n.sequence++
+	if err := n.stream.SendMsg(&flightData{AppMetadata: frame}); err != nil {
+		mp.Free(frame)
+		if n.retired.Load() {
+			n.releasePendingLocked()
+			return nil
+		}
+		err = internalErrorf("sidecar flight: send native input batch: %w", err)
+		n.failPendingLocked(err)
+		return err
+	}
+	index := (n.pendingHead + n.pendingCount) % len(n.pending)
+	n.pending[index] = nativeInputPendingFrame{
+		rows: frameRows, bytes: payloadBytes, frame: frame, mp: mp,
+	}
+	n.pendingCount++
+	n.pendingBytes += payloadBytes
+	return nil
+}
+
+// receiveConsumedLocked consumes exactly one ordered server response. Normal
+// responses release the oldest query-accounted frame. A terminal not-needed
+// response releases any frames already accepted by gRPC but never consumed.
+func (n *NativeInput) receiveConsumedLocked() (bool, error) {
 	ack, err := n.recvAck()
 	if err != nil {
 		if n.retired.Load() {
-			return nil
+			n.releasePendingLocked()
+			return true, nil
 		}
-		n.terminalErr = err
-		return err
+		return false, err
 	}
 	if ack.NotNeeded {
-		acknowledgedCurrent := ack.AcknowledgedBatches == n.sequence
-		acknowledgedPrevious := ack.AcknowledgedBatches == n.sequence-1
-		expectedRows, expectedBytes := n.rows, n.bytes
-		if acknowledgedCurrent {
-			expectedRows += frameRows
-			expectedBytes += payloadBytes
-		}
-		if !ack.Complete || ack.Ready || (!acknowledgedCurrent && !acknowledgedPrevious) ||
-			ack.Rows != expectedRows || ack.Bytes != expectedBytes {
-			n.terminalErr = internalErrorf("sidecar flight: invalid native input not-needed acknowledgement")
-			return n.terminalErr
+		acknowledged := n.sequence - uint64(n.pendingCount)
+		if !ack.Complete || ack.Ready || ack.AcknowledgedBatches != acknowledged ||
+			ack.Rows != n.rows || ack.Bytes != n.bytes {
+			return false, internalErrorf("sidecar flight: invalid native input not-needed acknowledgement")
 		}
 		var trailing flightPutResult
 		if err = n.stream.RecvMsg(&trailing); err != io.EOF {
 			if n.retired.Load() {
-				return nil
+				n.releasePendingLocked()
+				return true, nil
 			}
-			n.terminalErr = internalErrorf("sidecar flight: native input not-needed stream has trailing results: %w", err)
-			return n.terminalErr
+			return false, internalErrorf(
+				"sidecar flight: native input not-needed stream has trailing results: %w", err)
 		}
+		n.releasePendingLocked()
 		n.sequence = ack.AcknowledgedBatches
 		n.rows, n.bytes = ack.Rows, ack.Bytes
 		n.notNeeded = true
 		n.finished = true
 		n.cancelStream()
-		return nil
+		return true, nil
 	}
-	expectedRows := n.rows + frameRows
-	expectedBytes := n.bytes + payloadBytes
-	if ack.AcknowledgedBatches != n.sequence || ack.Rows != expectedRows || ack.Bytes != expectedBytes ||
+	if n.pendingCount == 0 {
+		return false, internalErrorf("sidecar flight: unexpected native input acknowledgement")
+	}
+	frame := n.pending[n.pendingHead]
+	expectedBatches := n.sequence - uint64(n.pendingCount) + 1
+	expectedRows := n.rows + frame.rows
+	expectedBytes := n.bytes + frame.bytes
+	if ack.AcknowledgedBatches != expectedBatches || ack.Rows != expectedRows || ack.Bytes != expectedBytes ||
 		ack.Complete || ack.NotNeeded || ack.Ready {
-		n.terminalErr = internalErrorf("sidecar flight: invalid native input acknowledgement")
-		return n.terminalErr
+		return false, internalErrorf("sidecar flight: invalid native input acknowledgement")
 	}
+	if frame.frame != nil {
+		frame.mp.Free(frame.frame)
+	}
+	n.pending[n.pendingHead] = nativeInputPendingFrame{}
+	n.pendingHead = (n.pendingHead + 1) % len(n.pending)
+	n.pendingCount--
+	if n.pendingCount == 0 {
+		n.pendingHead = 0
+	}
+	n.pendingBytes -= frame.bytes
 	n.rows = ack.Rows
 	n.bytes = ack.Bytes
-	return nil
+	return false, nil
+}
+
+func (n *NativeInput) releasePendingLocked() {
+	for offset := 0; offset < n.pendingCount; offset++ {
+		index := (n.pendingHead + offset) % len(n.pending)
+		if n.pending[index].frame != nil {
+			n.pending[index].mp.Free(n.pending[index].frame)
+		}
+		n.pending[index] = nativeInputPendingFrame{}
+	}
+	n.pendingHead = 0
+	n.pendingCount = 0
+	n.pendingBytes = 0
+}
+
+func (n *NativeInput) failPendingLocked(err error) {
+	if n.terminalErr == nil {
+		n.terminalErr = err
+	}
+	n.releasePendingLocked()
+	n.cancelStream()
 }
 
 func (n *NativeInput) sendSplitLocked(source *batch.Batch, limit uint64, mp *mpool.MPool) error {
@@ -356,6 +451,17 @@ func (n *NativeInput) Finish(ctx context.Context) error {
 		n.finished = true
 		return err
 	}
+	for n.pendingCount != 0 {
+		terminal, err := n.receiveConsumedLocked()
+		if err != nil {
+			n.failPendingLocked(err)
+			n.finished = true
+			return err
+		}
+		if terminal {
+			return nil
+		}
+	}
 	if err := n.stream.CloseSend(); err != nil {
 		if n.retired.Load() {
 			return nil
@@ -404,6 +510,9 @@ func (n *NativeInput) Retire() {
 	}
 	n.retired.Store(true)
 	n.cancelStream()
+	n.mu.Lock()
+	n.releasePendingLocked()
+	n.mu.Unlock()
 }
 
 func (n *NativeInput) recvAck() (*uploadInputAck, error) {
@@ -431,6 +540,7 @@ func (n *NativeInput) Abort(cause error) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.releasePendingLocked()
 	if n.retired.Load() {
 		return
 	}

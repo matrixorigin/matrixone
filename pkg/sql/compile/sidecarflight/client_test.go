@@ -370,7 +370,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	require.NoError(t, runtime.Close(cleanupCtx))
 }
 
-func TestNativeInputStreamsOneAcknowledgedBatchAtATime(t *testing.T) {
+func TestNativeInputDrainsItsBoundedWindowAtFinish(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
 	}
@@ -386,6 +386,7 @@ func TestNativeInputStreamsOneAcknowledgedBatchAtATime(t *testing.T) {
 	require.NoError(t, err)
 	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
 	require.NoError(t, err)
+	input.windowFrames = 2
 	_, err = execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
 	require.ErrorContains(t, err, "duplicate native input identity")
 	require.NoError(t, input.Start(context.Background()))
@@ -396,8 +397,16 @@ func TestNativeInputStreamsOneAcknowledgedBatchAtATime(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
-	require.NoError(t, input.Send(context.Background(), bat, mp))
+	beforeSend := mp.CurrNB()
+	for range 3 {
+		require.NoError(t, input.Send(context.Background(), bat, mp))
+	}
+	require.Greater(t, mp.CurrNB(), beforeSend)
+	require.Equal(t, 2, input.pendingCount)
 	require.NoError(t, input.Finish(context.Background()))
+	require.Equal(t, beforeSend, mp.CurrNB())
+	require.Zero(t, input.pendingCount)
+	require.Equal(t, int32(3), server.doPutBatches.Load())
 	require.NoError(t, input.Err())
 }
 
@@ -491,10 +500,15 @@ func TestCloneNativeWindowHandlesConstAndRejectsImpossibleRows(t *testing.T) {
 	large.SetRowCount(1)
 	require.ErrorContains(t, new(NativeInput).sendSplitLocked(large, 1, mp), "one native input row exceeds")
 	large.Clean(mp)
+
+	frame, err := mp.Alloc(2, true)
+	require.NoError(t, err)
+	tooSmallWindow := &NativeInput{windowBytes: 1}
+	require.ErrorContains(t, tooSmallWindow.sendFrameLocked(frame, 1, 2, mp), "exceeds the send window")
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testing.T) {
+func TestNativeInputBoundedWindowBackpressuresAndAbortReleasesWaiters(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
 		doPutBatch: make(chan struct{}), blockDoPutAck: make(chan struct{}),
@@ -510,16 +524,15 @@ func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testi
 	require.NoError(t, err)
 	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
 	require.NoError(t, err)
+	input.windowFrames = 1
 	require.NoError(t, input.Start(context.Background()))
 
 	sourceMP := mpool.MustNewZero()
 	frameMP := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	for row := int64(0); row < 20; row++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, sourceMP))
-	}
-	bat.SetRowCount(20)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, sourceMP))
+	bat.SetRowCount(1)
 	defer func() {
 		bat.Clean(sourceMP)
 		require.Zero(t, sourceMP.CurrNB())
@@ -527,15 +540,14 @@ func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testi
 	}()
 	firstPlan, err := planNativeWindow(bat, 0, runtime.config.MaxBatchBytes)
 	require.NoError(t, err)
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- input.Send(context.Background(), bat, frameMP) }()
+	require.NoError(t, input.Send(context.Background(), bat, frameMP))
 	select {
 	case <-server.doPutBatch:
 	case <-time.After(time.Second):
 		t.Fatal("native input batch did not reach the server")
 	}
 	require.Equal(t, int64(nativeBatchFrameHeaderBytes+firstPlan.payloadBytes), frameMP.CurrNB(),
-		"the acknowledged frame must remain charged while its acknowledgement is blocked")
+		"the pipelined frame must remain charged until Sirius acknowledges consumption")
 	secondStarted := make(chan struct{})
 	secondDone := make(chan error, 1)
 	go func() {
@@ -544,23 +556,18 @@ func TestNativeInputBackpressureSerializesFramesAndAbortReleasesWaiters(t *testi
 	}()
 	<-secondStarted
 	input.Abort(errors.New("injected cancellation"))
-	for name, done := range map[string]<-chan error{
-		"first frame":  firstDone,
-		"second frame": secondDone,
-	} {
-		select {
-		case sendErr := <-done:
-			require.Error(t, sendErr, name)
-		case <-time.After(time.Second):
-			t.Fatalf("Abort did not release %s", name)
-		}
+	select {
+	case sendErr := <-secondDone:
+		require.Error(t, sendErr)
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not release the sender blocked at the window boundary")
 	}
 	require.Equal(t, int32(1), server.doPutBatches.Load(),
-		"the second Send must remain behind the first frame's acknowledgement")
+		"the second Send must remain behind the one-frame test window")
 	require.Zero(t, frameMP.CurrNB())
 }
 
-func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T) {
+func TestNativeInputRetireReleasesPipelinedFramesWithoutError(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
 		doPutBatch: make(chan struct{}), blockDoPutAck: make(chan struct{}),
@@ -576,6 +583,7 @@ func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T
 	require.NoError(t, err)
 	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
 	require.NoError(t, err)
+	input.windowFrames = 1
 	require.NoError(t, input.Start(context.Background()))
 
 	sourceMP := mpool.MustNewZero()
@@ -642,8 +650,9 @@ func TestNativeInputSplitsOversizedBatchesWithinNegotiatedLimit(t *testing.T) {
 		require.Zero(t, frameMP.CurrNB())
 	}()
 	require.NoError(t, input.Send(context.Background(), bat, frameMP))
-	require.Zero(t, frameMP.CurrNB())
+	require.Positive(t, frameMP.CurrNB())
 	require.NoError(t, input.Finish(context.Background()))
+	require.Zero(t, frameMP.CurrNB())
 	require.Greater(t, input.sequence, uint64(1))
 	require.Equal(t, uint64(20), input.rows)
 	require.LessOrEqual(t, input.bytes, input.sequence*runtime.config.MaxBatchBytes)
@@ -685,6 +694,9 @@ func TestNativeInputFrameReleasedAfterTerminalSendOutcomes(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, sourceMP))
 			bat.SetRowCount(1)
 			err = input.Send(context.Background(), bat, frameMP)
+			if err == nil {
+				err = input.Finish(context.Background())
+			}
 			require.ErrorContains(t, err, tc.want)
 			require.Zero(t, frameMP.CurrNB())
 			bat.Clean(sourceMP)
@@ -721,11 +733,11 @@ func TestNativeInputAcceptsEarlyNotNeeded(t *testing.T) {
 	bat.SetRowCount(20)
 	defer bat.Clean(mp)
 	require.NoError(t, input.Send(context.Background(), bat, mp))
+	require.NoError(t, input.Finish(context.Background()))
 	require.True(t, input.notNeeded)
 	require.Equal(t, int32(1), server.doPutBatches.Load())
 	require.NoError(t, input.Send(context.Background(), bat, mp))
 	require.Equal(t, int32(1), server.doPutBatches.Load())
-	require.NoError(t, input.Finish(context.Background()))
 }
 
 func TestCleanupAfterResultEOFStillJoinsNativeInputs(t *testing.T) {

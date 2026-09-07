@@ -570,14 +570,20 @@ func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
 	for _, identity := range []string{
 		`"stream_input_host_accounting":"pre-admitted-execution-v2"`,
 		`"gpu_fatal_recovery":"process-fail-stop-v1"`,
-		`"gpu_partition_concurrency":"same-stage-reentrant-v1"`,
+		`"stream_input_ack":"ready-cumulative-consumed-final-v2"`,
+		`"stream_input_client_window_max_frames":128`,
+		`"stream_input_client_window_max_payload_bytes":67108864`,
+		`"stream_input_source_batching":"bounded-expanded-v1"`,
+		`"stream_input_source_batch_max_frames":128`,
+		`"stream_input_source_batch_max_expanded_bytes":67108864`,
+		`"gpu_pipeline_concurrency":"cross-pipeline-v1"`,
 	} {
 		require.Contains(t, CapabilityDocument, identity)
 		withoutIdentity := strings.Replace(CapabilityDocument, identity+",", "", 1)
 		require.NotEqual(t, sha256.Sum256([]byte(withoutIdentity)), CapabilityHash,
 			"a peer missing %s must fail exact capability negotiation", identity)
 	}
-	require.Equal(t, "32f14380770bf4016cbf1b0f564e4423421f6b86779018e9dfcb7aba94f67ea7", hex.EncodeToString(CapabilityHash[:]))
+	require.Equal(t, "40f25820f84d04ff8676996e87ff85f1191612a1b2de13670b0b60d6af022acc", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {

@@ -35,18 +35,20 @@ import (
 )
 
 const (
-	flightService            = "/arrow.flight.protocol.FlightService/"
-	getFlightInfoMethod      = flightService + "GetFlightInfo"
-	doGetMethod              = flightService + "DoGet"
-	doPutMethod              = flightService + "DoPut"
-	doActionMethod           = flightService + "DoAction"
-	commandDescriptor        = int32(2)
-	ticketBytes              = 32
-	protocolVersion          = uint32(4)
-	substraitVersion         = "0.78.0"
-	maxNativeInputBatchBytes = uint64(4 << 20)
-	maxNativeInputs          = 16
-	maxPlanBytes             = uint64(16 << 20)
+	flightService              = "/arrow.flight.protocol.FlightService/"
+	getFlightInfoMethod        = flightService + "GetFlightInfo"
+	doGetMethod                = flightService + "DoGet"
+	doPutMethod                = flightService + "DoPut"
+	doActionMethod             = flightService + "DoAction"
+	commandDescriptor          = int32(2)
+	ticketBytes                = 32
+	protocolVersion            = uint32(4)
+	substraitVersion           = "0.78.0"
+	maxNativeInputBatchBytes   = uint64(4 << 20)
+	maxNativeInputWindowBytes  = uint64(64 << 20)
+	maxNativeInputWindowFrames = 128
+	maxNativeInputs            = 16
+	maxPlanBytes               = uint64(16 << 20)
 )
 
 var serverStream = &grpc.StreamDesc{ServerStreams: true}

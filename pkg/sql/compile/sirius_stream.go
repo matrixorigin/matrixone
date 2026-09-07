@@ -236,10 +236,10 @@ func (c *Compile) compileSiriusStreamScopes(
 					if bat == nil {
 						return nativeInput.Finish(c.proc.Ctx)
 					}
-					// Send is intentionally synchronous. A withheld sidecar
-					// acknowledgement blocks Output.Call, which fills the same
-					// bounded pipeline edge used by native query output and stops
-					// connectors before they call the storage reader again.
+					// Send pipelines only a fixed frame/byte window. Once full, a
+					// withheld consumed acknowledgement blocks Output.Call, which
+					// fills the same bounded pipeline edge used by native query
+					// output and stops connectors before another storage read.
 					return nativeInput.Send(c.proc.Ctx, bat, c.proc.Mp())
 				}).
 				WithBlock(false).
