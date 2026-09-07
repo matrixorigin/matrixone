@@ -28,6 +28,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -435,7 +436,8 @@ func (entry *TableEntry) sessionTemporarySchemaLocked(txn txnif.TxnReader) *MVCC
 	}
 	schema := node.BaseNode.Schema
 	owner, ok := txn.(interface{ GetTenantID() uint32 })
-	if !ok || schema.Relkind != pkgcatalog.SystemTemporaryTable || schema.AcInfo.TenantID != owner.GetTenantID() {
+	if !ok || schema.Relkind != pkgcatalog.SystemTemporaryTable ||
+		!defines.IsTempTableName(schema.Name) || schema.AcInfo.TenantID != owner.GetTenantID() {
 		return nil
 	}
 	return node

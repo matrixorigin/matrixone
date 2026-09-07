@@ -530,14 +530,21 @@ func TestSessionTemporarySchemaVisibility(t *testing.T) {
 	require.NoError(t, err)
 	oldTS := old.GetStartTS()
 	defer old.Rollback(context.Background())
-	for _, kind := range []string{pkgcatalog.SystemTemporaryTable, pkgcatalog.SystemOrdinaryRel} {
-		t.Run(kind, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		visible    bool
+	}{
+		{"__mo_tmp_123e4567e89b12d3a456426614174000_db_t", pkgcatalog.SystemTemporaryTable, true},
+		{"unprefixed_temporary", pkgcatalog.SystemTemporaryTable, false},
+		{"persistent", pkgcatalog.SystemOrdinaryRel, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			create, err := mgr.StartTxn(nil)
 			require.NoError(t, err)
 			db, err := create.GetDatabase("temporary_schema_visibility")
 			require.NoError(t, err)
 			schema := MockSchema(2, 0)
-			schema.Name, schema.Relkind = kind, kind
+			schema.Name, schema.Relkind = tc.name, tc.kind
 			relation, err := db.CreateRelation(schema)
 			require.NoError(t, err)
 			entryDB, err := catalog.GetDatabaseByID(dbID)
@@ -547,7 +554,7 @@ func TestSessionTemporarySchemaVisibility(t *testing.T) {
 			require.Nil(t, entry.GetVisibleSchema(old, false), "uncommitted schema must stay invisible")
 			require.NoError(t, create.Commit(context.Background()))
 			_, err = entryDB.TxnGetTableEntryByID(relation.(*mockTableHandle).entry.ID, old)
-			if kind == pkgcatalog.SystemTemporaryTable {
+			if tc.visible {
 				require.NoError(t, err)
 				require.NotNil(t, entry.GetVisibleSchema(old, false))
 				require.NotNil(t, entry.GetVisibleSchema(old, true))
@@ -565,7 +572,7 @@ func TestSessionTemporarySchemaVisibility(t *testing.T) {
 			require.NoError(t, err)
 			dropDB, err := drop.GetDatabase("temporary_schema_visibility")
 			require.NoError(t, err)
-			_, err = dropDB.DropRelationByName(kind)
+			_, err = dropDB.DropRelationByName(tc.name)
 			require.NoError(t, err)
 			require.NoError(t, drop.Commit(context.Background()))
 			_, err = entryDB.TxnGetTableEntryByID(relation.(*mockTableHandle).entry.ID, old)
