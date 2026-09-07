@@ -216,6 +216,10 @@ func TestScheduleQueryWorkersKeepsLocalExecTypesFromRuntimeStateLookup(t *testin
 
 type panicReadonlyWorkspace struct{ *Ws }
 
+type readonlyWorkspaceForScheduling struct{ *Ws }
+
+func (*readonlyWorkspaceForScheduling) Readonly() bool { return true }
+
 func (*panicReadonlyWorkspace) Readonly() bool {
 	panic("local execution must not inspect workspace routing state")
 }
@@ -418,7 +422,7 @@ func TestScheduleQueryWorkersRejectsIngressOwnedStateOutsideResolvedPool(t *test
 		strict    bool
 	}{
 		{name: "writable-workspace", workspace: &Ws{}},
-		{name: "load-data-local", workspace: &readonlyWorkspaceForIvfTest{Ws: &Ws{}}, stmt: &tree.Load{Local: true}, strict: true},
+		{name: "load-data-local", workspace: &readonlyWorkspaceForScheduling{Ws: &Ws{}}, stmt: &tree.Load{Local: true}, strict: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -487,7 +491,7 @@ func TestScheduleQueryWorkersRejectsIngressInvariantExcludedPolicyBeforeDiscover
 func TestScheduleQueryWorkersAllowsReadOnlyWorkspaceToUseRemoteCN(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	_, txnOp := newTestTxnClientAndOp(ctrl, &readonlyWorkspaceForIvfTest{Ws: &Ws{}})
+	_, txnOp := newTestTxnClientAndOp(ctrl, &readonlyWorkspaceForScheduling{Ws: &Ws{}})
 
 	c := NewMockCompile(t)
 	c.proc.Base.TxnOperator = txnOp
@@ -607,13 +611,7 @@ func TestScheduleQueryWorkersCanonicalizesIvfIngressByServiceID(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.LockService = lockSvc
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_FUNCTION_SCAN,
-			TableDef: &plan.TableDef{
-				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-			},
-			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
-		}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},
