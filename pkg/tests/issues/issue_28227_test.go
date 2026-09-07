@@ -229,14 +229,17 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					require.Equal(t, expected[functionName], got, query)
 				}
 
-				prepared, err := db.PrepareContext(ctx, fmt.Sprintf(
-					"select hex(%s(substring(v512, ?, 511))) from %s where g=1",
-					functionName, tableName))
-				require.NoError(t, err)
-				var rebound string
-				require.NoError(t, prepared.QueryRowContext(ctx, 2).Scan(&rebound))
-				require.Equal(t, expected[functionName], rebound)
-				require.NoError(t, prepared.Close())
+				func() {
+					prepared, err := db.PrepareContext(ctx, fmt.Sprintf(
+						"select hex(%s(substring(v512, ?, 511))) from %s where g=1",
+						functionName, tableName))
+					require.NoError(t, err)
+					defer prepared.Close()
+
+					var rebound string
+					require.NoError(t, prepared.QueryRowContext(ctx, 2).Scan(&rebound))
+					require.Equal(t, expected[functionName], rebound)
+				}()
 
 				_, err = db.ExecContext(ctx, fmt.Sprintf(
 					"select %s(substring(v512, start_pos, 512)) from %s where g=1",
@@ -254,18 +257,22 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					functionName, expression, tableName)).Scan(&grouped))
 				require.Equal(t, expected[functionName], grouped)
 
-				rows, err := db.QueryContext(ctx, fmt.Sprintf(
-					"select id,hex(%s(%s) over (order by id)) from %s where id <= 2 order by id",
-					functionName, expression, tableName))
-				require.NoError(t, err)
 				var windowValues []string
-				for rows.Next() {
-					var id int
-					var value string
-					require.NoError(t, rows.Scan(&id, &value))
-					windowValues = append(windowValues, value)
-				}
-				require.NoError(t, rows.Close())
+				func() {
+					rows, err := db.QueryContext(ctx, fmt.Sprintf(
+						"select id,hex(%s(%s) over (order by id)) from %s where id <= 2 order by id",
+						functionName, expression, tableName))
+					require.NoError(t, err)
+					defer rows.Close()
+
+					for rows.Next() {
+						var id int
+						var value string
+						require.NoError(t, rows.Scan(&id, &value))
+						windowValues = append(windowValues, value)
+					}
+					require.NoError(t, rows.Err())
+				}()
 				require.Equal(t, expectedWindow[functionName], windowValues)
 			}
 
