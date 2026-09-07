@@ -756,3 +756,56 @@ select * from t_replace_self_cascade order by id;
 id    parent_id
 1    null
 drop table t_replace_self_cascade;
+drop table if exists t_replace_subquery_target;
+drop table if exists t_replace_subquery_source;
+create table t_replace_subquery_target (id int primary key, v int, note varchar(40));
+create table t_replace_subquery_source (id int primary key, v int);
+insert into t_replace_subquery_target values (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
+insert into t_replace_subquery_source values (1, 101), (2, 202), (4, 404);
+replace into t_replace_subquery_target set id = 1, v = (select max(v) from t_replace_subquery_source), note = 'set-subquery';
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    404    set-subquery
+2    20    two
+3    30    three
+replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) from t_replace_subquery_source), 'values-subquery');
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    404    values-subquery
+2    20    two
+3    30    three
+replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) from t_replace_subquery_source), 'multi-one'), (2, (select min(v) from t_replace_subquery_source), 'multi-two');
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    404    multi-one
+2    101    multi-two
+3    30    three
+replace into t_replace_subquery_target set id = 3, v = (select v from t_replace_subquery_source where id = 99), note = 'empty-subquery';
+replace into t_replace_subquery_target set id = 2, v = (select v from t_replace_subquery_source where id = 4), note = 'single-subquery';
+replace into t_replace_subquery_target set id = 4, v = (select v from t_replace_subquery_source), note = 'multi-subquery';
+Subquery returns more than 1 row
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    404    multi-one
+2    404    single-subquery
+3    null    empty-subquery
+prepare ps_replace_subquery_values from 'replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) from t_replace_subquery_source where id <= ?), "prepared-values")';
+set @replace_subquery_param = 2;
+execute ps_replace_subquery_values using @replace_subquery_param;
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    202    prepared-values
+2    404    single-subquery
+3    null    empty-subquery
+deallocate prepare ps_replace_subquery_values;
+prepare ps_replace_subquery from 'replace into t_replace_subquery_target set id = 1, v = (select max(v) from t_replace_subquery_source where id <= ?), note = "prepared"';
+set @replace_subquery_param = 2;
+execute ps_replace_subquery using @replace_subquery_param;
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    202    prepared
+2    404    single-subquery
+3    null    empty-subquery
+deallocate prepare ps_replace_subquery;
+drop table t_replace_subquery_source;
+drop table t_replace_subquery_target;

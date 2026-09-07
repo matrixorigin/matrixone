@@ -5096,6 +5096,36 @@ func TestReplacePKTable(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestReplaceScalarSubqueriesInValuesAndSet(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tests := []string{
+		"REPLACE INTO dept SET deptno = (SELECT MAX(n_nationkey) FROM nation), dname = 'set-subquery', loc = 'x'",
+		"REPLACE INTO dept (deptno, dname, loc) VALUES ((SELECT MAX(n_nationkey) FROM nation), 'values-subquery', 'x')",
+		"REPLACE INTO dept (deptno, dname, loc) VALUES ((SELECT MAX(n_nationkey) FROM nation), 'first', 'x'), ((SELECT MIN(n_nationkey) FROM nation), 'second', 'y')",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList} {
+				for _, expr := range exprs {
+					require.False(t, hasSubquery(expr), "executable REPLACE plan contains Expr_Sub: %s", sql)
+				}
+			}
+			if node.RowsetData != nil {
+				for _, col := range node.RowsetData.Cols {
+					for _, row := range col.Data {
+						require.False(t, hasSubquery(row.Expr), "value scan contains Expr_Sub: %s", sql)
+					}
+				}
+			}
+		}
+	}
+
+	_, err := runOneStmt(mock, t, `PREPARE ps_replace_subquery FROM 'REPLACE INTO dept SET deptno = (SELECT MAX(n_nationkey) FROM nation WHERE n_nationkey <= ?), dname = "prepared", loc = "x"'`)
+	require.NoError(t, err)
+}
+
 func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	tableDef := mock.ctxt.tables["dept"]

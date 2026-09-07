@@ -1015,8 +1015,9 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ  Type
-	cols []string
+	typ           Type
+	cols          []string
+	allowSubquery bool
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`

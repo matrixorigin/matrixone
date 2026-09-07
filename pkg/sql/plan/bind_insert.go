@@ -4079,7 +4079,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault && astCols != nil {
 			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, isReplace, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -4640,6 +4640,7 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	colRefAsDefault bool,
+	allowSubquery bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
@@ -4662,6 +4663,15 @@ func (builder *QueryBuilder) buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*plan.Expr, colCount)
+	valueExprs := make([][]*plan.Expr, colCount)
+	var valueBindCtx *BindContext
+	if allowSubquery {
+		valueBindCtx = NewBindContext(builder, bindCtx)
+	}
+	appendValueExpr := func(colIdx int, expr *plan.Expr) {
+		rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: expr})
+		valueExprs[colIdx] = append(valueExprs[colIdx], expr)
+	}
 
 	for i, colName := range colNames {
 		col := tableDef.Cols[tableDef.Name2ColIndex[colName]]
@@ -4682,25 +4692,22 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
-			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(stmt.Rows))
-			for j := range stmt.Rows {
-				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
-					Expr: defExpr,
-				}
+			for range stmt.Rows {
+				appendValueExpr(i, defExpr)
 			}
 		} else {
 			var binder, funcBinder Binder
 			if colRefAsDefault {
 				// REPLACE ... SET col = expr: an RHS reference to a target-table
 				// column is evaluated as DEFAULT(col), including inside functions.
-				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, col.Typ, tableDef)
+				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, tableDef)
 				binder = replaceBinder
 
-				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, plan.Type{}, tableDef)
+				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, tableDef)
 				funcBinder = funcReplaceBinder
 			} else {
-				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-				defaultBinder.builder = builder
+				defaultBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, nil)
+				defaultBinder.allowSubquery = allowSubquery
 				binder = defaultBinder
 
 				// Non-numeric destinations need a target-free function binder. The
@@ -4708,8 +4715,8 @@ func (builder *QueryBuilder) buildValueScan(
 				// arguments and break overload resolution. Numeric destinations use
 				// the target-aware binder below, which resolves each function argument
 				// from overload metadata before the final assignment cast.
-				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-				defaultFuncBinder.builder = builder
+				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, nil)
+				defaultFuncBinder.allowSubquery = allowSubquery
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
@@ -4719,7 +4726,7 @@ func (builder *QueryBuilder) buildValueScan(
 						return 0, err
 					}
 					if handled {
-						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
+						appendValueExpr(i, expr)
 						continue
 					}
 				}
@@ -4729,9 +4736,7 @@ func (builder *QueryBuilder) buildValueScan(
 						return 0, err
 					}
 					if expr != nil {
-						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-							Expr: expr,
-						})
+						appendValueExpr(i, expr)
 						continue
 					}
 				}
@@ -4809,9 +4814,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if err != nil {
 					return 0, err
 				}
-				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Expr: defExpr,
-				})
+				appendValueExpr(i, defExpr)
 			}
 		}
 		colName := fmt.Sprintf("column_%d", i) // like MySQL
@@ -4830,6 +4833,14 @@ func (builder *QueryBuilder) buildValueScan(
 			},
 		}
 		projectList[i] = expr
+	}
+
+	for i := range valueExprs {
+		for _, expr := range valueExprs[i] {
+			if hasSubquery(expr) {
+				return builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			}
+		}
 	}
 
 	rowsetData.RowCount = int32(len(stmt.Rows))
@@ -4855,4 +4866,101 @@ func (builder *QueryBuilder) buildValueScan(
 	}, bindCtx)
 
 	return nodeID, nil
+}
+
+// buildValueScanWithSubqueries lowers value rows that contain subqueries into
+// ordinary relational expressions. RowsetData is evaluated without an input
+// relation, so it cannot host the joins produced by scalar-subquery
+// flattening. Each row therefore gets a one-row input and projection; the
+// resulting rows are combined before the normal INSERT/REPLACE source-cast
+// path consumes them. The common literal-only path remains RowsetData-based.
+func (builder *QueryBuilder) buildValueScanWithSubqueries(
+	bindCtx *BindContext,
+	colNames []string,
+	valueExprs [][]*plan.Expr,
+) (int32, error) {
+	if len(valueExprs) == 0 || len(valueExprs[0]) == 0 {
+		return 0, moerr.NewInternalError(builder.GetContext(), "value expressions are empty")
+	}
+
+	rowCount := len(valueExprs[0])
+	branches := make([]int32, 0, rowCount)
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		rowCtx := NewBindContext(builder, bindCtx)
+		rowCtx.hasSingleRow = true
+		projectTag := builder.genNewBindTag()
+		rowCtx.projectTag = projectTag
+
+		// A VALUE_SCAN without RowsetData is the planner's single-row DUAL
+		// relation. It supplies cardinality without introducing a dummy column
+		// that projection pruning could reduce to an invalid empty rowset.
+		dummyID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, rowCtx)
+
+		projectList := make([]*plan.Expr, len(colNames))
+		for colIdx := range colNames {
+			if rowIdx >= len(valueExprs[colIdx]) {
+				return 0, moerr.NewInternalError(builder.GetContext(), "value expression rows are inconsistent")
+			}
+			var err error
+			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, valueExprs[colIdx][rowIdx], rowCtx)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		rowCtx.headings = make([]string, len(colNames))
+		rowCtx.projects = projectList
+		rowCtx.results = projectList
+		for colIdx := range colNames {
+			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		}
+		branches = append(branches, builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_PROJECT,
+			ProjectList:  projectList,
+			Children:     []int32{dummyID},
+			BindingTags:  []int32{projectTag},
+			NotCacheable: true,
+		}, rowCtx))
+	}
+
+	if len(branches) == 1 {
+		return branches[0], nil
+	}
+
+	unionCtx := NewBindContext(builder, bindCtx)
+	lastNodeID := branches[0]
+	lastTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
+	for _, rightID := range branches[1:] {
+		rightNode := builder.qry.Nodes[rightID]
+		projectList := make([]*plan.Expr, len(colNames))
+		unionTag := builder.genNewBindTag()
+		for colIdx := range colNames {
+			projectList[colIdx] = &plan.Expr{
+				Typ: setOperationOutputType(plan.Node_UNION_ALL,
+					builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+					rightNode.ProjectList[colIdx].Typ),
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+			}
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_UNION_ALL,
+			Children:    []int32{lastNodeID, rightID},
+			BindingTags: []int32{unionTag},
+			ProjectList: projectList,
+		}, unionCtx)
+		lastTag = unionTag
+	}
+
+	unionCtx.projectTag = lastTag
+	unionCtx.headings = make([]string, len(colNames))
+	unionCtx.projects = make([]*plan.Expr, len(colNames))
+	unionCtx.results = unionCtx.projects
+	for colIdx := range colNames {
+		unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		unionCtx.projects[colIdx] = &plan.Expr{
+			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+		}
+	}
+	return lastNodeID, nil
 }
