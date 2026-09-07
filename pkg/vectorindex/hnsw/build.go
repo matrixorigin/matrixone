@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -350,10 +351,10 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, sqlexec.MetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 	}
 
-	metasql := sqlexec.MetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
+	metasql := catalog.IndexMetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

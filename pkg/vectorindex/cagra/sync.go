@@ -323,8 +323,8 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 		provenance := sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
 			catalog.Cagra_TblCol_Metadata_Build_Ts)
 		if provenance {
-			sqls = append(sqls, sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
-				[]string{sqlexec.MetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
+			sqls = append(sqls, catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
+				[]string{catalog.IndexMetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
 					time.Now().UnixMicro(), int64(len(s.pendingRecords)),
 					int64(len(s.pendingSizes)), s.buildTS)}))
 		}

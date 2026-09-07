@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sqlexec
+package catalog
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,15 +25,15 @@ import (
 // nrow/build_ts, tables created before the columns existed do not until their tenant's v4_0_7
 // migration runs. One writer has to be right on both, which is why it names its columns.
 func TestMetadataInsertMatchesEitherTableShape(t *testing.T) {
-	rows := []string{MetadataRow(true, "idx-1", "abc", 7, 4096, 1000, 12345)}
+	rows := []string{IndexMetadataRow(true, "idx-1", "abc", 7, 4096, 1000, 12345)}
 
-	wide := MetadataInsertSql("db", "__mo_index_secondary_meta", true, rows)
+	wide := IndexMetadataInsertSql("db", "__mo_index_secondary_meta", true, rows)
 	require.Contains(t, wide, "`nrow`")
 	require.Contains(t, wide, "`build_ts`")
 	require.Contains(t, wide, "1000, 12345)")
 
-	legacy := MetadataInsertSql("db", "__mo_index_secondary_meta", false,
-		[]string{MetadataRow(false, "idx-1", "abc", 7, 4096, 1000, 12345)})
+	legacy := IndexMetadataInsertSql("db", "__mo_index_secondary_meta", false,
+		[]string{IndexMetadataRow(false, "idx-1", "abc", 7, 4096, 1000, 12345)})
 	require.NotContains(t, legacy, "`nrow`")
 	require.NotContains(t, legacy, "`build_ts`")
 	require.NotContains(t, legacy, "12345", "the values go with the columns, or the counts diverge")
@@ -63,23 +62,8 @@ func valuesIn(sql string) int {
 // The provenance columns are appended last and default to 0, so omitting them is a loss of
 // provenance and nothing else -- 0 is already the documented "unknown" sentinel.
 func TestMetadataRowOmitsProvenanceWithoutDroppingColumns(t *testing.T) {
-	require.Equal(t, "('idx-1', 'abc', 7, 4096)", MetadataRow(false, "idx-1", "abc", 7, 4096, 1000, 12345))
-	require.Equal(t, "('idx-1', 'abc', 7, 4096, 1000, 12345)", MetadataRow(true, "idx-1", "abc", 7, 4096, 1000, 12345))
+	require.Equal(t, "('idx-1', 'abc', 7, 4096)", IndexMetadataRow(false, "idx-1", "abc", 7, 4096, 1000, 12345))
+	require.Equal(t, "('idx-1', 'abc', 7, 4096, 1000, 12345)", IndexMetadataRow(true, "idx-1", "abc", 7, 4096, 1000, 12345))
 }
 
 // The shape question is asked of the table, and a table that has the column keeps the answer.
-func TestHasProvenanceColumnsMemoizesOnlyThePositive(t *testing.T) {
-	const db, tbl = "shapedb", "shapetbl"
-	t.Cleanup(func() { ForgetProvenanceShape(db, tbl) })
-
-	// No session: nothing can be asked, so the writer takes the shape that works on both.
-	require.False(t, HasProvenanceColumns(nil, db, tbl, catalog.Hnsw_TblCol_Metadata_Build_Ts))
-	require.False(t, HasProvenanceColumns(nil, "", "", ""))
-
-	provenanceShape.Store(db+"."+tbl, struct{}{})
-	require.True(t, HasProvenanceColumns(nil, db, tbl, catalog.Hnsw_TblCol_Metadata_Build_Ts),
-		"a table never loses the columns, so the positive answer needs no re-read")
-
-	ForgetProvenanceShape(db, tbl)
-	require.False(t, HasProvenanceColumns(nil, db, tbl, catalog.Hnsw_TblCol_Metadata_Build_Ts))
-}

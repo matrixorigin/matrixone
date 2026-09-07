@@ -12,22 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sqlexec
+package catalog
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 )
 
-// MetadataRow formats one row of an index metadata table: the four columns every version has,
+// IndexMetadataRow formats one row of an index metadata table: the four columns every version has,
 // plus nrow and build_ts when the table carries them.
 //
 // hnsw, cagra and ivfpq share the column list, so they share this -- named from the shared
-// catalog.IndexMetadata_TblCol_* set rather than any one algo's aliases of it.
-func MetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, buildTS int64) string {
+// IndexMetadata_TblCol_* set rather than any one algo's aliases of it.
+func IndexMetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, buildTS int64) string {
 	if !provenance {
 		return fmt.Sprintf("(%s, %s, %d, %d)",
 			sqlquote.String(indexID), sqlquote.String(checksum), ts, filesize)
@@ -36,7 +35,7 @@ func MetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, 
 		sqlquote.String(indexID), sqlquote.String(checksum), ts, filesize, nrow, buildTS)
 }
 
-// MetadataInsertSql builds the metadata INSERT for rows from MetadataRow.
+// IndexMetadataInsertSql builds the metadata INSERT for rows from IndexMetadataRow.
 //
 // It NAMES its columns rather than relying on position, which is what lets one CN write to both
 // table shapes during a rolling upgrade: a metadata table is created per index at CREATE INDEX,
@@ -47,17 +46,17 @@ func MetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, 
 //
 // Omitting the provenance columns leaves them at their default 0, which is already the
 // documented "unknown" sentinel, so the conservative direction costs provenance and nothing else.
-func MetadataInsertSql(db, table string, provenance bool, rows []string) string {
+func IndexMetadataInsertSql(db, table string, provenance bool, rows []string) string {
 	cols := []string{
-		catalog.IndexMetadata_TblCol_Index_Id,
-		catalog.IndexMetadata_TblCol_Checksum,
-		catalog.IndexMetadata_TblCol_Timestamp,
-		catalog.IndexMetadata_TblCol_Filesize,
+		IndexMetadata_TblCol_Index_Id,
+		IndexMetadata_TblCol_Checksum,
+		IndexMetadata_TblCol_Timestamp,
+		IndexMetadata_TblCol_Filesize,
 	}
 	if provenance {
 		cols = append(cols,
-			catalog.IndexMetadata_TblCol_Nrow,
-			catalog.IndexMetadata_TblCol_Build_Ts)
+			IndexMetadata_TblCol_Nrow,
+			IndexMetadata_TblCol_Build_Ts)
 	}
 	quoted := make([]string, len(cols))
 	for i, c := range cols {

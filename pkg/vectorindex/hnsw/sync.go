@@ -812,12 +812,12 @@ func (s *HnswSync[T]) ToSql(ts int64, buildTS int64, provenance bool) ([]string,
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, sqlexec.MetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 		ts++
 	}
 
 	if len(metas) > 0 {
-		metasql := sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas)
+		metasql := catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas)
 		sqls = append(sqls, metasql)
 	}
 	return sqls, nil

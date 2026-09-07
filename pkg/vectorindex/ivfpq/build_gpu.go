@@ -21,12 +21,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // IvfpqBuild manages bulk index construction across one or more IvfpqModel sub-indexes.
@@ -254,10 +254,10 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool)
 			return nil, err
 		}
 		sqls = append(sqls, indexsqls...)
-		metas = append(metas, sqlexec.MetadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, int64(idx.Len), buildTS))
+		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, int64(idx.Len), buildTS))
 	}
 
-	metasql := sqlexec.MetadataInsertSql(b.tblcfg.DbName, b.tblcfg.MetadataTable, provenance, metas)
+	metasql := catalog.IndexMetadataInsertSql(b.tblcfg.DbName, b.tblcfg.MetadataTable, provenance, metas)
 	sqls = append(sqls, metasql)
 	return sqls, nil
 }
