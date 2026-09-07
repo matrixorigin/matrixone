@@ -25,10 +25,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/xeipuuv/gojsonschema"
@@ -2031,6 +2033,7 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	switch jsonFuncType {
 	case bytejson.JsonModifySet:
@@ -2113,7 +2116,7 @@ rowLoop:
 				}
 				continue rowLoop
 			}
-			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
+			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i), protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2152,8 +2155,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 	}
 }
 
-func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int) (bytejson.ByteJson, error) {
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row)
+func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (bytejson.ByteJson, error) {
+	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row, protocolVersion)
 	if err != nil {
 		return bytejson.Null, err
 	}
@@ -2178,6 +2181,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
@@ -2188,7 +2192,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc, params[i], j)
+			elem, err := op.convertToAny(proc, params[i], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2210,7 +2214,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int) (any, error) {
+func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (any, error) {
 	ctx := context.Background()
 	if proc != nil {
 		ctx = proc.Ctx
@@ -2229,6 +2233,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		v,
 		row,
 		jsonSessionTimeZone(proc),
+		protocolVersion,
 		func(payload []byte) (bytejson.ByteJson, error) {
 			return geometryToByteJSON(ctx, payload)
 		},
@@ -2279,6 +2284,33 @@ func jsonSessionTimeZone(proc *process.Process) *time.Location {
 	return proc.GetSessionInfo().TimeZone
 }
 
+func jsonSessionProtocolVersion(proc *process.Process) int64 {
+	service := ""
+	if proc != nil {
+		service = proc.GetService()
+	}
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	switch version := value.(type) {
+	case int64:
+		return version
+	case int:
+		return int64(version)
+	case uint64:
+		return int64(version)
+	case uint32:
+		return int64(version)
+	default:
+		return defines.MORPCMinVersion
+	}
+}
+
 func geometryToByteJSON(ctx context.Context, payload []byte) (bytejson.ByteJson, error) {
 	geoJSON, err := geometryToGeoJSONBytes(payload)
 	if err != nil {
@@ -2313,6 +2345,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
@@ -2329,7 +2362,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			}
 			// key may be any type, convert to string representation.
-			keyAny, err := op.convertKeyToAny(proc, arrayOp, params[i], j)
+			keyAny, err := op.convertKeyToAny(proc, arrayOp, params[i], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2368,7 +2401,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				key = fmt.Sprint(v)
 			}
 
-			elem, err := arrayOp.convertToAny(proc, params[i+1], j)
+			elem, err := arrayOp.convertToAny(proc, params[i+1], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2397,6 +2430,7 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 	arrayOp *opBuiltInJsonArray,
 	v *vector.Vector,
 	row int,
+	protocolVersion int64,
 ) (any, error) {
 	typ := v.GetType()
 	switch typ.Oid {
@@ -2411,12 +2445,18 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 			vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), typ.Scale)), nil
 	case types.T_year:
 		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), 10), nil
+	case types.T_bit:
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, ctx)
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 	case types.T_geometry:
 		return string(v.GetBytesAt(row)), nil
 	default:
-		return arrayOp.convertToAny(proc, v, row)
+		return arrayOp.convertToAny(proc, v, row, protocolVersion)
 	}
 }
 

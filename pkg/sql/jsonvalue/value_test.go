@@ -140,7 +140,7 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 			require.NoError(t, tc.append(v, mp))
 			defer v.Free(mp)
 
-			value, err := FromVector(context.Background(), v, 0, tc.loc, nil)
+			value, err := FromVector(context.Background(), v, 0, tc.loc, bytejson.MySQLOpaqueProtocolVersion, nil)
 			require.NoError(t, err)
 			bj, err := bytejson.CreateByteJSON(value)
 			require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestFromVectorGeometryAndNull(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(geometry, []byte("wkb"), false, mp))
 	defer geometry.Free(mp)
 
-	value, err := FromVector(context.Background(), geometry, 0, time.UTC, func(payload []byte) (bytejson.ByteJson, error) {
+	value, err := FromVector(context.Background(), geometry, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, func(payload []byte) (bytejson.ByteJson, error) {
 		require.Equal(t, []byte("wkb"), payload)
 		return bytejson.ParseFromString(`{"type":"Point","coordinates":[1,2]}`)
 	})
@@ -168,13 +168,13 @@ func TestFromVectorGeometryAndNull(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bytejson.TpCodeObject, bj.Type)
 
-	_, err = FromVector(context.Background(), geometry, 0, time.UTC, nil)
+	_, err = FromVector(context.Background(), geometry, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, nil)
 	require.ErrorContains(t, err, "geometry JSON conversion is unavailable")
 
 	nulls := vector.NewVec(types.T_year.ToType())
 	require.NoError(t, vector.AppendFixed(nulls, types.MoYear(0), true, mp))
 	defer nulls.Free(mp)
-	value, err = FromVector(context.Background(), nulls, 0, time.UTC, nil)
+	value, err = FromVector(context.Background(), nulls, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, nil)
 	require.NoError(t, err)
 	require.Nil(t, value)
 }
@@ -185,6 +185,6 @@ func TestFromVectorRejectsInvalidBitWidth(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(v, uint64(1), false, mp))
 	defer v.Free(mp)
 
-	_, err := FromVector(nil, v, 0, time.UTC, nil)
+	_, err := FromVector(nil, v, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, nil)
 	require.ErrorContains(t, err, "cannot cast BIT(65) to json")
 }

@@ -41,6 +41,7 @@ func FromVector(
 	v *vector.Vector,
 	row int,
 	loc *time.Location,
+	protocolVersion int64,
 	geometry GeometryConverter,
 ) (any, error) {
 	if ctx == nil {
@@ -102,15 +103,15 @@ func FromVector(
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
 		return typed(bytejson.TpCodeDecimal, value.Format(typ.Scale)), nil
 	case types.T_binary:
-		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeString, v.GetBytesAt(row))
+		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeString, v.GetBytesAt(row))
 	case types.T_varbinary:
-		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeVarchar, v.GetBytesAt(row))
+		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeVarchar, v.GetBytesAt(row))
 	case types.T_blob:
-		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeBlob, v.GetBytesAt(row))
+		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeBlob, v.GetBytesAt(row))
 	case types.T_year:
 		return uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), nil
 	case types.T_bit:
-		return bit(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, ctx)
+		return bit(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, protocolVersion, ctx)
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](v, row).String(), nil
 	case types.T_geometry, types.T_geometry32:
@@ -173,7 +174,7 @@ func typed(tp bytejson.TpCode, value string) bytejson.ByteJson {
 	return bytejson.ByteJson{Type: tp, Data: data}
 }
 
-func bit(value uint64, width int32, ctx context.Context) (bytejson.ByteJson, error) {
+func bit(value uint64, width int32, protocolVersion int64, ctx context.Context) (bytejson.ByteJson, error) {
 	if width <= 0 {
 		width = 1
 	}
@@ -186,5 +187,5 @@ func bit(value uint64, width int32, ctx context.Context) (bytejson.ByteJson, err
 	byteLen := int((width + 7) / 8)
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], value)
-	return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, 16, raw[8-byteLen:])
+	return bytejson.NewMySQLOpaque(protocolVersion, 16, raw[8-byteLen:])
 }

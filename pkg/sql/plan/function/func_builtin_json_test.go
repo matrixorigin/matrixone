@@ -19,8 +19,12 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -423,6 +427,90 @@ func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
 			require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0))
 		})
 	}
+}
+
+func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector, *mpool.MPool) error
+	}{
+		{
+			name: "binary", typ: types.T_binary.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("binary"), false, mp)
+			},
+		},
+		{
+			name: "varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("varbinary"), false, mp)
+			},
+		},
+		{
+			name: "blob", typ: types.T_blob.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("blob"), false, mp)
+			},
+		},
+		{
+			name: "bit", typ: types.New(types.T_bit, 9, 0),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendFixed(v, uint64(0x101), false, mp)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			v := vector.NewVec(tc.typ)
+			require.NoError(t, tc.append(v, mp))
+			defer v.Free(mp)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
+			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			require.ErrorContains(t, err, "MORPC protocol version 52")
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			require.NoError(t, err)
+			_, err = bytejson.CreateByteJSON(value)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestJsonObjectBitKeyPreservesLegacyNameAndTaggedValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_bit, 9, 0), []uint64{0x101}, []bool{false}),
+			NewFunctionTestInput(types.New(types.T_bit, 4, 0), []uint64{0xa}, []bool{false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+
+	got := jsonVectorRowString(t, vec, 0)
+	require.Equal(t, `{"AQE=": "base64:type16:Cg=="}`, got)
+
+	document, err := bytejson.ParseFromString(got)
+	require.NoError(t, err)
+	path, err := types.ParseStringToPath(`$."AQE="`)
+	require.NoError(t, err)
+	member, exists := document.QuerySimpleExist(&path)
+	require.True(t, exists)
+	require.Equal(t, `"base64:type16:Cg=="`, member.String())
 }
 
 func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {
