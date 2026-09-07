@@ -18,15 +18,20 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -282,4 +287,124 @@ func TestSetvalRejectsNonSequenceBeforeSQL(t *testing.T) {
 	require.Zero(t, sql.calls)
 	require.Equal(t, "sentinel", proc.Base.SessionInfo.SeqAddValues[7])
 	require.Equal(t, "last", proc.Base.SessionInfo.SeqLastValue[0])
+}
+
+func TestSequenceSQLSharedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
+	proc.Base.IsFrontend = true
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lower_case_table_names" {
+			return int64(0), nil
+		}
+		return nil, nil
+	})
+	exec := mock_executor.NewMockSQLExecutor(ctrl)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, exec)
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+		}
+	})
+	retryErr := moerr.NewTxnNeedRetryNoCtx()
+	exec.EXPECT().Exec(gomock.Any(), "select metadata for update", gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ string, opts executor.Options) (executor.Result, error) {
+			require.Equal(t, true, ctx.Value(defines.BgKey{}))
+			require.Same(t, proc.GetTxnOperator(), opts.Txn())
+			require.True(t, opts.DisableIncrStatement())
+			require.True(t, opts.HasAccountID())
+			require.Equal(t, uint32(42), opts.AccountID())
+			require.Equal(t, "view_db", opts.Database())
+			require.Equal(t, int64(0), opts.LowerCaseTableNames())
+			require.Same(t, time.UTC, opts.GetTimeZone())
+			require.True(t, opts.IsFrontend())
+			return executor.Result{}, retryErr
+		}).Times(1)
+	_, err := sequenceSQL(proc, "view_db", "select metadata for update")
+	require.ErrorIs(t, err, retryErr, "the owning outer statement must retry")
+	require.Equal(t, "`d``b`.`s``q`", sequenceTableName("d`b", "s`q"))
+}
+
+func TestSequenceSQLStopsOnCanceledContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	exec := mock_executor.NewMockSQLExecutor(ctrl)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, exec)
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+		}
+	})
+	exec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	_, err := sequenceSQL(proc, "db", "select metadata for update")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSequenceSQLMetadata(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		rows      int
+		wrongType bool
+		wantError bool
+	}{
+		{name: "one row", rows: 1},
+		{name: "multiple rows", rows: 2, wantError: true},
+		{name: "wrong flag type", rows: 1, wrongType: true, wantError: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
+			columnTypes := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_bool.ToType(), types.T_bool.ToType()}
+			if scenario.wrongType {
+				columnTypes[6] = types.T_int64.ToType()
+			}
+			before := proc.Mp().CurrNB()
+			data := executor.NewMemResult(columnTypes, proc.Mp())
+			data.NewBatchWithRowCount(scenario.rows)
+			for i := range columnTypes {
+				if columnTypes[i].Oid == types.T_bool {
+					require.NoError(t, executor.AppendFixedRows(data, i, make([]bool, scenario.rows)))
+				} else {
+					require.NoError(t, executor.AppendFixedRows(data, i, make([]int64, scenario.rows)))
+				}
+			}
+			exec := executor.NewMemExecutor(func(string) (executor.Result, error) { return data.GetResult(), nil })
+			rt := runtime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, exec)
+				if hadPrevious {
+					rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+				}
+			})
+			rows, err := sequenceSQL(proc, "db", "select metadata for update")
+			if scenario.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, [][]interface{}{{int64(0), int64(0), int64(0), int64(0), int64(0), false, false}}, rows)
+			}
+			require.Equal(t, before, proc.Mp().CurrNB(), "executor result must be released even on metadata errors")
+		})
+	}
 }

@@ -139,6 +139,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
+	c.sequenceState = captureSequenceStatementState(proc)
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -279,6 +280,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
+	c.sequenceState = captureSequenceStatementState(proc)
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
 	c.captureStringShuffleHashAlgorithm()
@@ -497,6 +499,7 @@ func (c *Compile) clear() {
 	c.stringShuffleHashAlgorithmFrozen = false
 	c.resultMetadataFrozen = false
 	c.planGenerationRebuilt = false
+	c.sequenceState = sequenceStatementState{}
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
