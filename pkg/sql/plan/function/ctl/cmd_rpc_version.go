@@ -37,13 +37,21 @@ func handleGetProtocolVersion(proc *process.Process,
 	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	var nodeIds []string
-	mc.GetCNService(
+	inventoryCtx := proc.Ctx
+	if inventoryCtx == nil {
+		inventoryCtx = context.Background()
+	}
+	if err := clusterservice.GetCNServiceRawWithContext(
+		inventoryCtx,
+		mc,
 		clusterservice.NewSelector(),
 		func(c metadata.CNService) bool {
 			addrs = append(addrs, c.QueryAddress)
 			nodeIds = append(nodeIds, c.ServiceID)
 			return true
-		})
+		}); err != nil {
+		return Result{}, moerr.AttachCause(inventoryCtx, err)
+	}
 	mc.GetTNService(
 		clusterservice.NewSelector(),
 		func(d metadata.TNService) bool {
@@ -53,7 +61,7 @@ func handleGetProtocolVersion(proc *process.Process,
 			}
 			return true
 		})
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleGetProtocolVersion)
+	ctx, cancel := context.WithTimeoutCause(inventoryCtx, time.Second*10, moerr.CauseHandleGetProtocolVersion)
 	defer cancel()
 
 	versions := make([]string, 0, len(addrs))
