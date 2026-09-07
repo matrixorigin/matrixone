@@ -324,6 +324,10 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
+		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
@@ -476,6 +480,65 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 	next.Free(cw.proc.Mp())
 	prepareStmt.params = nil
+}
+
+func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
+	const query = "select json_unquote(?)"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 122, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+
+	cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		wantBinary bool
+		wantErr    bool
+	}{
+		{name: "text rebind", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+		{name: "binary rebind", mysqlType: defines.MYSQL_TYPE_LONG_BLOB, wantBinary: true, wantErr: true},
+		{name: "text rebind after binary", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx, cw.proc, prepareStmt,
+				buildStringExecutePacket(proto, tc.mysqlType, "plain"), 0))
+
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+
+			queryPlan := runtimePlan.GetQuery()
+			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
+			require.Len(t, projects, 1)
+			executor, err := colexec.NewExpressionExecutor(cw.proc, projects[0])
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.EmptyForConstFoldBatch
+			result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Length())
+			require.Equal(t, "plain", result.GetStringAt(0))
+			require.False(t, result.GetIsBinaryStringAt(0))
+
+			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, cachedPlan, after, "execute-time rebinding must not mutate the cached plan")
+		})
+	}
 }
 
 func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
@@ -2928,6 +2991,85 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
 }
 
+func TestExecuteUserParamConcreteTypePreservesMemberOfDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	memberOfArg := func(typ types.T) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}}
+	}
+
+	got, err := executeUserParamConcreteType(
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_array_float32, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_geometry32), "POINT(1 2)", vector.PrepareParamNone, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_geometry32, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_bit), uint64(1), vector.PrepareParamInteger, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bit, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, types.T_any, got)
+}
+
+func TestNormalizeMemberOfUserParamUsesEnumLabel(t *testing.T) {
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}}
+	value, err := normalizeMemberOfUserParam(arg, types.Enum(2))
+	require.NoError(t, err)
+	require.Equal(t, "blue", value)
+}
+
+func TestInitExecuteStmtParamPreservesPreparedBitMemberOf(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 126, "select ? member of ('[1]')")
+	defer prepareStmt.Close()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BIT), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	// Reject the unsupported width-less domain in the executor, not here:
+	// SQL NULL or a masked-off row must still short-circuit its evaluation.
+	require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
+}
+
+func TestPreparedMemberOfBitFailureThenRebind(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 127, "select ? member of ('[1]')")
+	defer prepared.Close()
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+	for i := 0; i < 3; i++ {
+		packet := buildLongLongExecutePacket(1, false)
+		packet[1] = 1 // iteration-count, excluding the statement ID
+		packet[7] = byte(defines.MYSQL_TYPE_BIT)
+		if i == 1 {
+			packet[8] = 0x80 // unsigned BIT must not masquerade as uint64
+		}
+		_, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
+		require.ErrorContains(t, err, "argument 1")
+		require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
+		packet[7] = byte(defines.MYSQL_TYPE_LONGLONG)
+		packet[8] = 0
+		got, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), got)
+		require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
+	}
+}
+
 func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 118)
 	defer prepareStmt.Close()
@@ -3194,6 +3336,46 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(sysAccountID), prepareSchemaAccountID(7, &plan.ObjectRef{
 		SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT,
 	}))
+}
+
+func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.T) {
+	schemas := []*plan.ObjectRef{{
+		Server:           4,
+		Db:               2,
+		Obj:              3,
+		SchemaName:       "publisher_db",
+		ObjName:          "src",
+		SubscriptionName: "sub",
+		PubInfo:          &plan.PubInfo{TenantId: 11},
+	}}
+	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		OriginViews: []string{"information_schema#statistics"},
+	}}}}}
+	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
+	require.True(t, rebuildEveryExecute)
+
+	resolveCalls := 0
+	resolve := func(
+		_, _ string,
+		_ *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		resolveCalls++
+		return nil, nil, assert.AnError
+	}
+	changed, validated, err := validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, rebuildEveryExecute)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, validated)
+	require.Zero(t, resolveCalls,
+		"a guaranteed rebuild must not resolve stale subscription ObjectRefs")
+
+	changed, validated, err = validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, false)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, changed)
+	require.True(t, validated)
+	require.Equal(t, 1, resolveCalls)
 }
 
 func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
@@ -4081,4 +4263,349 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	cwft.recordSchedulingTraceOnCompileError(context.Background())
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestInitExecuteStmtParamUsesBinaryMemberOfTypeAndFilter(t *testing.T) {
+	const query = `select 1 where ? member of ('[0.10000000149011612]')`
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 118, query)
+	defer prepareStmt.Close()
+
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+	require.NoError(t, proto.ParseExecuteData(
+		execCtx.reqCtx, cw.proc, prepareStmt, buildFloat32ExecutePacket(float32(0.1)), 0))
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+
+	var predicate *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		for _, candidate := range node.FilterList {
+			if candidate.GetF() != nil &&
+				candidate.GetF().Func.GetObjName() == "cast" {
+				require.GreaterOrEqual(t, len(candidate.GetF().Args), 1)
+				require.NotNil(t, candidate.GetF().Args[0].GetF())
+				require.Equal(t, "member of", candidate.GetF().Args[0].GetF().Func.GetObjName())
+				predicate = candidate
+				break
+			}
+		}
+		if predicate != nil {
+			break
+		}
+	}
+	require.NotNil(t, predicate, "prepared MEMBER OF must remain a production filter predicate")
+
+	executor, err := colexec.NewExpressionExecutor(cw.proc, predicate)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+}
+
+func findPreparedMemberOfExpr(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && fn.Func.GetObjName() == "member of" {
+			return expr
+		}
+		for _, arg := range fn.Args {
+			if memberOf := findPreparedMemberOfExpr(arg); memberOf != nil {
+				return memberOf
+			}
+		}
+	}
+	return nil
+}
+
+func evalPreparedMemberOf(t testing.TB, cw *TxnComputationWrapper, runtimePlan *plan.Plan) (int64, error) {
+	t.Helper()
+	if runtimePlan == nil || runtimePlan.GetQuery() == nil {
+		return 0, fmt.Errorf("prepared MEMBER OF query plan is missing")
+	}
+	var memberOf *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		for _, root := range node.ProjectList {
+			if memberOf = findPreparedMemberOfExpr(root); memberOf != nil {
+				break
+			}
+		}
+		if memberOf == nil {
+			for _, root := range node.FilterList {
+				if memberOf = findPreparedMemberOfExpr(root); memberOf != nil {
+					break
+				}
+			}
+		}
+		if memberOf != nil {
+			break
+		}
+	}
+	if memberOf == nil {
+		return 0, fmt.Errorf("prepared MEMBER OF expression is missing")
+	}
+	executor, err := colexec.NewExpressionExecutor(cw.proc, memberOf)
+	if err != nil {
+		return 0, err
+	}
+	defer executor.Free()
+	result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return 0, err
+	}
+	if result.GetType().Oid != types.T_int64 {
+		return 0, fmt.Errorf("prepared MEMBER OF result type is %s", result.GetType().Oid)
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](result, 0), nil
+}
+
+func runPreparedMemberOfPacket(
+	t testing.TB,
+	ses *Session,
+	prepareStmt *PrepareStmt,
+	cw *TxnComputationWrapper,
+	execCtx *ExecCtx,
+	proto *MysqlProtocolImpl,
+	packet []byte,
+) (int64, error) {
+	t.Helper()
+	if err := proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0); err != nil {
+		return 0, err
+	}
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	if err != nil {
+		return 0, err
+	}
+	if retComp != nil {
+		return 0, fmt.Errorf("unexpected runtime compile for prepared MEMBER OF")
+	}
+	return evalPreparedMemberOf(t, cw, runtimePlan)
+}
+
+func TestInitExecuteStmtParamRejectsNonTextMemberOfRHS(t *testing.T) {
+	const wantErr = "Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required."
+	tests := []struct {
+		name   string
+		packet func(*MysqlProtocolImpl) []byte
+		want   int64
+	}{
+		{
+			name: "integer",
+			packet: func(*MysqlProtocolImpl) []byte {
+				return buildLongLongExecutePacket(1, false)
+			},
+		},
+		{
+			name: "float",
+			packet: func(*MysqlProtocolImpl) []byte {
+				return buildFloat32ExecutePacket(1)
+			},
+		},
+		{
+			name: "boolean",
+			packet: func(*MysqlProtocolImpl) []byte {
+				return buildTinyExecutePacket(1, false)
+			},
+		},
+		{
+			name: "text",
+			packet: func(proto *MysqlProtocolImpl) []byte {
+				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "[1]")
+			},
+			want: 1,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(121+i), "select 1 where 1 member of (?)")
+			defer prepareStmt.Close()
+
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ioses.Close() })
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+			proto.SetSession(ses)
+
+			got, err := runPreparedMemberOfPacket(
+				t, ses, prepareStmt, cw, execCtx, proto, tt.packet(proto))
+			require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+			if tt.name == "text" {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+				return
+			}
+			require.EqualError(t, err, wantErr)
+		})
+	}
+}
+
+func TestInitExecuteStmtParamRebindsMemberOfRHSRuntimeDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 125, "select 1 where 1 member of (?)")
+	defer prepareStmt.Close()
+
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+
+	got, err := runPreparedMemberOfPacket(
+		t, ses, prepareStmt, cw, execCtx, proto,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "[1]"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), got)
+
+	_, err = runPreparedMemberOfPacket(
+		t, ses, prepareStmt, cw, execCtx, proto,
+		buildLongLongExecutePacket(1, false))
+	require.EqualError(t, err,
+		"Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.")
+
+	got, err = runPreparedMemberOfPacket(
+		t, ses, prepareStmt, cw, execCtx, proto,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "[1]"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), got)
+}
+
+func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		want       types.T
+		supported  bool
+	}{
+		{name: "signed tiny", mysqlType: defines.MYSQL_TYPE_TINY, want: types.T_int8, supported: true},
+		{name: "unsigned tiny", mysqlType: defines.MYSQL_TYPE_TINY, isUnsigned: true, want: types.T_uint8, supported: true},
+		{name: "signed bit", mysqlType: defines.MYSQL_TYPE_BIT, want: types.T_bit, supported: true},
+		{name: "unsigned bit", mysqlType: defines.MYSQL_TYPE_BIT, isUnsigned: true, want: types.T_bit, supported: true},
+		{name: "year", mysqlType: defines.MYSQL_TYPE_YEAR, want: types.T_year, supported: true},
+		{name: "float", mysqlType: defines.MYSQL_TYPE_FLOAT, want: types.T_float32, supported: true},
+		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64, supported: true},
+		{name: "decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, want: types.T_decimal256, supported: true},
+		{name: "text", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text, supported: true},
+		{name: "blob", mysqlType: defines.MYSQL_TYPE_BLOB, want: types.T_blob, supported: true},
+		{name: "json", mysqlType: defines.MYSQL_TYPE_JSON, want: types.T_json, supported: true},
+		{name: "date", mysqlType: defines.MYSQL_TYPE_DATE, want: types.T_date, supported: true},
+		{name: "time", mysqlType: defines.MYSQL_TYPE_TIME, want: types.T_time, supported: true},
+		{name: "datetime", mysqlType: defines.MYSQL_TYPE_DATETIME, want: types.T_datetime, supported: true},
+		{name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, want: types.T_timestamp, supported: true},
+		{name: "enum", mysqlType: defines.MYSQL_TYPE_ENUM, want: types.T_enum, supported: true},
+		{name: "geometry", mysqlType: defines.MYSQL_TYPE_GEOMETRY, want: types.T_geometry, supported: true},
+		{name: "unknown", mysqlType: defines.MYSQL_TYPE_NULL, want: types.T_any},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, supported := binaryProtocolPrepareParamConcreteType(test.mysqlType, test.isUnsigned)
+			require.Equal(t, test.want, got)
+			require.Equal(t, test.supported, supported)
+		})
+	}
+}
+
+func TestBinaryProtocolPrepareParamBinaryStringMetadataNoBlobDoesNotAllocate(t *testing.T) {
+	const paramCount = 64
+	paramTypes := make([]byte, paramCount*2)
+	for i := 0; i < paramCount; i++ {
+		paramTypes[i*2] = byte(defines.MYSQL_TYPE_LONG)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if metadata := binaryProtocolPrepareParamBinaryStringMetadata(paramTypes, paramCount, nil); metadata != nil {
+			t.Fatal("non-BLOB binary parameters must not produce binary-string metadata")
+		}
+	})
+	require.Zero(t, allocs)
+}
+
+func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 126, "select ?")
+	defer prepareStmt.Close()
+
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+
+	run := func(tp defines.MysqlType, payload string) {
+		require.NoError(t, proto.ParseExecuteData(
+			execCtx.reqCtx, cw.proc, prepareStmt,
+			buildStringExecutePacket(proto, tp, payload), 0))
+		_, _, stmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+		require.NoError(t, err)
+	}
+
+	run(defines.MYSQL_TYPE_BLOB, "blob-one")
+	require.Len(t, prepareStmt.paramBinaryStrings, 1)
+	first := &prepareStmt.paramBinaryStrings[0]
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+
+	run(defines.MYSQL_TYPE_VAR_STRING, "text")
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+
+	run(defines.MYSQL_TYPE_BLOB, "blob-two")
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+}
+
+func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 117, "select ? member of ('[18446744073709551615]')")
+	defer prepareStmt.Close()
+
+	prepareStmt.jsonComparisonParamPositions = plan2.PreparedJSONComparisonParamPositions(
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+	prepareStmt.jsonMemberOfParamPositions = plan2.PreparedJSONMemberOfParamPositions(
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+	require.Equal(t, []int32{0}, prepareStmt.jsonMemberOfParamPositions)
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamInteger, cw.proc.GetPrepareParamKind(0))
+
+	require.NoError(t, vector.SetStringAt(
+		prepareStmt.params, 0, "16777216", cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
 }

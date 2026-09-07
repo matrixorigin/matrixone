@@ -675,6 +675,27 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	tblName := qry.GetTableDef().GetName()
 	isTemp := qry.GetTableDef().GetIsTemporary()
+	aliasName := tblName
+	if isTemp {
+		var err error
+		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
+		if err != nil {
+			return err
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+		defer func() { c.proc.Ctx = originalCtx }()
+
+		executionPlan := *qry
+		qry = &executionPlan
+		qry.TableDef = plan2.DeepCopyTableDef(qry.TableDef, true)
+		qry.CopyTableDef = plan2.DeepCopyTableDef(qry.CopyTableDef, true)
+		qry.TableDef.Name = tblName
+		if qry.CopyTableDef != nil {
+			qry.CopyTableDef.Name = tblName
+		}
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
@@ -685,6 +706,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	if err != nil {
 		return err
 	}
+	if isTemp && rel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+
 	tblId := rel.GetTableID(c.proc.Ctx)
 	extra := rel.GetExtraInfo()
 
@@ -1271,10 +1296,19 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				return err
 			}
 		case *plan.AlterTable_Action_AlterName:
+			oldName, newName := act.AlterName.OldName, act.AlterName.NewName
+			if isTemp {
+				if _, exists := c.proc.GetSession().GetTempTable(dbName, newName); exists {
+					return moerr.NewTableAlreadyExists(c.proc.Ctx, newName)
+				}
+				oldName = tblName
+				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			}
+
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
-				act.AlterName.OldName,
-				act.AlterName.NewName,
+				oldName,
+				newName,
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
@@ -1357,6 +1391,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	if isTemp {
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil {
+				c.proc.GetSession().RemoveTempTable(dbName, aliasName)
+				c.proc.GetSession().AddTempTable(dbName, rename.NewName,
+					physicalTemporaryTableName(c.proc, dbName, rename.NewName))
+			}
+		}
 	}
 
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
@@ -1462,6 +1506,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			return s.createSessionTemporaryTable(c, owner, tableCreated)
+		}
+	}
 	if isTemp {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
@@ -2161,6 +2210,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
+		return err
+	}
+
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
@@ -2240,20 +2307,13 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		res.Close()
 	}
 
-	if isTemp && session != nil {
-		// The temporary table and all follow-up metadata/index/CTAS work have
-		// completed. Keep the alias registered in the session.
-		rollbackTempAlias = false
-	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
-		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
+	if names, ok := proc.GetSession().(interface{ TemporaryTableName(string, string) string }); ok {
+		return names.TemporaryTableName(dbName, alias)
+	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
@@ -3946,6 +4006,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 		return err
+	}
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
+			return nil
+		}
 	}
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
