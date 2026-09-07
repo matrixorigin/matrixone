@@ -1,4 +1,4 @@
-- Status: in progress — independent design decision recorded below
+- Status: in progress — original design approved; capacity amendment pending owner approval
 - Start Date: 2026-08-26
 - Authors: iamlinjunhong
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27553
@@ -21,8 +21,8 @@ client lifetime, digest-only diagnostics, compatibility fencing, ownership
 model, rollout/fallback, and validation map. This status update records that
 decision; it does not self-approve the implementation.
 
-**Capacity amendment (2026-09-07): ACCEPTED.** Issue #28337 admits `$sort` and
-`$unwind` to the collection-scoped stage allowlist without changing the existing
+**Capacity amendment (2026-09-07): PROPOSED.** Issue #28337 proposes admitting
+`$sort` and `$unwind` to the collection-scoped stage allowlist without changing the existing
 operation, concurrency, spill, timeout, or output budgets. `$sort` is a blocking
 stage in the same bounded MongoDB aggregation-memory envelope already accepted
 for `$group`; `allowDiskUse=false` makes excess memory fail instead of spilling.
@@ -298,12 +298,14 @@ rechecking only changed base-side contracts.
 
 1. **Operator allowlist evolution:** every added MongoDB operator/stage requires
    a new security/resource semantics decision and regression before admission.
-2. **Capacity expansion:** the amended envelope and 30-second cap above are the
-   accepted rollout limit. Any broader stage/operator set or budget is a new
-   design decision owned by the MongoDB connector maintainers, with an attached
-   workload measurement; it is not an open blocker for this revision.
+2. **Capacity expansion:** the amended envelope and unchanged 30-second cap
+   require approval from the MongoDB connector policy owner. Any broader
+   stage/operator set or budget is a separate design decision with an attached
+   workload measurement.
 
-These are continuing admission conditions, not open design questions for this
-revision. The independent PASS above names the reviewed document revision and
-the selected invariants and validation plan. The RFC is therefore `in progress`;
-implementation approval remains a separate review decision.
+The independent PASS above names the reviewed revision for the original
+capability and does not cover this capacity amendment. The RFC remains `in
+progress` for that original capability; delivery of the #28337 amendment stays
+blocked until the policy owner records the approving identity, scope, rationale,
+and exact reviewed revision. Implementation approval remains a separate review
+decision.
