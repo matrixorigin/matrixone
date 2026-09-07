@@ -289,7 +289,17 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
+	predecessor := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
+	assert.Contains(t, predecessor, InformationSchemaViewsLegacyDDL)
+	assert.NotContains(t, predecessor, InformationSchemaViewsDDL)
+	assert.NotContains(t, strings.Join(predecessor, "\n"), "mo_view_definition(")
+	assert.Contains(t, strings.Join(predecessor, "\n"), "mo_subscription_tables()")
+	assert.Contains(t, strings.Join(predecessor, "\n"), "mo_subscription_columns()")
+	for _, sql := range predecessor {
+		assertInformationSchemaInitSQLParses(t, sql)
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion59)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
