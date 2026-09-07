@@ -1955,7 +1955,7 @@ func TestBackendWriteFailureRetiresBatch(t *testing.T) {
 			}
 			done := make(chan struct{})
 			go func() { rb.writeLoop(ctx); close(done) }()
-			defer func() { close(rb.stopWriteC); <-done }()
+			defer func() { rb.stopWriteLoop(); <-done }()
 			select {
 			case <-done:
 			case <-ctx.Done():

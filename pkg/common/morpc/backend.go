@@ -182,6 +182,7 @@ type remoteBackend struct {
 	writeC          chan *Future
 	waitWriteC      chan struct{}
 	stopWriteC      chan struct{}
+	stopWriteOnce   sync.Once
 	resetConnC      chan error
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
@@ -639,6 +640,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					// Encoding may have written a partial frame (including directly
 					// to the socket). Never flush or reuse this connection after it.
 					rb.changeToStopping()
+					rb.stopWriteLoop()
 					rb.cancelActiveStreams()
 					for _, pending := range written {
 						pending.messageSent(err)
@@ -667,6 +669,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						f.messageSent(err)
 					}
 					rb.changeToStopping()
+					rb.stopWriteLoop()
 					rb.cancelActiveStreams()
 					rb.makeAllWaitingFutureFailed(err)
 					return
@@ -1018,7 +1021,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	close(rb.stopWriteC)
+	// Wake every admission waiter before termination waits for stream locks.
+	// The writer's failure path and Close may both own this notification.
+	rb.stopWriteOnce.Do(func() { close(rb.stopWriteC) })
 }
 
 func (rb *remoteBackend) requestDone(
