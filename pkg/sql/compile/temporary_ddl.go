@@ -36,6 +36,19 @@ func supportsSessionTemporaryDDL(service string) bool {
 	return ok && version >= defines.MORPCVersion55
 }
 
+// sessionTemporaryDDLOwner admits only top-level client schema operations to
+// the session-owned temporary DDL lifecycle. Temporary DDL issued by a SQL
+// executor is a constituent operation of that executor's transaction even when
+// it carries the originating frontend session.
+func sessionTemporaryDDLOwner(c *Compile) (process.TemporaryTableDDL, bool) {
+	if c.isInternal || c.temporaryDDLInExecutorTxn || !c.proc.Base.IsFrontend ||
+		!supportsSessionTemporaryDDL(c.proc.GetService()) {
+		return nil, false
+	}
+	owner, ok := c.proc.GetSession().(process.TemporaryTableDDL)
+	return owner, ok
+}
+
 // A schema transaction sees its own aliases without publishing them into the
 // user session. One generation also names every hidden index consistently.
 type temporaryDDLSession struct {
