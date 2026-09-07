@@ -1720,6 +1720,29 @@ func TestColumnExpressionExecutorConstNullPreservesStringSourceAcrossCacheReuse(
 	}
 }
 
+func TestColumnExpressionExecutorPreservesGroupingSentinel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewRollupConst(types.T_varchar.ToType(), 3, proc.Mp())
+	bat.SetRowCount(3)
+	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Same(t, bat.Vecs[0], result)
+	require.True(t, result.IsGrouping())
+	require.Equal(t, 3, result.GetGrouping().Count())
+
+	executor.Free()
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 // TestColumnExpressionExecutor_RelIndexOutOfRange verifies that Eval returns
 // an error instead of panicking when relIndex >= len(batches).
 // This reproduces the crash seen when IVF-Flat entries table contains NULL

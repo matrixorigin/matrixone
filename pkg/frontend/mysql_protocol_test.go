@@ -3075,6 +3075,50 @@ func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
 		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
 }
 
+func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T) {
+	const query = `select ? member of ('[0.10000000149011612]')`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	// This is the binary COM_STMT_EXECUTE shape emitted for MYSQL_TYPE_FLOAT:
+	// no cursor, iteration-count 1, one non-NULL parameter, and a 4-byte
+	// IEEE-754 payload.  The parser stores the payload in the text transport
+	// vector, while ParamTypes retains the concrete wire domain.
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
+	runtimeType, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0))
+	require.True(t, ok)
+	require.Equal(t, types.T_float32, runtimeType.Oid)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
+	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, result.GetType().Oid)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+}
+
 func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	const value = "12345678901234567890123456789012345.6789"
 	ctx := context.TODO()
@@ -3139,6 +3183,68 @@ func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
 }
 
+func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		packet     func(*MysqlProtocolImpl) []byte
+		paramKind  vector.PrepareParamKind
+		want       uint64
+		specialize bool
+	}{
+		{
+			name: "var string keeps binary marker default",
+			packet: func(proto *MysqlProtocolImpl) []byte {
+				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "64")
+			},
+			want: 7,
+		},
+		{
+			name: "blob keeps binary marker default",
+			packet: func(proto *MysqlProtocolImpl) []byte {
+				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, "64")
+			},
+			want: 7,
+		},
+		{
+			name:       "integer rebinds numeric overload",
+			packet:     func(*MysqlProtocolImpl) []byte { return buildLongLongExecutePacket(64, false) },
+			paramKind:  vector.PrepareParamInteger,
+			want:       1,
+			specialize: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select bit_count(?)")
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, tc.packet(proto), 0))
+			prepareStmt.params.SetPrepareParamKinds([]vector.PrepareParamKind{tc.paramKind})
+			proc.SetPrepareParamsWithMeta(
+				prepareStmt.params, []bool{false}, []vector.PrepareParamKind{tc.paramKind})
+			values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
+			require.NoError(t, err)
+			runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			require.Equal(t, tc.specialize, specialized)
+
+			query := runtimePlan.GetQuery()
+			require.NotEmpty(t, query.Steps)
+			project := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.Len(t, project.ProjectList, 1)
+			executor, err := colexec.NewExpressionExecutor(proc, project.ProjectList[0])
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+		})
+	}
+}
+
 func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
 	data := make([]byte, 11)
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})
@@ -3151,16 +3257,60 @@ func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_YEAR), 0}, prepareStmt.ParamTypes)
 }
 
+func TestParseExecuteDataPreservesStringDomainAcrossRebinds(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	for _, tc := range []struct {
+		mysqlType defines.MysqlType
+		binary    bool
+	}{
+		{mysqlType: defines.MYSQL_TYPE_BLOB, binary: true},
+		{mysqlType: defines.MYSQL_TYPE_VAR_STRING, binary: false},
+		{mysqlType: defines.MYSQL_TYPE_LONG_BLOB, binary: true},
+	} {
+		require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+			buildStringExecutePacket(proto, tc.mysqlType, "中中"), 0))
+		require.Equal(t, []byte{byte(tc.mysqlType), 0}, prepareStmt.ParamTypes)
+		proc.SetPrepareParamsWithMetadata(prepareStmt.params, nil,
+			[]bool{binaryProtocolPrepareParamIsBinaryString(tc.mysqlType)})
+		require.Equal(t, tc.binary, proc.GetPrepareParamIsBinaryString(0))
+		require.Equal(t, "中中", proc.GetPrepareParams().GetStringAt(0))
+	}
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
-	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(tp), 0})
 	pos := proto.writeStringLenEnc(data, 9, payload)
 	return data[:pos]
 }
 
+func buildFloat32ExecutePacket(value float32) []byte {
+	data := make([]byte, 13)
+	// flag, iteration-count=1, null bitmap, new-params-bound, type, value
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_FLOAT), 0})
+	binary.LittleEndian.PutUint32(data[9:], math.Float32bits(value))
+	return data
+}
+
+func buildTinyExecutePacket(value uint8, unsigned bool) []byte {
+	data := make([]byte, 10)
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_TINY), 0})
+	if unsigned {
+		data[8] = 0x80
+	}
+	data[9] = value
+	return data
+}
+
 func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 	data := make([]byte, 17)
-	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})
 	if unsigned {
 		data[8] = 0x80
 	}
@@ -3169,7 +3319,7 @@ func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 }
 
 func buildNullExecutePacket(tp defines.MysqlType) []byte {
-	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	data := []byte{0, 1, 0, 0, 0, 1, 1, byte(tp), 0}
 	return data
 }
 

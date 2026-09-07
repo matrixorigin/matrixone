@@ -199,6 +199,38 @@ func TestExecutionResourceBudgetAllocationAccountIsSoleOwner(t *testing.T) {
 	}
 }
 
+func TestExecutionResourceBudgetTransientMemoryReservation(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(10, 10)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := generation.ReserveTransientMemory(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation.Used() != 6 {
+		t.Fatalf("used = %d, want 6", generation.Used())
+	}
+	if _, err = generation.ReserveTransientMemory(5); !errors.Is(err, ErrExecutionResourceAdmission) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	if !reservation.Release() || reservation.Release() || generation.Used() != 0 {
+		t.Fatal("transient reservation was not released exactly once")
+	}
+	reservation, err = generation.ReserveTransientMemory(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation.Close()
+	if _, err = generation.ReserveTransientMemory(1); !errors.Is(err, ErrExecutionResourceClosed) {
+		t.Fatalf("closed generation error = %v", err)
+	}
+	if !reservation.Release() || generation.Used() != 0 {
+		t.Fatal("closed generation did not accept the live token release")
+	}
+}
+
 func TestExecutionResourceAllocationAccountRegistryBounds(t *testing.T) {
 	budget := MustNewExecutionResourceBudget(16<<10, 16<<10)
 	first, err := budget.OpenGeneration(1)

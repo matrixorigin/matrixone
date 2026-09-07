@@ -2610,7 +2610,7 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
 			require.NoError(t, err)
 			query := queryPlan.GetQuery()
-			rootNode := query.Nodes[query.Steps[0]]
+			rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 			for i, wantNotNullable := range test.notNullable {
 				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
 			}
@@ -3032,6 +3032,40 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id)
 		require.Equal(t, int32(8), cols[index].Typ.Width)
 	}
+}
+
+func TestBuildCTASPreservesJsonUnquoteTextBounds(t *testing.T) {
+	const sql = `create table json_unquote_copy as select
+		json_unquote(json_text) as plain_text,
+		json_unquote(json_mediumtext) as plain_mediumtext,
+		json_unquote(json_longtext) as plain_longtext,
+		json_unquote(json_doc) as json_text_value,
+		json_unquote('"literal"') as literal_value
+		from nation`
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{Name: "json_text", Typ: plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_mediumtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen, Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_longtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen, Charset: uint32(types.CharsetUTF8MB4Bin)}},
+		&plan.ColDef{Name: "json_doc", Typ: plan.Type{Id: int32(types.T_json)}},
+	)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 5)
+	for i, width := range []int32{0, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		require.Equal(t, int32(types.T_text), cols[i].Typ.Id)
+		require.Equal(t, width, cols[i].Typ.Width)
+	}
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[0].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[1].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[2].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[3].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[4].Typ.Charset)
 }
 
 func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {

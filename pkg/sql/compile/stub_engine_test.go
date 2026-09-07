@@ -59,6 +59,7 @@ type stubDatabase struct {
 	name         string
 	rels         map[string]*stubRelation
 	createErr    error
+	deleteErr    error
 	createCtx    context.Context
 	relExistsErr error
 }
@@ -92,6 +93,9 @@ func (db *stubDatabase) Create(ctx context.Context, name string, defs []engine.T
 }
 
 func (db *stubDatabase) Delete(_ context.Context, name string) error {
+	if db.deleteErr != nil {
+		return db.deleteErr
+	}
 	delete(db.rels, name)
 	return nil
 }
