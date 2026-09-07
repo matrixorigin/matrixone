@@ -1316,13 +1316,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	//5. ISCP: temp table already created pitr and iscp job with temp table name
 	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
 	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
-	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, copyTblName)
 	if err != nil {
 		return err
 	}
 
 	// Idxcron: remove index update tasks with temp table id
-	err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, copyTblName)
 	if err != nil {
 		return err
 	}
