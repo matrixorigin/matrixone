@@ -38,7 +38,8 @@ SELECT JSON_OBJECTAGG(float_key, value) AS float_key_object FROM t_obj_numeric W
 SELECT JSON_OBJECTAGG(decimal_key, value) AS decimal_key_object FROM t_obj_numeric WHERE row_id = 1;
 SELECT JSON_OBJECTAGG(row_id, value) AS integer_key_object, JSON_OBJECTAGG(row_id + 1, value) AS expression_key_object FROM t_obj_numeric WHERE row_id = 1;
 SELECT JSON_OBJECTAGG(row_id, value) AS implicit_object, JSON_OBJECTAGG(CAST(row_id AS CHAR), value) AS explicit_object FROM t_obj_numeric WHERE row_id = 1;
-SELECT JSON_OBJECTAGG(signed_key, value) AS duplicate_numeric FROM (SELECT CAST(1 AS SIGNED) AS signed_key, value FROM t_obj_numeric ORDER BY row_id) AS ordered_numeric;
+# Ordinary aggregation does not promise input order; accept either duplicate winner.
+SELECT JSON_CONTAINS(duplicate_object, '{"1":"first"}') OR JSON_CONTAINS(duplicate_object, '{"1":"last"}') AS duplicate_numeric FROM (SELECT JSON_OBJECTAGG(signed_key, value) AS duplicate_object FROM (SELECT CAST(1 AS SIGNED) AS signed_key, value FROM t_obj_numeric) AS unordered_numeric) AS duplicate_check;
 SET @json_objectagg_key = '-19';
 PREPARE json_objectagg_signed_key FROM 'SELECT JSON_OBJECTAGG(CAST(? AS SIGNED), value) AS prepared_signed FROM t_obj_numeric WHERE row_id = 1';
 EXECUTE json_objectagg_signed_key USING @json_objectagg_key;
