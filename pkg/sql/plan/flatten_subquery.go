@@ -169,6 +169,9 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+		builder.pushdownScalarAggregateKeys(subID, joinPreds, ctx)
+	}
 
 	if len(filterPreds) > 0 {
 		deepScalarAggregate := subquery.Typ == plan.SubqueryRef_SCALAR &&
@@ -958,6 +961,447 @@ func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// pushdownScalarAggregateKeys limits a decorrelated scalar aggregate to keys
+// that can actually occur in the outer relation. Decorrelating
+//
+//	... where inner.key = outer.key
+//
+// currently adds inner.key to the aggregate GROUP BY, but leaves the
+// aggregate input independent of the filtered outer relation. For a complete
+// primary-key point domain, a SEMI join provides the missing dependency
+// without duplicating rows. If the aggregate input is a direct base-table
+// scan, the same constants are also copied to that scan so the regular index
+// pass can bound the physical read.
+//
+// This is deliberately conservative: the correlation must be direct equality
+// on pulled-up group keys, all outer keys must come from one base-table
+// binding, and that table must have a deterministic local WHERE predicate.
+// Copying only that predicate domain is safe because it is a superset of the
+// outer rows that survive the complete query. Volatile, computed-key,
+// multi-table, derived, and unfiltered shapes retain the existing
+// decorrelation plan.
+func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*plan.Expr, ctx *BindContext) {
+	aggNode := builder.findAggNodeBelow(subID)
+	if aggNode == nil || len(aggNode.Children) != 1 || len(aggNode.BindingTags) == 0 {
+		return
+	}
+
+	pairs := make([]scalarAggregateKeyPair, 0, len(preds))
+	outerTag := int32(-1)
+
+	for _, pred := range splitPlanConjunctions(preds) {
+		f := pred.GetF()
+		if f == nil || f.Func == nil {
+			return
+		}
+		if f.Func.ObjName == "istrue" && len(f.Args) == 1 {
+			f = f.Args[0].GetF()
+			if f == nil || f.Func == nil {
+				return
+			}
+		}
+		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) {
+			return
+		}
+
+		left := f.Args[0].GetCol()
+		right := f.Args[1].GetCol()
+		if left == nil || right == nil {
+			return
+		}
+
+		leftGroupPos, leftIsGroup := builder.scalarAggregateGroupPos(subID, aggNode, left)
+		rightGroupPos, rightIsGroup := builder.scalarAggregateGroupPos(subID, aggNode, right)
+		var outer *plan.ColRef
+		var groupPos int32
+		switch {
+		case leftIsGroup && !rightIsGroup:
+			groupPos, outer = leftGroupPos, right
+		case rightIsGroup && !leftIsGroup:
+			groupPos, outer = rightGroupPos, left
+		default:
+			return
+		}
+		if groupPos < 0 || int(groupPos) >= len(aggNode.GroupBy) ||
+			ctx == nil || ctx.bindingByTag[outer.RelPos] == nil {
+			return
+		}
+		// pullupThroughAgg can add an arbitrary inner expression to GROUP BY.
+		// Referencing that expression from both the aggregate and the new SEMI
+		// predicate would evaluate it twice. Restrict this rewrite to direct
+		// columns so volatile, stateful, or merely expensive computed keys keep
+		// their original single-evaluation semantics.
+		if aggNode.GroupBy[groupPos].GetCol() == nil {
+			return
+		}
+		if outerTag >= 0 && outerTag != outer.RelPos {
+			return
+		}
+		outerTag = outer.RelPos
+		pairs = append(pairs, scalarAggregateKeyPair{
+			outerPos: outer.ColPos,
+			groupPos: groupPos,
+		})
+	}
+	if len(pairs) == 0 {
+		return
+	}
+
+	outerBinding := ctx.bindingByTag[outerTag]
+	if outerBinding == nil || outerBinding.nodeId < 0 || int(outerBinding.nodeId) >= len(builder.qry.Nodes) {
+		return
+	}
+	outerScan := builder.qry.Nodes[outerBinding.nodeId]
+	if outerScan.NodeType != plan.Node_TABLE_SCAN || len(outerScan.Children) != 0 ||
+		len(outerScan.BindingTags) == 0 || outerScan.BindingTags[0] != outerTag {
+		return
+	}
+
+	outerTags := map[int32]bool{outerTag: true}
+	domainFilters := make([]*plan.Expr, 0, len(ctx.whereFilters))
+	for _, filter := range splitPlanConjunctions(ctx.whereFilters) {
+		if !hasSubquery(filter) && !scalarAggregateDomainContainsVolatile(filter) &&
+			containsTag(filter, outerTag) && containsOnlyTags(filter, outerTags) {
+			domainFilters = append(domainFilters, DeepCopyExpr(filter))
+		}
+	}
+	if len(domainFilters) == 0 {
+		return
+	}
+	// The general SEMI shape adds a second domain scan. Keep this rewrite
+	// limited to point lookups, where the copied primary-key constants also
+	// bound the aggregate input and pay for that extra scan. Broad/range and
+	// non-key domains retain the existing plan until a cost-based admission
+	// rule is available.
+	if !scalarAggregateDomainHasPrimaryKeyPointFilter(outerBinding, outerScan, domainFilters) {
+		return
+	}
+
+	for _, pair := range pairs {
+		if pair.outerPos < 0 || int(pair.outerPos) >= len(outerBinding.types) {
+			return
+		}
+	}
+	domainScan := DeepCopyNode(outerScan)
+	domainScan.ScanSnapshot = DeepCopySnapshot(outerScan.ScanSnapshot)
+	for _, filter := range domainFilters {
+		domainScan.FilterList = append(domainScan.FilterList, DeepCopyExpr(filter))
+	}
+	builder.rebindScanNode(domainScan)
+	domainTag := domainScan.BindingTags[0]
+	joinPreds := make([]*plan.Expr, len(pairs))
+	for i, pair := range pairs {
+		innerKey := DeepCopyExpr(aggNode.GroupBy[pair.groupPos])
+		domainKey := &plan.Expr{
+			Typ: *outerBinding.types[pair.outerPos],
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: domainTag,
+				ColPos: pair.outerPos,
+			}},
+		}
+		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{innerKey, domainKey})
+		if err != nil {
+			return
+		}
+		joinPreds[i] = cond
+	}
+	// The key-domain join is logically sufficient, but the regular index pass
+	// only sees filters on a scan; it does not necessarily turn this newly-
+	// created join into an index join. Copy the proven point filters to the
+	// aggregate input after all join predicates have been built. If the
+	// aggregate input is not a plain scan with direct group-key columns, the
+	// helper leaves it unchanged and the duplicate-safe SEMI shape still
+	// applies.
+	builder.pushScalarAggregatePointFilters(
+		aggNode, aggNode.Children[0], outerBinding, outerScan, pairs, domainFilters)
+
+	domainID := builder.appendNode(domainScan, ctx)
+	joinID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{aggNode.Children[0], domainID},
+		JoinType: plan.Node_SEMI,
+		OnList:   joinPreds,
+		SpillMem: builder.joinSpillMem,
+	}, ctx)
+	aggNode.Children[0] = joinID
+}
+
+type scalarAggregateKeyPair struct {
+	outerPos int32
+	groupPos int32
+}
+
+func scalarAggregatePrimaryKeyPositions(binding *Binding, scan *plan.Node) ([]int32, bool) {
+	if binding == nil || scan == nil || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+		return nil, false
+	}
+	pkeyNames := make([]string, 0, len(scan.TableDef.Pkey.Names))
+	for _, name := range scan.TableDef.Pkey.Names {
+		// Some older/synthetic TableDef producers leave empty padding entries
+		// in Names.  They do not describe a key column and must not make an
+		// otherwise valid composite-key proof fail closed.
+		if catalog.ToLower(name) != "" {
+			pkeyNames = append(pkeyNames, name)
+		}
+	}
+	if len(pkeyNames) == 0 && scan.TableDef.Pkey.PkeyColName != "" {
+		pkeyNames = []string{scan.TableDef.Pkey.PkeyColName}
+	}
+	if len(pkeyNames) == 0 {
+		return nil, false
+	}
+
+	positions := make([]int32, 0, len(pkeyNames))
+	seen := make(map[int32]struct{}, len(pkeyNames))
+	for _, name := range pkeyNames {
+		pos, ok := binding.colIdByName[catalog.ToLower(name)]
+		if !ok || pos < 0 || int(pos) >= len(binding.cols) {
+			return nil, false
+		}
+		if _, ok := seen[pos]; ok {
+			continue
+		}
+		seen[pos] = struct{}{}
+		positions = append(positions, pos)
+	}
+	return positions, len(positions) > 0
+}
+
+// scalarAggregateDomainHasPrimaryKeyPointFilter is a cost guard for
+// scan-level point pushdown. A point domain is cheap to materialize and gives
+// the optimizer a bounded input for the aggregate scan. For a broad
+// predicate, keep the existing decorrelation plan without forcing a second
+// wide key-domain scan or many index probes.
+func scalarAggregateDomainHasPrimaryKeyPointFilter(
+	binding *Binding,
+	scan *plan.Node,
+	filters []*plan.Expr,
+) bool {
+	pkeyPositions, ok := scalarAggregatePrimaryKeyPositions(binding, scan)
+	if !ok {
+		return false
+	}
+	required := make(map[int32]struct{}, len(pkeyPositions))
+	for _, pos := range pkeyPositions {
+		required[pos] = struct{}{}
+	}
+	matched := make(map[int32]struct{}, len(required))
+	for _, filter := range splitPlanConjunctions(filters) {
+		f := filter.GetF()
+		if f == nil || f.Func == nil || f.Func.ObjName == "" {
+			continue
+		}
+		if f.Func.ObjName == "istrue" && len(f.Args) == 1 {
+			f = f.Args[0].GetF()
+			if f == nil || f.Func == nil {
+				continue
+			}
+		}
+		if f.Func.ObjName != "=" || len(f.Args) != 2 {
+			continue
+		}
+
+		var col *plan.ColRef
+		var value *plan.Expr
+		if left := f.Args[0].GetCol(); left != nil && left.RelPos == binding.tag {
+			col, value = left, f.Args[1]
+		} else if right := f.Args[1].GetCol(); right != nil && right.RelPos == binding.tag {
+			col, value = right, f.Args[0]
+		}
+		if col == nil || !isRuntimeConstExpr(value) {
+			continue
+		}
+		if _, ok := required[col.ColPos]; ok {
+			matched[col.ColPos] = struct{}{}
+		}
+	}
+	return len(matched) == len(required)
+}
+
+// pushScalarAggregatePointFilters copies a complete primary-key point domain
+// from the outer table to the aggregate input.  The copy is valid only when
+// every correlation key is the corresponding base-table column: for any
+// surviving outer row, outer.pk = const and inner.pk = outer.pk imply
+// inner.pk = const.  Keeping this as a separate proof also prevents a filter
+// on a projection, cast, OR arm, or non-key column from being pushed into the
+// aggregate by accident.
+func (builder *QueryBuilder) pushScalarAggregatePointFilters(
+	aggNode *plan.Node,
+	aggInputID int32,
+	binding *Binding,
+	outerScan *plan.Node,
+	pairs []scalarAggregateKeyPair,
+	filters []*plan.Expr,
+) bool {
+	if aggNode == nil || binding == nil || outerScan == nil ||
+		aggInputID < 0 || int(aggInputID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	aggInput := builder.qry.Nodes[aggInputID]
+	for aggInput != nil && aggInput.NodeType == plan.Node_FILTER && len(aggInput.Children) == 1 {
+		aggInput = builder.qry.Nodes[aggInput.Children[0]]
+	}
+	if aggInput == nil || aggInput.NodeType != plan.Node_TABLE_SCAN || len(aggInput.BindingTags) == 0 {
+		return false
+	}
+
+	groupPosByOuterPos := make(map[int32]int32, len(pairs))
+	for _, pair := range pairs {
+		if pair.outerPos < 0 || pair.groupPos < 0 ||
+			int(pair.groupPos) >= len(aggNode.GroupBy) {
+			return false
+		}
+		groupExpr := aggNode.GroupBy[pair.groupPos]
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || groupCol.RelPos != aggInput.BindingTags[0] {
+			return false
+		}
+		groupPosByOuterPos[pair.outerPos] = pair.groupPos
+	}
+
+	pkeyPositions, ok := scalarAggregatePrimaryKeyPositions(binding, outerScan)
+	if !ok {
+		return false
+	}
+	matched := make(map[int32]struct{}, len(pkeyPositions))
+	newFilters := make([]*plan.Expr, 0, len(pkeyPositions))
+	for _, filter := range splitPlanConjunctions(filters) {
+		f := filter.GetF()
+		if f == nil || f.Func == nil {
+			continue
+		}
+		if f.Func.ObjName == "istrue" && len(f.Args) == 1 {
+			f = f.Args[0].GetF()
+			if f == nil || f.Func == nil {
+				continue
+			}
+		}
+		if f.Func.ObjName != "=" || len(f.Args) != 2 {
+			continue
+		}
+
+		var outerCol *plan.ColRef
+		var value *plan.Expr
+		if left := f.Args[0].GetCol(); left != nil && left.RelPos == binding.tag {
+			outerCol, value = left, f.Args[1]
+		} else if right := f.Args[1].GetCol(); right != nil && right.RelPos == binding.tag {
+			outerCol, value = right, f.Args[0]
+		}
+		if outerCol == nil || !isRuntimeConstExpr(value) {
+			continue
+		}
+		groupPos, ok := groupPosByOuterPos[outerCol.ColPos]
+		if !ok {
+			continue
+		}
+		isPrimaryKeyPart := false
+		for _, pkeyPos := range pkeyPositions {
+			if pkeyPos == outerCol.ColPos {
+				isPrimaryKeyPart = true
+				break
+			}
+		}
+		if !isPrimaryKeyPart {
+			continue
+		}
+		if _, ok := matched[outerCol.ColPos]; ok {
+			continue
+		}
+
+		pushed, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			DeepCopyExpr(aggNode.GroupBy[groupPos]),
+			DeepCopyExpr(value),
+		})
+		if err != nil {
+			return false
+		}
+		newFilters = append(newFilters, pushed)
+		matched[outerCol.ColPos] = struct{}{}
+	}
+	if len(matched) != len(pkeyPositions) {
+		return false
+	}
+	aggInput.FilterList = append(aggInput.FilterList, newFilters...)
+	return true
+}
+
+// scalarAggregateGroupPos resolves a pulled-up predicate column through the
+// transparent unary projections above aggNode. It returns an AGG group-output
+// position, never an aggregate-output position.
+func (builder *QueryBuilder) scalarAggregateGroupPos(
+	nodeID int32,
+	aggNode *plan.Node,
+	col *plan.ColRef,
+) (int32, bool) {
+	if col == nil || aggNode == nil || len(aggNode.BindingTags) == 0 {
+		return 0, false
+	}
+	ref := *col
+	for nodeID != aggNode.NodeId {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return 0, false
+		}
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && ref.RelPos == node.BindingTags[0] {
+			if ref.ColPos < 0 || int(ref.ColPos) >= len(node.ProjectList) {
+				return 0, false
+			}
+			projected := node.ProjectList[ref.ColPos].GetCol()
+			if projected == nil {
+				return 0, false
+			}
+			ref = *projected
+		}
+		if len(node.Children) != 1 {
+			return 0, false
+		}
+		nodeID = node.Children[0]
+	}
+	if ref.RelPos != aggNode.BindingTags[0] || ref.ColPos < 0 || int(ref.ColPos) >= len(aggNode.GroupBy) {
+		return 0, false
+	}
+	return ref.ColPos, true
+}
+
+// scalarAggregateDomainContainsVolatile reports whether evaluating expr more than once can
+// change its value. A copied predicate is evaluated by both the original
+// outer scan and the aggregate-domain scan, so volatile or unknown functions
+// must never be copied into the latter.
+func scalarAggregateDomainContainsVolatile(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
+		if !ok || overload.CannotFold() {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if scalarAggregateDomainContainsVolatile(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return true
+		}
+		for _, item := range exprImpl.List.List {
+			if scalarAggregateDomainContainsVolatile(item) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
