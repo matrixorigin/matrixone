@@ -166,7 +166,7 @@ func TestLoadBudgetGates(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
 	})
 	require.NoError(t, checkBaseLoadBudget(sp, cfg))
-	require.NoError(t, checkTailLoadBudget(sp, cfg))
+	require.NoError(t, checkTailLoadBudget(sp, cfg, 0))
 
 	// an enormous count exceeds the CN budget → actionable error (no int64 overflow).
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
@@ -176,7 +176,7 @@ func TestLoadBudgetGates(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, int64(1)<<50, 0)}}, nil
 	})
-	require.Error(t, checkTailLoadBudget(sp, cfg))
+	require.Error(t, checkTailLoadBudget(sp, cfg, 0))
 }
 
 func TestLoadAllBasesEmpty(t *testing.T) {

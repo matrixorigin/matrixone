@@ -15,6 +15,8 @@
 package fulltext2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -115,12 +117,22 @@ func TestBaseDocCount(t *testing.T) {
 	})
 }
 
+// preloadStub answers the two reads Preload makes: the base doc/byte sums, and the tail's
+// chunk count.
+func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailChunks int64) {
+	t.Helper()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailChunks, 0)}}, nil
+		}
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, ndoc, bytes)}}, nil
+	})
+}
+
 // Preload records the count in preloadNdoc and sets preloaded.
 func TestFulltext2SearchPreload(t *testing.T) {
 	mp := mpool.MustNewZero()
-	swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 9, 0)}}, nil
-	})
+	preloadStub(t, mp, 9, 0, 0)
 
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta"})
 	require.NoError(t, s.Preload(nil))
@@ -184,4 +196,66 @@ func TestGetIndexSizeChargesTheMappingItOwns(t *testing.T) {
 		require.Equal(t, 3*hostOne, three)
 		require.Greater(t, three, int64(3*mapped))
 	})
+}
+
+// A CDC-only index counts ZERO base docs. Publishing (0,0) put it outside admission entirely:
+// makeRoom takes its "nothing to account for" exit before registering a reservation.
+func TestFulltext2PreloadDeclaresTheCdcTail(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const chunks = 128
+	preloadStub(t, mp, 0, 0, chunks)
+
+	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta", IndexTable: "idx"})
+	require.NoError(t, s.Preload(nil))
+
+	host, device := s.GetIndexSize()
+	require.Zero(t, device)
+	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize*tailLoadPeakFactor), host,
+		"a tail-only index must declare the tail at the peak the load holds")
+}
+
+// The tail size is COUNTED, not summed: data is a blob, and SUM(LENGTH(data)) would make the
+// scan read the whole tail off storage just to size it.
+func TestTailPeakBytesCountsChunksWithoutReadingThem(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	var seen string
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		seen = sql
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4, 0)}}, nil
+	})
+	got, err := tailPeakBytes(sp, cfg)
+	require.NoError(t, err)
+	require.Equal(t, int64(4*vectorindex.MaxChunkSize*tailLoadPeakFactor), got)
+	require.Contains(t, seen, "COUNT(*)")
+	require.NotContains(t, seen, "LENGTH(",
+		"LENGTH over a blob column makes the scan read every byte of the tail")
+}
+
+// Free memory alone is not a bound when two loads sample it at once: both read the same
+// pre-allocation figure, both see room for one tail, and both allocate. The bytes promised to
+// arrivals ahead of this one are what make the second refuse.
+func TestTailBudgetSubtractsWhatIsAlreadyPromised(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	// One tail needs 3 chunks x 64 KiB x 3 = 576 KiB. Give the machine room for one, not two.
+	const chunks = 3
+	need := int64(chunks * vectorindex.MaxChunkSize * tailLoadPeakFactor)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, chunks, 0)}}, nil
+	})
+
+	origTotal, origGo := memTotalFn, memGolangFn
+	t.Cleanup(func() { memTotalFn, memGolangFn = origTotal, origGo })
+	// avail = total*0.8 - heap. Size it at 1.5 tails.
+	memGolangFn = func() int { return 0 }
+	memTotalFn = func() uint64 { return uint64(need*3/2) * 10 / 8 }
+
+	require.NoError(t, checkTailLoadBudget(sp, cfg, 0),
+		"alone, the tail fits")
+	err := checkTailLoadBudget(sp, cfg, need)
+	require.Error(t, err, "with one tail already promised, the second does not")
+	require.Contains(t, err.Error(), "promised to loads already in flight")
 }

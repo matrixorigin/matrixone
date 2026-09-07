@@ -90,6 +90,11 @@ type Fulltext2Search struct {
 	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
 	// never ran" -- a caller may reach Load directly.
 	preloadNdoc int64
+	// reservedAhead is what the governor says other in-flight loads have promised. Set
+	// between Preload and Load via SetReservedAhead; see checkTailLoadBudget.
+	reservedAhead int64
+	// preloadTailBytes is the peak the CDC tail costs to load. See tailPeakBytes.
+	preloadTailBytes int64
 	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
 	preloadBytes int64
 	preloaded    bool
@@ -115,7 +120,16 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	s.preloadNdoc, s.preloadBytes, s.preloaded = ndoc, bytes, true
+	// The CDC tail is loaded too, and it is pure Go heap. An index with only a tail counts
+	// ZERO base docs, so without this the arrival publishes (0,0), makeRoom takes its
+	// "nothing to account for" exit BEFORE registering a reservation, and the load is
+	// invisible to admission entirely. Counting the chunks is cheap enough to do here; see
+	// tailPeakBytes.
+	tail, err := tailPeakBytes(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.preloadNdoc, s.preloadBytes, s.preloadTailBytes, s.preloaded = ndoc, bytes, tail, true
 	return nil
 }
 
@@ -137,7 +151,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	tails, deletes, err := LoadTailSegments(sqlproc, s.cfg)
+	tails, deletes, err := LoadTailSegmentsWithin(sqlproc, s.cfg, s.reservedAhead)
 	if err != nil {
 		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
@@ -175,7 +189,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
 		// Between Preload and Load: report what Load is about to cost, mapping included.
-		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0), 0
+		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0) + max(s.preloadTailBytes, 0), 0
 	}
 	var ndoc, mapped int64
 	for _, seg := range s.idx.segments {
@@ -453,3 +467,8 @@ func (s *Fulltext2Search) Destroy() {
 	s.idx = nil
 	s.loaded = false
 }
+
+// SetReservedAhead receives what the governor has already promised to loads ahead of this one,
+// between Preload and Load. The tail budget subtracts it, so two concurrent loads cannot spend
+// the same free memory twice. Implements the cache's reservationAware interface.
+func (s *Fulltext2Search) SetReservedAhead(n int64) { s.reservedAhead = n }

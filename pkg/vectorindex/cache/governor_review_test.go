@@ -1010,3 +1010,77 @@ func TestHousekeepingDoesNotPruneAMemoWrittenDuringItsOwnPass(t *testing.T) {
 	require.True(t, ok, "the memo written during the pass must survive it")
 	require.Equal(t, fresh, got, "and must be the value the arrival wrote")
 }
+
+// reservationSpy records what the governor tells it is already promised.
+type reservationSpy struct {
+	countingSearch
+	arrived *sync.WaitGroup
+	start   <-chan struct{}
+	gate    <-chan struct{}
+	ahead   atomic.Int64
+	told    atomic.Bool
+}
+
+func (r *reservationSpy) SetReservedAhead(n int64) {
+	r.ahead.Store(n)
+	r.told.Store(true)
+}
+
+func (r *reservationSpy) Preload(*sqlexec.SqlProcess) error {
+	r.arrived.Done()
+	<-r.start
+	return nil
+}
+
+func (r *reservationSpy) Load(*sqlexec.SqlProcess) error {
+	r.loads.Add(1)
+	<-r.gate
+	return nil
+}
+
+// An algorithm's own load-time memory gate cannot see a load that has been admitted but has not
+// allocated yet, so two concurrent loads hand each other the same free bytes. The governor knows
+// -- it ordered the arrivals -- and now tells each one what the arrivals AHEAD of it promised.
+// This is what closes the race under a budget that does not bind, which is the default.
+func TestGovernorTellsEachArrivalWhatIsPromisedAhead(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, caps{}, caps{}) // no operator cap: the derived budget, which is huge
+
+	base := "__mo_index_secondary_promised"
+	keys := []string{SnapshotKey(base, snapshotTS(100)), SnapshotKey(base, snapshotTS(200))}
+
+	var arrived sync.WaitGroup
+	arrived.Add(len(keys))
+	start := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(gate) })
+
+	const tail = 24 << 20
+	spies := make([]*reservationSpy, 0, len(keys))
+	for _, key := range keys {
+		spy := &reservationSpy{
+			countingSearch: countingSearch{host: tail},
+			arrived:        &arrived, start: start, gate: gate,
+		}
+		spies = append(spies, spy)
+		go func() { _, _, _ = c.Search(sp, key, spy, nil, vectorindex.RuntimeConfig{}) }()
+	}
+	arrived.Wait()
+	close(start)
+
+	require.Eventually(t, func() bool {
+		return spies[0].told.Load() && spies[1].told.Load()
+	}, 10*time.Second, time.Millisecond, "both arrivals must be told before they load")
+
+	// Exactly one is first in line and owes nothing; the other is told the first one's bytes.
+	first, second := spies[0].ahead.Load(), spies[1].ahead.Load()
+	if first > second {
+		first, second = second, first
+	}
+	require.EqualValues(t, 0, first, "the arrival at the head of the line owes nothing")
+	require.EqualValues(t, tail, second,
+		"the one behind it is told exactly what the first promised, so its own gate can refuse")
+
+	once.Do(func() { close(gate) })
+}

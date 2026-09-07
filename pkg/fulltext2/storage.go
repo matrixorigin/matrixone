@@ -570,35 +570,75 @@ func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, st
 // cgroup-aware, and MemoryGolang already includes any tails currently resident, so this
 // gates an INCREMENTAL load. The 0.8 headroom absorbs the (small) transient query-mpool
 // usage the formula omits.
-func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
-	// CAST AS SIGNED is load-bearing: SUM over an integer expression yields
-	// DECIMAL128, and the result is read as an int64 below. Without the cast the
-	// read reinterprets decimal bytes as an int64 — a garbage budget in a normal
-	// build, and a CN-killing panic in a type-checked one.
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
-		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+// tailLoadPeakFactor scales stored tail bytes to the peak the load actually holds.
+//
+// LoadTailSegments holds SEVERAL full copies at once -- the raw per-chunk []byte copies, the
+// reassembled per-frame buffers, and the deserialized segments -- so the peak is a multiple of
+// the stored bytes, not 1x. Conservative on purpose: rejecting a borderline load beats an OOM.
+const tailLoadPeakFactor = 3
+
+// memTotalFn/memGolangFn are the machine's figures, indirected so a test can put the budget
+// where it needs it.
+var (
+	memTotalFn  = system.MemoryTotal
+	memGolangFn = system.MemoryGolang
+)
+
+// tailPeakBytes is what loading the CDC tail costs at its peak.
+//
+// It COUNTS the chunks; it does not read them. Every chunk is written at <= MaxChunkSize (see
+// framesInsertSqls), so count x MaxChunkSize bounds the stored bytes from above -- and a budget
+// wants its error in that direction.
+//
+// The obvious query, SUM(LENGTH(data)), is not obvious at all: data is a blob, so evaluating
+// LENGTH makes the scan project that column and read the ENTIRE tail off storage -- a gigabyte
+// read to answer "how big is it". COUNT(*) references only the predicate columns, so the blob
+// never leaves disk. That is what makes this figure cheap enough to take in Preload, where
+// admission needs it, instead of only at load time where it is too late to serialize anything.
+func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT CAST(COUNT(*) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer res.Close()
-	need := resultScalarInt64(res)
-	// LoadTailSegments holds SEVERAL full copies of the tail bytes at once — the raw
-	// per-chunk []byte copies, the reassembled per-frame buffers, and the Deserialized
-	// segments — so the real peak is a multiple of the stored bytes, not 1x. Scale the
-	// estimate up so the guard fails BEFORE that peak OOM-kills the CN rather than after
-	// the SUM passes. Conservative (may reject a borderline load that would just fit); a
-	// clear "compact/add memory" error beats a node-killing OOM.
-	const tailLoadPeakFactor = 3
-	need *= tailLoadPeakFactor
-	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
+
+	chunks := resultScalarInt64(res)
+	if chunks <= 0 {
+		return 0, nil
+	}
+	// Saturate rather than wrap. Multiplying a COUNT by a constant can overflow where summing
+	// real bytes could not -- a corrupt or absurd count would wrap negative, compare below the
+	// budget, and admit the very load the check exists to refuse.
+	const perChunk = int64(vectorindex.MaxChunkSize) * tailLoadPeakFactor
+	if chunks > math.MaxInt64/perChunk {
+		return math.MaxInt64, nil
+	}
+	return chunks * perChunk, nil
+}
+
+// checkTailLoadBudget refuses a tail that cannot fit in the memory left for it.
+//
+// reservedAhead is what OTHER in-flight loads have already promised, from the governor. Free
+// memory ALONE is not a bound when two loads sample it at once: both read the same
+// pre-allocation figure, both see room for one tail, and both then allocate. Subtracting the
+// arrivals ahead of this one is what makes the second refuse instead of joining the first.
+func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) error {
+	need, err := tailPeakBytes(sqlproc, cfg)
+	if err != nil {
+		return err
+	}
+	promised := max(reservedAhead, 0)
+	avail := int64(memTotalFn())*8/10 - int64(memGolangFn()) - promised
 	if need > avail {
 		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
 			"fulltext2 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
-				"(MemoryTotal*0.8 - Go heap); compact it (ALTER ... REINDEX) or increase CN memory",
-			cfg.DbName, cfg.IndexTable, need>>20, avail>>20))
+				"(MemoryTotal*0.8 - Go heap - %d MB promised to loads already in flight); "+
+				"compact it (ALTER ... REINDEX) or increase CN memory",
+			cfg.DbName, cfg.IndexTable, need>>20, avail>>20, promised>>20))
 	}
 	return nil
 }
@@ -608,9 +648,15 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 // Recency = the frame's first chunk_id). Delete frames are folded into the pk
 // tombstone map. Empty tail → (nil, nil, nil).
 func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, map[any]int64, error) {
+	return LoadTailSegmentsWithin(sqlproc, cfg, 0)
+}
+
+// LoadTailSegmentsWithin is LoadTailSegments with the bytes other in-flight loads have already
+// promised, so the budget check can refuse a tail that only fits if it pretends it is alone.
+func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) ([]*Segment, map[any]int64, error) {
 	// Fail fast if the tail can't fit in the memory budget, rather than letting it
 	// OOM-kill the CN as it decodes into the Go heap.
-	if err := checkTailLoadBudget(sqlproc, cfg); err != nil {
+	if err := checkTailLoadBudget(sqlproc, cfg, reservedAhead); err != nil {
 		return nil, nil, err
 	}
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",

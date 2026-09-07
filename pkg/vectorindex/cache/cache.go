@@ -193,6 +193,13 @@ type cacheInvalidationAware interface {
 	OnCacheInvalidated(reason string)
 }
 
+// reservationAware is implemented by an algorithm whose own load-time memory gate must account
+// for loads already in flight. The governor knows what the arrivals ahead of this one promised;
+// a gate that samples free memory alone cannot, and two concurrent loads then spend it twice.
+type reservationAware interface {
+	SetReservedAhead(int64)
+}
+
 type loadWaiterAware interface {
 	SetLoadWaiters(int64)
 }

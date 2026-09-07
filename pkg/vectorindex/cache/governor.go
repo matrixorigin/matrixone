@@ -345,6 +345,13 @@ func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, 
 	// Claim a place in line BEFORE reclaiming, so a load that starts while this one is still
 	// evicting cannot read the arena as empty and slip past the sole-occupant bypass.
 	self, release := g.reserve(key, account, incoming)
+	// Tell the algorithm what is already promised, so its own load-time memory gate does not
+	// hand the same free bytes to two loads at once. Done here, between Preload and Load,
+	// because that is where the arrival's place in line is known.
+	if aware, ok := entry.Algo.(reservationAware); ok {
+		_, ahead := g.pendingAhead(self)
+		aware.SetReservedAhead(ahead.host)
+	}
 	g.enforce(account, tenant.less(incoming), sys.less(incoming), key)
 
 	// ADMISSION CONTROL. The reclaim above took every IDLE entry it could; if the arrival still
