@@ -71,6 +71,16 @@ func TestJsonStorageSize(t *testing.T) {
 	texts := []string{"null", "true", `""`, `"x"`, `[]`, `{}`, `[1,2,3]`, `{"a":1}`}
 	want := []int64{2, 2, 2, 3, 9, 9, 48, 29}
 
+	t.Run("empty batch", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
+			JsonStorageSize)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+		require.Zero(t, fc.GetResultVectorDirectly().Length())
+	})
+
 	t.Run("varchar", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), texts, nil)},
