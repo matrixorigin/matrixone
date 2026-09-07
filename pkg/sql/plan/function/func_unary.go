@@ -2628,6 +2628,23 @@ func geometryNFromPayload(payload []byte, n int64) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("geometry index out of range")
 	}
 	item := strings.TrimSpace(items[n-1])
+	// Empty members have no coordinate parentheses. Emit typed WKB rather
+	// than constructing POINT(EMPTY), LINESTRINGEMPTY, or POLYGONEMPTY and
+	// accidentally falling back to raw text at the encoding boundary.
+	if strings.EqualFold(item, "EMPTY") {
+		var empty geo.Geometry
+		switch typeName {
+		case "MULTIPOINT":
+			empty = geo.Point{IsEmpty: true}
+		case "MULTILINESTRING":
+			empty = geo.LineString{}
+		case "MULTIPOLYGON":
+			empty = geo.Polygon{}
+		}
+		if empty != nil {
+			return functionUtil.QuickBytesToStr(geo.WriteWKB(empty)), nil
+		}
+	}
 	switch typeName {
 	case "MULTIPOINT":
 		if strings.HasPrefix(strings.ToUpper(item), "POINT") {
@@ -3337,7 +3354,9 @@ func boundaryFromPayload(payload []byte) ([]byte, error) {
 			return nil, err
 		}
 		if points[0] == points[len(points)-1] {
-			return encodeGeometryPayload("MULTIPOINT()", srid, sridDefined), nil
+			// A closed line has an empty boundary, not a malformed text
+			// payload. Keep the same WKB contract as non-empty results.
+			return geo.WriteWKB(geo.MultiPoint{}), nil
 		}
 		return encodeGeometryPayload("MULTIPOINT(("+points[0]+"),("+points[len(points)-1]+"))", srid, sridDefined), nil
 	case "POLYGON":
