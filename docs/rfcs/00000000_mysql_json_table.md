@@ -225,12 +225,32 @@ rules.
   `each_event` semantics and are never accidentally deduplicated.
 
 The existing terminal JSON envelope is extended, without a protobuf/catalog
-migration, with a statement diagnostic scope and per-record fields equivalent
-to:
+migration, with a statement diagnostic scope, attempt/contribution identity,
+and three independent transport facts:
+
+1. `warning_once_keys` is the complete set of keyed-once identities observed
+   by the contribution. It is bounded by the finite statement key space
+   (JSON_TABLE operator, diagnostic kind, and column or parse-occurrence
+   ordinal), not by input rows, batches, CNs, retries, or the presentation
+   retention limit. A key is never evicted when the presentation list is full.
+2. `warning_each_event_count` is the number of committed ordinary
+   `each_event` occurrences in the contribution. It is an aggregate count and
+   is not inferred from the number of retained records.
+3. `warning_diagnostics` is a bounded presentation list for `SHOW WARNINGS`.
+   Its records may be dropped after the existing retention limit without
+   changing either the complete key set or the ordinary count. A keyed-once
+   record is retained at most once per key; an `each_event` record is only a
+   presentation sample and never a counting source.
+
+The wire shape is equivalent to:
 
 ```json
 {
   "warning_scope": "<coordinator statement id>",
+  "warning_attempt": "<statement execution attempt id>",
+  "warning_contribution_id": "<logical terminal contribution id>",
+  "warning_once_keys": ["<complete stable diagnostic key set>"],
+  "warning_each_event_count": 0,
   "warning_diagnostics": [
     {
       "key": "<stable diagnostic key>",
@@ -245,15 +265,53 @@ to:
 
 The stable key contains the coordinator statement id, table-function/operator
 ordinal, diagnostic kind, and column/parse-occurrence ordinal; it deliberately
-does not contain CN id, fragment id, batch id, or retry id. The coordinator
-keeps a statement-scoped `seen` set before increasing `WarningCount`, and
-retains at most the existing bounded number of records for `SHOW WARNINGS`.
-Therefore two CNs reporting the same keyed-once event increase the total by
-one even when the retained list is already full. The set is reset after the
-statement (including failed/cancelled attempts); a new statement receives a
-new scope. Missing diagnostic keys on a JSON_TABLE `statement_once` event from
-a CN that claims JSON_TABLE support are a protocol/version error, not a
-fallback to blind accumulation.
+does not contain CN id, fragment id, batch id, or retry id. `warning_scope` is
+stable for the user statement. `warning_attempt` identifies one complete
+execution attempt, and `warning_contribution_id` is stable for that logical
+terminal contribution when the same terminal envelope is retransmitted. A
+new retry uses a new attempt identity; an intermediate CN preserves the
+scope, attempt, and contribution identity while forwarding the contribution
+or maintains an equivalent child-contribution ledger before emitting its
+aggregate. It must never reconstruct keyed-once identity from retained
+records or forward only an aggregate total.
+
+Execution warning state is attempt-owned. The collector first accumulates an
+attempt-local key set, ordinary count, and presentation list. The coordinator
+merges a terminal contribution into a provisional attempt ledger keyed by
+`warning_contribution_id`; a duplicate terminal envelope is a no-op. Only
+when every required terminal for the statement attempt succeeds are the
+provisional facts committed to the statement. A failed, cancelled, timed-out,
+or otherwise uncommitted execution attempt discards its keyed-once keys,
+ordinary count, and presentation records. If a retry follows a partial
+terminal merge, the old provisional ledger is discarded, the retry starts with
+an empty attempt ledger, and only the retry's successful contributions are
+committed. Thus a successful retry cannot inherit a failed attempt's ordinary
+count or double-count a key that appeared in a discarded partial merge.
+Parse/prepare warning 1287 remains phase-local: a successful PREPARE commits
+its reversed-column occurrence keys and EXECUTE retries do not re-emit them.
+
+For a successfully committed execution attempt, the coordinator computes the
+execution warning cardinality as:
+
+```text
+len(union(committed warning_once_keys)) +
+sum(committed warning_each_event_count)
+```
+
+It then combines that result with the separately committed parse/prepare
+diagnostics. For this contract, remote `warning_count` is not an authoritative
+transport field. If retained for compatibility, it is a derived final-session
+value only; it is never summed to recover keyed-once identity. Two CNs
+reporting the same keyed-once event therefore contribute one after union even
+when both records were omitted by retention, while two distinct omitted keys
+contribute two. Intermediate forwarding unions keys, sums committed each-event
+counts, and independently applies the presentation cap. A JSON_TABLE-capable
+CN that cannot provide the complete key set for a contribution that may contain
+a `statement_once` event, or cannot provide the each-event count or contribution
+identity, has a protocol/version error rather than a fallback to blind
+accumulation. An empty `warning_once_keys` set is valid when no keyed-once event
+occurred. The statement-scoped state is released after the statement, including
+a failed or cancelled statement; a new statement receives a new scope.
 
 ### Compatibility and rollout
 
@@ -326,7 +384,17 @@ The frozen MySQL 8.0.46 corpus covers:
   right row fails `ON`, yielding exactly one NULL-complemented row;
 - `SHOW WARNINGS`, keyed-once warning merging across CNs/batches/retries,
   ordinary row-warning counts, bounded retention, cancellation, early LIMIT,
-  and repeated reset/free;
+  and repeated reset/free. The diagnostic transport/counting contract has
+  dedicated oracles for: a full presentation list before a keyed-once key K
+  arrives; the same versus distinct omitted keys from two CNs; direct and
+  intermediate-CN forwarding; mixed keyed-once and ordinary each-event
+  counts; duplicate terminal-envelope replay; and a failed attempt after a
+  partial terminal merge followed by retry. These oracles assert that the
+  complete key set is retained independently of presentation records, failed
+  attempt counts are discarded, committed each-event counts are summed, and
+  a retry contributes only its successful attempt once. The key-set bound is
+  the planned operator/column/diagnostic space; exceeding that bound is a
+  deterministic protocol error rather than key eviction.
 - single-column multi-match conversion: JSON array aggregation versus
   non-JSON `ON ERROR`, the 64 MiB cell boundary, allocation failure cleanup,
   and peak iterator memory/first-batch latency for documents with increasing
@@ -342,13 +410,16 @@ the executable oracle, including unmatched nested paths with `DEFAULT`.
 
 ## Review disposition and unresolved questions
 
-The six review findings are resolved in this revision: sibling fallback is
-defined by the whole parent row source; APPLY predicates have a versioned
-remote representation and post-remap encoding point; reverse-order syntax is
-fixed at code 1287 with parse/prepare timing and occurrence counting; keyed-once
-diagnostics carry a cross-CN identity and merge lifecycle; JSON_TABLE views have
-an explicit downgrade gate; and multi-match PATH conversion distinguishes the
-final JSON cell from the forbidden auxiliary match slice with a concrete size
-limit and allocation-failure rule. No unresolved design question remains.
+The earlier review findings outside the Diagnostics section remain resolved:
+sibling fallback is defined by the whole parent row source; APPLY predicates
+have a versioned remote representation and post-remap encoding point;
+reverse-order syntax is fixed at code 1287 with parse/prepare timing and
+occurrence counting; JSON_TABLE views have an explicit downgrade gate; and
+multi-match PATH conversion distinguishes the final JSON cell from the
+forbidden auxiliary match slice with a concrete size limit and allocation-
+failure rule. This revision closes the remaining diagnostic information-loss
+gap by separating complete keyed-once identity, committed each-event counting,
+bounded presentation, failed-attempt ownership, and terminal retry
+deduplication. No unresolved design question remains.
 Any behavior not explicitly listed above is resolved by the pinned MySQL 8.0.46
 differential corpus before PR4 is marked Ready.
