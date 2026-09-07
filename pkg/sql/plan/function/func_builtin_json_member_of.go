@@ -259,7 +259,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		}
 		err = geoErr
 	} else {
-		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row))
+		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row), jsonSessionProtocolVersion(proc))
 	}
 	if err == nil {
 		operand.document, err = bytejson.CreateByteJSON(elem)
