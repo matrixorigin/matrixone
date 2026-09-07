@@ -1688,6 +1688,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 		return flushAccountedMedianNumeric(exec)
 	}
 	vs := exec.ret.values
+	var arithmetic percentileArithmeticScratch
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
 	for i, x := 0, 0; i < groups; i += lim {
@@ -1703,7 +1704,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 				continue
 			}
 			markMedianGroupNotEmpty(&exec.ret, x, j)
-			v, err := MedianNumeric(exec.groups[s])
+			v, err := medianNumericWithScratch(exec.groups[s], &arithmetic)
 			if err != nil {
 				return nil, err
 			}
@@ -1769,6 +1770,7 @@ func flushAccountedMedianNumeric[T numeric](
 ) (_ []*vector.Vector, retErr error) {
 	results := make([]*vector.Vector, len(exec.accounted.state))
 	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
+	var arithmetic percentileArithmeticScratch
 	groupBase := 0
 	for chunk := range exec.accounted.state {
 		state := &exec.accounted.state[chunk]
@@ -1792,8 +1794,8 @@ func flushAccountedMedianNumeric[T numeric](
 					result.SetNull(uint64(row))
 					continue
 				}
-				values[row], err = denseMedianNumeric(
-					group, exec.accounted.allocation, exec.mp)
+				values[row], err = denseMedianNumericWithScratch(
+					group, exec.accounted.allocation, exec.mp, &arithmetic)
 				if err != nil {
 					return nil, err
 				}
@@ -1822,7 +1824,7 @@ func flushAccountedMedianNumeric[T numeric](
 				err = moerr.NewInternalErrorNoCtx("median retained argument count mismatch")
 			}
 			if err == nil {
-				values[row] = medianNumericVals(scratch)
+				values[row] = medianNumericValsWithScratch(scratch, &arithmetic)
 			}
 			mpool.FreeSlice(exec.mp, scratch)
 			if err != nil {
@@ -1986,8 +1988,8 @@ func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.De
 }
 
 func MedianNumeric[T numeric](vs *Vectors[T]) (float64, error) {
-	vals := collectMedianValues(vs)
-	return medianNumericVals(vals), nil
+	var arithmetic percentileArithmeticScratch
+	return medianNumericWithScratch(vs, &arithmetic)
 }
 
 func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {
@@ -2003,9 +2005,17 @@ func MedianDecimal128(vs *Vectors[types.Decimal128]) (types.Decimal128, error) {
 func denseMedianNumeric[T numeric](
 	values *Vectors[T], allocation *AllocationAccount, mp *mpool.MPool,
 ) (float64, error) {
+	var arithmetic percentileArithmeticScratch
+	return denseMedianNumericWithScratch(values, allocation, mp, &arithmetic)
+}
+
+func denseMedianNumericWithScratch[T numeric](
+	values *Vectors[T], allocation *AllocationAccount, mp *mpool.MPool,
+	arithmetic *percentileArithmeticScratch,
+) (float64, error) {
 	if len(values.vecs) == 1 {
-		return medianNumericVals(
-			vector.MustFixedColNoTypeCheck[T](values.vecs[0])), nil
+		return medianNumericValsWithScratch(
+			vector.MustFixedColNoTypeCheck[T](values.vecs[0]), arithmetic), nil
 	}
 	selector, err := newDenseMedianSelector(values, allocation, mp)
 	if err != nil {
@@ -2019,7 +2029,7 @@ func denseMedianNumeric[T numeric](
 	}
 	v1 := selector.selectKth(rows>>1-1, compare)
 	v2 := selector.selectKth(rows>>1, compare)
-	return (float64(v1) + float64(v2)) / 2, nil
+	return medianNumericMidpoint(v1, v2, arithmetic), nil
 }
 
 func denseMedianDecimal64(
@@ -2217,13 +2227,72 @@ func collectMedianValues[T numeric | types.Decimal64 | types.Decimal128](vs *Vec
 }
 
 func medianNumericVals[T numeric](vals []T) float64 {
+	var arithmetic percentileArithmeticScratch
+	return medianNumericValsWithScratch(vals, &arithmetic)
+}
+
+func medianNumericValsWithScratch[T numeric](
+	vals []T, arithmetic *percentileArithmeticScratch,
+) float64 {
 	rows := len(vals)
 	if rows&1 == 1 {
 		return float64(selectKthNumeric(vals, rows>>1))
 	}
 	v1 := selectKthNumeric(vals, rows>>1-1)
 	v2 := selectKthNumeric(vals, rows>>1)
-	return (float64(v1) + float64(v2)) / 2
+	return medianNumericMidpoint(v1, v2, arithmetic)
+}
+
+func medianNumericWithScratch[T numeric](
+	values *Vectors[T], arithmetic *percentileArithmeticScratch,
+) (float64, error) {
+	return medianNumericValsWithScratch(collectMedianValues(values), arithmetic), nil
+}
+
+func medianNumericMidpoint[T numeric](
+	v1, v2 T, arithmetic *percentileArithmeticScratch,
+) float64 {
+	if arithmetic == nil {
+		arithmetic = new(percentileArithmeticScratch)
+	}
+	switch first := any(v1).(type) {
+	case int8:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(int8), arithmetic.medianHalfFraction())
+	case int16:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(int16), arithmetic.medianHalfFraction())
+	case int32:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(int32), arithmetic.medianHalfFraction())
+	case int64:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(int64), arithmetic.medianHalfFraction())
+	case uint8:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(uint8), arithmetic.medianHalfFraction())
+	case uint16:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(uint16), arithmetic.medianHalfFraction())
+	case uint32:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(uint32), arithmetic.medianHalfFraction())
+	case uint64:
+		return interpolateNumericWithScratch(arithmetic, first, any(v2).(uint64), arithmetic.medianHalfFraction())
+	case float32:
+		return medianFloatMidpoint(float64(first), float64(any(v2).(float32)))
+	case float64:
+		return medianFloatMidpoint(first, any(v2).(float64))
+	default:
+		panic("unsupported median numeric type")
+	}
+}
+
+func (scratch *percentileArithmeticScratch) medianHalfFraction() percentileFraction {
+	scratch.one.SetUint64(1)
+	scratch.two.SetUint64(2)
+	return percentileFraction{numerator: &scratch.one, denominator: &scratch.two}
+}
+
+func medianFloatMidpoint(v1, v2 float64) float64 {
+	sum := v1 + v2
+	if math.IsInf(sum, 0) && !math.IsInf(v1, 0) && !math.IsInf(v2, 0) {
+		return v1/2 + v2/2
+	}
+	return sum / 2
 }
 
 func medianNumericComparator[T numeric]() func(a, b T) int {
