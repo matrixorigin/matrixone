@@ -16,6 +16,10 @@ select cast(2 as unsigned) - 1 as result;
 select cast(2 as unsigned) - (-1) as result;
 select cast('18446744073709551615' as unsigned) - 0 as result;
 select cast('18446744073709551615' as unsigned) - (-1) as result;
+select (cast(0 as unsigned) + 0) - 1 as result;
+select (cast(0 as unsigned) * 1) - 1 as result;
+select (cast(0 as unsigned) div 1) - 1 as result;
+select (cast(0 as unsigned) % 1) - 1 as result;
 
 create table t_widths (
     u8 tinyint unsigned,
@@ -41,6 +45,10 @@ select cast(0 as unsigned) - cast(1 as unsigned) as result;
 select cast(null as unsigned) - 1 as result;
 select cast('18446744073709551615' as unsigned) - cast('18446744073709551615' as unsigned) as result;
 select cast('18446744073709551615' as unsigned) - 0 as result;
+select (cast(0 as unsigned) + 0) - 1 as result;
+select (cast(0 as unsigned) * 1) - 1 as result;
+select (cast(0 as unsigned) div 1) - 1 as result;
+select (cast(0 as unsigned) % 1) - 1 as result;
 select u8 - 1, u16 - 1, u32 - 1, u64 - 1, b - 1 from t_widths;
 
 set session sql_mode = 'STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION';
@@ -48,7 +56,7 @@ select cast(0 as unsigned) - 1 as result;
 
 create table t_nested (u bigint unsigned, y year);
 insert into t_nested values (0, 0);
-select (u + 0) - 1, (u * 1) - 1, (u % 1) - 1, y - 1 from t_nested;
+select (u + 0) - 1, (u * 1) - 1, (u div 1) - 1, (u % 1) - 1, y - 1 from t_nested;
 
 create function stored_signed_sub() returns bigint language sql as 'cast(0 as unsigned) - 1';
 set session sql_mode = '';

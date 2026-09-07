@@ -6037,7 +6037,9 @@ func (b *baseBinder) unsignedIntegerSubtractionResultType(name string, astArgs [
 // integerSubtractionOperandDomain combines the parsed expression with its
 // bound expression. The bound arithmetic node may already contain implicit
 // DECIMAL casts, whereas the AST distinguishes that implementation detail from
-// a user-written DECIMAL cast, which remains a non-integer boundary.
+// a user-written DECIMAL cast, which remains a non-integer boundary. If an
+// entirely constant nested expression has already folded, the AST is also the
+// only surviving record of its logical integer/unsigned domain.
 func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
 	astExpr = unwrapParenExpr(astExpr)
 	if literal, ok := astExpr.(*tree.NumVal); ok {
@@ -6053,10 +6055,16 @@ func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Ex
 	}
 
 	if binary, ok := astExpr.(*tree.BinaryExpr); ok && integerArithmeticBinaryOperator(binary.Op) {
-		fn := expr.GetF()
-		if fn == nil || len(fn.Args) != 2 {
-			return false, false
+		if expr == nil || expr.GetF() == nil || len(expr.GetF().Args) != 2 {
+			// Constant folding can replace the bound function with a literal before
+			// its parent subtraction is bound. The AST still carries the logical
+			// integer domain, so preserve it rather than relying on the folded
+			// physical DECIMAL result.
+			leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(binary.Left, nil)
+			rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(binary.Right, nil)
+			return leftInteger && rightInteger, leftUnsigned || rightUnsigned
 		}
+		fn := expr.GetF()
 		leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(binary.Left, fn.Args[0])
 		rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(binary.Right, fn.Args[1])
 		return leftInteger && rightInteger, leftUnsigned || rightUnsigned
@@ -6071,7 +6079,10 @@ func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Ex
 
 func integerArithmeticBinaryOperator(op tree.BinaryOp) bool {
 	switch op {
-	case tree.PLUS, tree.MULTI, tree.MOD:
+	case tree.PLUS, tree.MULTI, tree.MOD, tree.INTEGER_DIV:
+		// '/' deliberately produces a fractional domain. A nested '-' already
+		// has the selected final integer type, and the bitwise operators retain
+		// their UINT64 physical result, so neither needs AST provenance here.
 		return true
 	default:
 		return false

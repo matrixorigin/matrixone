@@ -16,6 +16,14 @@ select cast('18446744073709551615' as unsigned) - 0 as result;
 18446744073709551615
 select cast('18446744073709551615' as unsigned) - (-1) as result;
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
+select (cast(0 as unsigned) + 0) - 1 as result;
+Data truncation: data out of range: data type uint64, value '-1'
+select (cast(0 as unsigned) * 1) - 1 as result;
+Data truncation: data out of range: data type uint64, value '-1'
+select (cast(0 as unsigned) div 1) - 1 as result;
+Data truncation: data out of range: data type uint64, value '-1'
+select (cast(0 as unsigned) % 1) - 1 as result;
+Data truncation: data out of range: data type uint64, value '-1'
 create table t_widths (
 u8 tinyint unsigned,
 u16 smallint unsigned,
@@ -55,6 +63,18 @@ select cast('18446744073709551615' as unsigned) - cast('18446744073709551615' as
 0
 select cast('18446744073709551615' as unsigned) - 0 as result;
 Data truncation: data out of range: data type int64, value '18446744073709551615'
+select (cast(0 as unsigned) + 0) - 1 as result;
+➤ result[-5,64,0]  𝄀
+-1
+select (cast(0 as unsigned) * 1) - 1 as result;
+➤ result[-5,64,0]  𝄀
+-1
+select (cast(0 as unsigned) div 1) - 1 as result;
+➤ result[-5,64,0]  𝄀
+-1
+select (cast(0 as unsigned) % 1) - 1 as result;
+➤ result[-5,64,0]  𝄀
+-1
 select u8 - 1, u16 - 1, u32 - 1, u64 - 1, b - 1 from t_widths;
 ➤ u8 - 1[-5,64,0]  ¦  u16 - 1[-5,64,0]  ¦  u32 - 1[-5,64,0]  ¦  u64 - 1[-5,64,0]  ¦  b - 1[-5,64,0]  𝄀
 -1  ¦  -1  ¦  -1  ¦  -1  ¦  -1
@@ -64,9 +84,9 @@ select cast(0 as unsigned) - 1 as result;
 -1
 create table t_nested (u bigint unsigned, y year);
 insert into t_nested values (0, 0);
-select (u + 0) - 1, (u * 1) - 1, (u % 1) - 1, y - 1 from t_nested;
-➤ (u + 0) - 1[-5,64,0]  ¦  (u * 1) - 1[-5,64,0]  ¦  (u % 1) - 1[-5,64,0]  ¦  y - 1[-5,64,0]  𝄀
--1  ¦  -1  ¦  -1  ¦  -1
+select (u + 0) - 1, (u * 1) - 1, (u div 1) - 1, (u % 1) - 1, y - 1 from t_nested;
+➤ (u + 0) - 1[-5,64,0]  ¦  (u * 1) - 1[-5,64,0]  ¦  (u div 1) - 1[-5,64,0]  ¦  (u % 1) - 1[-5,64,0]  ¦  y - 1[-5,64,0]  𝄀
+-1  ¦  -1  ¦  -1  ¦  -1  ¦  -1
 create function stored_signed_sub() returns bigint language sql as 'cast(0 as unsigned) - 1';
 set session sql_mode = '';
 select stored_signed_sub() as result;

@@ -67,6 +67,18 @@ func assertUnsignedSubtractionPlan(t *testing.T, expr *Expr, resultType types.T)
 	}
 }
 
+// assertConstantUnsignedSubtractionPlan verifies the selected result cast is
+// retained after the nested arithmetic itself has been folded to a literal.
+func assertConstantUnsignedSubtractionPlan(t *testing.T, expr *Expr, resultType types.T) {
+	t.Helper()
+	require.Equal(t, int32(resultType), expr.Typ.Id)
+	cast := expr.GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.Len(t, cast.Args, 2)
+	require.Equal(t, int32(types.T_decimal128), cast.Args[0].Typ.Id)
+}
+
 func TestUnsignedIntegerSubtractionHonorsSQLMode(t *testing.T) {
 	for _, bindMode := range bindModes {
 		for _, tc := range []struct {
@@ -112,6 +124,7 @@ func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
 	}{
 		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation"},
 		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation"},
+		{name: "integer division", sql: "select (cast(n_nationkey as unsigned) div 1) - 1 from nation"},
 		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation"},
 	} {
 		for _, mode := range []struct {
@@ -122,11 +135,79 @@ func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
 			{name: "default", want: types.T_uint64},
 			{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
 		} {
-			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
-				expr := unsignedSubtractionProjection(t, mode.mode, tc.sql, false)
-				assertUnsignedSubtractionPlan(t, expr, mode.want)
+			for _, bindMode := range bindModes {
+				t.Run(tc.name+"/"+mode.name+"/"+bindMode.name, func(t *testing.T) {
+					expr := unsignedSubtractionProjection(t, mode.mode, tc.sql, bindMode.prepare)
+					assertUnsignedSubtractionPlan(t, expr, mode.want)
+				})
+			}
+		}
+	}
+}
+
+func TestUnsignedIntegerSubtractionRetainsNestedSubtractionResultDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want types.T
+	}{
+		{name: "default", want: types.T_uint64},
+		{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+	} {
+		for _, bindMode := range bindModes {
+			t.Run(tc.name+"/"+bindMode.name, func(t *testing.T) {
+				expr := unsignedSubtractionProjection(
+					t, tc.mode, "select (cast(n_nationkey as unsigned) - 0) - 1 from nation", bindMode.prepare,
+				)
+				require.Equal(t, int32(tc.want), expr.Typ.Id)
 			})
 		}
+	}
+}
+
+func TestUnsignedIntegerSubtractionPreservesConstantFoldedNestedIntegerDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "addition", sql: "select (cast(0 as unsigned) + 0) - 1"},
+		{name: "multiplication", sql: "select (cast(0 as unsigned) * 1) - 1"},
+		{name: "integer division", sql: "select (cast(0 as unsigned) div 1) - 1"},
+		{name: "modulo", sql: "select (cast(0 as unsigned) % 1) - 1"},
+	} {
+		for _, mode := range []struct {
+			name string
+			mode string
+			want types.T
+		}{
+			{name: "default", want: types.T_uint64},
+			{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+		} {
+			for _, bindMode := range bindModes {
+				t.Run(tc.name+"/"+mode.name+"/"+bindMode.name, func(t *testing.T) {
+					expr := unsignedSubtractionProjection(t, mode.mode, tc.sql, bindMode.prepare)
+					assertConstantUnsignedSubtractionPlan(t, expr, mode.want)
+				})
+			}
+		}
+	}
+}
+
+func TestUnsignedIntegerSubtractionPreservesIntegerDivisionDomain(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		mode string
+		want types.T
+	}{
+		{name: "default", want: types.T_uint64},
+		{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			expr := unsignedSubtractionProjection(
+				t, mode.mode, "select (cast(n_nationkey as unsigned) div 1) - 1 from nation", false,
+			)
+			assertUnsignedSubtractionPlan(t, expr, mode.want)
+		})
 	}
 }
 
@@ -278,8 +359,13 @@ func TestUnsignedIntegerSubtractionExecution(t *testing.T) {
 		wantNull  bool
 	}{
 		{name: "default underflow", sql: "select cast(0 as unsigned) - 1", wantType: types.T_uint64, wantError: true},
+		{name: "constant-folded nested addition underflow", sql: "select (cast(0 as unsigned) + 0) - 1", wantType: types.T_uint64, wantError: true},
+		{name: "constant-folded nested multiplication underflow", sql: "select (cast(0 as unsigned) * 1) - 1", wantType: types.T_uint64, wantError: true},
+		{name: "constant-folded nested integer division underflow", sql: "select (cast(0 as unsigned) div 1) - 1", wantType: types.T_uint64, wantError: true},
+		{name: "constant-folded nested modulo underflow", sql: "select (cast(0 as unsigned) % 1) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "strict underflow", mode: "STRICT_TRANS_TABLES", sql: "select cast(0 as unsigned) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "mode permits negative", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select cast(0 as unsigned) - 1", wantType: types.T_int64, wantInt: -1},
+		{name: "mode permits constant-folded nested integer division negative", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select (cast(0 as unsigned) div 1) - 1", wantType: types.T_int64, wantInt: -1},
 		{name: "positive result", sql: "select cast(2 as unsigned) - 1", wantType: types.T_uint64, wantUint: 1},
 		{name: "negative signed operand", sql: "select cast(2 as unsigned) - (-1)", wantType: types.T_uint64, wantUint: 3},
 		{name: "maximum unsigned result", sql: "select cast('18446744073709551615' as unsigned) - 0", wantType: types.T_uint64, wantUint: ^uint64(0)},
