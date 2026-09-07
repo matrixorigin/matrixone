@@ -716,6 +716,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 		viewRef,
 		"db",
 		"v",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, bindCtx.views, 1)
@@ -743,6 +744,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 		&ObjectRef{},
 		"db",
 		"empty",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Zero(t, nodeID)

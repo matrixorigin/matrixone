@@ -2276,7 +2276,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 		value, ok := moruntime.ServiceRuntime(proc.GetService()).
 			GetGlobalVariables(moruntime.MOProtocolVersion)
 		version, versionOK := value.(int64)
-		if ok && versionOK && version >= defines.MORPCVersion54 {
+		if ok && versionOK && version >= defines.MORPCVersion55 {
 			return nil
 		}
 	}
@@ -2287,7 +2287,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"binary string function semantics require MORPC protocol version %d",
-		defines.MORPCVersion54)
+		defines.MORPCVersion55)
 }
 
 func validateRemotePadSpacePipelineProtocol(
