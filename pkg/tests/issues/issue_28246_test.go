@@ -140,6 +140,7 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				"select nextval('"+sequence+"') from `"+name+"`.`"+left+"` "+
 					"union all select nextval('"+sequence+"') from `"+name+"`.`"+right+"`")
 			require.NoError(t, err)
+			defer func() { require.NoError(t, rows.Close()) }()
 			values := make([]int, 0, 2)
 			for rows.Next() {
 				var value int
@@ -147,7 +148,6 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 				values = append(values, value)
 			}
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
 			require.Len(t, values, 2)
 			sort.Ints(values)
 			require.Equal(t, []int{1, 2}, values)
@@ -176,16 +176,16 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 					"select n from `"+name+"`.`"+left+"` union all "+
 					"select n from `"+name+"`.`"+right+"`")
 			require.NoError(t, err)
-			rows, err = conn.QueryContext(ctx, "select id from `"+name+"`.`"+defaultTable+"` order by id")
+			defaultRows, err := conn.QueryContext(ctx, "select id from `"+name+"`.`"+defaultTable+"` order by id")
 			require.NoError(t, err)
+			defer func() { require.NoError(t, defaultRows.Close()) }()
 			defaultValues := make([]int, 0, 2)
-			for rows.Next() {
+			for defaultRows.Next() {
 				var value int
-				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, defaultRows.Scan(&value))
 				defaultValues = append(defaultValues, value)
 			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
+			require.NoError(t, defaultRows.Err())
 			require.Equal(t, []int{3, 4}, defaultValues)
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&persisted))
@@ -377,6 +377,7 @@ func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
 					"union all select nextval('" + sequence + "') from `" + source + "`"
 				resultRows, err := conn.QueryContext(ctx, query)
 				require.NoError(t, err)
+				defer func() { require.NoError(t, resultRows.Close()) }()
 				values := make([]int, 0, rowsPerStatement)
 				for resultRows.Next() {
 					var value int
@@ -384,7 +385,6 @@ func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
 					values = append(values, value)
 				}
 				require.NoError(t, resultRows.Err())
-				require.NoError(t, resultRows.Close())
 				require.Len(t, values, rowsPerStatement)
 				sort.Ints(values)
 				start := index*rowsPerStatement + 1
