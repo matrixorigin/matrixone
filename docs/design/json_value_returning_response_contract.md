@@ -31,8 +31,9 @@ use strict conversion. A conversion that exceeds the target or loses data is an
 ## Plan representation
 
 The parser creates a dedicated JSON_VALUE expression carrying the document,
-path, target type, and both response policies. Its formatter emits the default
-target explicitly as `RETURNING CHAR(512)` and preserves explicit policies. The
+path, target type, and both response policies. Its formatter preserves an omitted
+target so reparsing retains `VARCHAR(512)` rather than an explicit `CHAR(512)`,
+and preserves explicit policies. The
 binder lowers it to an internal seven-argument JSON_VALUE overload. The target
 type is carried by the existing plan `Expr_T`; response modes are integer
 constants and validated defaults are typed constants. The internal overload is
