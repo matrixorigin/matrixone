@@ -124,13 +124,14 @@ type admissionStartQueryService struct {
 	queryservice.QueryService
 	started     chan struct{}
 	startedOnce sync.Once
+	startErr    error
 }
 
 func (s *admissionStartQueryService) Start() error {
 	if s.started != nil {
 		s.startedOnce.Do(func() { close(s.started) })
 	}
-	return nil
+	return s.startErr
 }
 
 func (*admissionStartQueryService) Close() error {
@@ -196,6 +197,22 @@ func TestCNStartsQueryServiceBeforeViewMetadataAdmission(t *testing.T) {
 	require.NoError(t, s.Start())
 	require.False(t, fenceBeforeQuery.Load(),
 		"catalog admission must not run before the internal QueryService is reachable")
+}
+
+func TestCNStartPropagatesQueryServiceStartFailure(t *testing.T) {
+	startErr := errors.New("query service start failed")
+	s := newViewMetadataAdmissionStartService(
+		t,
+		&testBootService{},
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+		time.Second,
+	)
+	s.queryService = &admissionStartQueryService{startErr: startErr}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.ErrorIs(t, s.Start(), startErr)
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
