@@ -64,10 +64,13 @@ func TestParseUserQueryPipelineAndPlanRoundTrip(t *testing.T) {
 }
 
 func TestParseUserQueryAcceptsSortAndUnwind(t *testing.T) {
+	maxDepthPath := strings.Join(makeFieldPath(MaxUserFieldPathSegments), ".")
 	for _, source := range []string{
 		`{"pipeline":[{"$sort":{"site_id":1}}]}`,
+		`{"pipeline":[{"$sort":{"` + maxDepthPath + `":1}}]}`,
 		`{"pipeline":[{"$unwind":"$site_id"}]}`,
 		`{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"index","preserveNullAndEmptyArrays":true}}]}`,
+		`{"pipeline":[{"$unwind":"$` + maxDepthPath + `"}]}`,
 	} {
 		query, err := ParseUserQuery(t.Context(), source)
 		require.NoError(t, err, source)
@@ -135,12 +138,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "sort direction is zero", source: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "1 or -1 directions"},
 		{name: "sort dollar field", source: `{"pipeline":[{"$sort":{"$natural":1}}]}`, want: "$sort requires 1 to 32 fields"},
 		{name: "sort empty path segment", source: `{"pipeline":[{"$sort":{"site_id..value":1}}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort path too deep", source: `{"pipeline":[{"$sort":{"` + strings.Join(makeFieldPath(MaxUserFieldPathSegments+1), ".") + `":1}}]}`, want: "$sort requires 1 to 32 fields"},
 		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind string is not path", source: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind variable is not path", source: `{"pipeline":[{"$unwind":"$$ROOT"}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind trailing dot", source: `{"pipeline":[{"$unwind":"$site_id."}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind empty path segment", source: `{"pipeline":[{"$unwind":"$site_id..value"}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind dollar path segment", source: `{"pipeline":[{"$unwind":"$site_id.$value"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind path too deep", source: `{"pipeline":[{"$unwind":"$` + strings.Join(makeFieldPath(MaxUserFieldPathSegments+1), ".") + `"}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind object missing path", source: `{"pipeline":[{"$unwind":{"preserveNullAndEmptyArrays":true}}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind object unknown option", source: `{"pipeline":[{"$unwind":{"path":"$site_id","futureOption":true}}]}`, want: "$unwind requires a valid field path"},
 		{name: "unwind object invalid index", source: `{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"$index"}}]}`, want: "$unwind requires a valid field path"},
@@ -173,6 +178,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 	stages := strings.Repeat(`{"$match":{}},`, MaxUserPipelineStages) + `{"$match":{}}`
 	_, err = ParseUserQuery(t.Context(), `{"pipeline":[`+stages+`]}`)
 	require.ErrorContains(t, err, "stage limit")
+}
+
+func makeFieldPath(segments int) []string {
+	path := make([]string, segments)
+	for i := range path {
+		path[i] = "a"
+	}
+	return path
 }
 
 func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {

@@ -40,6 +40,10 @@ const (
 	// MaxUserSortKeys matches MongoDB's compound-sort key limit and bounds the
 	// per-stage validation and server sort specification.
 	MaxUserSortKeys = 32
+	// MaxUserFieldPathSegments is the common path-depth envelope accepted by
+	// both $sort and $unwind on the supported MongoDB baseline. $unwind rejects
+	// a 200-component path, so all locally validated stage paths use 199.
+	MaxUserFieldPathSegments = 199
 	// MaxUserQueryDepth bounds recursive JSON/BSON validation independently of
 	// the byte limit so adversarial nesting cannot exhaust the planner stack.
 	MaxUserQueryDepth = 32
@@ -541,7 +545,11 @@ func isMongoDottedFieldPath(path string) bool {
 	if path == "" || strings.IndexByte(path, 0) >= 0 {
 		return false
 	}
-	for _, field := range strings.Split(path, ".") {
+	fields := strings.Split(path, ".")
+	if len(fields) > MaxUserFieldPathSegments {
+		return false
+	}
+	for _, field := range fields {
 		if field == "" || field[0] == '$' {
 			return false
 		}
