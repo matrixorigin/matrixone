@@ -921,7 +921,9 @@ func binaryProtocolPrepareParamConcreteType(
 	case defines.MYSQL_TYPE_LONGLONG:
 		return signed(types.T_int64, types.T_uint64), true
 	case defines.MYSQL_TYPE_BIT:
-		return signed(types.T_bit, types.T_uint64), true
+		// Unsigned is a numeric attribute, not permission to erase BIT's
+		// opaque width-dependent domain on a direct MEMBER OF operand.
+		return types.T_bit, true
 	case defines.MYSQL_TYPE_YEAR:
 		return types.T_year, true
 	case defines.MYSQL_TYPE_FLOAT:
@@ -2484,6 +2486,9 @@ func executeUserParamConcreteType(
 			if !preparedJSONConcreteTypeAllowed(concreteType, kind, memberOfParam) {
 				return types.T_any, nil
 			}
+			if !memberOfParam && !preparedJSONGenericConcreteTypeSupported(concreteType) {
+				return types.T_any, nil
+			}
 			return concreteType, nil
 		}
 	}
@@ -2492,10 +2497,34 @@ func executeUserParamConcreteType(
 	// particular, arbitrary Go integer widths are intentionally normalized to
 	// BIGINT/UBIGINT rather than treated as proof of an SQL assignment type.
 	concreteType := types.T(inferUserDefinedVarType(param).Id)
+	if memberOfParam && concreteType != types.T_any {
+		if _, supported := vector.PrepareParamKindForType(concreteType); supported {
+			return concreteType, nil
+		}
+	}
 	if expectedKind, supported := untypedUserParamKindForType(concreteType); supported && expectedKind == kind {
 		return concreteType, nil
 	}
 	return types.T_any, nil
+}
+
+// preparedJSONGenericConcreteTypeSupported keeps newly preserved MEMBER OF
+// domains out of the older generic JSON-comparison adapter. That adapter only
+// has scalar conversion implementations for this original set.
+func preparedJSONGenericConcreteTypeSupported(concreteType types.T) bool {
+	switch concreteType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_json, types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum, types.T_geometry,
+		types.T_bit, types.T_year:
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedJSONConcreteTypeAllowed(
@@ -2600,8 +2629,14 @@ func buildExecuteUserParamsWithMemberOfPositions(
 		} else {
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
+		_, memberOfParam := slices.BinarySearch(memberOfPositions, int32(i))
+		if memberOfParam {
+			param, err = normalizeMemberOfUserParam(arg, param)
+			if err != nil {
+				return
+			}
+		}
 		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
-			_, memberOfParam := slices.BinarySearch(memberOfPositions, int32(i))
 			var concreteType types.T
 			concreteType, err = executeUserParamConcreteType(
 				proc, arg, param, paramKinds[i], i, memberOfParam)
@@ -2644,6 +2679,17 @@ func buildExecuteUserParamsWithMemberOfPositions(
 		paramVals[i] = paramValue
 	}
 	return
+}
+
+func normalizeMemberOfUserParam(arg *plan.Expr, param any) (any, error) {
+	if arg == nil || types.T(arg.Typ.Id) != types.T_enum {
+		return param, nil
+	}
+	index, ok := param.(types.Enum)
+	if !ok {
+		return param, nil
+	}
+	return types.ParseEnumIndex(arg.Typ.Enumvalues, index)
 }
 
 func executeArgumentSourceType(typ plan.Type) types.Type {

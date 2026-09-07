@@ -4599,8 +4599,8 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 // PreparedJSONComparisonParamPositions returns direct parameter markers whose
 // runtime SQL type controls a JSON comparison. The hidden adapter remains in a
 // cacheable generic plan; execution metadata supplies the concrete type for
-// only these positions. The MEMBER OF case is collected defensively for plans
-// assembled directly by callers that bypass the binder's adapter rewrite.
+// only these positions. MEMBER OF retains direct markers on both operands:
+// its own executor converts their scalar domains after SQL NULL checks.
 func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil {
 		return nil

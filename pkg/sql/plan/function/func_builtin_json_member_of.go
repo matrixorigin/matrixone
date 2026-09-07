@@ -29,10 +29,44 @@ const (
 	jsonMemberOfFunctionName = JsonMemberOfFunctionName
 )
 
+func preparedJSONMemberOfScalarValue(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+) (any, error) {
+	switch paramType {
+	case types.T_bit:
+		// COM_STMT_EXECUTE does not carry BIT(n)'s width, so a uint64 JSON
+		// number would silently lose the opaque byte/width contract.
+		return nil, moerr.NewNotSupportedf(
+			ctx, "prepared BIT parameters are not supported by MEMBER OF without width metadata")
+	case types.T_enum:
+		// ENUM values arriving through the prepared transport are already their
+		// display labels. Preserve the label even if a transport-side binary bit
+		// is present; the SQL domain is more specific than that transport flag.
+		return string(value), nil
+	case types.T_geometry, types.T_geometry32:
+		geoJSON, err := geometryToGeoJSONBytes(value)
+		if err != nil {
+			return nil, err
+		}
+		return types.ParseSliceToByteJson(geoJSON)
+	case types.T_uuid:
+		return string(value), nil
+	default:
+		return PreparedJSONScalarValue(ctx, value, kind, paramType, binaryString)
+	}
+}
+
 // MEMBER OF accepts SQL scalar values and JSON documents.  Native vector
 // values are SQL arrays, not JSON arrays, and MySQL rejects them as operands
 // instead of implicitly converting them to a JSON document.
 func jsonMemberOfLeftSupportsType(oid types.T) bool {
+	if oid == types.T_geometry32 {
+		return true
+	}
 	return jsonConstructorSupportsType(oid) && !oid.IsArrayRelate()
 }
 
@@ -96,15 +130,42 @@ func jsonMemberOfRightHasInvalidRuntimeType(parameter *vector.Vector, row int) b
 	return parameter.GetPrepareParamKindAt(row) != vector.PrepareParamNone
 }
 
-func jsonMemberOfInvalidRightType(proc *process.Process, binaryCharset bool) error {
+// jsonMemberOfLeftHasInvalidRuntimeType rejects a direct prepared value using
+// its concrete SQL domain before the text transport can erase that domain.
+// This is especially important for vector values: formatting []float32 as
+// text would otherwise make an SQL array look like a JSON scalar.
+func jsonMemberOfLeftHasInvalidRuntimeType(parameter *vector.Vector, row int) bool {
+	if parameter == nil || parameter.IsNull(uint64(row)) {
+		return false
+	}
+	if preparedType := parameter.GetPrepareParamType(); preparedType != types.T_any {
+		// The binary protocol does not carry BIT(n)'s declared width. Fail closed
+		// instead of comparing a width-dependent opaque value as uint64 JSON.
+		if preparedType == types.T_bit {
+			return true
+		}
+		return !jsonMemberOfLeftSupportsType(preparedType)
+	}
+	return !jsonMemberOfLeftSupportsType(parameter.GetType().Oid)
+}
+
+func jsonMemberOfInvalidType(proc *process.Process, argument int) error {
 	ctx := context.Background()
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
+	return moerr.NewInvalidTypeForJSON(ctx, argument, jsonMemberOfFunctionName)
+}
+
+func jsonMemberOfInvalidRightType(proc *process.Process, binaryCharset bool) error {
 	if binaryCharset {
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
 		return moerr.NewInvalidJSONCharset(ctx, "binary")
 	}
-	return moerr.NewInvalidTypeForJSON(ctx, 2, jsonMemberOfFunctionName)
+	return jsonMemberOfInvalidType(proc, 2)
 }
 
 // jsonMemberOfCheckFn keeps the left operand typed so SQL strings remain JSON
@@ -155,6 +216,9 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		}
 		return bytejson.Null, true, nil
 	}
+	if operand.parameter.GetType().Oid == types.T_enum {
+		return bytejson.Null, false, jsonMemberOfInvalidType(proc, 1)
+	}
 
 	var (
 		elem any
@@ -174,7 +238,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 			// numeric/Boolean kind still follows that kind below.
 			paramType = operand.parameter.GetType().Oid
 		}
-		elem, err = PreparedJSONScalarValue(
+		elem, err = preparedJSONMemberOfScalarValue(
 			ctx,
 			operand.parameter.GetBytesAt(int(row)),
 			kind,
@@ -187,6 +251,13 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		// JSON_ARRAY/JSON_SET intentionally retain their existing temporal
 		// string formatting contract.
 		elem = uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](operand.parameter, int(row)))
+	} else if operand.parameter.GetType().Oid == types.T_geometry ||
+		operand.parameter.GetType().Oid == types.T_geometry32 {
+		geoJSON, geoErr := geometryToGeoJSONBytes(operand.parameter.GetBytesAt(int(row)))
+		if geoErr == nil {
+			elem, geoErr = types.ParseSliceToByteJson(geoJSON)
+		}
+		err = geoErr
 	} else {
 		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row))
 	}
@@ -249,6 +320,9 @@ func jsonMemberOf(
 			continue
 		}
 
+		if jsonMemberOfLeftHasInvalidRuntimeType(parameters[0], int(row)) {
+			return jsonMemberOfInvalidType(proc, 1)
+		}
 		leftDocument, leftNull, err := left.documentAt(row, proc)
 		if err != nil {
 			return err

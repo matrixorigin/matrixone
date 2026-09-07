@@ -1382,7 +1382,9 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_int64), result.Typ.Id)
 		require.Len(t, result.GetF().Args, 2)
-		paramArg := requireExactJSONParam(t, result.GetF().Args[0], function.JsonComparisonParamFunctionName)
+		// MEMBER OF owns its scalar conversion. A generic JSON adapter here
+		// would eagerly convert/reject an operand before NULL/domain checks.
+		paramArg := result.GetF().Args[0]
 		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
 		require.NotNil(t, paramArg.GetP())
 	})

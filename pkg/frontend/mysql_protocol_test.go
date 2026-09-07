@@ -3285,7 +3285,7 @@ func TestParseExecuteDataPreservesStringDomainAcrossRebinds(t *testing.T) {
 
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
-	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(tp), 0})
 	pos := proto.writeStringLenEnc(data, 9, payload)
 	return data[:pos]
 }
@@ -3300,7 +3300,7 @@ func buildFloat32ExecutePacket(value float32) []byte {
 
 func buildTinyExecutePacket(value uint8, unsigned bool) []byte {
 	data := make([]byte, 10)
-	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_TINY), 0})
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_TINY), 0})
 	if unsigned {
 		data[8] = 0x80
 	}
@@ -3310,7 +3310,7 @@ func buildTinyExecutePacket(value uint8, unsigned bool) []byte {
 
 func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 	data := make([]byte, 17)
-	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})
 	if unsigned {
 		data[8] = 0x80
 	}
@@ -3319,7 +3319,7 @@ func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 }
 
 func buildNullExecutePacket(tp defines.MysqlType) []byte {
-	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	data := []byte{0, 1, 0, 0, 0, 1, 1, byte(tp), 0}
 	return data
 }
 

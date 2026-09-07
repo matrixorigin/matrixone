@@ -53,6 +53,18 @@ compatibility cases captured in this design revision:
   2024 MEMBER OF ('[2024]')` is true while it does not match the JSON string
   element in `'["2024"]'`. This rule is local to `MEMBER OF`; the existing
   temporal string formatting of `JSON_ARRAY` and `JSON_SET` is unchanged.
+- Static `ENUM` values compare by their catalog display label, not the stored
+  ordinal. `GEOMETRY` and `GEOMETRY32` compare as complete GeoJSON objects.
+  Existing SET user-variable assignment rejects native spatial values before
+  this operator is reached; this PR does not broaden that assignment contract.
+- Static `BIT(n)` values retain their width-aware opaque JSON encoding. Direct
+  prepared BIT parameters are rejected at evaluation: the current parameter
+  transport retains an OID but not the declared bit width, so exact opaque
+  equivalence cannot be promised. This explicit limitation applies to binary
+  EXECUTE and SQL EXECUTE USING; it does not affect SQL NULL short-circuiting.
+- EXECUTE USING preserves native vector domains through the parameter metadata
+  even though the value transport is text. These domains remain invalid on
+  either side of MEMBER OF; formatting a vector never turns it into JSON text.
 
 ## Design
 
@@ -67,6 +79,12 @@ execution so a SQL `NULL` left operand can short-circuit them. The type checker 
 deliberately asymmetric: the left side accepts JSON-convertible scalar values,
 while the right side accepts only JSON or text JSON documents.
 
+Both MEMBER OF parameter markers remain direct text-transport parameters. The
+position collector attaches their concrete SQL OIDs; the operator consumes
+them once, after its own NULL/type checks. The generic JSON comparison adapter
+must not eagerly encode them, since that would bypass these checks and apply
+the wrong ENUM/spatial/BIT conversion policy.
+
 The right-side type predicate uses both the string OID and its static charset.
 This prevents a `VARCHAR` with binary charset from bypassing the same rejection
 as an intrinsic `BINARY`/`VARBINARY`/`BLOB` type. Runtime prepared metadata and
@@ -79,7 +97,10 @@ masked rows remain unevaluated.
 global JSON-constructor conversion routine. This is required because existing
 `JSON_ARRAY`/`JSON_SET` behavior formats temporal `YEAR` values as strings,
 whereas the `MEMBER OF` scalar contract compares a `YEAR` as a number. All
-other scalar conversions reuse the established JSON conversion helpers.
+Other scalar conversions reuse established helpers; ENUM display conversion
+runs in the binder (or at EXECUTE USING's assignment boundary), and spatial
+values use the existing GeoJSON conversion helper. Generic JSON comparison and
+constructor conversion behavior is unchanged.
 
 The right document uses the exact comparator shared with `JSON_OVERLAPS`:
 
@@ -146,6 +167,9 @@ evaluated row and add no state beyond the current expression invocation.
 | exact direct equality | JSON value/array/object unit tests | existing nested-array/object BVT cases |
 | YEAR numeric domain | `TestJSONMemberOfYearUsesNumericJSONDomain` and prepared YEAR test | numeric and quoted YEAR BVT cases |
 | prepared concrete types | prepared scalar/FLOAT32/YEAR tests | prepared statement BVT and frontend protocol tests |
+| native vector rejection and failed-plan reuse | runtime OID validation on both operands | `TestIssue23008MemberOfScalarDomains` uses repeated SET/EXECUTE through a real frontend |
+| ENUM and spatial scalar domains | special-domain function tests | catalog ENUM labels and spatial WHERE predicates in the same embedded SQL test |
+| BIT width contract | static BIT(9) opaque equality; binary BIT rejection followed by integer rebind | static `b MEMBER OF(JSON_ARRAY(b))`; prepared BIT is explicitly unsupported |
 | malformed/selected input | invalid JSON and select-list tests | malformed RHS BVT |
 | conflict-free parser integration | regenerated `mysql_sql.go` plus parser tests | full required CI parser/build checks |
 

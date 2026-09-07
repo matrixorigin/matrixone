@@ -2932,6 +2932,85 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
 }
 
+func TestExecuteUserParamConcreteTypePreservesMemberOfDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	memberOfArg := func(typ types.T) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}}
+	}
+
+	got, err := executeUserParamConcreteType(
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_array_float32, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_geometry32), "POINT(1 2)", vector.PrepareParamNone, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_geometry32, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_bit), uint64(1), vector.PrepareParamInteger, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bit, got)
+
+	got, err = executeUserParamConcreteType(
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, types.T_any, got)
+}
+
+func TestNormalizeMemberOfUserParamUsesEnumLabel(t *testing.T) {
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}}
+	value, err := normalizeMemberOfUserParam(arg, types.Enum(2))
+	require.NoError(t, err)
+	require.Equal(t, "blue", value)
+}
+
+func TestInitExecuteStmtParamPreservesPreparedBitMemberOf(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 126, "select ? member of ('[1]')")
+	defer prepareStmt.Close()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BIT), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	// Reject the unsupported width-less domain in the executor, not here:
+	// SQL NULL or a masked-off row must still short-circuit its evaluation.
+	require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
+}
+
+func TestPreparedMemberOfBitFailureThenRebind(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 127, "select ? member of ('[1]')")
+	defer prepared.Close()
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+	for i := 0; i < 3; i++ {
+		packet := buildLongLongExecutePacket(1, false)
+		packet[1] = 1 // iteration-count, excluding the statement ID
+		packet[7] = byte(defines.MYSQL_TYPE_BIT)
+		if i == 1 {
+			packet[8] = 0x80 // unsigned BIT must not masquerade as uint64
+		}
+		_, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
+		require.ErrorContains(t, err, "argument 1")
+		require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
+		packet[7] = byte(defines.MYSQL_TYPE_LONGLONG)
+		packet[8] = 0
+		got, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), got)
+		require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
+	}
+}
+
 func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 118)
 	defer prepareStmt.Close()
@@ -4326,7 +4405,7 @@ func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
 		{name: "signed tiny", mysqlType: defines.MYSQL_TYPE_TINY, want: types.T_int8, supported: true},
 		{name: "unsigned tiny", mysqlType: defines.MYSQL_TYPE_TINY, isUnsigned: true, want: types.T_uint8, supported: true},
 		{name: "signed bit", mysqlType: defines.MYSQL_TYPE_BIT, want: types.T_bit, supported: true},
-		{name: "unsigned bit", mysqlType: defines.MYSQL_TYPE_BIT, isUnsigned: true, want: types.T_uint64, supported: true},
+		{name: "unsigned bit", mysqlType: defines.MYSQL_TYPE_BIT, isUnsigned: true, want: types.T_bit, supported: true},
 		{name: "year", mysqlType: defines.MYSQL_TYPE_YEAR, want: types.T_year, supported: true},
 		{name: "float", mysqlType: defines.MYSQL_TYPE_FLOAT, want: types.T_float32, supported: true},
 		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64, supported: true},

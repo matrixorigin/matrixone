@@ -400,3 +400,95 @@ func TestJSONMemberOfRejectsBinaryRightRuntimeProvenance(t *testing.T) {
 	require.EqualError(t, err, "Cannot create a JSON value from a string with CHARACTER SET 'binary'.")
 	require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode())
 }
+
+func TestJSONMemberOfPreservesSpecialScalarDomains(t *testing.T) {
+	bitValue, err := bitToJSON(0x10a, 9, context.Background())
+	require.NoError(t, err)
+	bitArray, err := bytejson.CreateByteJSON([]any{bitValue})
+	require.NoError(t, err)
+	bitJSON, err := bitArray.Marshal()
+	require.NoError(t, err)
+
+	runJSONMemberOfCase(t,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_bit, 9, 0), []uint64{0x10a}, nil),
+			NewFunctionTestInput(types.T_json.ToType(), []string{string(bitJSON)}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil))
+
+	const geoJSON = `[{"type":"Point","coordinates":[1,2]}]`
+	runJSONMemberOfCase(t,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{geoJSON}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil))
+
+	runJSONMemberOfCase(t,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, "POINT(1 2)")}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{geoJSON}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil))
+}
+
+func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
+	const geoJSON = `[{"type":"Point","coordinates":[1,2]}]`
+	preparedGeometry := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(), []string{string(encodeGeometryPayload("POINT(1 2)", 0, false))}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{geoJSON}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
+		jsonMemberOf,
+	)
+	preparedGeometry.parameters[0].SetPrepareParamType(types.T_geometry)
+	preparedGeometry.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+	succeed, message := preparedGeometry.Run()
+	require.True(t, succeed, message)
+
+	preparedEnum := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(), []string{"red"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`["red"]`}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
+		jsonMemberOf,
+	)
+	preparedEnum.parameters[0].SetPrepareParamType(types.T_enum)
+	preparedEnum.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+	succeed, message = preparedEnum.Run()
+	require.True(t, succeed, message)
+}
+
+func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		typ  types.T
+		data any
+	}{
+		{name: "bit", typ: types.T_bit, data: "266"},
+		{name: "vecf32", typ: types.T_array_float32, data: "[1 2]"},
+		{name: "vecf64", typ: types.T_array_float64, data: "[1 2]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_text.ToType(), []string{test.data.(string)}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"[1]"}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+				jsonMemberOf,
+			)
+			testCase.parameters[0].SetPrepareParamType(test.typ)
+			testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+			require.NoError(t, testCase.result.PreExtendAndReset(1))
+			err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
+			require.Error(t, err)
+		})
+	}
+}
