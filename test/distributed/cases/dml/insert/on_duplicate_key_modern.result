@@ -199,6 +199,74 @@ select id from t_odku_ft2 where match(body) against('gamma') order by id;
 ➤ id[4,32,0]  𝄀
 3
 drop table if exists t_odku_ft2;
+drop table if exists t_odku_ft_value_noop;
+create table t_odku_ft_value_noop(id int primary key, body text, payload int);
+create fulltext index ftidx_value_noop on t_odku_ft_value_noop(body);
+insert into t_odku_ft_value_noop values (1, 'same posting', 10), (2, 'untouched token', 20);
+insert into t_odku_ft_value_noop values (1, 'same posting', 11) on duplicate key update body = values(body), payload = values(payload);
+select id, body, payload from t_odku_ft_value_noop order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  same posting  ¦  11  𝄀
+2  ¦  untouched token  ¦  20
+insert into t_odku_ft_value_noop values (1, 'same posting', 12), (3, 'fresh token', 30) on duplicate key update body = values(body), payload = values(payload);
+select id, body, payload from t_odku_ft_value_noop order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  same posting  ¦  12  𝄀
+2  ¦  untouched token  ¦  20  𝄀
+3  ¦  fresh token  ¦  30
+select id from t_odku_ft_value_noop where match(body) against('same') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_ft_value_noop where match(body) against('untouched') order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from t_odku_ft_value_noop where match(body) against('fresh') order by id;
+➤ id[4,32,0]  𝄀
+3
+drop table if exists t_odku_ft_value_noop;
+drop table if exists t_odku_ft_nulls;
+create table t_odku_ft_nulls(id int primary key, body text);
+insert into t_odku_ft_nulls values (1, NULL), (2, 'oldtoken');
+create fulltext index ftidx_nulls on t_odku_ft_nulls(body);
+insert into t_odku_ft_nulls values (1, NULL) on duplicate key update body = values(body);
+select id, body from t_odku_ft_nulls order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  oldtoken
+insert into t_odku_ft_nulls values (1, 'newtoken') on duplicate key update body = values(body);
+select id from t_odku_ft_nulls where match(body) against('newtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into t_odku_ft_nulls values (2, NULL) on duplicate key update body = values(body);
+select id from t_odku_ft_nulls where match(body) against('oldtoken') order by id;
+➤ id[4,32,0]
+select id, body from t_odku_ft_nulls order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  newtoken  𝄀
+2  ¦  null
+drop table if exists t_odku_ft_nulls;
+drop table if exists t_odku_ft_multi;
+create table t_odku_ft_multi(id int primary key, title text, body text, payload int);
+insert into t_odku_ft_multi values (1, 'alpha title', 'beta body', 10), (2, 'stable title', 'stable body', 20);
+create fulltext index ftidx_multi on t_odku_ft_multi(title, body);
+insert into t_odku_ft_multi values (1, 'alpha title', 'beta body', 11) on duplicate key update title = values(title), body = values(body), payload = values(payload);
+select id, title, body, payload from t_odku_ft_multi order by id;
+➤ id[4,32,0]  ¦  title[12,0,0]  ¦  body[12,0,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  alpha title  ¦  beta body  ¦  11  𝄀
+2  ¦  stable title  ¦  stable body  ¦  20
+select id from t_odku_ft_multi where match(title, body) against('beta') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into t_odku_ft_multi values (1, 'alpha title', 'gamma body', 12) on duplicate key update title = values(title), body = values(body), payload = values(payload);
+select id from t_odku_ft_multi where match(title, body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_ft_multi where match(title, body) against('beta') order by id;
+➤ id[4,32,0]
+select id from t_odku_ft_multi where match(title, body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table if exists t_odku_ft_multi;
 drop table if exists t_odku_vec;
 create table t_odku_vec(id int primary key, uk int unique, embedding vecf32(3), val int);
 insert into t_odku_vec values (1, 10, '[1,2,3]', 100), (2, 20, '[4,5,6]', 200);
