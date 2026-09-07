@@ -52,8 +52,8 @@ select count(*) from temp_dst;
 drop temporary table temp_dst;
 
 -- Temporary aliases must follow the same statement and transaction lifecycle
--- as their physical relations. COMMIT keeps a clone; ROLLBACK removes a newly
--- created clone and restores a dropped one; IF NOT EXISTS never changes the
+-- as their physical relations. COMMIT keeps a clone; both CREATE and DROP keep
+-- their definition change across ROLLBACK; IF NOT EXISTS never changes the
 -- pre-transaction mapping.
 begin;
 create temporary table temp_txn_commit clone src;
@@ -90,11 +90,14 @@ begin;
 drop temporary table temp_txn_drop;
 rollback;
 select * from temp_txn_drop order by id;
+create temporary table temp_txn_drop (id int primary key);
+insert into temp_txn_drop values (23);
+select * from temp_txn_drop;
 begin;
 drop temporary table temp_txn_drop;
 commit;
 create temporary table temp_txn_drop (id int primary key);
-insert into temp_txn_drop values (23);
+insert into temp_txn_drop values (24);
 select * from temp_txn_drop;
 drop temporary table temp_txn_drop;
 
