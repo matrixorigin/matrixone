@@ -156,10 +156,12 @@ values, and applies an allowlist to stages and `$` operators recursively.
 Allowed stages are `$match`, `$project`, `$set`, `$addFields`, `$unset`,
 `$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`; each has a
 shape-specific validation. `$sort` accepts 1–32 fields with an integer `1` or
-`-1` direction; metadata sorts are not in this envelope. `$unwind` accepts a
-`$`-prefixed field path whose dotted components are nonempty and do not start
-with `$`, or the standard options object containing required `path` and optional
-`includeArrayIndex` and `preserveNullAndEmptyArrays` fields.
+`-1` direction on valid dotted field paths; metadata sorts are not in this
+envelope. `$unwind` accepts a `$`-prefixed field path whose dotted components
+are nonempty and do not start with `$`, or the standard options object
+containing required `path` and optional `includeArrayIndex` (using the same
+dotted-component grammar without a leading `$`) and
+`preserveNullAndEmptyArrays` fields.
 `$push` and `$addToSet` remain excluded from the resource envelope. Unknown
 stages/operators and server-side JavaScript BSON values are rejected. This
 deliberately rejects `$out`, `$merge`,

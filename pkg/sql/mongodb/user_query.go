@@ -477,7 +477,7 @@ func isValidSortDocument(value any) bool {
 		return false
 	}
 	for _, element := range document {
-		if element.Key == "" || !isOneOrMinusOneInteger(element.Value) {
+		if !isMongoDottedFieldPath(element.Key) || !isOneOrMinusOneInteger(element.Value) {
 			return false
 		}
 	}
@@ -519,7 +519,7 @@ func isValidUnwind(value any) bool {
 			seenPath = true
 		case "includeArrayIndex":
 			name, ok := element.Value.(string)
-			if !ok || name == "" || strings.HasPrefix(name, "$") {
+			if !ok || !isMongoDottedFieldPath(name) {
 				return false
 			}
 		case "preserveNullAndEmptyArrays":
@@ -534,10 +534,14 @@ func isValidUnwind(value any) bool {
 }
 
 func isMongoFieldPath(path string) bool {
-	if len(path) <= 1 || path[0] != '$' || strings.IndexByte(path, 0) >= 0 {
+	return len(path) > 1 && path[0] == '$' && isMongoDottedFieldPath(path[1:])
+}
+
+func isMongoDottedFieldPath(path string) bool {
+	if path == "" || strings.IndexByte(path, 0) >= 0 {
 		return false
 	}
-	for _, field := range strings.Split(path[1:], ".") {
+	for _, field := range strings.Split(path, ".") {
 		if field == "" || field[0] == '$' {
 			return false
 		}
