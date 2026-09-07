@@ -7897,7 +7897,7 @@ func supportsRemoteArrowLoadPipeline(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion54
+	return ok && protocolVersion >= defines.MORPCVersion55
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
