@@ -141,7 +141,7 @@ func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -227,7 +227,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 		}
 	}()
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -289,7 +289,7 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -353,7 +353,7 @@ func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *te
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 

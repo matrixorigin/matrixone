@@ -126,12 +126,12 @@ func TestGovernorHousekeepingAppliesALoweredCap(t *testing.T) {
 	}
 
 	// The operator lowers the CN-wide cap; the memo is what housekeeping can see.
-	c.sysLimit.mu.Lock()
-	c.sysLimit.value = hostCap(250)
-	c.sysLimit.fetched = time.Now()
-	c.sysLimit.mu.Unlock()
+	c.gov().sysLimit.mu.Lock()
+	c.gov().sysLimit.value = hostCap(250)
+	c.gov().sysLimit.fetched = time.Now()
+	c.gov().sysLimit.mu.Unlock()
 
-	c.HouseKeeping()
+	houseKeepingSync(t, c)
 
 	require.False(t, isResident(c, keys[0]), "the coldest is reclaimed without waiting for a miss")
 	require.True(t, isResident(c, keys[1]), "and the pass stops once under the cap")
@@ -160,10 +160,10 @@ func TestGovernorHousekeepingRefreshesWarmSysCap(t *testing.T) {
 	entryOf(t, c, second).ExpireAt.Store(time.Now().Add(2 * time.Minute).UnixMicro())
 
 	capBytes = "250"
-	c.sysLimit.mu.Lock()
-	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	c.sysLimit.mu.Unlock()
-	c.HouseKeeping()
+	c.gov().sysLimit.mu.Lock()
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	c.gov().sysLimit.mu.Unlock()
+	houseKeepingSync(t, c)
 
 	require.False(t, isResident(c, first), "housekeeping refreshes and applies the lowered SYS cap")
 	require.True(t, isResident(c, second), "the colder entry is reclaimed first")
@@ -196,12 +196,12 @@ func TestGovernorHousekeepingRefreshesWarmTenantCap(t *testing.T) {
 	entryOf(t, c, second).ExpireAt.Store(time.Now().Add(2 * time.Minute).UnixMicro())
 
 	tenantCap = "250"
-	v, ok := c.acctLimits.Load(uint32(7))
+	v, ok := c.gov().acctLimits.Load(uint32(7))
 	require.True(t, ok)
 	e := v.(acctLimitEntry)
 	e.fetched = time.Now().Add(-2 * sysLimitTTL)
-	c.acctLimits.Store(uint32(7), e)
-	c.HouseKeeping()
+	c.gov().acctLimits.Store(uint32(7), e)
+	houseKeepingSync(t, c)
 
 	require.False(t, isResident(c, first), "housekeeping refreshes and applies the lowered tenant cap")
 	require.True(t, isResident(c, second), "the colder tenant entry is reclaimed first")
@@ -214,14 +214,14 @@ func TestGovernorHousekeepingRefreshesWarmTenantCap(t *testing.T) {
 func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 	c := newBoundCache(t)
 
-	auto, aerr, aerr2 := c.defaultLimits()
+	auto, aerr, aerr2 := c.gov().defaultLimits()
 	require.NoError(t, aerr2)
 	require.NoError(t, aerr)
 
 	// Host zeroed at BOTH scopes, device set. Each arena resolves on its own.
 	sp := govProc(t, c, 1, caps{host: 0, device: auto.device},
 		caps{host: 0, device: auto.device})
-	_, sys, serrs := c.limits(sp)
+	_, sys, serrs := c.gov().limits(sp)
 	require.NoError(t, serrs.host)
 	require.NoError(t, serrs.device)
 	require.EqualValues(t, auto.host, sys.host,
@@ -230,7 +230,7 @@ func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 
 	// The mirror: device zeroed, host set.
 	sp = govProc(t, c, 1, caps{host: auto.host, device: 0}, caps{host: auto.host, device: 0})
-	_, sys, serrs = c.limits(sp)
+	_, sys, serrs = c.gov().limits(sp)
 	require.NoError(t, serrs.host)
 	require.NoError(t, serrs.device)
 	require.EqualValues(t, auto.device, sys.device,
@@ -239,7 +239,7 @@ func TestGovernorResolvesEachArenaIndependently(t *testing.T) {
 
 	// An operator-chosen value is never overwritten by a ceiling.
 	sp = govProc(t, c, 1, caps{}, caps{host: 4096, device: 8192})
-	_, sys, serrs = c.limits(sp)
+	_, sys, serrs = c.gov().limits(sp)
 	require.NoError(t, serrs.host)
 	require.NoError(t, serrs.device)
 	require.EqualValues(t, 4096, sys.host, "a real cap survives the resolution")
@@ -263,21 +263,21 @@ func TestGovernorAccountCapReadFailureKeepsLastKnownCap(t *testing.T) {
 		return varRows(t, mpool.MustNewZero(), maxIndexCacheSizeVar, "1073741824"), nil
 	})
 
-	require.EqualValues(t, int64(1<<30), c.accountCacheLimit(sp, owner).host,
+	require.EqualValues(t, int64(1<<30), c.gov().accountCacheLimit(sp, owner).host,
 		"the first read memoizes the tenant's real cap")
 
 	// Expire the memo, then fail the refresh.
-	prev, _ := c.acctLimits.Load(owner)
-	c.acctLimits.Store(owner, acctLimitEntry{
+	prev, _ := c.gov().acctLimits.Load(owner)
+	c.gov().acctLimits.Store(owner, acctLimitEntry{
 		value:   prev.(acctLimitEntry).value,
 		fetched: time.Now().Add(-2 * sysLimitTTL),
 	})
 	fail = true
 
-	require.EqualValues(t, int64(1<<30), c.accountCacheLimit(sp, owner).host,
+	require.EqualValues(t, int64(1<<30), c.gov().accountCacheLimit(sp, owner).host,
 		"a failed refresh keeps the cap rather than falling open to unlimited")
 
-	v, ok := c.acctLimits.Load(owner)
+	v, ok := c.gov().acctLimits.Load(owner)
 	require.True(t, ok)
 	require.EqualValues(t, int64(1<<30), v.(acctLimitEntry).value.host,
 		"and the memo still carries it, so the next window does not re-stamp a zero")
@@ -299,12 +299,12 @@ func TestGovernorHousekeepingEvictsColdestNotTheSysAccount(t *testing.T) {
 	entryOf(t, c, warmSys).ExpireAt.Store(now.Add(time.Hour).UnixMicro())
 	entryOf(t, c, coldTenant).ExpireAt.Store(now.Add(time.Minute).UnixMicro())
 
-	c.sysLimit.mu.Lock()
-	c.sysLimit.value = hostCap(250)
-	c.sysLimit.fetched = time.Now()
-	c.sysLimit.mu.Unlock()
+	c.gov().sysLimit.mu.Lock()
+	c.gov().sysLimit.value = hostCap(250)
+	c.gov().sysLimit.fetched = time.Now()
+	c.gov().sysLimit.mu.Unlock()
 
-	c.HouseKeeping()
+	houseKeepingSync(t, c)
 
 	require.False(t, isResident(c, coldTenant), "the coldest entry is reclaimed, whoever owns it")
 	require.True(t, isResident(c, warmSys), "and the warm account-0 entry is not sacrificed for it")
@@ -437,7 +437,7 @@ func TestGovernorBoundsMappedBytesAcrossGenerations(t *testing.T) {
 			admitted++
 			entryOf(t, c, key).ExpireAt.Store(int64(i + 1)) // idle and cold
 		}
-		_, _, total := c.snapshotResidents("")
+		_, _, total := c.gov().snapshotResidents("")
 		require.LessOrEqual(t, total.host, budget,
 			"resident mapped bytes must never exceed the budget, however many generations arrive")
 	}
@@ -458,7 +458,7 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 	t.Run("a configured cap does not consult the failed probe", func(t *testing.T) {
 		c := newBoundCache(t)
 		sp := govProc(t, c, 1, caps{}, caps{host: 1 << 30, device: 1 << 30})
-		_, sys, serrs := c.limits(sp)
+		_, sys, serrs := c.gov().limits(sp)
 		require.NoError(t, serrs.host, "both arenas are configured, so nothing needs deriving")
 		require.EqualValues(t, 1<<30, sys.host)
 		require.EqualValues(t, 1<<30, sys.device)
@@ -469,16 +469,16 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 		// Only the DEVICE probe failed; host sizing is fine. Crucially the GPU cap is NOT
 		// configured -- that is the state a GPU build with a failing CUDA query is actually in,
 		// and preconfiguring it would mean the poisoned probe is never consulted at all.
-		c.defaultLimitMu.Lock()
-		c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
-		c.defaultLimitDeviceReady = true
-		c.defaultLimitMu.Unlock()
+		c.gov().defaultLimitMu.Lock()
+		c.gov().defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		c.gov().defaultLimitDeviceReady = true
+		c.gov().defaultLimitMu.Unlock()
 
 		sp := govProc(t, c, 1, caps{}, caps{}) // nothing configured, either arena
-		_, sys, serrs := c.limits(sp)
+		_, sys, serrs := c.gov().limits(sp)
 		require.NoError(t, serrs.host, "the host arena derived fine")
 		require.Error(t, serrs.device, "and the device failure is reported, not hidden")
-		auto, hostErr, _ := c.defaultLimits()
+		auto, hostErr, _ := c.gov().defaultLimits()
 		require.NoError(t, hostErr)
 		require.EqualValues(t, auto.host, sys.host)
 
@@ -491,10 +491,10 @@ func TestGovernorSizingFailureDoesNotRefuseConfiguredOrUnrelatedArenas(t *testin
 
 	t.Run("a device-using load still gets the device failure", func(t *testing.T) {
 		c := newBoundCache(t)
-		c.defaultLimitMu.Lock()
-		c.defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
-		c.defaultLimitDeviceReady = true
-		c.defaultLimitMu.Unlock()
+		c.gov().defaultLimitMu.Lock()
+		c.gov().defaultLimitDeviceErr = moerr.NewInternalErrorNoCtx("device probe failed")
+		c.gov().defaultLimitDeviceReady = true
+		c.gov().defaultLimitMu.Unlock()
 		sp := govProc(t, c, 1, caps{}, caps{})
 
 		_, _, err := c.Search(sp, "__mo_index_secondary_gpuload",
@@ -781,19 +781,107 @@ func TestRemoveKeepsSnapshotGenerationsAndDDLClearsThem(t *testing.T) {
 func TestGovernorEvictionLoggingIsRateLimited(t *testing.T) {
 	c := newBoundCache(t)
 
-	c.logReclaim(arenaHost, 100, 1, 250)
-	first := c.lastEvictLog[arenaHost].Load()
+	c.gov().logReclaim(arenaHost, 100, 1, 250)
+	first := c.gov().lastEvictLog[arenaHost].Load()
 	require.NotZero(t, first, "the first eviction is always reported")
 
-	c.logReclaim(arenaHost, 100, 1, 250)
-	require.Equal(t, first, c.lastEvictLog[arenaHost].Load(),
+	c.gov().logReclaim(arenaHost, 100, 1, 250)
+	require.Equal(t, first, c.gov().lastEvictLog[arenaHost].Load(),
 		"a second eviction inside the interval is counted, not logged")
 
-	c.logReclaim(arenaDevice, 100, 1, 250)
-	require.NotZero(t, c.lastEvictLog[arenaDevice].Load(), "the other arena has its own budget")
+	c.gov().logReclaim(arenaDevice, 100, 1, 250)
+	require.NotZero(t, c.gov().lastEvictLog[arenaDevice].Load(), "the other arena has its own budget")
 
-	c.lastEvictLog[arenaHost].Store(time.Now().Add(-2 * evictionLogInterval).UnixNano())
-	c.logReclaim(arenaHost, 100, 1, 250)
-	require.Greater(t, c.lastEvictLog[arenaHost].Load(), first,
+	c.gov().lastEvictLog[arenaHost].Store(time.Now().Add(-2 * evictionLogInterval).UnixNano())
+	c.gov().logReclaim(arenaHost, 100, 1, 250)
+	require.Greater(t, c.gov().lastEvictLog[arenaHost].Load(), first,
 		"and a still-evicting cache reports again once the interval has passed")
+}
+
+// Housekeeping must stay bounded on a CN that has served many tenants against a slow catalog.
+//
+// acctLimits accumulates an entry per account that has ever loaded and nothing removed them, so
+// refreshing "every account we have seen" is a per-account catalog call, serially, with an
+// independent timeout each -- and it ran on the lifecycle goroutine, so TTL eviction, lifecycle
+// hooks and Stop/SIGTERM all queued behind it. Accounts holding nothing have nothing to enforce
+// and are the ones that accumulate.
+func TestGovernorHousekeepingStaysBoundedWithManyDeadTenants(t *testing.T) {
+	const tenants = 40
+	const catalogDelay = 50 * time.Millisecond
+
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	var reads atomic.Int64
+	withSysSql(t, c, func(ctx context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		reads.Add(1)
+		select {
+		case <-time.After(catalogDelay):
+		case <-ctx.Done():
+			return executor.Result{}, ctx.Err()
+		}
+		return varRows(t, mp), nil
+	})
+
+	// Tenants that used this CN once and hold nothing now: expired memos, no residency.
+	for i := 1; i <= tenants; i++ {
+		c.gov().acctLimits.Store(uint32(i), acctLimitEntry{
+			value:   hostCap(1 << 20),
+			fetched: time.Now().Add(-2 * sysLimitTTL),
+			service: "gov-test-cn",
+		})
+	}
+	c.gov().sysLimit.mu.Lock()
+	c.gov().sysLimit.fetched = time.Now() // SYS memo fresh, so only the tenant walk is under test
+	c.gov().sysLimit.mu.Unlock()
+
+	start := time.Now()
+	c.HouseKeeping()
+	dispatch := time.Since(start)
+	require.Less(t, dispatch, catalogDelay,
+		"HouseKeeping returned in %s: the lifecycle goroutine must not wait on the catalog", dispatch)
+
+	require.Eventually(t, func() bool { return !c.capRefreshing.Load() }, 30*time.Second, time.Millisecond)
+
+	require.Zero(t, reads.Load(),
+		"a tenant holding nothing resident is not worth a catalog read")
+	for i := 1; i <= tenants; i++ {
+		_, still := c.gov().acctLimits.Load(uint32(i))
+		require.False(t, still, "and its memo is pruned rather than refreshed forever")
+	}
+}
+
+// The same pass with tenants that DO hold bytes reads the catalog for them, and the whole pass
+// is bounded by one budget rather than by the sum of its calls.
+func TestGovernorHousekeepingRefreshesOnlyResidentTenantsUnderOneBudget(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+	var reads atomic.Int64
+	seen := make(chan uint32, 16)
+
+	sp := govProc(t, c, 3, caps{}, caps{})
+	withSysSql(t, c, func(_ context.Context, _ string, account uint32, _, _ string) (executor.Result, error) {
+		if account != catalog.System_Account {
+			reads.Add(1)
+			seen <- account
+		}
+		return varRows(t, mp), nil
+	})
+
+	loadInto(t, c, sp, "__mo_index_secondary_resident", 100, 0)
+	entryOf(t, c, "__mo_index_secondary_resident").accountID.Store(3)
+
+	// One resident tenant, one that has gone away.
+	c.gov().acctLimits.Store(uint32(3), acctLimitEntry{
+		value: hostCap(1 << 20), fetched: time.Now().Add(-2 * sysLimitTTL), service: "gov-test-cn"})
+	c.gov().acctLimits.Store(uint32(99), acctLimitEntry{
+		value: hostCap(1 << 20), fetched: time.Now().Add(-2 * sysLimitTTL), service: "gov-test-cn"})
+
+	houseKeepingSync(t, c)
+
+	require.EqualValues(t, 1, reads.Load(), "exactly the resident tenant")
+	require.EqualValues(t, 3, <-seen)
+	_, kept := c.gov().acctLimits.Load(uint32(3))
+	require.True(t, kept, "the resident tenant keeps its memo")
+	_, dead := c.gov().acctLimits.Load(uint32(99))
+	require.False(t, dead, "the departed one does not")
 }

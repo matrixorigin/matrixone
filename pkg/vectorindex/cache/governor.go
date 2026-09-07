@@ -50,6 +50,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -184,6 +185,43 @@ func (e sizingErrs) of(a arena) error {
 	return e.device
 }
 
+// VectorIndexGovernor decides what may become resident in a VectorIndexCache and what has to
+// leave: the per-arena budgets, where they come from, who is charged for them, which arrivals
+// are admitted, and which entries are reclaimed.
+//
+// It is a separate type from the cache on purpose. The cache is a map of loaded indexes with a
+// TTL; the governor is a policy with its own state -- memoized catalog reads, derived machine
+// capacity, in-flight admissions, eviction counters -- and mixing the two put a dozen policy
+// fields on the cache struct where a reader of the cache had to skip past them.
+//
+// The two still need each other, and only in two places: the governor reads the cache's map to
+// see what is resident, and calls back into it to evict. Everything else here is its own.
+type VectorIndexGovernor struct {
+	// cache is the residency this governor bounds. Set by VectorIndexCache.gov().
+	cache *VectorIndexCache
+
+	sysLimit     sysLimitCache
+	acctLimits   sync.Map     // accountID -> acctLimitEntry, for warm tenant-cap refreshes
+	evictions    atomic.Int64 // evictions since start, for EvictionStats
+	evictedBytes atomic.Int64
+
+	// Wall-clock of the last eviction summary line, per arena; see logReclaim.
+	lastEvictLog [2]atomic.Int64
+
+	// Loads that have passed admission but are not resident yet. See arrival.
+	inflight   sync.Map // key -> *arrival
+	arrivalSeq atomic.Uint64
+
+	// The automatic per-arena budget. Host capacity is refreshed on every sizing pass so a live
+	// cgroup downsize is enforced without restarting the CN. Device probing remains lazy because
+	// GPU capacity is stable for the lifetime of a process; see defaults.go.
+	defaultLimitMu          sync.Mutex
+	defaultLimit            caps
+	defaultLimitHostErr     error
+	defaultLimitDeviceErr   error
+	defaultLimitDeviceReady bool
+}
+
 // arena names the two budgets, kept apart because RAM and VRAM are not interchangeable.
 type arena int
 
@@ -230,18 +268,18 @@ type arrival struct {
 
 // reserve records an arrival and returns the release to call once it is resident or has failed.
 // Release is idempotent.
-func (c *VectorIndexCache) reserve(key string, account uint32, size caps) (*arrival, func()) {
-	a := &arrival{seq: c.arrivalSeq.Add(1), account: account, size: size}
-	c.inflight.Store(key, a)
+func (g *VectorIndexGovernor) reserve(key string, account uint32, size caps) (*arrival, func()) {
+	a := &arrival{seq: g.arrivalSeq.Add(1), account: account, size: size}
+	g.inflight.Store(key, a)
 	return a, func() {
-		c.inflight.CompareAndDelete(key, a)
+		g.inflight.CompareAndDelete(key, a)
 	}
 }
 
 // pendingAhead sums the arrivals that reserved BEFORE this one, per account and in total.
-func (c *VectorIndexCache) pendingAhead(self *arrival) (perAccount map[uint32]usage, total usage) {
+func (g *VectorIndexGovernor) pendingAhead(self *arrival) (perAccount map[uint32]usage, total usage) {
 	perAccount = make(map[uint32]usage)
-	c.inflight.Range(func(_, value any) bool {
+	g.inflight.Range(func(_, value any) bool {
 		other, ok := value.(*arrival)
 		if !ok || other == self || other.seq >= self.seq {
 			return true
@@ -278,7 +316,7 @@ type resident struct {
 // gone, and could veto a load that in fact fits.
 //
 // Called with NO entry lock held -- see VectorIndexSearch.Preload for why that matters.
-func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) (func(), error) {
+func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) (func(), error) {
 	// Preload published its estimate to these atomics under the entry lock; never call
 	// GetIndexSize from here, where no lock is held and Destroy may be nilling algo state.
 	host, device := entry.hostBytes.Load(), entry.deviceBytes.Load()
@@ -293,7 +331,7 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 			account = a
 		}
 	}
-	tenant, sys, sizeErrs := c.limits(sqlproc)
+	tenant, sys, sizeErrs := g.limits(sqlproc)
 	// A sizing failure only blocks an arena this arrival OCCUPIES. A host-only index does not
 	// care that the GPU could not be counted, and refusing it for that reason takes a CN with
 	// perfectly good RAM sizing out of service for hnsw and fulltext2.
@@ -312,8 +350,8 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 	incoming := caps{host: host, device: device}
 	// Claim a place in line BEFORE reclaiming, so a load that starts while this one is still
 	// evicting cannot read the arena as empty and slip past the sole-occupant bypass.
-	self, release := c.reserve(key, account, incoming)
-	c.enforce(account, tenant.less(incoming), sys.less(incoming), key)
+	self, release := g.reserve(key, account, incoming)
+	g.enforce(account, tenant.less(incoming), sys.less(incoming), key)
 
 	// ADMISSION CONTROL. The reclaim above took every IDLE entry it could; if the arrival still
 	// does not fit, the only way to seat it would be to destroy entries with searches running on
@@ -323,7 +361,7 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 	//
 	// The check is deliberately AFTER the reclaim: a cache merely full of cold entries admits
 	// the newcomer normally. Only genuine overload -- nothing idle left to give -- refuses.
-	if over := c.overBudget(account, tenant, sys, key, incoming, self); over != nil {
+	if over := g.overBudget(account, tenant, sys, key, incoming, self); over != nil {
 		release()
 		return nil, over
 	}
@@ -346,12 +384,12 @@ func (c *VectorIndexCache) makeRoom(sqlproc *sqlexec.SqlProcess, key string, ent
 // indexes stay resident TOGETHER. Without this an operator's index would become unloadable the
 // moment it outgrew a number derived from the machine, which is a capacity limit dressed up as
 // a cache policy.
-func (c *VectorIndexCache) overBudget(account uint32, tenant, sys caps, key string, incoming caps, self *arrival) error {
-	_, perAccount, total := c.snapshotResidents(key)
+func (g *VectorIndexGovernor) overBudget(account uint32, tenant, sys caps, key string, incoming caps, self *arrival) error {
+	_, perAccount, total := g.snapshotResidents(key)
 	// Arrivals ahead in line hold room that is spoken for but not yet occupied; counting them
 	// is what stops N concurrent cold misses from each admitting against an empty arena.
 	if self != nil {
-		pendingAcct, pendingTotal := c.pendingAhead(self)
+		pendingAcct, pendingTotal := g.pendingAhead(self)
 		for acct, u := range pendingAcct {
 			cur := perAccount[acct]
 			cur.host += u.host
@@ -390,7 +428,7 @@ func (c *VectorIndexCache) overBudget(account uint32, tenant, sys caps, key stri
 
 // chargeAndEnforce records what a freshly loaded entry costs, then brings the cache back under
 // the caps. Called once per successful load, from the miss path only.
-func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) {
+func (g *VectorIndexGovernor) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key string, entry *VectorIndexSearch) {
 	// The size was captured under the entry lock by Load (see captureSize); read the atomics
 	// rather than the algorithm, which a concurrent eviction may be tearing down.
 	if hasSession(sqlproc) {
@@ -402,7 +440,7 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 	// idxcron's background work already reports (idxcron/cmd.go builds its SqlContext with
 	// catalog.System_Account). Leaving it unattributed would exempt it from every cap.
 
-	tenant, sys, sizeErrs := c.limits(sqlproc)
+	tenant, sys, sizeErrs := g.limits(sqlproc)
 	if sizeErrs.host != nil || sizeErrs.device != nil {
 		// The load already happened; failing here would not un-spend it. Enforcement of an
 		// unsized arena is simply not possible until the operator sets a budget.
@@ -412,7 +450,7 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 	if tenant.unset() && sys.unset() {
 		return
 	}
-	c.enforce(entry.accountID.Load(), tenant, sys, key)
+	g.enforce(entry.accountID.Load(), tenant, sys, key)
 }
 
 // limits returns the calling tenant's caps and the CN-wide SYS caps, host and device. A 0 from
@@ -420,8 +458,8 @@ func (c *VectorIndexCache) chargeAndEnforce(sqlproc *sqlexec.SqlProcess, key str
 // the arena ceilings below rather than to unlimited -- so an unreadable variable still yields a
 // governed cache. Unreadable never FAILS the load: the governor is a memory policy, not a
 // correctness gate, and must not fail a query because a variable could not be read.
-func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizingErrs) {
-	tenant, sys := c.tenantCacheLimits(sqlproc), c.sysCacheLimit(sqlproc)
+func (g *VectorIndexGovernor) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizingErrs) {
+	tenant, sys := g.tenantCacheLimits(sqlproc), g.sysCacheLimit(sqlproc)
 
 	// Resolved PER ARENA, not per pair. enforce() skips an arena whose tenant and sys caps are
 	// both <= 0, so each arena has to reach a positive number on its own; a pair-wide test
@@ -457,7 +495,7 @@ func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizi
 	if sys.host > 0 && sys.device > 0 {
 		return tenant, sys, sizingErrs{}
 	}
-	auto, hostErr, deviceErr := c.defaultLimits()
+	auto, hostErr, deviceErr := g.defaultLimits()
 	var errs sizingErrs
 	if sys.host <= 0 {
 		if hostErr != nil {
@@ -484,17 +522,26 @@ func (c *VectorIndexCache) limits(sqlproc *sqlexec.SqlProcess) (caps, caps, sizi
 //
 // A concurrent duplicate query is cheaper than holding a cache-wide lock across a catalog query;
 // the last known value is retained if the refresh fails.
-func (c *VectorIndexCache) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accountID uint32) caps {
-	return c.accountCacheLimitForService(sqlproc.GetService(), accountID)
+func (g *VectorIndexGovernor) accountCacheLimit(sqlproc *sqlexec.SqlProcess, accountID uint32) caps {
+	return g.accountCacheLimitForService(sqlproc.GetService(), accountID)
 }
 
-func (c *VectorIndexCache) accountCacheLimitForService(cnUUID string, accountID uint32) caps {
+func (g *VectorIndexGovernor) accountCacheLimitForService(cnUUID string, accountID uint32) caps {
+	return g.accountCacheLimitWithin(context.Background(), catalogReadTimeout, cnUUID, accountID)
+}
+
+// accountCacheLimitWithin is accountCacheLimitForService under a caller's deadline. The
+// housekeeping refresh passes one budget for the WHOLE pass, so a slow catalog costs that pass a
+// bounded amount of time however many tenants it has to visit.
+func (g *VectorIndexGovernor) accountCacheLimitWithin(
+	parent context.Context, timeout time.Duration, cnUUID string, accountID uint32,
+) caps {
 	if cnUUID == "" {
 		return caps{}
 	}
 
 	var last caps
-	if v, ok := c.acctLimits.Load(accountID); ok {
+	if v, ok := g.acctLimits.Load(accountID); ok {
 		e := v.(acctLimitEntry)
 		if time.Since(e.fetched) < sysLimitTTL && (e.service == "" || e.service == cnUUID) {
 			return e.value
@@ -502,7 +549,7 @@ func (c *VectorIndexCache) accountCacheLimitForService(cnUUID string, accountID 
 		last = e.value
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	res, err := runSysSql(ctx, cnUUID, accountID, "", accountLimitSQL(accountID))
 	if err != nil {
@@ -512,13 +559,13 @@ func (c *VectorIndexCache) accountCacheLimitForService(cnUUID string, accountID 
 		// as the catalog stays unreachable (every window would re-stamp the zero). Only the
 		// attempt time is refreshed, so an unreachable catalog is retried at the TTL cadence
 		// rather than on every miss.
-		c.acctLimits.Store(accountID, acctLimitEntry{value: last, fetched: time.Now(), service: cnUUID})
+		g.acctLimits.Store(accountID, acctLimitEntry{value: last, fetched: time.Now(), service: cnUUID})
 		return last
 	}
 	defer res.Close()
 
 	value := capsFromVarRows(res)
-	c.acctLimits.Store(accountID, acctLimitEntry{value: value, fetched: time.Now(), service: cnUUID})
+	g.acctLimits.Store(accountID, acctLimitEntry{value: value, fetched: time.Now(), service: cnUUID})
 	return value
 }
 
@@ -539,7 +586,7 @@ func hasSession(sqlproc *sqlexec.SqlProcess) bool {
 
 // tenantCacheLimits reads both caps for the CALLING account through the request's own
 // resolver, at global scope so SET GLOBAL takes effect without a reconnect.
-func (c *VectorIndexCache) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
+func (g *VectorIndexGovernor) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 	if !hasSession(sqlproc) {
 		return caps{}
 	}
@@ -548,7 +595,7 @@ func (c *VectorIndexCache) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 	// caller. Read that account's row from the catalog instead, memoized like the SYS read.
 	if effective, err := sqlproc.EffectiveAccountID(); err == nil {
 		if caller, cerr := sqlproc.GetAccountID(); cerr == nil && caller != effective {
-			return c.accountCacheLimit(sqlproc, effective)
+			return g.accountCacheLimit(sqlproc, effective)
 		}
 	}
 	resolve := sqlproc.GetResolveVariableFunc()
@@ -568,7 +615,7 @@ func (c *VectorIndexCache) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 			// A resolver failure is not permission to forget a previously
 			// enforced tenant cap. Preserve only the arena that failed; a
 			// legitimate SET GLOBAL ... = 0 still replaces it with zero.
-			if previous, ok := c.acctLimits.Load(account); ok {
+			if previous, ok := g.acctLimits.Load(account); ok {
 				old := previous.(acctLimitEntry)
 				if !hostOK {
 					value.host = old.value.host
@@ -577,7 +624,7 @@ func (c *VectorIndexCache) tenantCacheLimits(sqlproc *sqlexec.SqlProcess) caps {
 					value.device = old.value.device
 				}
 			}
-			c.acctLimits.Store(account, acctLimitEntry{value: value, fetched: time.Now(), service: service})
+			g.acctLimits.Store(account, acctLimitEntry{value: value, fetched: time.Now(), service: service})
 		}
 	}
 	return value
@@ -603,7 +650,7 @@ func resolveByteVar(resolve func(string, bool, bool) (interface{}, error), name 
 // The read runs as the SYS account on a FRESH context: sqlexec.RunSqlAutoCommit rebinds
 // defines.TenantIDKey to the account it is given, so the caller's tenant-bound context is never
 // reused to read another account's catalog row.
-func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
+func (g *VectorIndexGovernor) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	if !hasSession(sqlproc) {
 		return caps{}
 	}
@@ -611,15 +658,15 @@ func (c *VectorIndexCache) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 	if cnUUID == "" {
 		return caps{}
 	}
-	return c.refreshSysLimit(cnUUID)
+	return g.refreshSysLimit(cnUUID)
 }
 
 // snapshotResidents lists every charged, live entry with its account and coldness. Entries
 // mid-load or already claimed for eviction are skipped: they hold no charged bytes yet, or
 // their bytes are already on their way back.
-func (c *VectorIndexCache) snapshotResidents(protect string) (list []resident, perAccount map[uint32]usage, total usage) {
+func (g *VectorIndexGovernor) snapshotResidents(protect string) (list []resident, perAccount map[uint32]usage, total usage) {
 	perAccount = make(map[uint32]usage)
-	c.IndexMap.Range(func(key, value any) bool {
+	g.cache.IndexMap.Range(func(key, value any) bool {
 		k, ok := key.(string)
 		if !ok {
 			return true
@@ -650,13 +697,20 @@ func (c *VectorIndexCache) snapshotResidents(protect string) (list []resident, p
 
 // enforce evicts coldest-first until the charging account is under its own cap and the CN is
 // under the SYS cap, in both arenas. protect is the key just loaded, never a victim.
+// catalogReadTimeout bounds ONE catalog read of a cap row.
+const catalogReadTimeout = 10 * time.Second
+
+// capRefreshPassBudget bounds a whole housekeeping cap-refresh pass, however many tenants it
+// visits. Without an aggregate bound the pass is N x catalogReadTimeout on a slow catalog.
+const capRefreshPassBudget = 10 * time.Second
+
 // noAskingAccount is the account id enforce() is given when no load triggered the pass, so its
 // "the account asking for room pays first" sub-pass matches no resident and coldest-first
 // ordering applies to the whole cache. Real account ids are small and dense; this one cannot
 // collide with one.
 const noAskingAccount = ^uint32(0)
 
-func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect string) {
+func (g *VectorIndexGovernor) enforce(account uint32, tenant, sys caps, protect string) {
 	for _, a := range []arena{arenaHost, arenaDevice} {
 		if tenant.of(a) <= 0 && sys.of(a) <= 0 {
 			continue
@@ -667,7 +721,7 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect str
 		// loop skips it without decrementing. A shared snapshot therefore over-states this
 		// arena's usage by exactly the bytes the other arena just freed, and evicts a warm
 		// index to make room that is already free.
-		list, perAccount, total := c.snapshotResidents(protect)
+		list, perAccount, total := g.snapshotResidents(protect)
 		if len(list) == 0 {
 			return
 		}
@@ -677,7 +731,7 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect str
 
 		var freed int64
 		if tenantLimit := tenant.of(a); tenantLimit > 0 {
-			freed = c.reclaim(list, a, tenantLimit, perAccount[account].of(a), func(r resident) bool {
+			freed = g.reclaim(list, a, tenantLimit, perAccount[account].of(a), func(r resident) bool {
 				return r.account == account
 			})
 		}
@@ -689,10 +743,10 @@ func (c *VectorIndexCache) enforce(account uint32, tenant, sys caps, protect str
 			// tenant that floods the CN evict a quiet neighbour's older entry before its own
 			// -- the CN-wide cap still held, but the cost of holding it landed on the wrong
 			// tenant. Only once this account has nothing left to give does the pass widen.
-			used -= c.reclaim(list, a, sysLimit, used, func(r resident) bool {
+			used -= g.reclaim(list, a, sysLimit, used, func(r resident) bool {
 				return r.account == account
 			})
-			c.reclaim(list, a, sysLimit, used, func(resident) bool { return true })
+			g.reclaim(list, a, sysLimit, used, func(resident) bool { return true })
 		}
 	}
 }
@@ -714,7 +768,7 @@ func parseByteLimit(raw string) (int64, error) {
 // a. Only entries that actually hold bytes in that arena are taken -- evicting a host-only
 // index to relieve VRAM pressure would free nothing and lose a warm index for it.
 // It returns the bytes it freed in that arena.
-func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, eligible func(resident) bool) int64 {
+func (g *VectorIndexGovernor) reclaim(list []resident, a arena, limit, used int64, eligible func(resident) bool) int64 {
 	// IDLE VICTIMS ONLY. A busy entry is a live request, and it wins.
 	//
 	// This is an overloaded HTTP server, not a scheduler: when the cache cannot make room, the
@@ -727,10 +781,10 @@ func (c *VectorIndexCache) reclaim(list []resident, a arena, limit, used int64, 
 	// The old second pass did exactly that: if every idle candidate was exhausted it went back
 	// and took busy ones. That kept the cache under its limit at the cost of killing live
 	// queries for an arrival, which is the wrong trade for a server.
-	before := c.evictions.Load()
-	freed := c.reclaimPass(list, a, limit, used, eligible)
-	if n := c.evictions.Load() - before; n > 0 {
-		c.logReclaim(a, freed, n, limit)
+	before := g.evictions.Load()
+	freed := g.reclaimPass(list, a, limit, used, eligible)
+	if n := g.evictions.Load() - before; n > 0 {
+		g.logReclaim(a, freed, n, limit)
 	}
 	return freed
 }
@@ -746,22 +800,22 @@ const evictionLogInterval = 10 * time.Second
 // forever -- so a line per pass turns an ordinary steady state into a log storm that buries
 // whatever else is being diagnosed. The rate-limited line keeps the condition visible; the
 // numbers to alert on are the EvictionStats counters, which lose nothing to sampling.
-func (c *VectorIndexCache) logReclaim(a arena, freed, entries, limit int64) {
+func (g *VectorIndexGovernor) logReclaim(a arena, freed, entries, limit int64) {
 	logutil.Debugf("index cache governor: reclaimed %d bytes from %d idle %s entries to stay under %d bytes",
 		freed, entries, a, limit)
 
 	now := time.Now().UnixNano()
-	last := c.lastEvictLog[a].Load()
-	if now-last < int64(evictionLogInterval) || !c.lastEvictLog[a].CompareAndSwap(last, now) {
+	last := g.lastEvictLog[a].Load()
+	if now-last < int64(evictionLogInterval) || !g.lastEvictLog[a].CompareAndSwap(last, now) {
 		return
 	}
-	total, bytes := c.EvictionStats()
+	total, bytes := g.evictions.Load(), g.evictedBytes.Load()
 	logutil.Infof("index cache governor: reclaiming %s to stay under %d bytes (%d bytes from %d entries this pass; "+
 		"%d entries / %d bytes since start; at most one line per %s)",
 		a, limit, freed, entries, total, bytes, evictionLogInterval)
 }
 
-func (c *VectorIndexCache) reclaimPass(
+func (g *VectorIndexGovernor) reclaimPass(
 	list []resident, a arena, limit, used int64, eligible func(resident) bool,
 ) int64 {
 	var freed int64
@@ -781,13 +835,13 @@ func (c *VectorIndexCache) reclaimPass(
 		// A false return means the entry was busy, or someone else already claimed it --
 		// housekeeping, a stale sweep, or the other arena's pass. Either way its bytes are
 		// not ours to count.
-		if !c.evictIdleEntry(r.key, r.entry, reason) {
+		if !g.cache.evictIdleEntry(r.key, r.entry, reason) {
 			continue
 		}
 		used -= r.size.of(a)
 		freed += r.size.of(a)
-		c.evictions.Add(1)
-		c.evictedBytes.Add(r.size.of(a))
+		g.evictions.Add(1)
+		g.evictedBytes.Add(r.size.of(a))
 		// Per-victim detail is DEBUG: two indexes alternating under a tight cap evict on
 		// every miss, and one INFO line per victim turns a steady state into a log storm.
 		// The pass logs one aggregated line instead, and the counters below are the thing
@@ -826,7 +880,7 @@ func capsFromVarRows(res executor.Result) caps {
 // bytes freed, across both arenas. Per-victim detail is logged at DEBUG, so these counters are
 // what an operator watches to see whether a cap is binding and how hard.
 func (c *VectorIndexCache) EvictionStats() (entries int64, bytes int64) {
-	return c.evictions.Load(), c.evictedBytes.Load()
+	return c.gov().evictions.Load(), c.gov().evictedBytes.Load()
 }
 
 // enforceMemoizedCaps refreshes and applies the memoized CN-wide and tenant caps from the
@@ -842,19 +896,23 @@ func (c *VectorIndexCache) EvictionStats() (entries int64, bytes int64) {
 // for a limit still gets the automatic machine/cgroup ceiling, so a live cgroup downsize is
 // enforced even before the next miss. Tenant rows are refreshed only for accounts that have
 // already used this cache; an account's first miss remains the normal application path.
-func (c *VectorIndexCache) enforceMemoizedCaps() {
-	c.refreshMemoizedSysLimit()
-	c.refreshMemoizedAccountLimits()
+func (g *VectorIndexGovernor) enforceMemoizedCaps() {
+	// The residency snapshot decides which tenants are worth a catalog read, and the same
+	// answer says which memos are dead. Taken once, before any I/O.
+	_, residents, _ := g.snapshotResidents("")
 
-	c.sysLimit.mu.Lock()
-	sysOverride := c.sysLimit.value
-	c.sysLimit.mu.Unlock()
+	g.refreshMemoizedSysLimit()
+	g.refreshMemoizedAccountLimits(residents)
+
+	g.sysLimit.mu.Lock()
+	sysOverride := g.sysLimit.value
+	g.sysLimit.mu.Unlock()
 
 	// Resolve each arena independently, exactly as limits() does on a miss. An
 	// explicit SYS value wins; an unset arena falls back to the current host/GPU
 	// automatic budget. This is the path that makes cgroup reductions effective
 	// for a warm cache.
-	auto, hostErr, deviceErr := c.defaultLimits()
+	auto, hostErr, deviceErr := g.defaultLimits()
 	var sys caps
 	if sysOverride.host > 0 {
 		sys.host = sysOverride.host
@@ -873,61 +931,64 @@ func (c *VectorIndexCache) enforceMemoizedCaps() {
 		// there) the only ones a binding CN-wide cap ever reclaimed, however warm, while a colder
 		// tenant's entries survived. A sentinel no resident can carry makes that sub-pass a no-op
 		// and leaves the widened pass to reclaim strictly coldest-first.
-		c.enforce(noAskingAccount, caps{}, sys, "")
+		g.enforce(noAskingAccount, caps{}, sys, "")
 	}
 
-	// Apply refreshed tenant caps separately. The SYS pass above already handled
-	// the CN-wide bound; using an account-only pass avoids making one tenant's
-	// cap look like a second CN-wide limit.
-	c.acctLimits.Range(func(key, value any) bool {
-		account, ok := key.(uint32)
+	// Apply refreshed tenant caps separately. The SYS pass above already handled the CN-wide
+	// bound; using an account-only pass avoids making one tenant's cap look like a second
+	// CN-wide limit. Only RESIDENT accounts are visited -- an account holding nothing has
+	// nothing for enforce() to reclaim, and its memo has just been pruned.
+	for account := range residents {
+		if account == noAskingAccount {
+			continue
+		}
+		v, ok := g.acctLimits.Load(account)
 		if !ok {
-			return true
+			continue
 		}
-		entry, ok := value.(acctLimitEntry)
+		entry, ok := v.(acctLimitEntry)
 		if !ok || entry.value.unset() {
-			return true
+			continue
 		}
-		c.enforce(account, entry.value, caps{}, "")
-		return true
-	})
+		g.enforce(account, entry.value, caps{}, "")
+	}
 }
 
 // refreshMemoizedSysLimit refreshes the SYS catalog row when its TTL has expired. The service
 // was captured by the last session-bound read, so this path does not need (and must not invent)
 // a tenant session on the housekeeping goroutine.
-func (c *VectorIndexCache) refreshMemoizedSysLimit() {
-	c.sysLimit.mu.Lock()
-	service := c.sysLimit.service
-	fetched := c.sysLimit.fetched
-	c.sysLimit.mu.Unlock()
+func (g *VectorIndexGovernor) refreshMemoizedSysLimit() {
+	g.sysLimit.mu.Lock()
+	service := g.sysLimit.service
+	fetched := g.sysLimit.fetched
+	g.sysLimit.mu.Unlock()
 	if service == "" || fetched.IsZero() || time.Since(fetched) < sysLimitTTL {
 		return
 	}
-	c.refreshSysLimit(service)
+	g.refreshSysLimit(service)
 }
 
 // refreshSysLimit is the session-free implementation shared by housekeeping and the regular
 // miss path. It preserves the last known value while a refresh is in flight or fails.
-func (c *VectorIndexCache) refreshSysLimit(cnUUID string) caps {
-	c.sysLimit.mu.Lock()
-	knownService := c.sysLimit.service
+func (g *VectorIndexGovernor) refreshSysLimit(cnUUID string) caps {
+	g.sysLimit.mu.Lock()
+	knownService := g.sysLimit.service
 	if cnUUID != "" {
-		c.sysLimit.service = cnUUID
+		g.sysLimit.service = cnUUID
 	}
-	if !c.sysLimit.fetched.IsZero() && time.Since(c.sysLimit.fetched) < sysLimitTTL &&
+	if !g.sysLimit.fetched.IsZero() && time.Since(g.sysLimit.fetched) < sysLimitTTL &&
 		(knownService == "" || cnUUID == "" || knownService == cnUUID) {
-		value := c.sysLimit.value
-		c.sysLimit.mu.Unlock()
+		value := g.sysLimit.value
+		g.sysLimit.mu.Unlock()
 		return value
 	}
-	firstFetch := c.sysLimit.fetched.IsZero()
-	c.sysLimit.fetched = time.Now()
-	last := c.sysLimit.value
+	firstFetch := g.sysLimit.fetched.IsZero()
+	g.sysLimit.fetched = time.Now()
+	last := g.sysLimit.value
 	if !firstFetch {
-		c.sysLimit.mu.Unlock()
+		g.sysLimit.mu.Unlock()
 	} else {
-		defer c.sysLimit.mu.Unlock()
+		defer g.sysLimit.mu.Unlock()
 	}
 	if cnUUID == "" {
 		return last
@@ -944,29 +1005,55 @@ func (c *VectorIndexCache) refreshSysLimit(cnUUID string) caps {
 
 	value := capsFromVarRows(res)
 	if firstFetch {
-		c.sysLimit.value = value
+		g.sysLimit.value = value
 	} else {
-		c.sysLimit.mu.Lock()
-		c.sysLimit.value = value
-		c.sysLimit.mu.Unlock()
+		g.sysLimit.mu.Lock()
+		g.sysLimit.value = value
+		g.sysLimit.mu.Unlock()
 	}
 	return value
 }
 
-// refreshMemoizedAccountLimits refreshes every tenant account that has already participated in
-// a cache load. It is intentionally best-effort and TTL-gated: a catalog failure keeps the last
-// known cap, while an account that has never loaded an index has no warm residency to enforce.
-func (c *VectorIndexCache) refreshMemoizedAccountLimits() {
-	c.acctLimits.Range(func(key, value any) bool {
+// refreshMemoizedAccountLimits refreshes the tenant caps that can actually change what is
+// resident, and prunes the rest.
+//
+// The refresh set is derived from RESIDENCY, not from history. acctLimits accumulates an entry
+// for every account that has ever loaded an index on this CN and nothing removed them, so
+// walking the map refreshed dead tenants forever: on a CN that has served many tenants, with a
+// slow catalog after the memo TTL, that is one 10-second call per account, serially, for
+// accounts with nothing to enforce. An account holding no bytes has nothing this pass could
+// evict, and its memo costs nothing to rebuild at its next miss -- so it is dropped instead.
+//
+// The whole pass shares ONE deadline. Per-call timeouts bound each read but not their sum, and
+// the sum is what a caller waits for.
+func (g *VectorIndexGovernor) refreshMemoizedAccountLimits(residents map[uint32]usage) {
+	ctx, cancel := context.WithTimeout(context.Background(), capRefreshPassBudget)
+	defer cancel()
+
+	var stale []uint32
+	g.acctLimits.Range(func(key, value any) bool {
 		account, ok := key.(uint32)
 		if !ok {
+			return true
+		}
+		if _, resident := residents[account]; !resident {
+			stale = append(stale, account)
 			return true
 		}
 		entry, ok := value.(acctLimitEntry)
 		if !ok || entry.service == "" || entry.fetched.IsZero() || time.Since(entry.fetched) < sysLimitTTL {
 			return true
 		}
-		c.accountCacheLimitForService(entry.service, account)
+		if ctx.Err() != nil {
+			// Out of budget for this pass. The remaining accounts keep their last known cap
+			// and are refreshed on the next tick, which is the same guarantee a failed read
+			// already gives them.
+			return false
+		}
+		g.accountCacheLimitWithin(ctx, capRefreshPassBudget, entry.service, account)
 		return true
 	})
+	for _, account := range stale {
+		g.acctLimits.Delete(account)
+	}
 }

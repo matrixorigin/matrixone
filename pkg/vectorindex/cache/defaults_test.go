@@ -88,12 +88,12 @@ func TestAutomaticDeviceCapacity(t *testing.T) {
 // the SYS value alone, and enforce applies both.
 func TestTenantOverrideCannotBypassAutomaticCNLimit(t *testing.T) {
 	c := newBoundCache(t)
-	defaults, err, err2 := c.defaultLimits()
+	defaults, err, err2 := c.gov().defaultLimits()
 	require.NoError(t, err2)
 	require.NoError(t, err)
 
 	sp := govProc(t, c, 1, caps{host: defaults.host * 2, device: defaults.device * 2}, caps{})
-	tenant, sys, serrs := c.limits(sp)
+	tenant, sys, serrs := c.gov().limits(sp)
 	require.NoError(t, serrs.host)
 	require.NoError(t, serrs.device)
 	require.Equal(t, defaults, sys, "the CN budget ignores what the tenant asked for")

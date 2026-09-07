@@ -121,7 +121,7 @@ func TestStaleSweepSkipsSnapshotGenerations(t *testing.T) {
 	require.False(t, histEntry.(*VectorIndexSearch).stale.Load(),
 		"a snapshot generation is immutable and must never be marked stale")
 
-	c.HouseKeeping()
+	houseKeepingSync(t, c)
 	_, ok = c.IndexMap.Load(histKey)
 	require.True(t, ok, "the snapshot generation must survive HouseKeeping")
 }

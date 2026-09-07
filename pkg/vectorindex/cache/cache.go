@@ -618,27 +618,21 @@ type VectorIndexCache struct {
 	once           sync.Once
 	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
-	sysLimit       sysLimitCache
-	acctLimits     sync.Map     // accountID -> acctLimitEntry, for warm tenant-cap refreshes
-	evictions      atomic.Int64 // governor evictions since start, for EvictionStats
-	evictedBytes   atomic.Int64
+	capRefreshing  atomic.Bool // single-flight guard for the async cap refresh + enforcement
 
-	// Wall-clock of the last eviction summary line, per arena; see logReclaim.
-	lastEvictLog [2]atomic.Int64
+	// The residency budget and everything that decides it. Held by value so a zero
+	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
+	governor     VectorIndexGovernor
+	governorOnce sync.Once
+}
 
-	// Loads that have passed admission but are not resident yet. See arrival.
-	inflight   sync.Map // key -> *arrival
-	arrivalSeq atomic.Uint64
-
-	// The automatic per-arena budget. Host capacity is refreshed on every
-	// sizing pass so a live cgroup downsize is enforced without restarting the
-	// CN. Device probing remains lazy because GPU capacity is stable for the
-	// lifetime of a process; see defaults.go.
-	defaultLimitMu          sync.Mutex
-	defaultLimit            caps
-	defaultLimitHostErr     error
-	defaultLimitDeviceErr   error
-	defaultLimitDeviceReady bool
+// gov returns this cache's governor, attaching the back-reference the first time. The governor
+// needs the cache to see what is resident and to evict; the cache needs the governor to decide
+// what may become resident. Keeping the wiring in one accessor means a VectorIndexCache built as
+// a zero value -- as tests and embedded users do -- still has a working governor.
+func (c *VectorIndexCache) gov() *VectorIndexGovernor {
+	c.governorOnce.Do(func() { c.governor.cache = c })
+	return &c.governor
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -790,8 +784,29 @@ func (c *VectorIndexCache) HouseKeeping() {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
 	}
-	c.enforceMemoizedCaps()
+	c.refreshAndEnforceCaps()
 	runLifecycleHooks(false)
+}
+
+// refreshAndEnforceCaps runs the cap refresh and its enforcement OFF the lifecycle goroutine,
+// single-flighted like the freshness sweep above.
+//
+// enforceMemoizedCaps reads the catalog, and catalog reads are unbounded in the way that
+// matters here: a slow or unreachable catalog turns each one into a timeout. Running that
+// inline made the ticker goroutine wait for it, and everything that goroutine owns waits too --
+// TTL eviction, lifecycle hooks, and the Stop/SIGTERM path it also serves. Shutdown must not
+// queue behind a catalog.
+//
+// Dropping a tick when one is still running is the right behaviour, not a compromise: the pass
+// is idempotent, and a second one would read exactly what the first is already reading.
+func (c *VectorIndexCache) refreshAndEnforceCaps() {
+	if !c.capRefreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer c.capRefreshing.Store(false)
+		c.gov().enforceMemoizedCaps()
+	}()
 }
 
 // checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
@@ -897,7 +912,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// Overload: nothing idle left to reclaim, and live queries are not preempted
 			// for an arrival. Refuse before Load allocates anything, tearing this entry
 			// down exactly as a failed load would.
-			release, rerr := c.makeRoom(sqlproc, key, algo)
+			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
 			if rerr != nil {
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
@@ -938,7 +953,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 				}
 				return nil, nil, err
 			}
-			c.chargeAndEnforce(sqlproc, key, algo)
+			c.gov().chargeAndEnforce(sqlproc, key, algo)
 		}
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
@@ -1007,7 +1022,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				return perr
 			}
 			// See Search: refuse rather than preempt a live query.
-			release, rerr := c.makeRoom(sqlproc, key, algo)
+			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
 			if rerr != nil {
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
@@ -1044,7 +1059,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				}
 				return err
 			}
-			c.chargeAndEnforce(sqlproc, key, algo)
+			c.gov().chargeAndEnforce(sqlproc, key, algo)
 		}
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {

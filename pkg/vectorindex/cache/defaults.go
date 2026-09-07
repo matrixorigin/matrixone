@@ -87,18 +87,18 @@ func automaticDeviceCapacity(countDevices func() (int, error), totalMem func(int
 // fails says nothing about host memory, and joining them would let an unreadable card refuse
 // every hnsw and fulltext2 load on a CN whose RAM is perfectly well known. limits() surfaces an
 // arena's error only when that arena actually needs deriving.
-func (c *VectorIndexCache) defaultLimits() (caps, error, error) {
-	c.defaultLimitMu.Lock()
-	defer c.defaultLimitMu.Unlock()
+func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
+	g.defaultLimitMu.Lock()
+	defer g.defaultLimitMu.Unlock()
 
 	host, herr := automaticHostLimit(system.MemoryTotal(), system.CgroupMemoryLimit())
-	c.defaultLimit.host = host
-	c.defaultLimitHostErr = herr
-	if !c.defaultLimitDeviceReady {
+	g.defaultLimit.host = host
+	g.defaultLimitHostErr = herr
+	if !g.defaultLimitDeviceReady {
 		device, derr := automaticDeviceLimit()
-		c.defaultLimit.device = device
-		c.defaultLimitDeviceErr = derr
-		c.defaultLimitDeviceReady = true
+		g.defaultLimit.device = device
+		g.defaultLimitDeviceErr = derr
+		g.defaultLimitDeviceReady = true
 	}
-	return c.defaultLimit, c.defaultLimitHostErr, c.defaultLimitDeviceErr
+	return g.defaultLimit, g.defaultLimitHostErr, g.defaultLimitDeviceErr
 }

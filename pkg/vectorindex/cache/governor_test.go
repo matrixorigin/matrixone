@@ -73,7 +73,7 @@ func stubSysLimit(t *testing.T, c *VectorIndexCache, value caps) {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("no catalog in unit test")
 	}
 	t.Cleanup(func() { runSysSql = orig })
-	c.sysLimit.value, c.sysLimit.fetched = value, time.Now()
+	c.gov().sysLimit.value, c.gov().sysLimit.fetched = value, time.Now()
 }
 
 // loadRefused drives a load the admission policy is expected to REJECT: it does not fit even
@@ -134,7 +134,7 @@ func TestGovernorUnsetCapChargesButDoesNotEvict(t *testing.T) {
 	}
 
 	// And the governor sees them: snapshotResidents is what every eviction pass walks.
-	list, perAccount, total := c.snapshotResidents("")
+	list, perAccount, total := c.gov().snapshotResidents("")
 	require.Len(t, list, len(keys), "an unconfigured cache is still enumerated")
 	require.EqualValues(t, int64(len(keys))<<30, total.host)
 	require.EqualValues(t, int64(len(keys))<<30, perAccount[1].host)
@@ -147,12 +147,12 @@ func TestGovernorUnconfiguredBudgetsAShareOfTheMachine(t *testing.T) {
 	c := newBoundCache(t)
 	sp := govProc(t, c, 1, caps{}, caps{})
 
-	tenant, sys, serrs := c.limits(sp)
+	tenant, sys, serrs := c.gov().limits(sp)
 	require.NoError(t, serrs.host)
 	require.NoError(t, serrs.device)
 	require.True(t, tenant.unset(), "nothing configured for the tenant")
 	require.False(t, sys.unset(), "but the CN-wide budget is set, not unlimited")
-	auto, hostErr, devErr := c.defaultLimits()
+	auto, hostErr, devErr := c.gov().defaultLimits()
 	require.NoError(t, hostErr)
 	require.NoError(t, devErr)
 	require.Equal(t, auto, sys,
@@ -298,16 +298,16 @@ func TestGovernorUnreadableLimitIsUnlimited(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 	}}
-	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(boom), "resolver error")
+	require.Equal(t, caps{}, newBoundCache(t).gov().tenantCacheLimits(boom), "resolver error")
 
 	wrong := &sqlexec.SqlProcess{SqlCtx: &sqlexec.SqlContext{
 		Ctx: context.Background(), CNUuid: "gov-test-cn", AccountId: 1,
 		ResolveVariableFunc: func(string, bool, bool) (interface{}, error) { return "not an int", nil },
 	}}
-	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(wrong), "wrong type")
+	require.Equal(t, caps{}, newBoundCache(t).gov().tenantCacheLimits(wrong), "wrong type")
 
-	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(nil), "no session")
-	require.Equal(t, caps{}, newBoundCache(t).tenantCacheLimits(&sqlexec.SqlProcess{}), "no proc or sqlctx")
+	require.Equal(t, caps{}, newBoundCache(t).gov().tenantCacheLimits(nil), "no session")
+	require.Equal(t, caps{}, newBoundCache(t).gov().tenantCacheLimits(&sqlexec.SqlProcess{}), "no proc or sqlctx")
 }
 
 // A failed SYS read keeps the last known good cap rather than falling open to unlimited.
@@ -316,8 +316,8 @@ func TestGovernorSysReadFailureKeepsLastKnownCap(t *testing.T) {
 	sp := govProc(t, c, 1, caps{}, hostCap(250))
 
 	// Expire the memoized value so the next call re-reads, and let that read fail.
-	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	require.Equal(t, hostCap(250), c.sysCacheLimit(sp),
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	require.Equal(t, hostCap(250), c.gov().sysCacheLimit(sp),
 		"a catalog blip must not silently unbound the cache")
 }
 
@@ -372,7 +372,7 @@ func withSysSql(t *testing.T, c *VectorIndexCache, f func(context.Context, strin
 	orig := runSysSql
 	runSysSql = f
 	t.Cleanup(func() { runSysSql = orig })
-	c.sysLimit = sysLimitCache{}
+	c.gov().sysLimit = sysLimitCache{}
 }
 
 // The SYS read extracts the cap from the catalog row, as the SYS account and on its own context.
@@ -392,7 +392,7 @@ func TestGovernorSysReadExtractsValue(t *testing.T) {
 	})
 
 	want := caps{host: 1048576, device: 4096}
-	require.Equal(t, want, c.sysCacheLimit(sysProc()),
+	require.Equal(t, want, c.gov().sysCacheLimit(sysProc()),
 		"each variable must land in its own arena, keyed by name not row order")
 	require.EqualValues(t, 0, gotAccount, "the CN-wide caps must be read as the SYS account, not the caller")
 	require.Equal(t, "gov-test-cn", gotCN)
@@ -401,12 +401,12 @@ func TestGovernorSysReadExtractsValue(t *testing.T) {
 	require.Contains(t, gotSQL, maxGpuIndexCacheSizeVar)
 
 	// Memoized: a second call inside the TTL does not re-query.
-	require.Equal(t, want, c.sysCacheLimit(sysProc()))
+	require.Equal(t, want, c.gov().sysCacheLimit(sysProc()))
 	require.Equal(t, 1, calls)
 
 	// Past the TTL it re-reads and picks up a new value.
-	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	require.Equal(t, want, c.sysCacheLimit(sysProc()))
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	require.Equal(t, want, c.gov().sysCacheLimit(sysProc()))
 	require.Equal(t, 2, calls, "the memo must expire so SET GLOBAL takes effect without a restart")
 }
 
@@ -418,13 +418,13 @@ func TestGovernorSysReadNoRowIsUnlimited(t *testing.T) {
 	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
 		return varRows(t, mp), nil
 	})
-	require.Equal(t, caps{}, c.sysCacheLimit(sysProc()))
+	require.Equal(t, caps{}, c.gov().sysCacheLimit(sysProc()))
 
 	c2 := newBoundCache(t)
 	withSysSql(t, c2, func(context.Context, string, uint32, string, string) (executor.Result, error) {
 		return varRows(t, mp, maxGpuIndexCacheSizeVar, "512"), nil
 	})
-	require.Equal(t, gpuCap(512), c2.sysCacheLimit(sysProc()),
+	require.Equal(t, gpuCap(512), c2.gov().sysCacheLimit(sysProc()),
 		"an unset host cap stays unlimited when only the device cap is set")
 }
 
@@ -435,7 +435,7 @@ func TestGovernorSysReadUnparseableValueIsIgnored(t *testing.T) {
 	withSysSql(t, c, func(context.Context, string, uint32, string, string) (executor.Result, error) {
 		return varRows(t, mp, maxIndexCacheSizeVar, "8MB"), nil
 	})
-	require.Equal(t, caps{}, c.sysCacheLimit(sysProc()))
+	require.Equal(t, caps{}, c.gov().sysCacheLimit(sysProc()))
 }
 
 // The SYS cap read through the catalog binds a real load, end to end.
@@ -673,7 +673,7 @@ func TestGovernorSizeReadsDoNotRaceEviction(t *testing.T) {
 			defer wg.Done()
 			for n := 0; n < 40; n++ {
 				c.Remove(keys[n%len(keys)])
-				c.HouseKeeping()
+				houseKeepingSync(t, c)
 			}
 		}(i)
 	}
@@ -692,19 +692,19 @@ func TestGovernorSysReadFailureIsRateLimited(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		require.Equal(t, caps{}, c.sysCacheLimit(sysProc()),
+		require.Equal(t, caps{}, c.gov().sysCacheLimit(sysProc()),
 			"never having read a value is unlimited, the unconfigured behaviour")
 	}
 	require.Equal(t, 1, calls, "the failed attempt must suppress retries for sysLimitTTL")
 
 	// Past the TTL it tries again, and a recovered catalog is picked up.
-	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
 	mp := mpool.MustNewZero()
 	runSysSql = func(context.Context, string, uint32, string, string) (executor.Result, error) {
 		calls++
 		return varRows(t, mp, maxIndexCacheSizeVar, "512"), nil
 	}
-	require.Equal(t, hostCap(512), c.sysCacheLimit(sysProc()))
+	require.Equal(t, hostCap(512), c.gov().sysCacheLimit(sysProc()))
 	require.Equal(t, 2, calls)
 }
 
@@ -795,7 +795,7 @@ func TestSearchRetryDoesNotWaitWhenNothingIsBeingDestroyed(t *testing.T) {
 	require.EqualValues(t, 1, algo.calls.Load(), "and the backend is called once, not spun on")
 }
 
-// The FIRST sys-cap read has no last-known value to fall back on: c.sysLimit.value is still
+// The FIRST sys-cap read has no last-known value to fall back on: c.gov().sysLimit.value is still
 // the zero caps, which every reader interprets as unlimited. A concurrent miss arriving while
 // that first query is in flight must therefore WAIT for the real cap rather than be told the
 // governor is unconfigured -- otherwise the whole window (up to the query timeout, at CN
@@ -817,11 +817,11 @@ func TestGovernorFirstSysReadBlocksConcurrentReaders(t *testing.T) {
 	})
 
 	firstDone := make(chan caps, 1)
-	go func() { firstDone <- c.sysCacheLimit(sysProc()) }()
+	go func() { firstDone <- c.gov().sysCacheLimit(sysProc()) }()
 	<-entered // the first read is now in flight, holding the claim
 
 	secondDone := make(chan caps, 1)
-	go func() { secondDone <- c.sysCacheLimit(sysProc()) }()
+	go func() { secondDone <- c.gov().sysCacheLimit(sysProc()) }()
 
 	// The second caller must not have answered yet: an answer here could only be the zero
 	// caps, i.e. "unlimited".
@@ -855,16 +855,16 @@ func TestGovernorSysRefreshServesLastKnownWithoutBlocking(t *testing.T) {
 	})
 
 	// First read completes and establishes the known cap.
-	require.Equal(t, hostCap(512), c.sysCacheLimit(sysProc()))
+	require.Equal(t, hostCap(512), c.gov().sysCacheLimit(sysProc()))
 
 	// Age it out so the next call refreshes, and hold that refresh open.
-	c.sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
-	go func() { c.sysCacheLimit(sysProc()) }()
+	c.gov().sysLimit.fetched = time.Now().Add(-2 * sysLimitTTL)
+	go func() { c.gov().sysCacheLimit(sysProc()) }()
 	<-entered
 
 	// A concurrent reader is served the last-known cap immediately.
 	done := make(chan caps, 1)
-	go func() { done <- c.sysCacheLimit(sysProc()) }()
+	go func() { done <- c.gov().sysCacheLimit(sysProc()) }()
 	select {
 	case got := <-done:
 		require.Equal(t, hostCap(512), got, "served from the memo, not blocked on the refresh")
@@ -872,4 +872,13 @@ func TestGovernorSysRefreshServesLastKnownWithoutBlocking(t *testing.T) {
 		t.Fatal("a refresh must not park readers that already have a value")
 	}
 	close(release)
+}
+
+// houseKeepingSync runs a housekeeping pass and waits for its cap refresh, which HouseKeeping
+// dispatches to its own goroutine so a slow catalog cannot stall the lifecycle loop.
+func houseKeepingSync(t *testing.T, c *VectorIndexCache) {
+	t.Helper()
+	c.HouseKeeping()
+	require.Eventually(t, func() bool { return !c.capRefreshing.Load() }, 30*time.Second, time.Millisecond,
+		"the cap refresh never finished")
 }
