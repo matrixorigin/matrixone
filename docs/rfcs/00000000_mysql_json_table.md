@@ -1,4 +1,5 @@
 - Status: drafted
+- Revision: 2026-09-07 semantic review repair
 - Start Date: 2026-09-04
 - Authors: MatrixOne SQL team
 - Implementation PR: pending (issue #28036)
@@ -60,8 +61,15 @@ on_error: {NULL | DEFAULT json_string | ERROR} ON ERROR
 `AS` is optional, but the alias itself is mandatory. Paths and defaults are
 string literals and are validated while binding. Beginning with MySQL 8.0.27,
 output column names are compared case-insensitively; duplicate names are a
-bind error. The parser accepts the historical `ON ERROR ... ON EMPTY` order,
-records that order in the AST, and lets execution emit MySQL warning 3961.
+bind error. The parser accepts the historical `ON ERROR ... ON EMPTY` order
+and records that order in the AST. It emits MySQL 8.0.46 warning **1287**
+(`ER_WARN_DEPRECATED_SYNTAX`) with the exact message
+`Specifying an ON EMPTY clause after the ON ERROR clause in a JSON_TABLE column definition is deprecated syntax and will be removed in a future release. Specify ON EMPTY before ON ERROR instead.`
+at parse time, once for each reversed column occurrence. This is a syntax
+warning, not an execution warning: it is produced for `PREPARE` while the
+statement is parsed, is not suppressed by an empty source, and is not emitted
+again by `EXECUTE` unless the statement is parsed again. It is kept separate
+from runtime conversion/truncation diagnostics.
 
 `tree.TableFunction` gains a dedicated `JSONTable` variant. The variant stores
 the source expression, root path, and a recursive column tree. Each column
@@ -76,13 +84,29 @@ keeps the source expression in `TblFuncExprList`. The immutable column tree is
 serialized into `TableFunction.Param` as a versioned JSON object:
 
 ```json
-{"version":1,"root_path":"$[*]","columns":[...]}
+{
+  "version": 1,
+  "root_path": "$[*]",
+  "columns": [...],
+  "apply_conditions": ["<base64 plan.Expr>"]
+}
 ```
 
 The payload is an execution detail and does not change `proto/plan.proto`,
 catalog metadata, persisted table definitions, or the shape of ordinary
 result vectors. A newer CN must reject an unknown payload version explicitly;
-an older CN must never interpret it as another table function.
+an older CN must never interpret it as another table function. `apply_conditions`
+is optional and is present only for a correlated JSON_TABLE on the right side
+of APPLY. Each entry is the canonical protobuf serialization of a bound
+`plan.Expr`, encoded as standard base64 by the JSON serializer. `Node_APPLY.OnList`
+remains the logical source of truth. The planner binds and performs the final
+column-reference remap first, then serializes the remapped expressions; any
+later remap must re-encode the payload before dispatch. The remote CN decodes,
+validates, and installs the same conditions in its `pipeline.Apply` instance.
+Missing, malformed, or stale condition payloads are deterministic plan errors,
+never an instruction to execute the right side without `ON` filtering. This
+transport mirror uses the existing `TableFunction.Param` and remote execution
+handoff and does not add a catalog or protobuf migration.
 
 ### Path iteration
 
@@ -114,14 +138,46 @@ missing match is handled only by `ON EMPTY`. Invalid JSON documents, invalid
 paths, and invalid DEFAULT JSON remain statement errors and are never hidden by
 an `ON ERROR` clause.
 
+A `PATH` column first evaluates all matches for the current row source. One
+match is converted directly. Multiple matches are aggregated, in path order,
+into one JSON array only when the target type is JSON; for every non-JSON target
+they are a conversion error and therefore use that column's `ON ERROR` action.
+For example, a JSON column at `'$[*]'` over `[1,2]` receives `[1,2]`, while an
+`INT` column at the same path takes `ON ERROR`. `EXISTS` only tests whether at
+least one match exists and never builds that array. A missing path remains zero
+matches and is handled by `ON EMPTY`.
+
+The iterator must not build an auxiliary slice containing every match. A JSON
+array result is the permitted exception: it is the final output cell and is
+appended incrementally while matches are consumed. The builder is bounded by
+the existing MatrixOne JSON/varlen cell limit
+`JSON_TABLE_MAX_CELL_BYTES = types.MaxBlobLen` (64 MiB). Crossing that limit,
+or an mpool/vector allocation failure while constructing the final cell, is a
+statement error with partial builder state released; it is not converted into
+`ON ERROR`. Tests cover one match, many matches, the cell limit, and allocation
+failure separately from the iterator's bounded traversal memory.
+
 ### Row generation and lifecycle
 
 The executor keeps a root frame and one frame per active `NESTED` level. A
 frame owns its iterator, current match, child cursor, and ordinality. Parent
 columns are copied into every produced child row. Sibling nested clauses are
-evaluated additively. When a nested path has no match, exactly one row is
-produced with that nested subtree NULL-complemented. `FOR ORDINALITY` starts at
-one for each applicable row source.
+evaluated additively, in declaration order, rather than as a Cartesian product.
+For one parent row, let each sibling nested clause produce a row set `R_i`.
+The output is the concatenation of the non-empty `R_i` sets. A sibling with an
+empty `R_i` contributes NULL-complemented columns to rows produced by other
+siblings, but does not create a row of its own. Only when **all** sibling sets
+are empty does the parent emit one NULL-complemented row. Thus sibling
+cardinalities `0/0`, `0/N`, `N/0`, and `N/M` produce respectively one, `N`,
+`N`, and `N+M` rows. The same rule is applied recursively at every nested level;
+a direct match of a nested path remains a valid row source even when one of its
+child nested clauses is empty. An unmatched nested subtree is set directly to
+SQL NULL, including when its columns specify `DEFAULT ... ON EMPTY`; the pinned
+MySQL 8.0.46 source/result oracle takes precedence over a handbook reading.
+`FOR ORDINALITY` starts at one and advances only for an actual match, never for
+a NULL-complement row. For example, a parent `{"a":[],"b":[10,20]}` with
+sibling paths `a` and `b` returns `(NULL,10)` and `(NULL,20)` only; a parent
+with both arrays empty returns one all-NULL sibling row.
 
 `Call` fills at most the normal MatrixOne output batch and persists all cursors
 needed for the next call. `Reset` returns the state to the beginning while
@@ -142,24 +198,83 @@ function scans so they are not evaluated once per left row.
 The Apply operator must treat a right batch that is completely removed by the
 `ON` predicate as “no match”; this is distinct from a function that produced a
 right row. This is required for `LEFT JOIN JSON_TABLE(...) ON predicate`.
+The condition is evaluated on every CN from the `apply_conditions` payload
+described above. A correlated LEFT join whose right rows all fail `ON` emits
+exactly one left row with the JSON_TABLE columns NULL-complemented; a correlated
+INNER/CROSS join emits no row. A multi-CN test must exercise a function that
+does produce right rows, make the predicate reject every one, and assert that
+the coordinator returns exactly one NULL-complemented row rather than the
+unfiltered right rows.
 
 ### Diagnostics
 
 JSON_TABLE diagnostics use the existing session warning sink and remote terminal
-envelope. A keyed-once diagnostic API is added internally so a statement emits
-one deprecation warning for reverse clause order and one truncation warning for
-multiple truncated values, even when execution spans batches or CNs. Warning
-storage remains bounded for `SHOW WARNINGS`; the total protocol warning count
-is maintained separately.
+envelope, but syntax and execution diagnostics have different phases and count
+rules.
+
+* **Parse/prepare phase.** Reverse clause order emits code 1287 and the exact
+  message frozen in the SQL/AST section once per reversed column occurrence.
+  The occurrence ordinal is part of the local diagnostic identity, so two
+  reversed columns produce two warnings. This warning is not keyed together
+  with runtime truncation and is not re-emitted by a later `EXECUTE`.
+* **Execution phase.** Conversion, truncation, and invalid-value warnings use
+  the MySQL 8.0.46 code/message pair for that condition. A warning declared
+  `statement_once` (including the JSON_TABLE truncation warning) is emitted at
+  most once per statement/table-function/column semantic key, across input
+  rows, output batches, CNs, and retries. Ordinary row-level warnings retain
+  `each_event` semantics and are never accidentally deduplicated.
+
+The existing terminal JSON envelope is extended, without a protobuf/catalog
+migration, with a statement diagnostic scope and per-record fields equivalent
+to:
+
+```json
+{
+  "warning_scope": "<coordinator statement id>",
+  "warning_diagnostics": [
+    {
+      "key": "<stable diagnostic key>",
+      "mode": "statement_once|each_event",
+      "phase": "parse|execute",
+      "code": 1265,
+      "message": "..."
+    }
+  ]
+}
+```
+
+The stable key contains the coordinator statement id, table-function/operator
+ordinal, diagnostic kind, and column/parse-occurrence ordinal; it deliberately
+does not contain CN id, fragment id, batch id, or retry id. The coordinator
+keeps a statement-scoped `seen` set before increasing `WarningCount`, and
+retains at most the existing bounded number of records for `SHOW WARNINGS`.
+Therefore two CNs reporting the same keyed-once event increase the total by
+one even when the retained list is already full. The set is reset after the
+statement (including failed/cancelled attempts); a new statement receives a
+new scope. Missing diagnostic keys on a JSON_TABLE `statement_once` event from
+a CN that claims JSON_TABLE support are a protocol/version error, not a
+fallback to blind accumulation.
 
 ### Compatibility and rollout
 
 The feature introduces no catalog or protobuf migration. During a rolling
 upgrade, a statement using JSON_TABLE is accepted only when the executing CNs
 understand payload version 1; an older CN returns a deterministic unsupported
-feature/version error rather than misinterpreting the plan. Rollback is
-operationally safe because existing statements and stored objects contain no
-JSON_TABLE payload.
+feature/version error rather than misinterpreting the plan. The same gate
+applies to `CREATE VIEW` and `ALTER VIEW` containing JSON_TABLE.
+
+Views are a deliberate compatibility boundary: MatrixOne persists the view SQL
+inside `ViewData.Stmt`/`plan.ViewDef.View`, and `bindView()` reparses that SQL on
+the next read. An older binary therefore cannot read a JSON_TABLE view. The
+supported downgrade rule is fail-closed: a downgrade preflight must reject the
+downgrade while any view definition contains JSON_TABLE, and the operator must
+drop or replace those views with syntax understood by the target version before
+retrying. There is no automatic SQL rewrite and no claim that catalog-format
+compatibility makes the view semantically downgrade-safe. If an environment
+cannot inventory views, downgrade with JSON_TABLE views is unsupported. The
+testing contract includes create view, restart/read on the new version, an old
+version read that returns the deterministic unsupported-feature error, and the
+successful drop/replace prerequisite before downgrade.
 
 ## Drawbacks
 
@@ -201,16 +316,39 @@ The frozen MySQL 8.0.46 corpus covers:
 - numeric, character, binary, temporal, year, and JSON target types;
 - all empty/error actions, invalid defaults, and reverse clause order;
 - nested and sibling row cardinality, ordinality, and NULL-complement;
+- sibling cardinality matrix `0/0`, `0/N`, `N/0`, and `N/M`, including the
+  no-match nested `DEFAULT ON EMPTY` oracle that still returns NULL;
 - independent and correlated INNER/CROSS/LEFT joins;
-- prepared statements, views, remote CN execution, `SHOW WARNINGS`, cancellation,
-  early LIMIT, and repeated reset/free;
-- peak memory and first-batch latency for documents with increasing match counts.
+- prepared statements, including direct/prepare/execute reverse-clause
+  warning timing, empty sources, and two reversed columns;
+- views across restart and old-version read/downgrade gates;
+- remote CN execution, remapped APPLY conditions, and LEFT APPLY where every
+  right row fails `ON`, yielding exactly one NULL-complemented row;
+- `SHOW WARNINGS`, keyed-once warning merging across CNs/batches/retries,
+  ordinary row-warning counts, bounded retention, cancellation, early LIMIT,
+  and repeated reset/free;
+- single-column multi-match conversion: JSON array aggregation versus
+  non-JSON `ON ERROR`, the 64 MiB cell boundary, allocation failure cleanup,
+  and peak iterator memory/first-batch latency for documents with increasing
+  match counts.
 
 Each implementation PR adds focused unit tests; public behavior is covered by
 `test/distributed/cases/function/table_func_json_table.test` and its checked-in
 `.result` output. Parser generation must remain conflict-free and deterministic.
+The pinned source-of-truth anchors are MySQL 8.0.46 `sql_yacc.yy` for the
+parse-time 1287 warning, `table_function.cc` for sibling row production and
+multi-match conversion, and `mysql-test/suite/json/r/json_table.result` for
+the executable oracle, including unmatched nested paths with `DEFAULT`.
 
-## Unresolved Questions
+## Review disposition and unresolved questions
 
-None. Any behavior not explicitly listed above is resolved by the pinned
-MySQL 8.0.46 differential corpus before PR4 is marked Ready.
+The six review findings are resolved in this revision: sibling fallback is
+defined by the whole parent row source; APPLY predicates have a versioned
+remote representation and post-remap encoding point; reverse-order syntax is
+fixed at code 1287 with parse/prepare timing and occurrence counting; keyed-once
+diagnostics carry a cross-CN identity and merge lifecycle; JSON_TABLE views have
+an explicit downgrade gate; and multi-match PATH conversion distinguishes the
+final JSON cell from the forbidden auxiliary match slice with a concrete size
+limit and allocation-failure rule. No unresolved design question remains.
+Any behavior not explicitly listed above is resolved by the pinned MySQL 8.0.46
+differential corpus before PR4 is marked Ready.
