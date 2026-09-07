@@ -71,6 +71,18 @@ func runTestWithQueryServiceHandlers(
 	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
 	fn func(cc *clientConn, addr string),
 ) {
+	runTestWithQueryServiceHandlersAndRefresh(
+		t, cn, migrateConnToHandler, resetSessionHandler, nil, fn)
+}
+
+func runTestWithQueryServiceHandlersAndRefresh(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	refreshSessionAuthHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -148,6 +160,19 @@ func runTestWithQueryServiceHandlers(
 				}
 				return nil
 			}, false)
+			if refreshSessionAuthHandler == nil {
+				refreshSessionAuthHandler = func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+					if req.RefreshSessionAuthRequest == nil {
+						return moerr.NewInternalError(ctx, "bad request")
+					}
+					resp.RefreshSessionAuthResponse = &pb.RefreshSessionAuthResponse{
+						AuthString: []byte("auth"),
+						Success:    true,
+					}
+					return nil
+				}
+			}
+			qs.AddHandleFunc(pb.CmdMethod_RefreshSessionAuth, refreshSessionAuthHandler, false)
 			err = qs.Start()
 			assert.NoError(t, err)
 

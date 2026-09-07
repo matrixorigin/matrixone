@@ -145,6 +145,7 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	c.retryTimes = 0
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -289,6 +290,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
@@ -469,6 +471,7 @@ func (c *Compile) clear() {
 	c.fill = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
 	c.db = ""
@@ -6366,7 +6369,8 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 				overflow = true
 			}
 			if !overflow && topN <= mergeTopResidentPlanThreshold {
-				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+				// Spilling Top still retains K keys/references per worker. Keep
+				// external Order for large prefixes, even with a tiny final LIMIT.
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
@@ -6391,26 +6395,138 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 
 const mergeTopResidentPlanThreshold uint64 = 8192 * 2
 
-// canUseResidentMergeTop limits the resident-only global MergeTop to small,
-// statically bounded plans. Large or runtime limits use the existing spill-capable
-// Top and MergeOrder operators instead.
+// Streaming has an extra k-way merge at each CN boundary. Keep the existing
+// MergeOrder path while its estimated candidates fit in a few spill windows;
+// beyond that point bounded hierarchical merging avoids materializing and
+// repeatedly spilling a much larger P*K candidate set.
+const distributedTopNStreamingThresholdBytes = 4 * 128 * mpool.MB
+
+// canUseResidentMergeTop limits the collection-based global MergeTop fallback
+// to small, statically bounded plans. When ordered streams are unavailable,
+// larger or runtime limits retain the spill-capable Top and MergeOrder path.
 func canUseResidentMergeTop(topN *plan.Expr) bool {
-	if topN == nil {
+	value, ok := staticTopNValue(topN)
+	return ok && value <= mergeTopResidentPlanThreshold
+}
+
+// residentTopPayloadFits proves a bound from types, never from statistics.
+// Varlen replacement can append dead area even with a fixed survivor count.
+// Leave room for headers, input copies and growth/shuffle overlap.
+func residentTopPayloadFits(node *plan.Node, topN *plan.Expr) bool {
+	rows, ok := staticTopNValue(topN)
+	if !ok || node == nil || len(node.ProjectList) == 0 {
 		return false
+	}
+	// These nodes run compileSort before their projection (and TIME_WINDOW
+	// before aggregation). Their ProjectList does not describe Top's input.
+	if node.NodeType == plan.Node_SORT || node.NodeType == plan.Node_TIME_WINDOW {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	remaining := uint64(64*mpool.MB/4) / rows
+	check := func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		typ := types.T(expr.Typ.Id)
+		if typ.TypeLen() <= 0 || !typ.IsFixedLen() {
+			return false
+		}
+		bytes := uint64(typ.TypeLen()) + 1 // null bitmap, conservatively per row
+		if bytes > remaining {
+			return false
+		}
+		remaining -= bytes
+		return true
+	}
+	for _, expr := range node.ProjectList {
+		if !check(expr) {
+			return false
+		}
+	}
+	for _, spec := range node.OrderBy {
+		if spec == nil || !check(spec.Expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func staticTopNValue(topN *plan.Expr) (uint64, bool) {
+	if topN == nil {
+		return 0, false
 	}
 	literal, ok := topN.Expr.(*plan.Expr_Lit)
 	if !ok || literal.Lit == nil {
-		return false
+		return 0, false
 	}
 	value, ok := literal.Lit.Value.(*plan.Literal_U64Val)
-	return ok && value.U64Val <= mergeTopResidentPlanThreshold
+	if !ok {
+		return 0, false
+	}
+	return value.U64Val, true
+}
+
+func shouldUseDistributedOrderedTop(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+) bool {
+	if topN == nil {
+		return false
+	}
+	staticLimit, hasStaticLimit := staticTopNValue(topN)
+	if hasStaticLimit && staticLimit == 0 {
+		return false
+	}
+	// Large static limits already use spill-capable Top + MergeOrder below
+	// the performance threshold. Small/runtime limits may otherwise retain
+	// payload, so lack of a type-based bound must select ordered streams.
+	if (!hasStaticLimit || staticLimit <= mergeTopResidentPlanThreshold) &&
+		!residentTopPayloadFits(node, topN) {
+		return true
+	}
+	if node == nil || node.Stats == nil ||
+		node.Stats.Cost <= 0 || node.Stats.Rowsize <= 0 ||
+		math.IsNaN(node.Stats.Cost) || math.IsInf(node.Stats.Cost, 0) ||
+		math.IsNaN(node.Stats.Rowsize) || math.IsInf(node.Stats.Rowsize, 0) {
+		// Missing or invalid estimates must choose the bounded path.
+		return true
+	}
+	fanout := 0
+	for _, scope := range ss {
+		if scope == nil {
+			continue
+		}
+		fanout += max(1, scope.NodeInfo.Mcpu)
+	}
+	if fanout == 0 {
+		return true
+	}
+	candidateRows := node.Stats.Cost
+	if hasStaticLimit {
+		candidateRows = math.Min(
+			candidateRows,
+			float64(staticLimit)*float64(fanout),
+		)
+	}
+	candidateBytes := candidateRows * node.Stats.Rowsize
+	return math.IsInf(candidateBytes, 0) ||
+		candidateBytes > float64(distributedTopNStreamingThresholdBytes)
 }
 
 func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
+	useOrderedStreams := supportsDistributedOrderedTop(c.proc.GetService()) &&
+		hasMaterializedTopOrderColumns(node.OrderBy) &&
+		shouldUseDistributedOrderedTop(node, topN, ss)
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructTop(node, topN)
+		// No ordered receiver consumes this single-worker result. Top owns
+		// actual payload admission and can retain fitting small results.
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -6421,32 +6537,56 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
 		op := constructTop(node, topN)
+		if useOrderedStreams {
+			op.WithOrderedOutput()
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
+	if useOrderedStreams {
+		rs := c.newMergeTopScope(node, topN, ss)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
+	// During a rolling upgrade an older CN can still interleave its DOP
+	// workers. Keep the collection-based path until every participant supports
+	// the ordered-stream boundary.
 	ss = c.mergeShuffleScopesIfNeeded(ss, false)
 	rs := c.newMergeScope(ss)
-
 	currentFirstFlag = c.anal.isFirst
-	if canUseResidentMergeTop(topN) {
+	if canUseResidentMergeTop(topN) && residentTopPayloadFits(node, topN) {
 		arg := constructMergeTop(node, topN)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
-
 	mergeOrder := constructMergeOrder(node)
 	mergeOrder.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeOrder)
 	c.anal.isFirst = false
-
 	globalLimit := constructLimit(&plan.Node{Limit: topN})
 	globalLimit.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	rs.setRootOperator(globalLimit)
 	c.anal.isFirst = false
 	return []*Scope{rs}
+}
+
+func hasMaterializedTopOrderColumns(orderBy []*plan.OrderBySpec) bool {
+	if len(orderBy) == 0 {
+		return false
+	}
+	for _, spec := range orderBy {
+		if spec == nil || spec.Expr == nil {
+			return false
+		}
+		if _, ok := spec.Expr.Expr.(*plan.Expr_Col); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
@@ -7189,6 +7329,19 @@ func supportsRemoteGroupingSetExpansion(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion49
+}
+
+func supportsDistributedOrderedTop(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion53
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
@@ -7974,6 +8127,69 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
+// newMergeTopScope connects one ordered stream from every input scope to a
+// leaf MergeTop. Runtime DOP is consolidated inside each input CN before its
+// connector writes this edge, so every receiver has exactly one producer.
+func (c *Compile) newMergeTopScope(node *plan.Node, topN *plan.Expr, ss []*Scope) *Scope {
+	rs := c.newEmptyMergeScope()
+	ss = c.groupOrderedTopRemoteRunDependenciesByCNIfNeeded(node, topN, ss, rs.NodeInfo)
+	rs.PreScopes = ss
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	if len(ss) > 0 {
+		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
+	}
+
+	arg := constructMergeTop(node, topN).WithOrderedStreams()
+	c.hasMergeOp = true
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(arg)
+
+	for i := range ss {
+		reg := rs.Proc.Reg.MergeReceivers[i]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+		connArg := connector.NewArgument().WithReg(reg)
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+	}
+	return rs
+}
+
+// newMergeTopScopeByCN keeps all same-CN receiver dependencies in one remote
+// execution tree while preserving one ordered stream per child. A plain Merge
+// cannot be used here because interleaving sorted child batches would invalidate
+// the stream contract consumed by the coordinator MergeTop.
+func (c *Compile) newMergeTopScopeByCN(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+	nodeinfo engine.Node,
+) *Scope {
+	rs := newScope(Remote)
+	rs.NodeInfo = scopeNodeWithMcpu(nodeinfo, 1)
+	rs.PreScopes = ss
+	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	if len(ss) > 0 {
+		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
+	}
+
+	arg := constructMergeTop(node, topN).WithOrderedStreams()
+	c.hasMergeOp = true
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	rs.setRootOperator(arg)
+
+	for i := range ss {
+		reg := rs.Proc.Reg.MergeReceivers[i]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+		connArg := connector.NewArgument().WithReg(reg)
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+		ss[i].IsEnd = true
+	}
+	return rs
+}
+
 // newScopeListOnSingleWorkerStage builds a single-worker stage. If query
 // placement already collapsed to one worker, inherit that worker; otherwise
 // keep the legacy current-CN coordinator for multi-CN stages.
@@ -8203,18 +8419,55 @@ func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(
 	ss []*Scope,
 	mergeNode engine.Node,
 ) []*Scope {
-	stageNodes := shuffleBucketStageNodes(ss)
-	if len(ss) <= len(stageNodes) {
+	stageNodes, needed := remoteRunDependenciesNeedGroupingByCN(ss, mergeNode)
+	if !needed {
 		return ss
 	}
+	return c.mergeScopesByStageNodes(ss, stageNodes)
+}
 
+func remoteRunDependenciesNeedGroupingByCN(
+	ss []*Scope,
+	mergeNode engine.Node,
+) (engine.Nodes, bool) {
+	stageNodes := shuffleBucketStageNodes(ss)
+	if len(ss) <= len(stageNodes) {
+		return stageNodes, false
+	}
 	for _, scope := range ss {
 		if !sameExecutionNode(scope.NodeInfo, mergeNode) &&
 			findPipelineExternalLocalReceiver(scope) != nil {
-			return c.mergeScopesByStageNodes(ss, stageNodes)
+			return stageNodes, true
 		}
 	}
-	return ss
+	return stageNodes, false
+}
+
+func (c *Compile) groupOrderedTopRemoteRunDependenciesByCNIfNeeded(
+	node *plan.Node,
+	topN *plan.Expr,
+	ss []*Scope,
+	mergeNode engine.Node,
+) []*Scope {
+	stageNodes, needed := remoteRunDependenciesNeedGroupingByCN(ss, mergeNode)
+	if !needed {
+		return ss
+	}
+
+	rs := make([]*Scope, 0, len(stageNodes))
+	for i := range stageNodes {
+		cn := stageNodes[i]
+		currentSS := make([]*Scope, 0, cn.Mcpu)
+		for j := range ss {
+			if sameExecutionNode(ss[j].NodeInfo, cn) {
+				currentSS = append(currentSS, ss[j])
+			}
+		}
+		if len(currentSS) > 0 {
+			rs = append(rs, c.newMergeTopScopeByCN(node, topN, currentSS, cn))
+		}
+	}
+	return rs
 }
 
 // shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level

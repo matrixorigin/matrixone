@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -640,6 +641,49 @@ func TestParallelRuntimeClonesJoinAllocationAttempt(t *testing.T) {
 	require.Len(t, exported, 1)
 	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
 	require.Zero(t, exported[0].Used)
+	parallel.release()
+	template.Release()
+}
+
+func TestOrderedTopRuntimeGatherJoinsAllocationAttempt(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	c := newTestAllocationLifecycleCompile(t, registry,
+		func(mpool.AllocationAccountTerminalSnapshot) {})
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(100)
+	orderBy := []*plan.OrderBySpec{{Expr: &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}}}
+	template := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy).WithOrderedOutput()
+	source := &Scope{
+		RootOp: template,
+		Proc:   c.proc,
+		NodeInfo: engine.Node{
+			Mcpu: 2,
+		},
+	}
+	c.scopes = []*Scope{source}
+	_, err = c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+
+	parallel, workers := newParallelScope(source)
+	require.Len(t, workers, 2)
+	require.NoError(t, c.attachRuntimeAllocationOwners([]*Scope{parallel}))
+	gather := parallel.RootOp.(*mergetop.MergeTop)
+	require.NoError(t, gather.Prepare(parallel.Proc))
+	for _, worker := range workers {
+		workerTop := worker.RootOp.(*connector.Connector).
+			GetOperatorBase().GetChildren(0).(*top.Top)
+		require.NoError(t, workerTop.Prepare(worker.Proc))
+		workerTop.Free(worker.Proc, false, nil)
+	}
+	for _, reg := range parallel.Proc.Reg.MergeReceivers {
+		require.True(t, reg.SendEnd())
+	}
+	gather.Free(parallel.Proc, false, nil)
+	require.NoError(t, c.finishAllocationAccountAttempt())
+
 	parallel.release()
 	template.Release()
 }
