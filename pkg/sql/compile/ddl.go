@@ -1506,8 +1506,8 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
-	if isTemp && !c.isInternal && c.proc.Base.IsFrontend {
-		if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok && supportsSessionTemporaryDDL(c.proc.GetService()) {
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
 			return s.createSessionTemporaryTable(c, owner, tableCreated)
 		}
 	}
@@ -4007,8 +4007,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		return err
 	}
-	if isTemp && !c.isInternal && c.proc.Base.IsFrontend && supportsSessionTemporaryDDL(c.proc.GetService()) {
-		if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
 			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
 			return nil
 		}
