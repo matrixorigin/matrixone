@@ -130,6 +130,42 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	}
 }
 
+func jsonUnquoteReturnType(parameters []types.Type) types.Type {
+	if len(parameters) != 1 {
+		return types.T_varchar.ToType()
+	}
+	source := parameters[0]
+	switch source.Oid {
+	case types.T_char, types.T_varchar:
+		// JSON_UNQUOTE always produces utf8mb4_bin text.  The source width is
+		// still the correct persistent bound for the passthrough path, but the
+		// input collation must not leak into the result metadata.
+		return types.NewWithCharset(types.T_varchar, source.Width, 0, types.CharsetUTF8MB4Bin)
+	case types.T_text:
+		return types.NewWithCharset(types.T_text, source.Width, 0, types.CharsetUTF8MB4Bin)
+	default:
+		return types.NewWithCharset(types.T_varchar, types.T_varchar.ToType().Width, 0, types.CharsetUTF8MB4Bin)
+	}
+}
+
+// jsonUnquoteTypeMatch keeps the original string domain visible to the
+// executor.  In particular, a binary value must reach JsonUnquote unchanged
+// so a NULL binary row can propagate NULL while a non-NULL binary row gets the
+// charset error at execution time.  Non-string scalar values are rejected
+// before the generic string cast path can turn DATE/TIME/etc. into text.
+func jsonUnquoteTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	input := inputs[0]
+	if input.Oid != types.T_any && input.Oid != types.T_json && !input.Oid.IsMySQLString() {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool {
+		return oid.IsMySQLString()
+	})
+}
+
 func replacementStringReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 3 {
 		return types.T_varchar.ToType()
@@ -360,6 +396,64 @@ func derivedStringReturnType(parameters []types.Type, sourceIndex int, resultOID
 	return textStringResultType(declaredTextCharacterBound(parameters[sourceIndex]), parameters[sourceIndex].Charset)
 }
 
+// regexpSubstrReturnType derives the result bound from the subject and the
+// effective text/binary domain from the subject-pattern matching pair. Other
+// string operands may participate in compatibility checks, but cannot change
+// the matcher or result domain.
+func regexpSubstrReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varchar.ToType()
+	}
+	operandCount := min(RegexpMatchStringOperandCount, len(parameters))
+	if hasBinaryStringDomain(parameters[:operandCount]) {
+		return binaryStringResultType(declaredStringByteBound(parameters[0]))
+	}
+	return textStringResultType(
+		declaredTextCharacterBound(parameters[0]), parameters[0].Charset)
+}
+
+// regexpReplaceReturnType keeps the SUBSTR domain rule but accounts for
+// replacement expansion. A non-empty regexp can still match zero width at
+// every source boundary, so S+(S+1)*R is the conservative maximum for a
+// replace-all call. The callback cannot inspect the occurrence value and must
+// therefore use the replace-all bound for every arity.
+func regexpReplaceReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	operandCount := min(RegexpMatchStringOperandCount, len(parameters))
+	binary := hasBinaryStringDomain(parameters[:operandCount])
+
+	var source, replacement stringResultBound
+	if binary {
+		source = declaredStringByteBound(parameters[0])
+		replacement = declaredStringByteBound(parameters[2])
+	} else {
+		source = declaredTextCharacterBound(parameters[0])
+		if types.StaticStringDomain(parameters[2]) == types.StringDomainBinary {
+			// Windows-1252 conversion maps each replacement byte to one result
+			// character in a text-domain match.
+			replacement = declaredStringByteBound(parameters[2])
+		} else {
+			replacement = declaredTextCharacterBound(parameters[2])
+		}
+	}
+	bound := unknownStringResultBound()
+	if !source.unknown && !replacement.unknown {
+		matchBound := addStringResultBounds(source, stringResultBound{bytes: 1})
+		if !matchBound.unknown {
+			bound = addStringResultBounds(
+				source,
+				multiplyStringResultBound(replacement, matchBound.bytes),
+			)
+		}
+	}
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, parameters[0].Charset)
+}
+
 // ConvertReturnTypeForBinder derives CONVERT metadata from the source types
 // before the executor's implicit VARCHAR cast is inserted.
 func ConvertReturnTypeForBinder(parameters []types.Type) types.Type {
@@ -552,7 +646,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ORD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1258,15 +1352,13 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: JSON_UNQUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonUnquoteTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_json},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1274,9 +1366,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1284,9 +1374,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1294,9 +1382,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    jsonUnquoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
 				},
@@ -1764,6 +1850,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return jsonOverlaps
+				},
+			},
+		},
+	},
+	// Internal implementation of the MySQL MEMBER [OF] JSON operator.
+	{
+		functionId: INTERNAL_JSON_MEMBER_OF,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonMemberOfCheckFn,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return jsonMemberOf
 				},
 			},
 		},
@@ -2879,10 +2985,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `not_reg_match`
 	{
-		functionId: NOT_REG_MATCH,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:          NOT_REG_MATCH,
+		class:               plan.Function_STRICT,
+		layout:              COMPARISON_OPERATOR,
+		checkFn:             regexpStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
@@ -2952,10 +3059,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `reg_match`
 	{
-		functionId: REG_MATCH,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:          REG_MATCH,
+		class:               plan.Function_STRICT,
+		layout:              COMPARISON_OPERATOR,
+		checkFn:             regexpStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
@@ -2973,10 +3081,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `regexp_instr`
 	{
-		functionId: REGEXP_INSTR,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:          REGEXP_INSTR,
+		class:               plan.Function_STRICT,
+		layout:              STANDARD_FUNCTION,
+		checkFn:             regexpStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
@@ -3024,10 +3133,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `regexp_like`
 	{
-		functionId: REGEXP_LIKE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:          REGEXP_LIKE,
+		class:               plan.Function_STRICT,
+		layout:              STANDARD_FUNCTION,
+		checkFn:             regexpStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
@@ -3055,17 +3165,18 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `regexp_replace`
 	{
-		functionId: REGEXP_REPLACE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:          REGEXP_REPLACE,
+		class:               plan.Function_STRICT,
+		layout:              STANDARD_FUNCTION,
+		checkFn:             regexpReplaceStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpReplaceStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpReplaceReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3075,7 +3186,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpReplaceReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3085,7 +3196,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpReplaceReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3096,17 +3207,18 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `regexp_substr`
 	{
-		functionId: REGEXP_SUBSTR,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:          REGEXP_SUBSTR,
+		class:               plan.Function_STRICT,
+		layout:              STANDARD_FUNCTION,
+		checkFn:             regexpStringDomainFixedTypeMatch,
+		stringDomainCheckFn: regexpStringDomainTypeMatchWithModes,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpSubstrReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -3117,7 +3229,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpSubstrReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -3128,7 +3240,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return regexpSubstrReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -6633,7 +6745,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SHA2,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7764,7 +7876,11 @@ var supportedMathBuiltIns = []FuncNew{
 			}
 			switch inputs[0].Oid {
 			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				// MySQL resolves an untyped BIT_COUNT parameter as a binary
+				// string and reparses the expression only when execution supplies
+				// a numeric type. Choosing BIGINT here silently changes "64" from
+				// seven set input bits to one numeric set bit.
+				return newCheckResultWithCast(14, []types.Type{types.T_varbinary.ToType()})
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithSuccess(14)
 			case types.T_char, types.T_varchar, types.T_text:
@@ -14604,6 +14720,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return Nextval
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Nextval
+				},
+			},
 		},
 	},
 	// function `setval`
@@ -14645,6 +14773,23 @@ var supportedOthersBuiltIns = []FuncNew{
 					return Setval
 				},
 			},
+			{
+				overloadId: 2,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_bool,
+					types.T_varchar,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Setval
+				},
+			},
 		},
 	},
 	// function `currval`
@@ -14658,6 +14803,18 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Currval
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {

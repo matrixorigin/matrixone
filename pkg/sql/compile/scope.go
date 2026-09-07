@@ -40,11 +40,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -456,7 +459,7 @@ func cleanLazyScopeStartFailure(s *Scope, c *Compile, err error) {
 		}
 		return nil
 	})
-	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 }
 
 func installSequentialBranchStarter(root vm.Operator, start func(int) error) (func(), error) {
@@ -492,7 +495,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	// specific case.
-	if c.IsTpQuery() && !c.hasMergeOp {
+	if c.IsTpQuery() && !c.hasMergeOp && !s.ConcurrentPreScopes {
 		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
@@ -506,10 +509,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
 	startedPreScopeCount := 0
-	startedPreScopes := make([]bool, len(s.PreScopes))
+	claimedPreScopes := make([]bool, len(s.PreScopes))
 
 	startPreScope := func(i int) error {
-		if i < 0 || i >= len(s.PreScopes) || startedPreScopes[i] {
+		if i < 0 || i >= len(s.PreScopes) || claimedPreScopes[i] {
 			return moerr.NewInternalErrorNoCtx("invalid lazy union all branch activation")
 		}
 		scope := s.PreScopes[i]
@@ -517,10 +520,11 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			// The union installs this branch's receiver before invoking us. Complete
 			// the unsubmitted scope through the ordinary start-failure cleanup so
 			// that receiver has a terminal signal to drain.
-			cleanPipelineWitchStartFail(scope, cause, c.isPrepare)
+			claimedPreScopes[i] = true
+			cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
 			return cause
 		}
-		startedPreScopes[i] = true
+		claimedPreScopes[i] = true
 		startedPreScopeCount++
 		wg.Add(1)
 
@@ -538,7 +542,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = scope.RemoteRun(c)
 				default:
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
+					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
 				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
@@ -547,7 +551,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
@@ -567,6 +571,18 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			return installErr
 		}
 		defer clearStarter()
+		defer func() {
+			cause := context.Cause(s.Proc.Ctx)
+			if cause == nil {
+				cause = context.Canceled
+			}
+			for i := range claimedPreScopes {
+				if !claimedPreScopes[i] {
+					claimedPreScopes[i] = true
+					cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+				}
+			}
+		}()
 		// Submission failures are delivered through the first branch receiver,
 		// matching the ordinary MergeRun start-failure protocol.
 		_ = startPreScope(0)
@@ -679,6 +695,20 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p.Cleanup(sp.Proc, true, isPrepare, fail)
 }
 
+// cleanScopeTreeWithStartFail retires a scope tree that was never submitted.
+// Children must publish their terminal signals before a parent Merge cleanup
+// waits on them. This also releases materialized readers owned by lazy UNION
+// ALL branches that an early LIMIT never starts.
+func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
+	if sp == nil {
+		return
+	}
+	for _, preScope := range sp.PreScopes {
+		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+	}
+	cleanPipelineWitchStartFail(sp, fail, isPrepare)
+}
+
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
 	s.resourceExecutedLocally = false
@@ -710,18 +740,36 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
+	queryCtx := scopeRunQueryContext(s.Proc)
+	var terminalErr error
+	if sender != nil && isScopeCancellationError(err) {
+		// An internal cancellation can win the receive select just before the
+		// remote execution publishes its terminal response. Stop the producer
+		// through the existing cleanup handshake and retain its terminal for
+		// arbitration after resolving the cancellation's primary cause.
+		terminalErr = sender.waitingTheStopResponse()
+	}
 
 	runErr, _ := normalizeScopeRunError(
 		err,
 		s.Proc.Ctx,
-		scopeRunQueryContext(s.Proc),
+		queryCtx,
 	)
+	if runErr == nil && terminalErr != nil {
+		// A query-owned terminal or substantive pipeline cancellation cause is
+		// primary. StopSending supplies the result only when the original
+		// cancellation was secondary; this still makes a terminal-less handshake
+		// fail closed without allowing teardown fallout to hide execution failure.
+		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
+	}
+	// The retained local root is the hand-off boundary from RemoteRun to its
+	// consumer. Publish its durable Error terminal before canceling this scope;
+	// otherwise the consumer can observe cancellation first and finish without
+	// the remote execution error that caused it.
+	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
-	// Normalize before cleanup mutates the pipeline context so a substantive
-	// cancellation cause remains available to the caller.
-	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
@@ -737,7 +785,7 @@ func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
 	if c != nil && c.proc != nil && c.proc.Cancel != nil {
 		c.proc.Cancel(err)
 	}
-	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 	return err
 }
 
@@ -914,7 +962,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			return nil, err
 		}
 	}
-	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+	if err := c.attachRuntimeAllocationOwners([]*Scope{ms}); err != nil {
 		s.discardParallelGeneration(ms)
 		return nil, err
 	}
@@ -969,7 +1017,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			RecvMsgList:  recvMsgList,
 		}
 	}
-	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+	if err := c.attachRuntimeAllocationOwners([]*Scope{ms}); err != nil {
 		s.discardParallelGeneration(ms)
 		return nil, err
 	}
@@ -1210,6 +1258,9 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 			panic("pipeline end with dispatch should have been merged in multi CN!")
 		}
 	}
+	if ordered, workers, ok := newOrderedTopParallelScope(s); ok {
+		return ordered, workers
+	}
 
 	// fake scope is used to merge parallel scopes, and do nothing itself
 	rs := newScope(Normal)
@@ -1237,6 +1288,87 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	//   |
 	//   |_ prescopes
 	return rs, parallelScopes
+}
+
+// newOrderedTopParallelScope preserves the stream boundary required by a
+// distributed MergeTop. Each DOP worker first produces an ordered local Top-K
+// stream on its own edge; a single leaf MergeTop consolidates those streams
+// before anything is returned to another CN or to the coordinator.
+func newOrderedTopParallelScope(s *Scope) (*Scope, []*Scope, bool) {
+	var (
+		sourceRoot  vm.Operator
+		externalReg *process.WaitRegister
+		externalOp  *connector.Connector
+		topOp       *top.Top
+	)
+	switch root := s.RootOp.(type) {
+	case *top.Top:
+		sourceRoot = root
+		topOp = root
+	case *connector.Connector:
+		if root.Reg == nil || root.Reg.NilBatchCnt != 1 || !root.Reg.OrderedStream {
+			return nil, nil, false
+		}
+		if root.GetOperatorBase().NumChildren() != 1 {
+			return nil, nil, false
+		}
+		child, ok := root.GetOperatorBase().GetChildren(0).(*top.Top)
+		if !ok {
+			return nil, nil, false
+		}
+		sourceRoot = child
+		topOp = child
+		externalReg = root.Reg
+		externalOp = root
+	default:
+		return nil, nil, false
+	}
+	if !topOp.OrderedOutput || !hasMaterializedTopOrderColumns(topOp.Fs) {
+		return nil, nil, false
+	}
+
+	workerCount := s.NodeInfo.Mcpu
+	gather := newScope(Merge)
+	gather.ConcurrentPreScopes = true
+	gather.NodeInfo = s.NodeInfo
+	gather.NodeInfo.Mcpu = 1
+	gather.Proc = s.Proc.NewContextChildProc(workerCount)
+	gather.TxnOffset = s.TxnOffset
+
+	workers := make([]*Scope, workerCount)
+	dupCtx := newOperatorDupContext()
+	for i := 0; i < workerCount; i++ {
+		reg := gather.Proc.Reg.MergeReceivers[i]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+		worker := newScope(Normal)
+		worker.NodeInfo = s.NodeInfo
+		worker.NodeInfo.Mcpu = 1
+		worker.Proc = gather.Proc.NewContextChildProc(0)
+		worker.TxnOffset = s.TxnOffset
+		workerRoot := dupOperatorRecursivelyWithContext(
+			sourceRoot, i, workerCount, dupCtx)
+		conn := connector.NewArgument().WithReg(reg)
+		conn.SetAnalyzeControl(topOp.GetIdx(), false)
+		conn.AppendChild(workerRoot)
+		worker.setRootOperator(conn)
+		workers[i] = worker
+	}
+
+	gatherTop := mergetop.NewArgument().WithLimit(topOp.Limit).WithFs(topOp.Fs).WithOrderedStreams()
+	gatherTop.SetAnalyzeControl(topOp.GetIdx(), false)
+	if externalReg == nil {
+		gather.setRootOperator(gatherTop)
+	} else {
+		out := connector.NewArgument().WithReg(externalReg)
+		out.SetAnalyzeControl(externalOp.GetIdx(), false)
+		out.AppendChild(gatherTop)
+		gather.setRootOperator(out)
+	}
+	gather.PreScopes = workers
+	s.PreScopes = append(s.PreScopes, gather)
+	s.parallelGenerations = append(s.parallelGenerations, gather)
+	return gather, workers, true
 }
 
 func (s *Scope) doSetRootOperator(op vm.Operator) {

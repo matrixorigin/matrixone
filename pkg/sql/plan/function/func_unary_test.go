@@ -798,6 +798,50 @@ func TestOrd(t *testing.T) {
 	}
 }
 
+func TestOrdMultibyteUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"é", "中", "😀", "éx", ""},
+				nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0xC3A9, 0xE4B8AD, 0xF09F9880, 0xC3A9, 0}, nil),
+		Ord)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestOrdBinaryUsesFirstOctet(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.New(oid, 4, 0), []string{"é", "中", ""}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xE4, 0}, nil),
+				Ord)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestOrdUsesRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"é", "é", "ignored"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xC3A9, 0}, []bool{false, false, true}),
+		Ord)
+	require.NoError(t, tc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 // QUOTE
 func initQuoteTestCase() []tcTemp {
 	return []tcTemp{
@@ -3541,6 +3585,17 @@ func initJsonUnquoteTestCase() []tcTemp {
 				[]string{"hello", "world", "", `"x"`, `""`},
 				[]bool{false, false, true, false, false}),
 		},
+		{
+			info: "test json unquote preserves non-string SQL text",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -3555,6 +3610,152 @@ func TestJsonUnquote(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestJsonUnquoteRejectsInvalidFramedStringAndUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{`"\x"`, string([]byte{0xff})} {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+			JsonUnquote)
+		s, _ := tc.Run()
+		require.False(t, s)
+	}
+}
+
+func TestJsonUnquoteTextTypeContract(t *testing.T) {
+	for _, input := range []types.Type{
+		types.NewWithCharset(types.T_char, 8, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxMediumTextLen, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8MB4Bin),
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		result := resolved.GetReturnType()
+		if input.Oid == types.T_char {
+			require.Equal(t, types.T_varchar, result.Oid)
+		} else {
+			require.Equal(t, input.Oid, result.Oid)
+		}
+		require.Equal(t, input.Width, result.Width)
+		require.Equal(t, types.CharsetUTF8MB4Bin, result.Charset)
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast)
+	}
+	for _, input := range []types.Type{types.T_json.ToType(), types.T_any.ToType()} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		require.Equal(t, types.CharsetUTF8MB4Bin, resolved.GetReturnType().Charset)
+	}
+}
+
+func TestJsonUnquoteRejectsNonStringDomain(t *testing.T) {
+	for _, input := range []types.Type{
+		types.T_date.ToType(),
+		types.T_time.ToType(),
+		types.T_datetime.ToType(),
+		types.T_int64.ToType(),
+	} {
+		_, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.Error(t, err, input.String())
+	}
+}
+
+func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
+	inputs := []types.Type{
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 32, 0),
+		types.T_blob.ToType(),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+	}
+	for _, input := range inputs {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err, input.String())
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast, input.String())
+
+		proc := testutil.NewProcess(t)
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			JsonUnquote)
+		succeed, info := nullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
+
+		nonNullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+			JsonUnquote)
+		succeed, info = nonNullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
+	}
+}
+
+func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{"", ""}, []bool{false, false}),
+			JsonUnquote)
+		require.NoError(t, tc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"text", ""}, []bool{false, true}),
+			JsonUnquote).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		})
+		require.NoError(t, tc.parameters[0].SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("prepared text binary text rebind", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"plain"}, []bool{false}),
+			JsonUnquote)
+
+		run := func(binary bool) error {
+			tc.parameters[0].SetIsBinaryString(binary)
+			require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+			return JsonUnquote(tc.parameters, tc.result, proc, tc.fnLength, nil)
+		}
+		assertResult := func() {
+			value, isNull := vector.GenerateFunctionStrParameter(tc.GetResultVectorDirectly()).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, "plain", string(value))
+		}
+
+		require.NoError(t, run(false))
+		assertResult()
+		require.Error(t, run(true))
+		require.NoError(t, run(false))
+		assertResult()
+	})
 }
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {

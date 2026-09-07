@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -85,14 +86,31 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
 	dbName := createDatabase.GetDatabase()
+
+	// A positive catalog lookup is already authoritative for this transaction's
+	// snapshot and must not wait behind unrelated DDL that holds a shared
+	// database lock. Only the absence-to-create transition needs serialization.
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return err
 	}
 
+	// Serialize competing creators, then recheck under the lock. Another
+	// transaction may have created the database after the optimistic lookup.
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return err
 	}
 
@@ -657,6 +675,27 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	tblName := qry.GetTableDef().GetName()
 	isTemp := qry.GetTableDef().GetIsTemporary()
+	aliasName := tblName
+	if isTemp {
+		var err error
+		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
+		if err != nil {
+			return err
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+		defer func() { c.proc.Ctx = originalCtx }()
+
+		executionPlan := *qry
+		qry = &executionPlan
+		qry.TableDef = plan2.DeepCopyTableDef(qry.TableDef, true)
+		qry.CopyTableDef = plan2.DeepCopyTableDef(qry.CopyTableDef, true)
+		qry.TableDef.Name = tblName
+		if qry.CopyTableDef != nil {
+			qry.CopyTableDef.Name = tblName
+		}
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
@@ -667,6 +706,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	if err != nil {
 		return err
 	}
+	if isTemp && rel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+
 	tblId := rel.GetTableID(c.proc.Ctx)
 	extra := rel.GetExtraInfo()
 
@@ -863,9 +906,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					if indexdef.IndexName == constraintName {
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSqlWithOptions(
-								"DROP TABLE "+sqlquote.QualifiedIdent(dbName, indexdef.IndexTableName),
-								executor.StatementOption{}.WithDisableLog(),
+							// ALTER already owns the parent and index storage locks. A
+							// nested DROP TABLE tries to acquire the hidden table's catalog
+							// lock after those storage locks, reversing the DML lock order
+							// and allowing a cross-index wait cycle. Use the same
+							// parent-owned deletion path as standalone DROP INDEX.
+							if err := c.dropIndexChildRelation(
+								dbSource, indexdef.IndexTableName, oTableDef.GetIsTemporary(),
 							); err != nil {
 								return err
 							}
@@ -880,12 +927,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 						notDroppedIndex = append(notDroppedIndex, indexdef)
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
-				}
-
-				// drop index cdc task
-				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
-				if err != nil {
-					return err
 				}
 
 				// unregister index update
@@ -1255,10 +1296,19 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				return err
 			}
 		case *plan.AlterTable_Action_AlterName:
+			oldName, newName := act.AlterName.OldName, act.AlterName.NewName
+			if isTemp {
+				if _, exists := c.proc.GetSession().GetTempTable(dbName, newName); exists {
+					return moerr.NewTableAlreadyExists(c.proc.Ctx, newName)
+				}
+				oldName = tblName
+				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			}
+
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
-				act.AlterName.OldName,
-				act.AlterName.NewName,
+				oldName,
+				newName,
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
@@ -1341,6 +1391,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	if isTemp {
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil {
+				c.proc.GetSession().RemoveTempTable(dbName, aliasName)
+				c.proc.GetSession().AddTempTable(dbName, rename.NewName,
+					physicalTemporaryTableName(c.proc, dbName, rename.NewName))
+			}
+		}
 	}
 
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
@@ -1446,6 +1506,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			return s.createSessionTemporaryTable(c, owner, tableCreated)
+		}
+	}
 	if isTemp {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
@@ -2145,6 +2210,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
+		return err
+	}
+
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
@@ -2224,20 +2307,13 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		res.Close()
 	}
 
-	if isTemp && session != nil {
-		// The temporary table and all follow-up metadata/index/CTAS work have
-		// completed. Keep the alias registered in the session.
-		rollbackTempAlias = false
-	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
-		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
+	if names, ok := proc.GetSession().(interface{ TemporaryTableName(string, string) string }); ok {
+		return names.TemporaryTableName(dbName, alias)
+	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
@@ -2563,6 +2639,17 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
 		deadTIDs, loadDAG, markDeleted, execDelete,
 	)
+}
+
+// reclaimAndCompactBranchProtectSnapshots completes the branch part of a
+// physical-table removal. Replacement paths publish their new lineage edge
+// first, then use this same lifecycle transition as an ordinary DROP.
+func (c *Compile) reclaimAndCompactBranchProtectSnapshots(deadTIDs []uint64) error {
+	branchParticipates, err := c.reclaimBranchProtectSnapshots(deadTIDs)
+	if err != nil || !branchParticipates {
+		return err
+	}
+	return c.compactExpiredAlterDataBranchLineage(time.Time{})
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -3449,7 +3536,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	truncate := s.Plan.GetDdl().GetTruncateTable()
-	oldID := truncate.GetTableId()
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
 
@@ -3469,6 +3555,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	oldID := rel.GetTableID(c.proc.Ctx)
 
 	// Check if target table is a CCPR shared table (from publication)
 	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
@@ -3501,6 +3588,64 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
+	// before the ordinary DROP path retires the old physical generation. Reuse
+	// ALTER's lineage publication protocol so the replacement remains the live
+	// branch child and the old generation stays protected for DIFF/MERGE.
+	lineagePlan := alterDataBranchLineagePlan{}
+	lineageTxnOp := c.proc.GetTxnOperator()
+	lineageSnapshotAdvanced := false
+	lineageCloneTS := int64(0)
+	lineageOriginalSnapshot := timestamp.Timestamp{}
+	lineageRestoreSnapshot := false
+	defer func() {
+		if lineageRestoreSnapshot {
+			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
+		}
+	}()
+	if shouldAdvanceAlterDataBranchLineageSnapshot(
+		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+	) {
+		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
+		lineageRestoreSnapshot = true
+		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+			return err
+		}
+		lineageSnapshotAdvanced = true
+	}
+	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
+	if lineagePlan, err = c.prepareAlterDataBranchLineage(oldID, db, table, "TRUNCATE"); err != nil {
+		return err
+	}
+	if !lineagePlan.enabled {
+		var hasLatestHistory bool
+		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(oldID, db, table); err != nil {
+			return err
+		}
+		if hasLatestHistory {
+			lineagePlan.enabled = true
+			lineagePlan.preserveHistoricalSource = true
+		}
+	}
+	if lineagePlan.enabled {
+		if lineageSnapshotAdvanced {
+			lineagePlan.cloneTS = lineageCloneTS
+		} else {
+			lineagePlan.cloneTS = lineageTxnOp.SnapshotTS().PhysicalTime
+		}
+	}
+	if lineageSnapshotAdvanced {
+		rel, err = dbSource.Relation(c.proc.Ctx, table, nil)
+		if err != nil {
+			return err
+		}
+		if rel.GetTableID(c.proc.Ctx) != oldID {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+	}
+
 	// delete from tables => truncate, need keep increment value
 	// Get logicalId from tableDef and pass it when creating the new table
 	tableDef := rel.GetTableDef(c.proc.Ctx)
@@ -3519,6 +3664,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		c.addAffectedRows(rows)
 		dropOpts = dropOpts.WithDisableDropIncrStatement()
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
+	}
+	if lineagePlan.enabled {
+		// The successor edge is published after CREATE obtains its physical ID.
+		// Keep the old edge until then; the shared reclaim below retires it.
+		dropOpts = dropOpts.WithSkipDataBranchReclaim()
 	}
 
 	r, err := c.runSqlWithResultAndOptions(
@@ -3562,6 +3712,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	newID := rel.GetTableID(c.proc.Ctx)
+	if lineagePlan.enabled {
+		if err = c.preserveAlterDataBranchLineage(
+			lineagePlan, oldID, newID, db, table,
+		); err != nil {
+			return err
+		}
+		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{oldID}); err != nil {
+			return err
+		}
+	}
 
 	for _, ftblId := range truncate.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), ftblId)
@@ -3847,6 +4007,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		return err
 	}
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
+			return nil
+		}
+	}
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
@@ -4118,17 +4284,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
 	// identical semantics in the frontend and compile-layer paths (design
 	// §5.3 / §9.2).
-	var branchParticipates bool
-	if branchParticipates, err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
-		logutil.Error("reclaim branch protect snapshots failed",
-			zap.Uint64("tblID", tblID),
-			zap.Error(err),
-		)
-		return err
-	}
-	if branchParticipates {
-		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
-			logutil.Error("compact historical ALTER lineage failed",
+	if !c.skipDataBranchReclaim {
+		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{tblID}); err != nil {
+			logutil.Error("reclaim branch protect snapshots failed",
 				zap.Uint64("tblID", tblID),
 				zap.Error(err),
 			)
@@ -6079,7 +6237,7 @@ func onPreUpdateCDCTasks(
 		affectedCdcRow += int(cnt)
 
 		// Delete mo_cdc_watermark
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, true); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6102,7 +6260,11 @@ func onPreUpdateCDCTasks(
 
 	// Restart cdc task
 	if targetTaskStatus == task.TaskStatus_RestartRequested {
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		// RESTART intentionally resets the watermark but retains the immutable
+		// table-generation epoch. A bounded snapshot may already have committed
+		// target groups at that epoch, so choosing a new one would strand stale
+		// DELETE/PK-change rows.
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, false); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6162,6 +6324,7 @@ func deleteManyWatermark(
 	ctx context.Context,
 	tx taskservice.SqlExecutor,
 	keys map[taskservice.CDCTaskKey]struct{},
+	deleteSnapshotEpochs bool,
 ) (deletedCnt int64, err error) {
 	var (
 		cnt int64
@@ -6182,6 +6345,21 @@ func deleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		if !deleteSnapshotEpochs {
+			continue
+		}
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Info(
+			"cdc.compile.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, tx, sql); err != nil {
+			return
+		}
 	}
 	return
 }
@@ -6192,9 +6370,13 @@ const (
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	executor := task.TaskCode_InitCdc
+	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcStableEpoch
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
-		Executor: task.TaskCode_InitCdc,
+		Executor: executor,
 		Options: task.TaskOptions{
 			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
 			RetryInterval: defaultCDCTaskRetryInterval,
@@ -6420,10 +6602,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sourceConn, sourceConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
+		)
+		if sourceConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", sourceConnErr)
+			return
+		}
+		if closeErr := sourceConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close source connection check: %v", closeErr)
 			return
 		}
 	}
@@ -6448,10 +6636,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sinkConn, sinkConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		)
+		if sinkConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", sinkConnErr)
+			return
+		}
+		if closeErr := sinkConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close sink connection check: %v", closeErr)
 			return
 		}
 	}
@@ -6545,6 +6739,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
+	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
+	// remain eligible for legacy executors because they cannot partially commit
+	// an initial snapshot.
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+			return
+		}
+	}
 
 	var extraOptsBytes []byte
 	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {
@@ -6554,6 +6758,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func validateStableInitialSnapshotCompileProtocol(
+	ctx context.Context,
+	c *Compile,
+	stable bool,
+) error {
+	protocolVersion := int64(defines.MORPCVersion4)
+	if c != nil && c.proc != nil {
+		if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				if version, valid := value.(int64); valid {
+					protocolVersion = version
+				}
+			}
+		}
+	}
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
 }
 
 func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {

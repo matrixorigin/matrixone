@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -49,6 +50,31 @@ const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+
+// StatsInfoUsable reports whether a statistics object contains a real table
+// cardinality observation. Persisted-object statistics use
+// AccurateObjectNumber; an explicit table-wide scan can also observe committed
+// rows before the first object is flushed. A successfully completed observation
+// carries TableName, which distinguishes an exact empty table from an
+// uninitialized zero-valued StatsInfo.
+func StatsInfoUsable(stats *pb.StatsInfo) bool {
+	if stats == nil || math.IsNaN(stats.TableCnt) || math.IsInf(stats.TableCnt, 0) || stats.TableCnt < 0 {
+		return false
+	}
+	return stats.AccurateObjectNumber > 0 || stats.TableCnt > 0 || stats.TableName != ""
+}
+
+func statsForTableDef(
+	ctx CompilerContext,
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if versioned, ok := ctx.(TableDefStatsCompilerContext); ok {
+		return versioned.StatsWithTableDef(obj, tableDef, snapshot)
+	}
+	return ctx.Stats(obj, snapshot)
+}
 
 // RowSizeThreshold Regardless of the table,
 // the minimum row size is 100.
@@ -527,7 +553,11 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	if w == nil || w.GetStats() == nil {
 		return -1
 	}
-	return w.GetStats().NdvMap[col.Name]
+	ndv, exists := w.GetStats().NdvMap[col.Name]
+	if !exists {
+		return -1
+	}
+	return ndv
 }
 
 //func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
@@ -547,7 +577,11 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 			break
 		}
 		s := w.GetStats()
-		nullCnt := float64(s.NullCntMap[col.Name])
+		nullCount, exists := s.NullCntMap[col.Name]
+		if !exists {
+			break
+		}
+		nullCnt := float64(nullCount)
 		if isnull {
 			return safeRatio(nullCnt, s.TableCnt, 0.1)
 		} else {
@@ -894,7 +928,13 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	}
 	s := w.GetStats()
 	if colRef != nil && len(literals) > 0 {
-		typ := types.T(s.DataTypeMap[colRef.Name])
+		typeID, hasType := s.DataTypeMap[colRef.Name]
+		minVal, hasMin := s.MinValMap[colRef.Name]
+		maxVal, hasMax := s.MaxValMap[colRef.Name]
+		if !hasType || !hasMin || !hasMax {
+			return 0.1
+		}
+		typ := types.T(typeID)
 
 		switch colFnName {
 		case "":
@@ -902,16 +942,16 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
 				return calcSelectivityByMinMaxForDecimal(
-					funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], expr)
+					funcName, minVal, maxVal, expr)
 			}
 			return calcSelectivityByMinMax(
-				funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], typ, literals)
+				funcName, minVal, maxVal, typ, literals)
 		case "year":
 			switch typ {
 			case types.T_date:
-				minVal := types.Date(s.MinValMap[colRef.Name])
-				maxVal := types.Date(s.MaxValMap[colRef.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
+				minDate := types.Date(minVal)
+				maxDate := types.Date(maxVal)
+				return calcSelectivityByMinMax(funcName, float64(minDate.Year()), float64(maxDate.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
 			}
@@ -1832,7 +1872,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		scanSnapshot = node.ScanSnapshot
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, scanSnapshot)
+	s, err := statsForTableDef(
+		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
@@ -1886,21 +1927,14 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
 	// SizeMap stores approximate persisted bytes per column (using OriginSize); divide by total rows to get bytes/row
-	var totalSize uint64
-	{
-		for _, v := range s.SizeMap {
-			totalSize += v
-		}
-		if stats.TableCnt > 0 && totalSize > 0 {
-			stats.Rowsize = float64(totalSize) / stats.TableCnt
-		} else {
-			// Fallback: use table definition to estimate row size when SizeMap is empty or TableCnt is 0
-			if node.TableDef != nil {
-				stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
-			} else {
-				stats.Rowsize = 0
-			}
-		}
+	if totalSize, complete := completeStatsSizeMap(s, node.TableDef); stats.TableCnt > 0 && totalSize > 0 && complete {
+		stats.Rowsize = float64(totalSize) / stats.TableCnt
+	} else if node.TableDef != nil {
+		// A partial ANALYZE generation intentionally omits unselected columns.
+		// Never mistake that subset for the complete physical row width.
+		stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
+	} else {
+		stats.Rowsize = 0
 	}
 
 	return stats
@@ -2028,6 +2062,21 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
+		if node.JoinType == plan.Node_INNER {
+			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[0], make(map[int32]bool))
+			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+				node.Children[1], make(map[int32]bool))
+			if leftMarked || rightMarked {
+				// CTE drain admission marked one exact equality-hash build.
+				// Preserve it as the physical right/build child even if ordinary
+				// cardinality costing would choose the opposite orientation.
+				if leftMarked && !rightMarked {
+					node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+				}
+				break
+			}
+		}
 		// UPDATE rewrites deliberately put an unfiltered hidden index on the probe
 		// side so a selective target can publish a runtime filter before scanning
 		// the index. Cardinality alone is not sufficient for the opposite,
@@ -2056,15 +2105,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			w1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
 			w2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
 			if w1 != nil && w2 != nil && w1.GetStats() != nil && w2.GetStats() != nil {
-				var t1size, t2size uint64
-				for _, v := range w1.GetStats().SizeMap {
-					t1size += v
+				t1size, complete1 := completeStatsSizeMap(w1.GetStats(), leftChild.TableDef)
+				t2size, complete2 := completeStatsSizeMap(w2.GetStats(), rightChild.TableDef)
+				if complete1 && complete2 && t1size > 0 && t2size > 0 {
+					factor1 = math.Pow(float64(t1size), 0.1)
+					factor2 = math.Pow(float64(t2size), 0.1)
 				}
-				factor1 = math.Pow(float64(t1size), 0.1)
-				for _, v := range w2.GetStats().SizeMap {
-					t2size += v
-				}
-				factor2 = math.Pow(float64(t2size), 0.1)
 			}
 		}
 		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
@@ -2078,6 +2124,15 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		// Some shared CTE readers are admitted only because a LEFT or equality
+		// SEMI join must fully consume their build input. Preserve that proof: a
+		// right-sided choice would turn the marked reader into the probe input,
+		// which may stop without draining it.
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
+			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
+			node.IsRightJoin = false
+			break
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
@@ -2104,6 +2159,24 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
+}
+
+func completeStatsSizeMap(stats *pb.StatsInfo, tableDef *plan.TableDef) (uint64, bool) {
+	if stats == nil || tableDef == nil {
+		return 0, false
+	}
+	var total uint64
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		value, exists := stats.SizeMap[col.Name]
+		if !exists || math.MaxUint64-total < value {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
 }
 
 // preferDominatingSecondaryIndexBuild decides whether child 0 should be swapped
@@ -2442,6 +2515,24 @@ func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
 		return math.MaxFloat64, true
 	}
 	return rows * rowSize, true
+}
+
+func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK_SCAN &&
+		node.ExtraOptions == materialized.CTEHashBuildScanOption {
+		return true
+	}
+	for _, childID := range node.Children {
+		if builder.subtreeContainsCTEHashBuildScan(childID, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.

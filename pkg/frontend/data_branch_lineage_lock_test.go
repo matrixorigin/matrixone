@@ -128,6 +128,17 @@ func TestLockDataBranchLineageOwnerLifecycleUsesSystemAccount(t *testing.T) {
 	)
 }
 
+func TestLineageOwnerLifecycleLockSQLForTxnUsesPessimisticRowLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic})
+
+	require.Equal(t,
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQLForTxn(txnOp),
+	)
+}
+
 func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
 	for _, featureLimited := range []bool{false, true} {
 		t.Run(fmt.Sprintf("feature-limited=%t", featureLimited), func(t *testing.T) {
@@ -156,6 +167,31 @@ func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
 			require.Equal(t, "commit;", bh.executedSqls[len(bh.executedSqls)-1])
 		})
 	}
+}
+
+func TestGetCloneMutationExecutorAdmitsBeforeClone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
+	ses.proc.Base.TxnOperator = txnOp
+
+	bh := &backgroundExecTestWithHistory{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+
+	returned, cleanup, err := getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.Same(t, bh, returned)
+	require.NotNil(t, cleanup)
+	require.Equal(t, []string{
+		"begin",
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+	}, bh.executedSqls)
+	require.NoError(t, cleanup(nil))
+	require.Equal(t, "commit;", bh.executedSqls[len(bh.executedSqls)-1])
 }
 
 func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) {

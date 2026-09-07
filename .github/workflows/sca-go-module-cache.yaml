@@ -49,6 +49,51 @@ jobs:
           setup-java: false
           setup-cmake: true
           go-version-file: "${{ github.workspace }}/go.mod"
+      - name: Resolve analysis cache compression
+        id: analysis-cache-compression
+        run: |
+          set -euo pipefail
+          compression_probe=matrixone-sca-cache-compression-probe
+          if command -v zstd >/dev/null 2>&1; then
+            # actions/cache selects zstd when this command is present, then
+            # invokes zstdmt to create and unzstd to restore the archive.
+            # Reject a partial installation before the expensive analysis.
+            if ! zstd --quiet --version >/dev/null 2>&1; then
+              echo "::error::zstd is present but unusable"
+              exit 1
+            fi
+            missing_helpers=()
+            for helper in zstdmt unzstd; do
+              if ! command -v "$helper" >/dev/null 2>&1; then
+                missing_helpers+=("$helper")
+              fi
+            done
+            if (( ${#missing_helpers[@]} > 0 )); then
+              echo "::error::Incomplete zstd installation; missing: ${missing_helpers[*]}"
+              exit 1
+            fi
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | zstdmt -q -c | unzstd -q -c
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::zstd compression round-trip failed"
+              exit 1
+            fi
+            compression_method=zstd
+          elif command -v gzip >/dev/null 2>&1; then
+            # This is the supported actions/cache fallback when zstd is absent.
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | gzip -c | gzip -dc
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::gzip compression round-trip failed"
+              exit 1
+            fi
+            compression_method=gzip
+          else
+            echo "::error::Neither zstd nor gzip is available for the analysis cache"
+            exit 1
+          fi
+          echo "method=$compression_method" >> "$GITHUB_OUTPUT"
+          echo "Analysis cache compression: $compression_method"
       - name: Clean generated SCA outputs
         run: |
           set -euo pipefail
@@ -246,6 +291,8 @@ jobs:
       - name: Warm golangci-lint analysis cache
         id: warm-analysis-cache
         if: steps.golangci-analysis-cache.outputs.cache-hit != 'true'
+        env:
+          CACHE_COMPRESSION_METHOD: ${{ steps.analysis-cache-compression.outputs.method }}
         run: |
           set -euo pipefail
           # The producer is not a validation gate: populate only the cache
@@ -266,20 +313,33 @@ jobs:
             echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          # GitHub accounts cache quota against the uploaded compressed
-          # archive, not filesystem blocks. golangci-lint creates tens of
-          # thousands of tiny files, so `du` can overstate quota usage by an
-          # order of magnitude and reject a healthy cache.
+          # GitHub accounts cache quota against the uploaded compressed archive,
+          # not filesystem blocks. Match actions/cache's zstd-or-gzip selection
+          # so this estimate remains valid on runner images without zstd.
+          case "$CACHE_COMPRESSION_METHOD" in
+            zstd)
+              # actions/cache uses the multithreaded alias when creating its
+              # archive, so measure with the same compressor.
+              compressor=(zstdmt -q -c)
+              ;;
+            gzip)
+              compressor=(gzip -c)
+              ;;
+            *)
+              echo "::error::Unsupported analysis cache compression method: $CACHE_COMPRESSION_METHOD"
+              exit 1
+              ;;
+          esac
           cache_archive_bytes="$(
-            tar -C "$GOLANGCI_LINT_CACHE" -cf - . | zstd -T1 -q -c | wc -c | tr -d ' '
+            tar -C "$GOLANGCI_LINT_CACHE" -cf - . | "${compressor[@]}" | wc -c | tr -d ' '
           )"
           cache_archive_kib=$(((cache_archive_bytes + 1023) / 1024))
           max_cache_kib=$((160 * 1024))
-          echo "golangci-lint cache: ${cache_files} files, estimated zstd archive $((cache_archive_kib / 1024)) MiB (limit: $((max_cache_kib / 1024)) MiB)"
+          echo "golangci-lint cache: ${cache_files} files, estimated ${CACHE_COMPRESSION_METHOD} archive $((cache_archive_kib / 1024)) MiB (limit: $((max_cache_kib / 1024)) MiB)"
           if (( cache_archive_kib > max_cache_kib )); then
             echo "::error::golangci-lint cache exceeds the 160 MiB compressed publication budget"
-            printf '### SCA cache publication failed\n\nEstimated zstd archive: %s MiB\n\nBudget: %s MiB\n' \
-              "$((cache_archive_kib / 1024))" "$((max_cache_kib / 1024))" >> "$GITHUB_STEP_SUMMARY"
+            printf '### SCA cache publication failed\n\nEstimated %s archive: %s MiB\n\nBudget: %s MiB\n' \
+              "$CACHE_COMPRESSION_METHOD" "$((cache_archive_kib / 1024))" "$((max_cache_kib / 1024))" >> "$GITHUB_STEP_SUMMARY"
             echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi

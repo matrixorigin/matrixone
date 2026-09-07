@@ -224,6 +224,121 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
+const (
+	// RegexpMatchStringOperandCount is the subject-pattern pair that owns
+	// matching and any string result domain for every REGEXP function.
+	RegexpMatchStringOperandCount = 2
+	// RegexpReplaceCompatibilityStringOperandCount additionally includes the
+	// replacement in REGEXP_REPLACE's charset compatibility check.
+	RegexpReplaceCompatibilityStringOperandCount = 3
+)
+
+// regexpStringDomainFixedTypeMatch applies the MySQL REGEXP two-stage
+// contract. Statically known binary and nonbinary strings cannot participate
+// in one regexp call, while T_any parameter markers and ordinary NULL remain
+// unresolved until execution. The normal string-domain matcher then preserves
+// every accepted operand instead of erasing its domain through VARCHAR casts.
+func regexpStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, nil)
+}
+
+func regexpStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, modes)
+}
+
+// regexpReplaceStringDomainFixedTypeMatch includes the replacement string in
+// the same compatibility domain as the subject and pattern.
+func regexpReplaceStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, nil)
+}
+
+func regexpReplaceStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, modes)
+}
+
+func regexpStringDomainFixedTypeMatchN(
+	overloads []overload, inputs []types.Type, stringOperands int, modes []StringDomainCheckMode,
+) checkResult {
+	matched := stringDomainFixedTypeMatch(overloads, inputs)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+
+	var firstText, firstBinaryTrigger types.Type
+	hasText, hasBinaryTrigger := false, false
+	if stringOperands > len(inputs) {
+		stringOperands = len(inputs)
+	}
+	for i := 0; i < stringOperands; i++ {
+		mode := StringDomainCheckKnown
+		if i < len(modes) {
+			mode = modes[i]
+		}
+		if mode == StringDomainCheckDeferred || mode == StringDomainCheckDomainless {
+			continue
+		}
+		domain := types.StaticStringDomain(inputs[i])
+		if domain == types.StringDomainNone {
+			// T_any is the binder-visible representation of both an ordinary
+			// untyped NULL and a parameter marker. Non-string scalars are also
+			// regexp-compatible through the ordinary string conversion path.
+			continue
+		}
+		switch domain {
+		case types.StringDomainText:
+			if hasBinaryTrigger {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(inputs[i]))
+			}
+			if !hasText {
+				firstText, hasText = inputs[i], true
+			}
+		case types.StringDomainBinary:
+			// MySQL's is_binary_string() is narrower than its binary-compatible
+			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
+			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
+			// values remain byte-domain operands without making text peers illegal.
+			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+				continue
+			}
+			if hasText {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstText), regexpCharsetName(inputs[i]))
+			}
+			if !hasBinaryTrigger {
+				firstBinaryTrigger, hasBinaryTrigger = inputs[i], true
+			}
+		default:
+			continue
+		}
+		if hasText && hasBinaryTrigger {
+			return newCheckResultWithCharacterSetMismatch(
+				regexpCharsetName(firstText), regexpCharsetName(firstBinaryTrigger))
+		}
+	}
+	return matched
+}
+
+func regexpCharsetName(typ types.Type) string {
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return "binary"
+	}
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		return "utf8mb4_general_ci"
+	case types.CharsetUTF8MB4Bin, types.CharsetLegacy:
+		return "utf8mb4_bin"
+	default:
+		return "utf8mb4"
+	}
+}
+
 // collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
 // binary families on ordinary overload casts until their rune-based consumers
 // have byte-preserving kernels.

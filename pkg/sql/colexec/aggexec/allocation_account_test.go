@@ -293,6 +293,87 @@ func TestAccountedDistinctGroupConcatDeduplicatesAndMerges(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedGroupConcatUnmarshalPreservesOrderAcrossArenaGrowth(t *testing.T) {
+	const rows = 4096
+
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	makeExec := func() *groupConcatExec {
+		exec := newGroupConcatExec(mp, multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   types.T_text.ToType(),
+			emptyNull: true,
+		}, "|").(*groupConcatExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		return exec
+	}
+
+	source, target := makeExec(), makeExec()
+	defer func() {
+		for _, exec := range []*groupConcatExec{source, target} {
+			exec.Free()
+			require.NoError(t, exec.ClearAllocationAccount(allocation))
+		}
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, source.GroupGrow(2))
+
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(mp)
+	groups := make([]uint64, hashmap.UnitLimit)
+	for row := range groups {
+		groups[row] = uint64(row%2 + 1)
+	}
+	payload := strings.Repeat("x", 512)
+	var expected [2]strings.Builder
+	for row := range rows {
+		value := fmt.Sprintf("%04d-%s", row, payload)
+		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+		group := row % 2
+		if expected[group].Len() > 0 {
+			expected[group].WriteByte('|')
+		}
+		expected[group].WriteString(value)
+	}
+	for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+		workGroups := groups[:min(hashmap.UnitLimit, rows-offset)]
+		require.NoError(t, source.PreflightBatchFill(
+			offset, workGroups, []*vector.Vector{input}))
+		require.NoError(t, source.BatchFill(
+			offset, workGroups, []*vector.Vector{input}))
+	}
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(
+		2, [][]uint8{{1, 1}}, &encoded))
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	targetBase := target.aggregateBase()
+	require.Greater(t, len(targetBase.state[0].argbuf), 4*kAggArgArenaSize,
+		"the ordered saved arguments must cross several arena relocations")
+
+	followup := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"tail-even", "tail-odd"})
+	defer followup.Free(mp)
+	require.NoError(t, target.PreflightBatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{followup}))
+	require.NoError(t, target.BatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{followup}))
+	expected[0].WriteString("|tail-even")
+	expected[1].WriteString("|tail-odd")
+
+	results, err := target.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	for group := range 2 {
+		require.Equal(t, expected[group].String(),
+			string(results[0].GetBytesAt(group)))
+	}
+}
+
 func TestAccountedOrderedGroupConcatSortsDeduplicatesAndMerges(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
 		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {

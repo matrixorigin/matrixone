@@ -20,6 +20,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -289,6 +291,32 @@ type txnExecutor struct {
 	database string
 }
 
+func (exec *txnExecutor) newCompile(
+	proc *process.Process,
+	stmt tree.Statement,
+	sql string,
+	receiveAt time.Time,
+) *Compile {
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmt,
+		false,
+		nil,
+		receiveAt,
+	)
+	// Every statement compiled here belongs to the txnExecutor's transaction.
+	// Borrowing the frontend session must not turn constituent temporary DDL
+	// (for example ALTER COPY CREATE/DROP) into an independent session txn.
+	c.temporaryDDLInExecutorTxn = true
+	return c
+}
+
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
@@ -414,6 +442,11 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	if session, ok := proc.Session.(interface{ GetSessId() uuid.UUID }); ok {
+		// Internal temporary CREATEs belong to the original connection, including
+		// the physical-name prefix used by orphan-table cleanup.
+		proc.Base.SessionInfo.SessionId = session.GetSessId()
+	}
 	// A DisableIncrStatement execution runs on the caller's transaction
 	// without opening a statement, so its compile must not advance the
 	// workspace snapshot write offset (the statement boundary).
@@ -498,22 +531,11 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	c := NewCompile(
-		exec.s.addr,
-		exec.getDatabase(),
-		sql,
-		"",
-		"",
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil,
-		receiveAt,
-	)
+	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()

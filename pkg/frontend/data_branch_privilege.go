@@ -166,7 +166,7 @@ func authenticateDataBranchCreateDatabaseSourceTables(
 		delta statistic.StatsArray
 		err   error
 	)
-	for _, tblInfo := range source.srcTblInfos {
+	for _, tblInfo := range source.cloneableTableInfos() {
 		srcName := makeBranchTableName(
 			source.srcPrivilegeDBName,
 			tblInfo.tblName,

@@ -55,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -2072,15 +2071,10 @@ func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
 	ses.EnterFPrint(FPHandleAnalyzeStmt)
 	defer ses.ExitFPrint(FPHandleAnalyzeStmt)
-	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
-	// IMO, this approach is simple and future-proof
-	// Although this rewriting processing could have been handled in rewrite module,
-	// `handleAnalyzeStmt` can be easily managed by cron jobs in the future
 
-	//backup the inside statement
+	// Authorization probes execute as derived SELECT statements.
 	prevInsideStmt := ses.ReplaceDerivedStmt(true)
 	defer func() {
-		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
 	if tcc := ses.GetTxnCompileCtx(); tcc != nil {
@@ -2091,94 +2085,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	if len(stmt.Entries) == 0 {
 		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
 	}
-
-	results := make([]ExecResult, 0, len(stmt.Entries))
-	for _, entry := range stmt.Entries {
-		cols := entry.Cols
-		if len(cols) == 0 {
-			// Restore tcc.execCtx to the outer execCtx; the inner doComQuery
-			// call below may have left it pointing at a closed tempExecCtx
-			// from a previous iteration (Close() nils out reqCtx).
-			if tcc := ses.GetTxnCompileCtx(); tcc != nil {
-				tcc.SetExecCtx(execCtx)
-			}
-			resolved, err := resolveTableVisibleColumns(ses, execCtx.reqCtx, entry.Table)
-			if err != nil {
-				return err
-			}
-			cols = resolved
-		}
-		sql := buildAnalyzeDerivedSQL(entry, cols)
-		sql = inheritAnalyzeRewriteHint(execCtx.sqlOfStmt, sql)
-		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
-		if err != nil {
-			return err
-		}
-		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
-			return err
-		}
-		results = append(results, result)
-	}
-	execCtx.results = results
-	return nil
-}
-
-func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
-	// The derived ANALYZE query observes the transaction workspace. The engine
-	// statistics cache is process-global and observes only committed catalog and
-	// object state, so publishing while a user transaction was already active
-	// would mix two visibility domains. Preserve the legacy derived result and
-	// leave global publication to an ANALYZE statement outside that transaction.
-	if !analyzeStatsPublicationAllowed(execCtx) {
-		return nil
-	}
-	ctx := execCtx.reqCtx
-	if entry == nil || entry.Table == nil || entry.Table.AtTsExpr != nil {
-		return nil
-	}
-
-	refresher, ok := getPu(ses.GetService()).StorageEngine.(engine.StatsRefresher)
-	if !ok {
-		// Engines without persistent optimizer statistics retain the legacy
-		// ANALYZE result behavior.
-		return nil
-	}
-
-	tcc := ses.GetTxnCompileCtx()
-	dbName := resolveAnalyzeDatabase(tcc, entry.Table)
-	if dbName == "" {
-		return moerr.NewNoDB(ctx)
-	}
-	obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
-	if err != nil {
-		return err
-	}
-	if obj == nil || tableDef == nil {
-		return moerr.NewNoSuchTable(ctx, dbName, string(entry.Table.Name()))
-	}
-	// Historical snapshots and publication-backed tables do not own the current
-	// local engine statistics generation. Non-physical relations keep the
-	// legacy derived-query result without asking disttae to subscribe to them.
-	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
-		return nil
-	}
-
-	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
-	databaseID := tableDef.DbId
-	if databaseID == 0 {
-		databaseID, err = tcc.GetDatabaseId(obj.SchemaName, nil)
-		if err != nil {
-			return err
-		}
-	}
-	key := pbstats.StatsInfoKey{
-		AccId:      accountID,
-		DatabaseID: databaseID,
-		TableID:    uint64(obj.Obj),
-		DbName:     obj.SchemaName,
-		TableName:  obj.ObjName,
-	}
-	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+	return handleAnalyzeStatsStmt(ses, execCtx, stmt)
 }
 
 func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
@@ -2202,43 +2109,6 @@ func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {
 	default:
 		return false
 	}
-}
-
-func publishAnalyzeTableStats(
-	ses *Session,
-	ctx context.Context,
-	key pbstats.StatsInfoKey,
-	refresher engine.StatsRefresher,
-) error {
-	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
-	release, err := acquireOptimizerStatsPublisher(ctx, ses.GetService(), tableKey)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	stats, err := refresher.RefreshTableStats(ctx, key)
-	if err != nil {
-		return err
-	}
-	if stats == nil {
-		return moerr.NewInternalErrorf(ctx, "ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
-	}
-
-	// The engine cache swap above is the data publication boundary. Advancing
-	// this table's version invalidates only dependent session entries; unrelated
-	// table statistics and plans remain reusable.
-	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
-	ses.cachePublishedStats(tableKey, version, stats)
-	return nil
-}
-
-func inheritAnalyzeRewriteHint(outerSQL, derivedSQL string) string {
-	content, ok := leadingHintContent(outerSQL)
-	if !ok || !strings.HasPrefix(strings.TrimSpace(content), "{") {
-		return derivedSQL
-	}
-	return "/*+" + content + "*/ " + derivedSQL
 }
 
 func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) (*MysqlResultSet, error) {
@@ -2340,22 +2210,6 @@ func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.G
 func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
 func (r *analyzeDerivedResponder) GetU8(id PropertyID) uint8   { return r.live.GetU8(id) }
 func (r *analyzeDerivedResponder) GetBool(id PropertyID) bool  { return r.live.GetBool(id) }
-
-func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierList) string {
-	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
-	ctx.WriteString("select ")
-	for i, ident := range cols {
-		if i > 0 {
-			ctx.WriteByte(',')
-		}
-		ctx.WriteString("approx_count_distinct(")
-		ctx.WriteIdentifier(ident)
-		ctx.WriteByte(')')
-	}
-	ctx.WriteString(" from ")
-	entry.Table.Format(ctx)
-	return ctx.String()
-}
 
 func resolveAnalyzeDatabase(tcc *TxnCompilerContext, tbl *tree.TableName) string {
 	if dbName := string(tbl.Schema()); dbName != "" {
@@ -2929,10 +2783,14 @@ func createPrepareStmtInSession(
 		protocolVersion:  protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
+		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			prepareControl.Plan),
+		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
 			prepareControl.Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		hasPaginationParams:        hasPaginationParams,
@@ -5141,6 +4999,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		if finishTxnOnReturn {
 			err = finishTxnFunc(ses, err, execCtx)
 		}
+		if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
+			owner.cleanupRetiredTempTables(execCtx.reqCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -5681,6 +5542,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
@@ -6137,6 +5999,15 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 func checkNodeCanCache(p *plan2.Plan) bool {
 	if p == nil {
 		return true
+	}
+	// INFORMATION_SCHEMA.STATISTICS expands the account's currently visible
+	// subscriptions while the plan is built. In particular, a plan built with
+	// zero subscriptions has no publisher scan whose node-level flags would
+	// otherwise reject it. Do not admit any plan with this dependency to the
+	// ordinary COM_QUERY cache: creating the first subscription does not change
+	// a table schema version and therefore cannot invalidate such a cached plan.
+	if plan2.PreparedPlanDependsOnSubscriptionMetadata(p) {
+		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		if q.Query.GetHasForeignKeyAction() {

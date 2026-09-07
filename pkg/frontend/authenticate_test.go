@@ -6468,6 +6468,17 @@ func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
 	}
 }
 
+func TestCDCSystemTablesAreNotClassifiedAsClusterTables(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_CDC_TASK,
+		catalog.MO_CDC_WATERMARK,
+		catalog.MO_CDC_SNAPSHOT,
+	} {
+		require.Contains(t, predefinedTables, tableName)
+		require.False(t, isClusterTable(moCatalog, tableName))
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -9244,6 +9255,82 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		require.Empty(t, bh.executedSQLs)
 	})
 
+	for _, testCase := range []struct {
+		name  string
+		level tree.PrivilegeLevel
+	}{
+		{
+			name: "qualified exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "published_t",
+			},
+		},
+		{
+			name: "current database exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE, TabName: "published_t",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+			bh.sql2result[lockedTableSQL("published_t")] = newMrsForCheckDatabaseTable(nil)
+
+			dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+			require.NoError(t, err)
+			dbTypeResult := &MysqlResultSet{}
+			for _, name := range []string{"dat_id", "dat_type"} {
+				col := &MysqlColumn{}
+				col.SetName(name)
+				dbTypeResult.AddColumn(col)
+			}
+			dbTypeResult.AddRow([]interface{}{uint64(11), catalog.SystemDBTypeSubscription})
+			bh.sql2result[dbTypeSQL] = dbTypeResult
+
+			_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, tree.OBJECT_TYPE_TABLE, testCase.level)
+			require.ErrorContains(t, err, `exact table grants on subscription database "d" are unsupported`)
+			require.ErrorContains(t, err, `grant on "d.*" or narrow the publication table list instead`)
+			require.Equal(t, []string{
+				lockedDatabaseSQL("d"),
+				lockedTableSQL("published_t"),
+				dbTypeSQL,
+			}, bh.executedSQLs)
+		})
+	}
+
+	t.Run("missing table in ordinary database keeps missing-table diagnosis", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+		bh.sql2result[lockedTableSQL("missing_t")] = newMrsForCheckDatabaseTable(nil)
+
+		dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+		require.NoError(t, err)
+		dbTypeResult := &MysqlResultSet{}
+		for _, name := range []string{"dat_id", "dat_type"} {
+			col := &MysqlColumn{}
+			col.SetName(name)
+			dbTypeResult.AddColumn(col)
+		}
+		dbTypeResult.AddRow([]interface{}{uint64(11), ""})
+		bh.sql2result[dbTypeSQL] = dbTypeResult
+
+		_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "missing_t",
+			},
+		)
+		require.ErrorContains(t, err, `there is no table "missing_t" in database "d"`)
+		require.NotContains(t, err.Error(), "subscription database")
+	})
+
 	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
@@ -10469,6 +10556,38 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	}
 	require.NotEmpty(t, createSQL)
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
+}
+
+func TestInitProcedurePersistsDefaultBoolSumAvgSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_default_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 1; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, mysqlparser.SQLModeEnableBoolSumAvg)
 }
 
 func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
@@ -12643,13 +12762,13 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
-		require.Contains(t, bh.executedSQLs[1], "d.dependency_generation")
-		require.Contains(t, bh.executedSQLs[1], "d.source_relation_kind")
-		require.NotContains(t, bh.executedSQLs[1], "'','','','','REVALIDATE_SCAN'")
-		require.Contains(t, bh.executedSQLs[1],
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
+		require.Contains(t, bh.executedSQLs[2], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[2], "d.source_relation_kind")
+		require.NotContains(t, bh.executedSQLs[2], "'','','','','REVALIDATE_SCAN'")
+		require.Contains(t, bh.executedSQLs[2],
 			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
 	})
 
@@ -12662,9 +12781,9 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 
 		missing := &backgroundExecTest{}
 		missing.init()
@@ -12672,7 +12791,7 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
 		require.NoError(t, inheritViewMetadataRevalidation(
 			context.Background(), missing, ses.GetService(), 43))
-		require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
 	})
 }
 
