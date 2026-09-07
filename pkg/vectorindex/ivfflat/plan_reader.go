@@ -217,6 +217,7 @@ func (r *planReader) Close() error {
 	r.includeData = nil
 	r.includeNulls = nil
 	r.explainDiagnostics = nil
+	r.req.MembershipFilter = nil
 	r.scanner = nil
 	if r.session != nil {
 		r.session.release()
@@ -296,6 +297,20 @@ func (*planReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
 func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
+func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
+	sqlproc := sqlexec.NewSqlProcess(r.proc)
+	sqlproc.RelationScanner = r.scanner
+	// The request retains immutable bytes for this reader generation. Borrow
+	// them just as the membership expression does; cloning here multiplies the
+	// complete domain's memory by local reader DOP.
+	sqlproc.IvfRuntimeFilterData = r.req.MembershipFilter
+	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	if r.session != nil {
+		sqlproc.IvfMembershipFilterObject = r.session.membership
+	}
+	return sqlproc
+}
+
 func (r *planReader) initialize() error {
 	if r.req.CandidateBudget == 0 {
 		return nil
@@ -366,13 +381,7 @@ func (r *planReader) initialize() error {
 		IncludeColumns:     includeColumns,
 		IncludeColumnTypes: includeTypes,
 	}
-	sqlproc := sqlexec.NewSqlProcess(r.proc)
-	sqlproc.RelationScanner = r.scanner
-	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
-	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
-	if r.session != nil {
-		sqlproc.IvfMembershipFilterObject = r.session.membership
-	}
+	sqlproc := r.newSearchProcess()
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:        ivfUint64Expr(r.req.CandidateBudget),
 		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},

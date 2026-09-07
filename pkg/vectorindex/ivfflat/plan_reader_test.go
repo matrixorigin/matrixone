@@ -2271,6 +2271,62 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
 }
 
+func TestPlanReadersShareRuntimePayload(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
+	keys := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { keys.Free(proc.Mp()) })
+	// A 1 MiB domain is large enough to expose DOP amplification without a
+	// dataset or storage fixture. Only process binding is measured below.
+	values := make([]int64, 1<<17)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	require.NoError(t, vector.AppendFixedList(keys, values, nil, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
+	const dop = 16
+	readers, err := NewPlanReaders(proc, &plan.VectorIndexScan{
+		Index: &plan.IndexDef{}, SourceTable: &plan.ObjectRef{},
+	}, searchplugin.Request{MembershipFilter: payload, HasMembershipFilter: true}, dop)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		for _, reader := range readers {
+			require.NoError(t, reader.Close())
+		}
+	})
+	processes := make([]*sqlexec.SqlProcess, dop)
+	allocs := testing.AllocsPerRun(10, func() {
+		for i, reader := range readers {
+			processes[i] = reader.(*planReader).newSearchProcess()
+		}
+	})
+	// One SqlProcess per reader, with no additional allocation for the domain.
+	require.Equal(t, float64(dop), allocs)
+	for _, sqlproc := range processes {
+		require.True(t, &payload[0] == &sqlproc.IvfRuntimeFilterData[0])
+		require.Len(t, sqlproc.IvfRuntimeFilterData, len(payload))
+		require.True(t, sqlproc.IvfHasMembershipFilter)
+		require.Same(t, processes[0].IvfMembershipFilterObject, sqlproc.IvfMembershipFilterObject)
+	}
+	require.NoError(t, readers[0].Close())
+	require.Nil(t, readers[0].(*planReader).req.MembershipFilter)
+	for _, sqlproc := range processes[1:] {
+		require.True(t, sqlproc.IvfMembershipFilterObject.Valid())
+		decoded := new(vector.Vector)
+		require.NoError(t, decoded.UnmarshalBinary(sqlproc.IvfRuntimeFilterData))
+		require.Equal(t, values, vector.MustFixedColWithTypeCheck[int64](decoded))
+	}
+	for _, req := range []searchplugin.Request{{}, {HasMembershipFilter: true}} {
+		sqlproc := (&planReader{proc: proc, req: req}).newSearchProcess()
+		require.Nil(t, sqlproc.IvfRuntimeFilterData)
+		require.Equal(t, req.HasMembershipFilter, sqlproc.IvfHasMembershipFilter)
+	}
+}
+
 func TestPlanSearchSessionSharesExactDomainAndCentroidRoute(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
