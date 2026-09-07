@@ -9624,7 +9624,8 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if berr != nil {
 			return "", berr
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
+		out, err := geoEncodeWKB(b, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9636,6 +9637,13 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := source.GetStrValue(i)
 		dist, null2 := dists.GetValue(i)
 		qs, null3 := quads.GetValue(i)
@@ -9653,7 +9661,11 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if berr != nil {
 			return berr
 		}
-		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
+		out, err := geoEncodeWKB(b, f32)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -9678,7 +9690,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if oerr != nil {
 				return nil, oerr
 			}
-			return geoEncodeWKB(g, f32), nil
+			return geoEncodeWKB(g, f32)
 		}, selectList)
 	}
 }
@@ -9786,7 +9798,8 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9802,7 +9815,8 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
+		out, err := geoEncodeWKB(g, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9818,7 +9832,8 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9831,7 +9846,8 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
+		out, err := geoEncodeWKB(geo.Simplify(g, tol), f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9848,7 +9864,7 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.Collect(a, b), f32), nil
+		return geoEncodeWKB(geo.Collect(a, b), f32)
 	}, selectList)
 }
 
@@ -13439,7 +13455,11 @@ func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, le
 		pt := geo.Point{X: x, Y: y}
 		var wkb []byte
 		if f32 {
-			wkb = geo.WriteWKBFloat32(pt)
+			var err error
+			wkb, err = geo.WriteWKBFloat32(pt)
+			if err != nil {
+				return err
+			}
 		} else {
 			wkb = geo.WriteWKB(pt)
 		}
