@@ -1,11 +1,48 @@
 # Bounded distributed ORDER BY / LIMIT
 
-Status: review 5127191041 corrections validated locally; new-head CI pending (2026-09-07). Historical
-measurements below are not acceptance evidence for the revised worktree.
+Status: implementation review completed through `b65946fd08133ad82eb46eab98dc5189643c39c8`;
+substantive CI is green; independent design approval is pending (2026-09-07).
+Historical measurements below remain labeled separately from final-head evidence.
 Owner: issue #28285; regression constraint: #27968 must remain executable.
 Current base: `e60b3eb3bdfd8ad5f1b5ae3eb8745037371f44d8`.
-Reviewed head: `7764c28ecdf038b4c7ea0edf26870c52de52103c`.
+Implementation reviewed through: `b65946fd08133ad82eb46eab98dc5189643c39c8`.
 Implementation branch: `xp/fix-28285-bounded-merge-top`.
+
+## Design review record
+
+| Field | Record |
+| --- | --- |
+| Change scope | Distributed ordered Top-N hierarchy, local Top admission/spill policy, remote scope encoding/write-back, runtime DOP expansion, and cleanup/accounting contracts |
+| Design trigger | Changes a distributed wire protocol and ordering contract, crosses compile/process/operator/remote-execution ownership boundaries, and materially affects a hot path and capacity bounds |
+| Design revision | The commit containing this document; an independent reviewer must cite that commit when recording the decision |
+| Implementation revision | Code reviewed through `b65946fd08133ad82eb46eab98dc5189643c39c8`; the documentation-only alignment commit does not change runtime behavior |
+| Design status | Ready for independent review; approval is not self-asserted and remains a merge gate |
+| Blocking design questions from implementation review | None identified; the independent reviewer owns the final PASS or concrete design findings |
+| Implementation conformance | Conforms to the selected hierarchy, protocol-v53 fallback, one-producer ordered edges, bounded gather output, resident winner admission, spill migration, and large-OFFSET fallback described below |
+
+### Decision log
+
+| Decision | Rationale and accepted boundary |
+| --- | --- |
+| Add a protocol-v53 ordered-stream edge and hierarchical MergeTop | Eliminates global P*K payload materialization while preserving one sorted stream per actual worker and CN boundary |
+| Activate the hierarchy only for materialized order columns and estimated/unknown pressure | Avoids reevaluating volatile expressions and retains the lower-overhead compatible path for small bounded inputs |
+| Let small fixed-width and varlen winners remain resident | Avoids mandatory disk I/O for ordinary small Top; actual-byte admission compacts dead history or migrates survivors under pressure |
+| Keep large OFFSET on external Order above the 16,384-row prefix bound | Spill-backed Top still retains O(K) keys/references and their growth overlap, so a small final LIMIT does not prove safe Top admission |
+| Retain O(K) local keys/references in v1 | They remain allocation-accounted and may return a controlled resource error; fully external key selection is a separate design |
+| Drain finite producer output instead of adding prefix-stop in v1 | Preserves substantive producer errors and existing terminal arbitration; early producer stop needs a separate protocol decision |
+
+### Remaining rollout gates
+
+- An independent reviewer must approve this design revision and record the
+  decision on the PR before implementation approval.
+- Mixed-version deployment must demonstrate that the negotiated version keeps
+  old peers on the compatible MergeTop/MergeOrder path and rejects an ordered
+  payload that a peer cannot understand. This is a deployment gate, not evidence
+  inferred from codec unit tests.
+- The final binary has issue-shaped co-located three-CN evidence. Reproducing the
+  original three-host TKE topology and comparing a historical-good build remain
+  production rollout evidence; absence of either does not change the source-level
+  correctness result already reviewed.
 
 ## Problem and review decision
 
@@ -113,9 +150,10 @@ This supports these invariants:
    charged by the existing allocation accounts, not by `Batch.Size()`. The
    64 MiB window is not an exact physical peak/RSS guarantee. Large result
    cardinality alone never requires one large payload allocation.
-4. Local Top spills source payload, but v1 still retains O(K) row references
-   and ordering keys per producer. Those allocations remain query-accounted;
-   a fully external key-selection state is a separate follow-up boundary.
+4. Local Top retains fitting winners and spills source payload after actual
+   pressure. Spill mode still retains O(K) row references and ordering keys per
+   producer. Those allocations remain query-accounted; a fully external
+   key-selection state is a separate follow-up boundary.
 5. Success, rejection, error, cancellation, and reuse have one cleanup owner.
 6. Early stop applies only to the exclusively owned pure read subtree. Shared
    producers, found-rows consumers, and required effects retain their semantics.
@@ -166,14 +204,17 @@ Implementation v1 uses the following deliberately narrow activation contract:
   winner-byte admission with compaction/migration as specified above; a varlen
   type alone does not require disk. Single-worker scopes do not request an
   ordered-edge contract they do not consume;
-- once the hierarchy is selected, every local Top uses external payload storage
-  and byte-bounded ordered output even when K is at or below 16,384. This keeps
-  wide rows from being reconstructed into one resident result vector;
-- output is bounded by both 8,192 rows and 64 MiB (except that one individually
-  valid row must be allowed to make progress). The logical window is additionally
-  capped at one quarter of the allocator's single-allocation ceiling, reserving
-  slack for vector growth. Fixed and variable-width winner
-  runs are copied in bounded chunks using actual varlen payload sizes;
+- once the hierarchy is selected, each local Top preserves the ordered-output
+  contract but chooses storage independently. Fitting small winners remain
+  resident; dead varlen replacement history is compacted, and survivors migrate
+  to external payload storage only under actual byte pressure. Large K starts in
+  spill mode. Both resident and spilled paths emit the same sorted rows;
+- spill reconstruction and ordered gather output are bounded by both 8,192 rows
+  and 64 MiB (except that one individually valid row must make progress). The
+  logical window is additionally capped by the allocator's single-allocation
+  ceiling with slack for growth. Fixed and variable-width winner runs are copied
+  in bounded chunks using actual varlen payload sizes. A fitting resident Top may
+  return its complete small result in one batch;
 - cleanup shares one 30-second deadline across every receiver. The first
   implementation drains already-produced local Top output rather than
   introducing a new receiver-stop terminal state; producer early-stop remains
@@ -330,8 +371,8 @@ All resources remain charged to the owning tenant.
 The type-based guard retains the small fixed-width fast path. The runtime
 resident path additionally retains fitting small varlen results, compacting dead
 payload or migrating survivors on actual pressure. Ordered distributed producers
-still use spill output; lazy writing bounds their rejected-input I/O, not all
-candidate I/O. Updating a cluster cannot retrofit this runtime guard onto
+use the same resident-or-spill admission; once spill mode is active, lazy writing
+bounds rejected-input I/O, not all candidate I/O. Updating a cluster cannot retrofit this runtime guard onto
 old CN binaries: mixed-version fallback preserves protocol compatibility, while
 the full payload safety guarantee requires all executors to carry this fix.
 
@@ -489,10 +530,10 @@ A finite suite cannot prove that no counterexample exists. Acceptance means
 the stated invariants, reachable transitions, and mapped failure dimensions
 have evidence; untested dimensions and known limits remain explicit.
 
-## Review correction evidence (2026-09-07)
+## Final implementation review evidence (2026-09-07)
 
-These checks apply to the corrections on reviewed head `7764c28e`, not the
-historical implementation measurements below/elsewhere in this document.
+These checks cover the implementation through `b65946fd08133ad82eb46eab98dc5189643c39c8`.
+Earlier failed or superseded measurements remain identified as historical evidence.
 
 Complete change-map closure against `e60b3eb3`:
 
@@ -513,7 +554,7 @@ cancellation and terminal draining remain necessary, with no new wait primitive.
 Q3: resident replacement history is bounded by admission/compaction, rejected
 spill batches do not write payload, and large OFFSET avoids O(K) Top metadata.
 Physical capacity is still charged; v1's accounted large-K key/reference state
-is not claimed to be fully external. Human approval of the distributed design
+is not claimed to be fully external. Independent approval of this design revision
 and mixed-version deployment acceptance are not inferred from these tests.
 
 - Review OFFSET reproducer: 4,194,304 bigint rows, LIMIT 1 OFFSET 4,194,303,
