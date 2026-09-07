@@ -1114,6 +1114,42 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
+// marker positions whose prepare-time binary-string default must be rebound
+// only when execution supplies a numeric domain.
+func PreparedPlanBitCountFallbackParamPositions(preparePlan *Plan) []int32 {
+	return preparedPlanFunctionFallbackParamPositions(preparePlan, "bit_count")
+}
+
+func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), functionName) || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
 	return expr != nil && expr.GetPreparedNumeric().GetFallback()
 }
