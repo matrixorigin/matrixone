@@ -254,6 +254,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
 	}
 
+	if tableDef.IsTemporary {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		tableDef.Name = tableName
+	}
+
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := cctx.GetAccountId()
 	if err != nil {
@@ -618,6 +623,10 @@ func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, erro
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}
 	replicaTableDef.Name = replicaTableDef.Name + "_copy_" + id.String()
+	if tableDef.IsTemporary {
+		// Physical session names can already exceed the SQL identifier limit.
+		replicaTableDef.Name = "__mo_alter_copy_" + id.String()
+	}
 	return replicaTableDef, nil
 }
 
@@ -681,9 +690,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if tableDef.IsTemporary {
-		// Only allow a safe subset of alter operations on temporary tables.
-		// For now: add index / drop index.
-		if !allowTempTableAlterForIndex(stmt) {
+		// Keep unsupported temporary-table DDL (e.g. foreign keys and partitions) closed.
+		if !allowTempTableAlter(stmt) {
 			return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 		}
 	}
@@ -764,9 +772,8 @@ func validateAlterTableIdentifierDestinations(ctx context.Context, options []tre
 	return nil
 }
 
-// allowTempTableAlterForIndex returns true if the alter table statement
-// is limited to add/drop index operations, which we support for temp tables.
-func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
+// allowTempTableAlter limits temporary ALTER to supported column, name and index changes.
+func allowTempTableAlter(stmt *tree.AlterTable) bool {
 	// partition alter is not allowed for temp table
 	if stmt.PartitionOption != nil {
 		return false
@@ -784,11 +791,15 @@ func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
 			}
 		case *tree.AlterOptionDrop:
 			switch o.Typ {
-			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
-				// supported drop index/key
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey, tree.AlterTableDropColumn:
+				// supported drop index/key/column
 			default:
 				return false
 			}
+		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableChangeColumnClause, *tree.AlterTableRenameColumnClause,
+			*tree.AlterOptionTableName:
+			// supported column and name changes
 		default:
 			return false
 		}

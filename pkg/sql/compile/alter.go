@@ -1063,6 +1063,23 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		dbName = c.db
 	}
 	tblName := qry.GetTableDef().GetName()
+	isTemp := qry.TableDef.IsTemporary
+	if isTemp {
+		var err error
+		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
+		if err != nil {
+			return err
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+		defer func() { c.proc.Ctx = originalCtx }()
+		// The execution options are resolved to physical names below. A retry
+		// must start from the original logical plan.
+		executionPlan := *qry
+		qry = &executionPlan
+		qry.Options = cloneAlterCopyOpt(qry.Options)
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
@@ -1076,6 +1093,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
+	}
+
+	if isTemp && originRel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
 
 	oldId := originRel.GetTableID(c.proc.Ctx)
@@ -1155,7 +1176,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if retryErr != nil {
 			return retryErr
 		}
-		if shouldAdvanceAlterDataBranchLineageSnapshot(
+		if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 		) {
 			// The source metadata lock excludes new current-source branch clones.
@@ -1170,29 +1191,32 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			lineageSnapshotAdvanced = true
 		}
 	}
-	// The stable row exists even when no owner does. Snapshot and PITR creation
-	// cross the same write barrier before choosing their timestamp and retain
-	// the write through owner publication. Pessimistic transactions wait; an
-	// optimistic write-write loser retries the whole statement.
-	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
-		return err
-	}
-	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName, "ALTER")
-	if err != nil {
-		return err
-	}
-	if !lineagePlan.enabled {
-		var hasLatestHistory bool
-		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
-			oldId, dbName, tblName,
-		); err != nil {
+	if !isTemp {
+		// The stable row exists even when no owner does. Snapshot and PITR creation
+		// cross the same write barrier before choosing their timestamp and retain
+		// the write through owner publication. Pessimistic transactions wait; an
+		// optimistic write-write loser retries the whole statement.
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}
-		if hasLatestHistory {
-			lineagePlan.enabled = true
-			lineagePlan.preserveHistoricalSource = true
+		lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName, "ALTER")
+		if err != nil {
+			return err
+		}
+		if !lineagePlan.enabled {
+			var hasLatestHistory bool
+			if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
+				oldId, dbName, tblName,
+			); err != nil {
+				return err
+			}
+			if hasLatestHistory {
+				lineagePlan.enabled = true
+				lineagePlan.preserveHistoricalSource = true
+			}
 		}
 	}
+
 	if lineagePlan.enabled {
 		if columnName, replaced := alterCopySameStatementColumnReplacement(qry); replaced {
 			return moerr.NewNotSupportedNoCtxf(
@@ -1266,8 +1290,20 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
+	if isTemp {
+		defer c.proc.GetSession().RemoveTempTable(dbName, qry.CopyTableDef.Name)
+	}
+
 	//4. obtain relation for new tables
-	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
+	copyTblName := qry.CopyTableDef.Name
+	if isTemp {
+		copyTblName, err = resolveAlterTemporaryTable(c, dbName, qry.CopyTableDef)
+		if err != nil {
+			return err
+		}
+		qry.Options.TargetTableName = copyTblName
+	}
+	newRel, err := dbSource.Relation(c.proc.Ctx, copyTblName, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -1358,7 +1394,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	if !plan2.IsFkBannedDatabase(qry.Database) {
+	if !isTemp && !plan2.IsFkBannedDatabase(qry.Database) {
 		// Apply ALTER actions to the source rows first, then make those rows
 		// follow the replacement relation. This preserves catalog-only forward
 		// references and avoids exposing a half-renamed self reference.
@@ -1382,6 +1418,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// 7. drop original table.
 	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
+	if isTemp {
+		dropSql = "drop temporary table " + sqlquote.QualifiedIdent(dbName, qry.TableDef.Name)
+	}
 	if err := c.runSqlWithOptions(
 		dropSql,
 		// ALTER TABLE COPY replaces the source table internally. It is not a
@@ -1398,7 +1437,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 	//-------------------------------------------------------------------------
 	// 8. rename temporary replica table into the original table(Table Id remains unchanged)
-	copyTblName := qry.CopyTableDef.Name
 	req := api.NewRenameTableReq(
 		newRel.GetDBID(c.proc.Ctx),
 		newRel.GetTableID(c.proc.Ctx),
@@ -1419,7 +1457,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	if !plan2.IsFkBannedDatabase(qry.Database) {
+	if isTemp {
+		c.proc.GetSession().AddTempTable(dbName, qry.TableDef.Name, tblName)
+	}
+
+	if !isTemp && !plan2.IsFkBannedDatabase(qry.Database) {
 		_, finalizeFkSqls := plan2.GetSqlForTransferAlterCopyFk(
 			qry.Database,
 			qry.TableDef.Name,
@@ -2008,6 +2050,10 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 	}
 	if err != nil {
 		return err
+	}
+
+	if qry.TableDef.IsTemporary {
+		return nil
 	}
 
 	if qry.AlgorithmType != plan.AlterTable_COPY && !plan2.IsFkBannedDatabase(qry.Database) {
@@ -2635,4 +2681,15 @@ func cloneUnaffectedIndexes(
 	}
 
 	return nil
+}
+
+// resolveAlterTemporaryTable never falls through to a permanent table when a
+// cached plan outlives its session alias. The relation ID is checked by callers.
+func resolveAlterTemporaryTable(c *Compile, dbName string, def *plan.TableDef) (string, error) {
+	if session := c.proc.GetSession(); session != nil {
+		if name, ok := session.GetTempTable(dbName, def.Name); ok {
+			return name, nil
+		}
+	}
+	return "", moerr.NewNoSuchTable(c.proc.Ctx, dbName, def.Name)
 }
