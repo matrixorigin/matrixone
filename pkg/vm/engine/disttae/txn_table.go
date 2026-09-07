@@ -2997,8 +2997,8 @@ func (tbl *txnTable) PKPersistedBetween(
 	if len(candidateBlks) > 0 {
 		// Acquire semaphore to limit concurrent block I/O across all transactions.
 		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Scoped to the block loop only — tombstone
-		// checking below is not rate-limited by this semaphore.
+		// exhausting mpool capacity. Release before the tombstone phase, which
+		// acquires its own permit (never nest acquisitions).
 		if err := acquirePKCheckSemaphore(ctx); err != nil {
 			return false, err
 		}
@@ -3070,7 +3070,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
 		changed, tombstoneReason, err := tombstonePKExistsInRange(
-			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+			ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
 		)
 		if changed {
 			reason = tombstoneReason
@@ -3082,9 +3082,13 @@ func (tbl *txnTable) PKPersistedBetween(
 
 // tombstonePKExistsInRange checks whether any tombstone object created or deleted
 // after 'from' contains a PK that intersects with 'keys'.
-// If the total tombstone rows exceed the threshold, it conservatively returns true.
+// User tables retain a row-count cost guard. System catalog checks must inspect
+// the requested keys: unrelated DDL/compaction can rewrite many historical
+// tombstones, and a false conflict restarts the entire (potentially expensive)
+// DDL statement. Object row counts are not evidence of a catalog-key change.
 func tombstonePKExistsInRange(
 	ctx context.Context,
+	tableID uint64,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -3093,17 +3097,36 @@ func tombstonePKExistsInRange(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (bool, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
 		return false, "", nil
 	}
 	const tombstoneRowsThreshold = 50000
-	var totalRows uint32
-	for i := range tombObjs {
-		totalRows += tombObjs[i].Rows()
-		if totalRows > tombstoneRowsThreshold {
-			return true, "tombstone_rows_bailout", nil
+	if !catalog.IsSystemTable(tableID) {
+		var totalRows uint64
+		for i := range tombObjs {
+			totalRows += uint64(tombObjs[i].Rows())
+			if totalRows > tombstoneRowsThreshold {
+				return true, "tombstone_rows_bailout", nil
+			}
 		}
+	}
+	// Bound concurrent pinned/decoded blocks, not the number of unrelated
+	// catalog rows. Each iteration releases its block before reading the next.
+	if err := acquirePKCheckSemaphore(ctx); err != nil {
+		return false, "", err
+	}
+	defer releasePKCheckSemaphore()
+	// Preserve conservative I/O-failure handling, but do not turn cancellation
+	// into a metadata-change retry. All readers receive the same caller context.
+	readFailure := func() (bool, string, error) {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
+		return true, "tombstone_read_error", nil
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
 	var cachedSearch *objectio.ReadFilterSearch
@@ -3120,6 +3143,9 @@ func tombstonePKExistsInRange(
 	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
+			if err := ctx.Err(); err != nil {
+				return false, "", err
+			}
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
 			if cachedSearch != nil {
@@ -3140,7 +3166,7 @@ func tombstonePKExistsInRange(
 						fileservice.Policy(0),
 					)
 					if err != nil {
-						return true, "tombstone_read_error", nil
+						return readFailure()
 					}
 					if len(hits) > 0 {
 						return true, "tombstone_cn_hit", nil
@@ -3163,7 +3189,7 @@ func tombstonePKExistsInRange(
 					fileservice.Policy(0),
 				)
 				if err != nil {
-					return true, "tombstone_read_error", nil
+					return readFailure()
 				}
 				if !usable || changed {
 					if usable {
@@ -3181,7 +3207,7 @@ func tombstonePKExistsInRange(
 			tombVectors := containers.NewVectors(vecCount)
 			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
 			if err != nil {
-				return true, "tombstone_read_error", nil
+				return readFailure()
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
