@@ -1506,6 +1506,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
+	if isTemp && !c.isInternal && c.proc.Base.IsFrontend {
+		if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok && supportsSessionTemporaryDDL(c.proc.GetService()) {
+			return s.createSessionTemporaryTable(c, owner, tableCreated)
+		}
+	}
 	if isTemp {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
@@ -2205,6 +2210,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
+		return err
+	}
+
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
@@ -2284,20 +2307,13 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		res.Close()
 	}
 
-	if isTemp && session != nil {
-		// The temporary table and all follow-up metadata/index/CTAS work have
-		// completed. Keep the alias registered in the session.
-		rollbackTempAlias = false
-	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
-		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
+	if names, ok := proc.GetSession().(interface{ TemporaryTableName(string, string) string }); ok {
+		return names.TemporaryTableName(dbName, alias)
+	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
@@ -3990,6 +4006,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 		return err
+	}
+	if isTemp && !c.isInternal && c.proc.Base.IsFrontend && supportsSessionTemporaryDDL(c.proc.GetService()) {
+		if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
+			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
+			return nil
+		}
 	}
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
