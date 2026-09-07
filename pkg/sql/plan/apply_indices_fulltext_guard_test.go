@@ -118,6 +118,57 @@ func TestFullTextGuardCoversWrappedProjectionMatch(t *testing.T) {
 				"the MATCH must be served by a fulltext index scan")
 			require.Zero(t, countReachableFullTextMatches(builder.qry),
 				"a fulltext_match surviving into the executed plan throws 20105")
+
+			sort := builder.qry.Nodes[projNode.Children[0]]
+			require.Equal(t, planpb.Node_SORT, sort.NodeType)
+			join := builder.qry.Nodes[sort.Children[0]]
+			require.Equal(t, planpb.Node_LEFT, join.JoinType,
+				"a projection MATCH cannot discard nonmatching base rows")
+			require.Equal(t, scanID, join.Children[0])
+			require.Empty(t, scanNode.RuntimeFilterProbeList,
+				"a score-only stream must not prune the preserved side")
+			score := projNode.ProjectList[0]
+			if !tc.bare {
+				score = score.GetF().Args[0]
+			}
+			require.NotNil(t, score.GetF())
+			require.Equal(t, "coalesce", score.GetF().Func.ObjName)
+			require.False(t, score.GetF().Args[0].Typ.NotNullable)
+			require.Equal(t, float32(0), score.GetF().Args[1].GetLit().GetFval())
+		})
+	}
+}
+
+func TestFullTextScoreMembershipControlsCandidateLimit(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(map[bool]string{false: "optional", true: "required"}[required], func(t *testing.T) {
+			builder, scanID, projID := buildWrappedMatchGuardPlan(t, true)
+			// No residual predicate: previously both forms admitted candidate LIMIT.
+			scan := builder.qry.Nodes[scanID]
+			scan.FilterList = nil
+			proj := builder.qry.Nodes[projID]
+			if required {
+				scan.FilterList = []*planpb.Expr{DeepCopyExpr(proj.ProjectList[0])}
+			}
+			proj.Limit = makePlan2Uint64ConstExprWithType(1)
+			builder.prepareSpecialIndexGuards(projID)
+			_, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			sort := builder.qry.Nodes[proj.Children[0]]
+			require.Equal(t, planpb.Node_SORT, sort.NodeType)
+			require.Equal(t, uint64(1), sort.Limit.GetLit().GetU64Val())
+			join := builder.qry.Nodes[sort.Children[0]]
+			functions := collectFullTextFunctionScans(builder, proj.Children[0])
+			require.Len(t, functions, 1)
+			if required {
+				require.Equal(t, planpb.Node_INNER, join.JoinType)
+				require.NotNil(t, functions[0].Limit, "retain the ordinary WHERE MATCH fast path")
+				require.NotNil(t, proj.ProjectList[0].GetCol())
+			} else {
+				require.Equal(t, planpb.Node_LEFT, join.JoinType)
+				require.Nil(t, functions[0].Limit,
+					"truncating an optional stream would turn omitted matching scores into zero")
+			}
 		})
 	}
 }

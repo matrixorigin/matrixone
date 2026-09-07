@@ -134,17 +134,8 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			if builder.jsonProbeFtNodes[id] {
 				continue
 			}
-			ftnode := builder.qry.Nodes[id]
 			orderByScore = append(orderByScore, &OrderBySpec{
-				Expr: &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: ftnode.BindingTags[0],
-							ColPos: 1, // score column
-						},
-					},
-				},
+				Expr: builder.fullTextScoreExpr(id, served),
 				Flag: plan.OrderBySpec_DESC,
 			})
 		}
@@ -155,17 +146,8 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 				continue
 			}
 
-			ftnode := builder.qry.Nodes[id]
 			orderByScore = append(orderByScore, &OrderBySpec{
-				Expr: &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: ftnode.BindingTags[0],
-							ColPos: 1, // score column
-						},
-					},
-				},
+				Expr: builder.fullTextScoreExpr(id, served),
 				Flag: plan.OrderBySpec_DESC,
 			})
 		}
@@ -188,7 +170,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			if s.nodeID < 0 || ordered[s.nodeID] || builder.jsonProbeFtNodes[s.nodeID] {
 				continue
 			}
-			scoreExpr := builder.fullTextScoreColRef(s.nodeID)
+			scoreExpr := builder.fullTextScoreExpr(s.nodeID, served)
 			if scoreExpr == nil {
 				continue
 			}
@@ -226,16 +208,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	// replace the project with ColRef
 	for i, id := range proj_node_ids {
 		idx := projids[i]
-		ftnode := builder.qry.Nodes[id]
-		projNode.ProjectList[idx] = &Expr{
-			Typ: ftnode.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ftnode.BindingTags[0],
-					ColPos: 1, // score column
-				},
-			},
-		}
+		projNode.ProjectList[idx] = builder.fullTextScoreExpr(id, served)
 	}
 
 	// The loop above only rewrites projections that ARE a bare fulltext_match, because
@@ -406,6 +379,25 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	}
 	scanNode.FilterList = kept
 
+	// Only a membership-implying WHERE predicate may remove nonmatching rows.
+	// Projection/ORDER BY streams supply scores, not an intersection of doc IDs.
+	var drivingMatches []*plan.Expr
+	for _, expr := range wrappedMatchFilters {
+		drivingMatches = collectDrivingFullTextMatches(expr, drivingMatches)
+	}
+	required := make([]bool, len(ft_filters))
+	preserveRows := false
+	for i, expr := range ft_filters {
+		required[i] = i < len(filterids)
+		for _, driving := range drivingMatches {
+			if builder.equalsFullTextMatchFunc(expr.GetF(), driving.GetF()) {
+				required[i] = true
+				break
+			}
+		}
+		preserveRows = preserveRows || !required[i]
+	}
+
 	// fulltext2 INCLUDE/pk prefilter pushdown: when the driving index is a fulltext2 index
 	// WITH INCLUDE columns, peel the WHERE predicates on those INCLUDE columns (and the pk)
 	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which fulltext2_search
@@ -416,7 +408,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Removing the peeled predicates lets the pre-filter second-scan below be skipped when no
 	// residual filter remains.
 	var ft2PredsJSON string
-	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
+	if !preserveRows && len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
 		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
 			pkColName := fulltext2PeelablePkColName(scanNode) // "" for a non-evaluable pk type
 			preds, serialized, residual, perr := buildFilterPredicateJSON(scanNode.FilterList, scanNode, incCols, pkColName, true)
@@ -430,7 +422,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Resolve the residual-WHERE prefilter before deciding whether the internal
 	// fulltext stream may keep only LIMIT+OFFSET candidates. The early LIMIT is
 	// correctness-safe only when that prefilter is exact.
-	pushdownEnabled := len(scanNode.FilterList) > 0
+	pushdownEnabled := !preserveRows && len(scanNode.FilterList) > 0
 	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
 		!localProtocolEnablesSortedMembershipFilter(builder.compCtx.GetProcess().GetService()) {
 		pushdownEnabled = false
@@ -459,13 +451,20 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
 	// runs above the join, so limiting the stream below it can under-fill the final result.
-	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
-		paginationLimit, paginationOffset)
+	var limitExpr *plan.Expr
+	if !preserveRows {
+		// An omitted matching document must not become a zero score after LEFT JOIN.
+		limitExpr = builder.buildFullTextCandidateLimit(
+			scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
+			paginationLimit, paginationOffset)
+	}
 
 	// buildFullTextIndexScan
 	var last_node_id int32
 	var last_ftnode_pkcol *Expr
+	if preserveRows {
+		last_node_id = scanNode.NodeId
+	}
 
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
@@ -499,6 +498,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// 2-member dispatch stays inline (not an index-plugin hook) because building the
 		// node needs QueryBuilder internals a plugin sub-package must not import.
 		var curr_ftnode_id int32
+		guardFilters := wrappedMatchFilters
+		if !required[i] {
+			guardFilters = nil
+		}
 		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
 			cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
 			if cfgErr != nil {
@@ -514,7 +517,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			// from the predicates the lift moved above the join -- they stay there too, so the
 			// pushed (deliberately widened) range can only ever remove work, not rows.
 			var scoreRangeJSON string
-			if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
+			if rng := builder.fulltext2ScoreRangeFromFilters(guardFilters, fn); rng != nil {
 				rb, rerr := json.Marshal(rng)
 				if rerr != nil {
 					return -1, nil, nil, nil, rerr
@@ -540,7 +543,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			// Optional 6th argument: the zero-relevance guard for a threshold only known
 			// at EXECUTE. Arguments are positional, so the two optional JSON slots are
 			// padded when only the guard is needed.
-			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			guard, gerr := builder.fulltextRuntimeScoreGuard(guardFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
@@ -574,7 +577,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			}
 			// Optional 5th argument: the zero-relevance guard for a threshold only known
 			// at EXECUTE. See fulltextRuntimeScoreGuard.
-			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			guard, gerr := builder.fulltextRuntimeScoreGuard(guardFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
@@ -652,7 +655,34 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
 
-		if i > 0 {
+		if preserveRows {
+			joinType := plan.Node_INNER
+			if !required[i] {
+				joinType = plan.Node_LEFT
+				score := builder.fullTextScoreColRef(served[i].nodeID)
+				score.Typ.NotNullable = false
+				served[i].score, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce", []*Expr{
+					score, makePlan2Float32ConstExprWithType(0),
+				})
+				if err != nil {
+					return -1, nil, nil, nil, err
+				}
+			}
+			// Always join against the base PK, never a previous nullable stream's PK.
+			basePK := &Expr{Typ: pkType, Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: pkPos},
+			}}
+			on, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{basePK, curr_ftnode_pkcol})
+			if bindErr != nil {
+				return -1, nil, nil, nil, bindErr
+			}
+			last_node_id = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{last_node_id, curr_ftnode_id},
+				JoinType: joinType,
+				OnList:   []*Expr{on},
+			}, ctx)
+		} else if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
 			// JOIN INNER with children (curr_ftnode_id, last_node_id)
 
@@ -680,7 +710,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
 	var joinnodeID int32
 
-	if pushdownEnabled {
+	if preserveRows {
+		joinnodeID = last_node_id
+	} else if pushdownEnabled {
 		// Pre-filter pushdown mode:
 		//   outerJoin( scanNode, innerJoin( ft_func_chain, secondScanProject ) )
 		//
@@ -1535,6 +1567,7 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 type fulltextServedMatch struct {
 	fn     *plan.Function
 	nodeID int32
+	score  *plan.Expr // Optional streams use COALESCE(score, 0) after LEFT JOIN.
 }
 
 // isServedFullTextMatch reports whether one of served is the SAME MATCH as fn.
@@ -1598,7 +1631,7 @@ func (builder *QueryBuilder) servedFullTextScoreSameTable(fn *plan.Function, ser
 		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFuncSameTable(fn, s.fn) {
 			continue
 		}
-		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
+		if expr := builder.fullTextScoreExpr(s.nodeID, served); expr != nil {
 			return expr
 		}
 	}
@@ -1623,6 +1656,15 @@ func (builder *QueryBuilder) fullTextScoreColRef(nodeID int32) *plan.Expr {
 	}
 }
 
+func (builder *QueryBuilder) fullTextScoreExpr(nodeID int32, served []fulltextServedMatch) *plan.Expr {
+	for _, s := range served {
+		if s.nodeID == nodeID && s.score != nil {
+			return DeepCopyExpr(s.score)
+		}
+	}
+	return builder.fullTextScoreColRef(nodeID)
+}
+
 // servedFullTextScore returns the score column of the index scan built for fn, or nil when no
 // served scan answers this particular MATCH or its node is not usable. Only meaningful after
 // the build loop has filled in the node ids.
@@ -1634,7 +1676,7 @@ func (builder *QueryBuilder) servedFullTextScore(fn *plan.Function, served []ful
 		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFunc(fn, s.fn) {
 			continue
 		}
-		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
+		if expr := builder.fullTextScoreExpr(s.nodeID, served); expr != nil {
 			return expr
 		}
 	}

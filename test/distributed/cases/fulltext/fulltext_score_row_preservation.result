@@ -1,0 +1,68 @@
+set ft_relevancy_algorithm="TF-IDF";
+set experimental_fulltext_index = 1;
+drop database if exists ft_score_rows_28327;
+create database ft_score_rows_28327;
+use ft_score_rows_28327;
+create table docs(id int primary key, body text);
+insert into docs values (1,'alpha'),(2,'beta'),(3,'alpha beta');
+create fulltext index ft on docs(body);
+select id from docs order by match(body) against('alpha') desc, id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+2
+select id, if(match(body) against('alpha') > 0, 1, 0) as has_score from docs order by id;
+➤ id[4,32,0]  ¦  has_score[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  1
+select id, if(round(match(body) against('alpha'), 3) > 0, 1, 0) as has_score from docs order by id;
+➤ id[4,32,0]  ¦  has_score[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  1
+select id from docs
+where round(match(body) against('alpha'), 3) >= 0
+order by round(match(body) against('alpha'), 3), id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id from docs where id > 1 order by match(body) against('alpha') desc, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2
+select id from docs order by match(body) against('missing') desc, id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs order by match(body) against('alpha') asc, id limit 2;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+select id from docs order by match(body) against('alpha') desc, id limit 2;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id,
+if(match(body) against('alpha') > 0, 1, 0) as alpha_score,
+if(match(body) against('beta') > 0, 1, 0) as beta_score
+from docs order by id;
+➤ id[4,32,0]  ¦  alpha_score[-5,64,0]  ¦  beta_score[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  1  ¦  1
+select id, if(match(body) against('beta') > 0, 1, 0) as beta_score
+from docs
+where match(body) against('alpha')
+order by match(body) against('beta') desc, id;
+➤ id[4,32,0]  ¦  beta_score[-5,64,0]  𝄀
+3  ¦  1  𝄀
+1  ¦  0
+select id from docs where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+drop database ft_score_rows_28327;
+set ft_relevancy_algorithm="TF-IDF";
