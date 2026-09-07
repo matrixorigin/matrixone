@@ -215,7 +215,25 @@ keyed by account id and `mo_mysql_compatibility_mode` is a per-account table. So
 a tenant's value caps that tenant, and the **SYS account's** value caps the whole
 CN. The SYS value cannot be read through the caller's resolver, which resolves
 for the calling tenant; it is read from the catalog as the SYS account on a
-**fresh context** (`RunSqlAutoCommit` rebinds `TenantIDKey`), memoized for 15s.
+**fresh context** (`RunSqlAutoCommit` rebinds `TenantIDKey`), and memoized.
+
+A tenant reading its OWN cap is answered by the session resolver, which is always
+current, so `SET GLOBAL` on a tenant takes effect at that tenant's very next miss.
+The memo covers the two reads a session cannot answer — the SYS account's, and
+another tenant's on its behalf during a cross-account snapshot read.
+
+The tenant value **is** memoized all the same, because housekeeping needs it to
+reach a warm cache: a miss writes the resolver's answer into `acctLimits` on its
+way past. What matters is the direction. The memo is written *from* the
+authoritative read and never consulted *instead of* it, so a stale entry cannot
+let a tenant keep loading against a cap it has already lowered.
+
+That also bounds how late a changed tenant cap can land, without needing the TTL
+to be short. The only thing that keeps the memo fresh is a miss — and a miss
+enforces the resolver's current value itself. So a changed cap is applied at the
+tenant's next miss, or at a housekeeping tick, **whichever comes first**, and
+never later than one tick. A short memo TTL would not improve that; it would only
+add catalog reads.
 
 The memo stamps every attempt, success or failure. Without that, a catalog outage
 defeats it entirely: each cache miss re-attempts a 10s-timeout query, twice per
@@ -375,8 +393,8 @@ Housekeeping **refreshes** the value (`refreshMemoizedSysLimit`,
 `refreshMemoizedAccountLimits`); it does not merely reuse the last one a miss left
 behind. Reusing was the same hole one layer up: `limits()` is reached only on
 a MISS, so a hot cache never refreshes the memo and a lowered `SET GLOBAL` would
-not be applied for as long as the queries kept hitting — not for the 15s the memo
-is meant to bound. The refresh is TTL-gated exactly as a miss's would be, and
+not be applied for as long as the queries kept hitting — not within the window the
+memo is meant to bound. The refresh is TTL-gated exactly as a miss's would be, and
 needs no session: the CN uuid is remembered from an earlier read, and the caps are
 catalog rows.
 
@@ -393,7 +411,11 @@ applying a reduced operator one.
 **Cadence and refresh set, precisely.** The housekeeping ticker fires every
 `VectorIndexCacheTTL/2`; each tick dispatches the cap pass to its own goroutine,
 single-flighted, so a tick is dropped rather than queued while one is running.
-The pass itself refreshes at most once per `sysLimitTTL` (15s) per row.
+The memo is sized from that tick rather than set independently: `sysLimitTTL` is
+`VectorIndexCacheTTL/4` (75s), comfortably under the 2.5-minute tick, so every pass
+refreshes without the two racing at the boundary. A memo shorter than the tick
+would be re-read on a cadence nothing acts on; one longer would make a pass find
+its own value still fresh and skip the refresh it exists to perform.
 
 The set it refreshes is derived from **current residency**, not from history:
 
@@ -665,6 +687,17 @@ latter is what makes it safe to run. They are presented together because merging
   case for the two variables' scope and readback; a case that binds a real cap.
   Cases are isolated by account, so they are idempotent rather than passing only
   on a virgin cluster.
+
+**No case may set a cap on the SYS account.** The index cache is one object per CN,
+shared by every case the BVT runs concurrently, so a SYS cap governs the whole
+cache and would evict a neighbouring case's warm indexes — a failure that appears
+in the wrong file, only under concurrency, and not on a re-run. Every case that
+binds a cap therefore creates its own account and sets the value inside that
+session, where it governs only its own entries.
+`TestBVTCapChangesStayInsideATenantAccount` scans the suite and fails on any
+`SET GLOBAL` of either variable made on the default connection or as `sys`.
+Session-scope spellings are exempt because both variables are `ScopeGlobal` and
+the server refuses them, which is itself something a case asserts.
 
 The cap-binding case alternates between **two** index keys, not one. A single index
 is the arena's only occupant, which §5.3 always seats however small the cap, and
