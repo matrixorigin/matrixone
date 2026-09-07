@@ -73,6 +73,7 @@ func TestCurrvalResolvesDatabaseOncePerBatch(t *testing.T) {
 	defer input.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(4))
 
 	require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 4, nil))
 	for i := 0; i < 4; i++ {
