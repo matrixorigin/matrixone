@@ -1150,7 +1150,7 @@ func connectToHAKeeper(
 			c.respPool,
 			defaultMaxMessageSize,
 			cfg.EnableCompress,
-			defaultBackendReadTimeout,
+			cfg.backendReadTimeout(),
 			"connectToHAKeeper",
 		)
 		if err != nil {

@@ -370,3 +370,25 @@ select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order b
 insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
 select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
 drop table if exists t_odku_sec_uk;
+
+-- A child table with an auto-increment primary key and a secondary UNIQUE key
+-- can make the DEDUP build row wider than the incoming row. The conflict-target
+-- primary key exists only on the stored row and must survive the FK lock barrier.
+drop table if exists t_odku_fk_uk_child;
+drop table if exists t_odku_fk_uk_parent;
+create table t_odku_fk_uk_parent(pid int primary key);
+create table t_odku_fk_uk_child(
+  id bigint auto_increment primary key,
+  pid int not null,
+  attr_id int not null,
+  val varchar(20),
+  unique key uk_pid_attr(pid, attr_id),
+  foreign key(pid) references t_odku_fk_uk_parent(pid)
+);
+insert into t_odku_fk_uk_parent values (1);
+insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'old');
+insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'new')
+  on duplicate key update val = values(val);
+select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
+drop table if exists t_odku_fk_uk_child;
+drop table if exists t_odku_fk_uk_parent;

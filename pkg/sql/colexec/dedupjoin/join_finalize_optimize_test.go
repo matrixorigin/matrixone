@@ -193,6 +193,62 @@ func TestDedupJoinUpdateRestoresProbeVectors(t *testing.T) {
 	}
 }
 
+// TestDedupJoinUpdateUsesBuildOnlyResultColumn covers an asymmetric ODKU row
+// layout: the stored build row carries a conflict-target column that is absent
+// from the incoming probe row.
+func TestDedupJoinUpdateUsesBuildOnlyResultColumn(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	int32Typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{10}, {9001}}, nil)
+	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{10}}, nil)
+	conditions := [][]*plan.Expr{
+		{newExpr(0, int32Typ)},
+		{newExpr(0, int32Typ)},
+	}
+
+	dedupArg := &DedupJoin{
+		LeftTypes:               []types.Type{int32Typ},
+		RightTypes:              []types.Type{int32Typ, int32Typ},
+		Conditions:              conditions,
+		Result:                  []colexec.ResultPos{colexec.NewResultPos(1, 1)},
+		OnDuplicateAction:       plan.Node_UPDATE,
+		DelColIdx:               -1,
+		DedupDeleteMarkerColIdx: -1,
+		JoinMapTag:              curTag,
+		OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:             true,
+		NeedBatches:             true,
+		NeedAllocateSels:        true,
+		Conditions:              conditions[1],
+		IsDedup:                 true,
+		OnDuplicateAction:       plan.Node_UPDATE,
+		DelColIdx:               -1,
+		DedupDeleteMarkerColIdx: -1,
+		JoinMapTag:              curTag,
+		JoinMapRefCnt:           1,
+		OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	t.Cleanup(func() {
+		dedupArg.Reset(proc, false, nil)
+		buildArg.Reset(proc, false, nil)
+		dedupArg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	})
+
+	out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+	require.Len(t, out, 1)
+	require.Equal(t, 1, out[0].RowCount())
+	require.Equal(t, []int32{9001}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[0]))
+}
+
 // TestDedupJoinFinalizeMatchedZero_NonCapture exercises the non-capture
 // fast path at finalize() lines 312-360: matched.Count()==0 and no capture
 // columns, so each Result column with rp.Rel==1 is transferred from the

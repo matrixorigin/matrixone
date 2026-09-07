@@ -1014,10 +1014,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					}
 					for j, rp := range ap.Result {
 						if rp.Rel == 1 {
-							//if last index is row_id, meams need fetch right child's partition column
-							//@FIXME should have better way to get right child's partition column
+							// UPDATE normally emits the post-update probe row. Row IDs and
+							// columns that exist only in the build row (for example the
+							// planner's conflict-target primary key) must come from the
+							// matched stored row instead.
 							var srcVec *vector.Vector
-							if ctr.joinBat1.Vecs[rp.Pos].GetType().Oid == types.T_Rowid {
+							if int(rp.Pos) >= len(ctr.joinBat1.Vecs) || ctr.joinBat1.Vecs[rp.Pos].GetType().Oid == types.T_Rowid {
 								srcVec = ctr.joinBat2.Vecs[rp.Pos]
 							} else {
 								srcVec = ctr.joinBat1.Vecs[rp.Pos]

@@ -145,6 +145,7 @@ func NewCompile(
 	c.proc.Base.SessionInfo.QuerySchedulingIntent = schedule.SchedulingIntent{}
 	c.startAt = startAt
 	c.disableRetry = false
+	c.retryTimes = 0
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -224,6 +225,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.sql = sql
 	c.affectRows.Store(0)
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -307,6 +309,7 @@ func (c *Compile) clear() {
 	c.fill = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
 	c.db = ""
@@ -445,12 +448,7 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
-		err := s.CreateDatabase(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(1)
-		return nil
+		return s.CreateDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
