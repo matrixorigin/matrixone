@@ -14,16 +14,21 @@
 package v4_0_6
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -154,7 +159,40 @@ func newTaskMetadataIndex(tableName, indexName, columnName string) versions.Upgr
 	return versions.UpgradeEntry{Schema: catalog.MOTaskDB, TableName: tableName, UpgType: versions.ADD_INDEX,
 		UpgSql: fmt.Sprintf("create index %s on %s.%s(%s)", indexName, catalog.MOTaskDB, tableName, columnName),
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckIndexDefinition(txn, accountID, catalog.MOTaskDB, tableName, indexName)
+			res, err := txn.Exec("SHOW CREATE TABLE "+sqlquote.QualifiedIdent(catalog.MOTaskDB, tableName), executor.StatementOption{}.WithAccountID(accountID))
+			if err != nil {
+				return false, err
+			}
+			defer res.Close()
+			var createSQL string
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows == 1 && len(cols) == 2 {
+					createSQL = cols[1].GetStringAt(0)
+				}
+				return false
+			})
+			statements, err := mysql.Parse(context.Background(), createSQL, 1)
+			if err != nil {
+				return false, err
+			}
+			defer func() {
+				for _, stmt := range statements {
+					stmt.Free()
+				}
+			}()
+			if len(statements) != 1 {
+				return false, moerr.NewInternalErrorNoCtx("missing task table definition during index upgrade")
+			}
+			definition, ok := statements[0].(*tree.CreateTable)
+			if !ok {
+				return false, moerr.NewInternalErrorNoCtx("invalid task table definition during index upgrade")
+			}
+			for _, def := range definition.Defs {
+				if index, ok := def.(*tree.Index); ok && strings.EqualFold(index.Name, indexName) {
+					return true, nil
+				}
+			}
+			return false, nil
 		},
 	}
 }
