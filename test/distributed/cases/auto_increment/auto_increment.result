@@ -672,25 +672,27 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-10
+1
 drop table auto_increment17;
 create table auto_increment17(col1 int auto_increment) auto_increment = 0;
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-10
+1
 drop table auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-100
+1
 drop table auto_increment17;
 set auto_increment_offset = 1;
 drop table if exists auto_increment_alter;
@@ -741,14 +743,72 @@ id
 501
 drop table auto_increment_alter_copy;
 drop table if exists auto_increment_alter_add_empty;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment_alter_add_empty(v int);
 alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+set auto_increment_offset = 1;
 insert into auto_increment_alter_add_empty(v) values (1);
 select * from auto_increment_alter_add_empty;
 v    id
-1    10
+1    1
 drop table auto_increment_alter_add_empty;
+drop table if exists auto_increment_session_ddl_alter;
+drop table if exists auto_increment_session_ddl_create;
+drop table if exists auto_increment_session_ddl_explicit;
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+create table auto_increment_session_ddl_alter(v int);
+alter table auto_increment_session_ddl_alter add column id bigint auto_increment, algorithm = copy;
+create table auto_increment_session_ddl_create(id bigint auto_increment, v int);
+create table auto_increment_session_ddl_explicit(id bigint auto_increment, v int) auto_increment = 100;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment.auto_increment_session_ddl_alter(v) values (1);
+insert into auto_increment.auto_increment_session_ddl_create(v) values (1);
+insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1);
+select id from auto_increment.auto_increment_session_ddl_alter;
+id
+1
+select id from auto_increment.auto_increment_session_ddl_create;
+id
+1
+select id from auto_increment.auto_increment_session_ddl_explicit;
+id
+100
+drop table auto_increment_session_ddl_alter;
+drop table auto_increment_session_ddl_create;
+drop table auto_increment_session_ddl_explicit;
+drop table if exists auto_increment_session_series;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+create table auto_increment_session_series(id bigint auto_increment primary key, v int);
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+insert into auto_increment_session_series(v) values (1), (2), (3);
+select id, v from auto_increment_session_series order by id;
+id    v
+2    1
+5    2
+8    3
+select last_insert_id();
+last_insert_id()
+2
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_series(v) values (4);
+select count(*) from auto_increment_session_series where v = 4 and id > 8;
+count(*)
+1
+set auto_increment_increment = 4;
+set auto_increment_offset = 3;
+insert into auto_increment.auto_increment_session_series(v) values (5), (6), (7);
+select count(*), min(id) % 4, max(id) - min(id), min(id) > 8
+from auto_increment.auto_increment_session_series where v >= 5;
+count(*)    min(id) % 4    max(id) - min(id)    min(id) > 8
+3    3    8    1
+drop table auto_increment_session_series;
+set auto_increment_increment = 1;
 set auto_increment_offset = 1;
 drop table if exists auto_increment_alter_rename;
 create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);

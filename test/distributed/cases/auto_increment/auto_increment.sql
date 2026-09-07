@@ -437,8 +437,9 @@ Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 Drop table auto_increment16;
 
--- system variable: auto_increment_increment
+-- Session variables control DML allocation, not CREATE metadata.
 drop table if exists auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -448,6 +449,7 @@ create table auto_increment17(col1 int auto_increment) auto_increment = 0;
 insert into auto_increment17 values();
 select * from auto_increment17;
 drop table auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -496,15 +498,71 @@ insert into auto_increment_alter_copy(v) values (4);
 select id from auto_increment_alter_copy order by id;
 drop table auto_increment_alter_copy;
 
--- COPY must preserve the session-initialized allocator for a newly added
--- AUTO_INCREMENT column when the source table is empty.
+-- COPY must keep a newly added empty AUTO_INCREMENT column independent of the
+-- session that performed the ALTER; the writer's session controls the first ID.
 drop table if exists auto_increment_alter_add_empty;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment_alter_add_empty(v int);
 alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+set auto_increment_offset = 1;
 insert into auto_increment_alter_add_empty(v) values (1);
 select * from auto_increment_alter_add_empty;
 drop table auto_increment_alter_add_empty;
+
+-- A fresh CREATE and a fresh ALTER COPY must not persist the creator's session
+-- offset for a later writer. Explicit AUTO_INCREMENT remains table state.
+drop table if exists auto_increment_session_ddl_alter;
+drop table if exists auto_increment_session_ddl_create;
+drop table if exists auto_increment_session_ddl_explicit;
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+create table auto_increment_session_ddl_alter(v int);
+alter table auto_increment_session_ddl_alter add column id bigint auto_increment, algorithm = copy;
+create table auto_increment_session_ddl_create(id bigint auto_increment, v int);
+create table auto_increment_session_ddl_explicit(id bigint auto_increment, v int) auto_increment = 100;
+-- @session:id=1{
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment.auto_increment_session_ddl_alter(v) values (1);
+insert into auto_increment.auto_increment_session_ddl_create(v) values (1);
+insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1);
+select id from auto_increment.auto_increment_session_ddl_alter;
+select id from auto_increment.auto_increment_session_ddl_create;
+select id from auto_increment.auto_increment_session_ddl_explicit;
+-- @session}
+drop table auto_increment_session_ddl_alter;
+drop table auto_increment_session_ddl_create;
+drop table auto_increment_session_ddl_explicit;
+
+-- Existing allocators use the writer's increment/offset series. Session-local
+-- variables must also be applied after the allocator has already been used.
+drop table if exists auto_increment_session_series;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+create table auto_increment_session_series(id bigint auto_increment primary key, v int);
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+insert into auto_increment_session_series(v) values (1), (2), (3);
+select id, v from auto_increment_session_series order by id;
+select last_insert_id();
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_series(v) values (4);
+-- A writer-side option change must still advance the existing allocator. The
+-- exact value may follow an already reserved range, so assert the invariant.
+select count(*) from auto_increment_session_series where v = 4 and id > 8;
+-- A different writer may select a new series without changing table metadata;
+-- check only the series invariants because reservation boundaries can create gaps.
+-- @session:id=2{
+set auto_increment_increment = 4;
+set auto_increment_offset = 3;
+insert into auto_increment.auto_increment_session_series(v) values (5), (6), (7);
+select count(*), min(id) % 4, max(id) - min(id), min(id) > 8
+from auto_increment.auto_increment_session_series where v >= 5;
+-- @session}
+drop table auto_increment_session_series;
+set auto_increment_increment = 1;
 set auto_increment_offset = 1;
 
 -- INPLACE rename must not orphan the allocator row used by a later reset.
