@@ -55,9 +55,9 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 			v511 varbinary(511),
 			v512 varbinary(512),
 			v600 varbinary(600),
-			vblob blob)`, tableName))
+			vbytes varbinary(511))`, tableName))
 		execSQLRequire(t, ctx, db, fmt.Sprintf(
-			"insert into %s values (1,1,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF')),(2,1,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F')),(3,2,null,null,null,null,null)",
+			"insert into %s values (1,1,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('E4B8AD')),(2,1,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('FF0001')),(3,2,null,null,null,null,null)",
 			tableName))
 
 		expectedAggregate := map[string]string{
@@ -80,7 +80,6 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 			{name: "uuid_to_bin", expression: uuidExpression, hexLength: 32},
 			{name: "inet6_aton", expression: "inet6_aton('2001:db8::1')", hexLength: 32},
 			{name: "substring", expression: "substring(v512, 1, 511)", hexLength: 4},
-			{name: "substring_blob", expression: "substring(vblob, 1, 511)", hexLength: 4},
 			{name: "binary_and", expression: uuidExpression + " & " + uuidExpression, hexLength: 32},
 			{name: "binary_or", expression: uuidExpression + " | " + uuidExpression, hexLength: 32},
 			{name: "binary_xor", expression: uuidExpression + " ^ " + uuidExpression, hexLength: 32},
@@ -119,6 +118,39 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 				}
 			})
 		}
+
+		t.Run("substring derived boundaries and byte semantics", func(t *testing.T) {
+			expectedBytes := map[string]string{
+				"bit_and": "E40001",
+				"bit_or":  "FFB8AD",
+				"bit_xor": "1BB8AC",
+			}
+			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+				expression := fmt.Sprintf("%s(substring(vbytes, 1, 511))", functionName)
+				queries := []string{
+					fmt.Sprintf("select hex(%s) from %s where g=1", expression, tableName),
+					fmt.Sprintf("select hex(%s(s)) from (select substring(vbytes, 1, 511) as s from %s where g=1) q", functionName, tableName),
+					fmt.Sprintf("with q as (select substring(vbytes, 1, 511) as s from %s where g=1) select hex(%s(s)) from q", tableName, functionName),
+				}
+				for _, query := range queries {
+					var got string
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got), query)
+					require.Equal(t, expectedBytes[functionName], got, query)
+				}
+			}
+
+			viewName := fmt.Sprintf("`%s`.bitwise_28227_bytes", dbName)
+			execSQLRequire(t, ctx, db, fmt.Sprintf(
+				"create view %s as select substring(vbytes, 1, 511) as s from %s where g=1",
+				viewName, tableName))
+			defer execSQLMaybe(t, ctx, db, "drop view if exists "+viewName)
+			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+				var got string
+				require.NoError(t, db.QueryRowContext(ctx,
+					fmt.Sprintf("select hex(%s(s)) from %s", functionName, viewName)).Scan(&got))
+				require.Equal(t, expectedBytes[functionName], got)
+			}
+		})
 
 		for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
 			t.Run(functionName, func(t *testing.T) {
@@ -172,9 +204,8 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					fmt.Sprintf("select %s(substring(v512, 1, 512)) from %s where g=1", functionName, tableName),
 					fmt.Sprintf("select g,%s(substring(v512, 1, 512)) from %s where g=1 group by g", functionName, tableName),
 					fmt.Sprintf("select id,%s(substring(v512, 1, 512)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
-					fmt.Sprintf("select %s(substring(vblob, 1, 512)) from %s where g=1", functionName, tableName),
-					fmt.Sprintf("select g,%s(substring(vblob, 1, 512)) from %s where g=1 group by g", functionName, tableName),
-					fmt.Sprintf("select id,%s(substring(vblob, 1, 512)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
+					fmt.Sprintf("select %s(s) from (select substring(v512, 1, 512) as s from %s where g=1) q", functionName, tableName),
+					fmt.Sprintf("with q as (select substring(v512, 1, 512) as s from %s where g=1) select %s(s) from q", tableName, functionName),
 				} {
 					_, err := db.ExecContext(ctx, statement)
 					require.Error(t, err, "%s must be rejected", statement)
@@ -184,6 +215,19 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					require.True(t, errors.As(err, &mysqlErr), "%T: %v", err, err)
 					require.Equal(t, uint16(3514), mysqlErr.Number)
 				}
+
+				viewName := fmt.Sprintf("`%s`.bitwise_28227_oversized_%s", dbName, functionName)
+				execSQLRequire(t, ctx, db, fmt.Sprintf(
+					"create view %s as select substring(v512, 1, 512) as s from %s where g=1",
+					viewName, tableName))
+				_, err := db.ExecContext(ctx, fmt.Sprintf("select %s(s) from %s", functionName, viewName))
+				require.Error(t, err)
+				require.ErrorContains(t, err,
+					"Aggregate bitwise functions cannot accept arguments longer than 511 bytes")
+				var mysqlErr *mysql.MySQLError
+				require.True(t, errors.As(err, &mysqlErr), "%T: %v", err, err)
+				require.Equal(t, uint16(3514), mysqlErr.Number)
+				execSQLMaybe(t, ctx, db, "drop view if exists "+viewName)
 			})
 		}
 	})

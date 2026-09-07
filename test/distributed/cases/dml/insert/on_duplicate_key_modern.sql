@@ -132,8 +132,8 @@ select * from t_odku_realpk order by id;
 insert into t_odku_realpk values (5, NULL, NULL, 5) on duplicate key update val = val + 1;
 select * from t_odku_realpk order by id;
 
--- In-batch protection: two brand-new rows sharing a new unique-key value still
--- error deterministically (avoids a duplicated unique-index entry).
+-- Statement-local arbitration: the first row inserts and publishes uk1=77;
+-- the later row resolves that conflict as UPDATE of the first row.
 insert into t_odku_realpk values (20, 77, 701, 5), (21, 77, 702, 5) on duplicate key update val = val + 1;
 select * from t_odku_realpk order by id;
 
@@ -260,13 +260,47 @@ drop table if exists t_odku_prefix;
 drop table if exists t_odku_fk_child;
 drop table if exists t_odku_fk_parent;
 create table t_odku_fk_parent(pid int primary key, pname varchar(20));
-create table t_odku_fk_child(cid int primary key, pid int, val int, foreign key(pid) references t_odku_fk_parent(pid));
+create table t_odku_fk_child(
+  cid int primary key,
+  pid int,
+  val int not null,
+  constraint ck_odku_fk_action check(val >= 0),
+  foreign key(pid) references t_odku_fk_parent(pid)
+);
 insert into t_odku_fk_parent values (1, 'P1'), (2, 'P2');
 insert into t_odku_fk_child values (1, 1, 100);
 -- seed an unrelated orphan row under FOREIGN_KEY_CHECKS=0 (pid=99 has no parent)
 set foreign_key_checks=0;
 insert into t_odku_fk_child values (2, 99, 200);
+-- CHECK/NOT NULL still require the ordered action stream while FK checking is
+-- disabled, but the planner must not consume FK eligibility columns that were
+-- deliberately not produced.
+insert into t_odku_fk_child values (1, 999, 100)
+  on duplicate key update val = values(val);
+select cid, pid, val from t_odku_fk_child where cid = 1;
+insert into t_odku_fk_child values (1, 999, -1)
+  on duplicate key update val = values(val);
+select cid, pid, val from t_odku_fk_child where cid = 1;
+insert into t_odku_fk_child values (1, 999, 102)
+  on duplicate key update val = if(values(val) = 102, null, values(val));
+select cid, pid, val from t_odku_fk_child where cid = 1;
 set foreign_key_checks=1;
+-- A conflicting no-op must not revalidate the unchanged orphan reference. The
+-- row remains in the stream for CLIENT_FOUND_ROWS accounting only.
+insert into t_odku_fk_child values (2, 99, 0) on duplicate key update val = val;
+select row_count(), cid, pid, val from t_odku_fk_child where cid = 2;
+-- Mentioning an FK column in the assignment is not enough to make it eligible:
+-- the final FK tuple is compared with the stored tuple using null-safe equality.
+insert into t_odku_fk_child values (2, 99, 0) on duplicate key update pid = pid;
+select row_count(), cid, pid, val from t_odku_fk_child where cid = 2;
+-- A real update to a non-FK column also leaves the FK tuple outside the check's
+-- mutation domain and must succeed.
+insert into t_odku_fk_child values (2, 99, 0) on duplicate key update val = val + 1;
+select row_count(), cid, pid, val from t_odku_fk_child where cid = 2;
+-- Eligibility is row-scoped: retain the orphan no-op while validating and
+-- inserting the valid new row in the same batch.
+insert into t_odku_fk_child values (2, 99, 0), (4, 2, 400) on duplicate key update val = val;
+select row_count(), cid, pid, val from t_odku_fk_child order by cid;
 -- ODKU on the valid row (cid=1) must succeed: it validates only this statement's
 -- final row image, not the whole table, so the pre-existing orphan is ignored.
 insert into t_odku_fk_child values (1, 1, 5) on duplicate key update val = val + 1;
@@ -276,8 +310,74 @@ insert into t_odku_fk_child values (1, 1, 5) on duplicate key update pid = 999;
 -- a genuine insert referencing a missing parent must still fail.
 insert into t_odku_fk_child values (3, 888, 1) on duplicate key update val = val + 1;
 select cid, pid, val from t_odku_fk_child order by cid;
+-- Correcting a historical orphan changes the FK tuple, so the new valid parent
+-- must be checked and the update must be accepted.
+insert into t_odku_fk_child values (2, 99, 0) on duplicate key update pid = 2;
+select row_count(), cid, pid, val from t_odku_fk_child where cid = 2;
+-- Constraint checks are action-ordered, not final-image-only. Both statements
+-- must roll back even though a later duplicate would repair the FK value.
+insert into t_odku_fk_child values (1, 999, 0), (1, 1, 0)
+  on duplicate key update pid = values(pid);
+select cid, pid, val from t_odku_fk_child where cid = 1;
+insert into t_odku_fk_child values (5, 999, 0), (5, 1, 0)
+  on duplicate key update pid = values(pid);
+select count(*) from t_odku_fk_child where cid = 5;
 drop table if exists t_odku_fk_child;
 drop table if exists t_odku_fk_parent;
+
+drop table if exists t_odku_action_check;
+create table t_odku_action_check(id int primary key, v int, constraint ck_action check(v >= 0));
+insert into t_odku_action_check values (1, 1);
+insert into t_odku_action_check values (1, -1), (1, 2)
+  on duplicate key update v = values(v);
+select * from t_odku_action_check;
+insert into t_odku_action_check values (2, -1), (2, 2)
+  on duplicate key update v = values(v);
+select count(*) from t_odku_action_check where id = 2;
+-- Nearest positive control: every action is valid and the final image survives.
+insert into t_odku_action_check values (1, 3), (1, 4)
+  on duplicate key update v = values(v);
+select * from t_odku_action_check;
+drop table t_odku_action_check;
+
+-- A group created by this statement remains insert-originated at its final
+-- image. An unrelated CHECK or FK must not lose eligibility merely because
+-- the last duplicate action changed only another constrained column.
+drop table if exists t_odku_final_insert_check;
+create table t_odku_final_insert_check(
+  id int primary key,
+  pid int,
+  v int,
+  constraint ck_final_insert_pid check(pid > 0),
+  constraint ck_final_insert_v check(v >= 0)
+);
+insert into t_odku_final_insert_check values (1, -1, 0), (1, 10, 1)
+  on duplicate key update v = values(v);
+select count(*) from t_odku_final_insert_check;
+insert into t_odku_final_insert_check values (2, 1, 0), (2, 10, 1)
+  on duplicate key update v = values(v);
+select id, pid, v from t_odku_final_insert_check;
+drop table t_odku_final_insert_check;
+
+drop table if exists t_odku_final_insert_fk_child;
+drop table if exists t_odku_final_insert_fk_parent;
+create table t_odku_final_insert_fk_parent(id int primary key);
+create table t_odku_final_insert_fk_child(
+  id int primary key,
+  pid int,
+  v int,
+  constraint ck_final_insert_fk_v check(v >= 0),
+  foreign key(pid) references t_odku_final_insert_fk_parent(id)
+);
+insert into t_odku_final_insert_fk_parent values (1);
+insert into t_odku_final_insert_fk_child values (1, 999, 0), (1, 1, 1)
+  on duplicate key update v = values(v);
+select count(*) from t_odku_final_insert_fk_child;
+insert into t_odku_final_insert_fk_child values (2, 1, 0), (2, 999, 1)
+  on duplicate key update v = values(v);
+select id, pid, v from t_odku_final_insert_fk_child;
+drop table t_odku_final_insert_fk_child;
+drop table t_odku_final_insert_fk_parent;
 
 -- INSERT IGNORE on a child table drops the rows whose parent does not exist
 -- (MySQL row-skip semantics) instead of failing the whole statement.
@@ -315,8 +415,9 @@ drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
 
 -- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
--- the auto-update column must not defeat no-op detection (affected rows = 0),
--- and it must not advance when nothing else changes.
+-- the auto-update column must not defeat physical no-op detection or advance.
+-- Under mo-tester's CLIENT_FOUND_ROWS connection the logical affected count is
+-- one even though no row is written.
 drop table if exists t_odku_onupdate;
 create table t_odku_onupdate (
   id int primary key,
@@ -332,6 +433,60 @@ select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
 insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = values(v);
 select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
 drop table if exists t_odku_onupdate;
+
+-- CHAR assignments use PAD SPACE equality for both logical affected-row and
+-- physical-write decisions. VARCHAR is the nearest non-equivalent control.
+drop table if exists t_odku_char_pad;
+
+drop table if exists t_odku_json_equal;
+create table t_odku_json_equal (
+  id int primary key,
+  j json,
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp
+);
+insert into t_odku_json_equal values (1, '1', '2000-01-01 00:00:00');
+insert into t_odku_json_equal(id, j) values (1, '1.0')
+  on duplicate key update j = values(j);
+select row_count(), json_type(j), updated_at = '2000-01-01 00:00:00' as auto_unchanged
+  from t_odku_json_equal;
+drop table t_odku_json_equal;
+create table t_odku_char_pad (
+  id int primary key,
+  c char(4),
+  v varchar(4),
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp
+);
+insert into t_odku_char_pad values (1, 'a', 'a', '2000-01-01 00:00:00');
+insert into t_odku_char_pad(id, c, v) values (1, 'a   ', 'zzzz')
+  on duplicate key update c = values(c);
+select row_count(), hex(c), hex(v), updated_at = '2000-01-01 00:00:00' as auto_unchanged
+  from t_odku_char_pad;
+insert into t_odku_char_pad(id, c, v) values (1, 'zzzz', 'a ')
+  on duplicate key update v = values(v);
+select row_count(), hex(c), hex(v), updated_at > '2000-01-01 00:00:00' as auto_updated
+  from t_odku_char_pad;
+drop table if exists t_odku_char_pad;
+
+-- A synthesized ON UPDATE value must not reach CHECK evaluation for a pure
+-- no-op. The mixed batch also proves that restoring the old image does not
+-- suppress an unrelated insert. CLIENT_FOUND_ROWS counts the no-op conflict as
+-- one; a real change still evaluates CHECK against the new timestamp and is
+-- rejected.
+drop table if exists t_odku_onupdate_check;
+create table t_odku_onupdate_check (
+  id int primary key,
+  v int,
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp,
+  constraint chk_old_timestamp check (updated_at < '2020-01-01 00:00:00')
+);
+insert into t_odku_onupdate_check(id, v) values (1, 10);
+insert into t_odku_onupdate_check(id, v) values (1, 10) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 10), (2, 20) on duplicate key update v = v;
+select row_count(), id, v, updated_at from t_odku_onupdate_check order by id;
+insert into t_odku_onupdate_check(id, v) values (1, 11) on duplicate key update v = values(v);
+select id, v, updated_at from t_odku_onupdate_check order by id;
+drop table if exists t_odku_onupdate_check;
 
 -- same, plus a stored generated column derived from the ON UPDATE column:
 -- its recomputed value must not defeat no-op detection either.
@@ -396,6 +551,141 @@ drop table if exists t_odku_sec_uk;
 -- primary key exists only on the stored row and must survive the FK lock barrier.
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+-- Ordered assignment semantics and logical affected rows survive in-batch key
+-- collapse. ROW_COUNT is checked separately from the final physical row image.
+drop table if exists t_odku_order_count;
+create table t_odku_order_count(id int primary key, a int, b int);
+insert into t_odku_order_count values (1, 10, 20);
+insert into t_odku_order_count values (1, 100, 200)
+  on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b from t_odku_order_count;
+update t_odku_order_count set a = 10, b = 20 where id = 1;
+insert into t_odku_order_count values (1, 100, 200)
+  on duplicate key update a = a + 1, a = a + 1;
+select row_count(), id, a, b from t_odku_order_count;
+drop table t_odku_order_count;
+
+drop table if exists t_odku_repeat_count;
+create table t_odku_repeat_count(id int primary key, v int, key iv(v));
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 11), (1, 12), (1, 13)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+truncate table t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 10);
+insert into t_odku_repeat_count values (1, 11), (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+insert into t_odku_repeat_count values (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), id, v from t_odku_repeat_count;
+select count(*) from t_odku_repeat_count force index(iv) where v = 10;
+drop table t_odku_repeat_count;
+
+-- Conflict targets evolve in input order across every unique constraint. An
+-- input row that becomes UPDATE must not reserve its unused PK/UNIQUE values.
+drop table if exists t_odku_statement_keys;
+create table t_odku_statement_keys(id int primary key, u int unique, v int);
+insert into t_odku_statement_keys values (1, 10, 1), (1, 11, 2)
+  on duplicate key update v = values(v);
+select row_count(), id, u, v from t_odku_statement_keys order by id;
+truncate table t_odku_statement_keys;
+insert into t_odku_statement_keys values (1, 10, 1), (2, 10, 2)
+  on duplicate key update v = values(v);
+select row_count(), id, u, v from t_odku_statement_keys order by id;
+truncate table t_odku_statement_keys;
+insert into t_odku_statement_keys values (1, 10, 1), (2, 10, 2), (2, 20, 3)
+  on duplicate key update v = values(v);
+select row_count(), id, u, v from t_odku_statement_keys order by id;
+truncate table t_odku_statement_keys;
+insert into t_odku_statement_keys values (1, 10, 1), (2, 20, 2);
+insert into t_odku_statement_keys values (1, 20, 99)
+  on duplicate key update v = values(v);
+select row_count(), id, u, v from t_odku_statement_keys order by id;
+drop table t_odku_statement_keys;
+
+drop table if exists t_odku_statement_fake_pk;
+create table t_odku_statement_fake_pk(u int unique, v int);
+insert into t_odku_statement_fake_pk values (10, 1), (10, 2)
+  on duplicate key update v = values(v);
+select row_count(), u, v from t_odku_statement_fake_pk;
+drop table t_odku_statement_fake_pk;
+
+drop table if exists t_odku_statement_composite;
+create table t_odku_statement_composite(
+  id int primary key,
+  a int,
+  b int,
+  v int,
+  unique key uk_ab(a, b)
+);
+insert into t_odku_statement_composite values (1, 10, 20, 1), (2, 10, 20, 2)
+  on duplicate key update v = values(v);
+select row_count(), id, a, b, v from t_odku_statement_composite;
+drop table t_odku_statement_composite;
+
+-- Generated columns observe the ordered final row. A later CHECK failure must
+-- roll back both a preceding insert and all base/index maintenance.
+drop table if exists t_odku_order_generated;
+create table t_odku_order_generated(
+  id int primary key,
+  a int,
+  b int,
+  g int as (a + b),
+  constraint ck_odku_order check(a = b),
+  key ig(g)
+);
+insert into t_odku_order_generated(id, a, b) values (1, 10, 10);
+insert into t_odku_order_generated(id, a, b) values (1, 99, 99)
+  on duplicate key update a = a + 1, b = a;
+select row_count(), id, a, b, g from t_odku_order_generated;
+insert into t_odku_order_generated(id, a, b) values (2, 20, 20), (1, 99, 99)
+  on duplicate key update a = a + 1, b = a + 2;
+select count(*) from t_odku_order_generated;
+select count(*) from t_odku_order_generated force index(ig) where g = 22;
+drop table t_odku_order_generated;
+
+-- The logical-action stream and the final physical image are distinct. A
+-- change followed by a restore still has four affected rows and must preserve
+-- an implicit ON UPDATE effect; a pure no-op must not update it and contributes
+-- one logical affected row under CLIENT_FOUND_ROWS.
+drop table if exists t_odku_repeat_onupdate;
+create table t_odku_repeat_onupdate(
+  id int primary key,
+  v int,
+  updated_at timestamp(6) default '2000-01-01 00:00:00.000000'
+    on update current_timestamp(6)
+);
+insert into t_odku_repeat_onupdate values (1, 10, '2000-01-01 00:00:00.000000');
+insert into t_odku_repeat_onupdate(id, v) values (1, 11), (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), v, updated_at > '2000-01-01 00:00:00.000000' as auto_updated
+  from t_odku_repeat_onupdate;
+update t_odku_repeat_onupdate set updated_at = '2000-01-01 00:00:00.000000';
+insert into t_odku_repeat_onupdate(id, v) values (1, 10)
+  on duplicate key update v = values(v);
+select row_count(), v, updated_at = '2000-01-01 00:00:00.000000' as auto_unchanged
+  from t_odku_repeat_onupdate;
+drop table t_odku_repeat_onupdate;
+
+-- NOT NULL is an action constraint, not merely a final-row storage check. The
+-- first duplicate action must abort even though the later action would restore
+-- a non-NULL final image; the original row must remain unchanged after rollback.
+drop table if exists t_odku_action_not_null;
+create table t_odku_action_not_null(id int primary key, v int not null, selector int);
+insert into t_odku_action_not_null values (1, 10, 0);
+insert into t_odku_action_not_null values (1, 10, 1), (1, 10, 2)
+  on duplicate key update
+    v = if(values(selector) = 1, null, 20),
+    selector = values(selector);
+select id, v, selector from t_odku_action_not_null;
+drop table t_odku_action_not_null;
+
 create table t_odku_fk_uk_parent(pid int primary key);
 create table t_odku_fk_uk_child(
   id bigint auto_increment primary key,

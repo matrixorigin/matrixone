@@ -31,7 +31,6 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 		typ  types.Type
 	}{
 		{name: "varbinary", typ: types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)},
-		{name: "blob", typ: types.T_blob.ToType()},
 	} {
 		t.Run(source.name, func(t *testing.T) {
 			sourceExpr := &planpb.Expr{
@@ -58,19 +57,11 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 						makePlan2Int64ConstExprWithType(test.length),
 					})
 					require.NoError(t, err)
-					if source.typ.Oid == types.T_blob {
-						require.Equal(t, int32(types.T_blob), substring.Typ.Id)
-					} else {
-						require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
-						require.Equal(t, test.wantWidth, substring.Typ.Width)
-					}
+					require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
+					require.Equal(t, test.wantWidth, substring.Typ.Width)
 
 					for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
 						_, err = BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
-						if source.typ.Oid == types.T_blob {
-							require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
-							require.Equal(t, test.wantWidth, substring.Typ.Width)
-						}
 						if test.wantError {
 							require.Error(t, err, "%s must reject SUBSTRING(..., %d)", aggregateName, test.length)
 							moErr := moerr.DowncastError(err)
@@ -82,5 +73,30 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
+	ctx := context.Background()
+	sourceType := types.T_blob.ToType()
+	sourceExpr := &planpb.Expr{
+		Typ: makePlan2Type(&sourceType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+
+	substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", []*planpb.Expr{
+		sourceExpr,
+		makePlan2Int64ConstExprWithType(1),
+		makePlan2Int64ConstExprWithType(511),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), substring.Typ.Id)
+
+	for _, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
+		_, err = BindFuncExprImplByPlanExpr(ctx, aggregateName, []*planpb.Expr{substring})
+		require.Error(t, err, "%s must keep BLOB SUBSTRING outside binary aggregate support", aggregateName)
 	}
 }

@@ -684,6 +684,20 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.HasODKUAffectedRows = t.HasODKUAffectedRows
+		op.AffectedRowsResultPos = t.AffectedRowsResultPos
+		op.PhysicalChangedResultPos = t.PhysicalChangedResultPos
+		op.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		op.CountFoundRows = t.CountFoundRows
+		op.EmitActionRows = t.EmitActionRows
+		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -997,6 +1011,14 @@ func constructMultiUpdate(
 		if updateCtx.ChangedRowsCol != nil {
 			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
 			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+		}
+		if updateCtx.AffectedRowsWeightCol != nil {
+			col := int(updateCtx.AffectedRowsWeightCol.ColPos)
+			arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+		}
+		if updateCtx.PhysicalChangedRowsCol != nil {
+			col := int(updateCtx.PhysicalChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 		}
 	}
 	arg.Action = action
@@ -1542,6 +1564,24 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
+			arg.HasODKUAffectedRows = true
+			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
+			arg.PhysicalChangedResultPos = findJoinResultPos(result, node.DedupJoinCtx.PhysicalChangedRowsCol)
+			arg.UpdateCheckColIdxList = node.DedupJoinCtx.UpdateCheckColIdxList
+			arg.CountFoundRows = node.DedupJoinCtx.CountFoundRows
+		}
+		arg.EmitActionRows = node.DedupJoinCtx.EmitActionRows
+		if arg.EmitActionRows {
+			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
+		}
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
+		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
 		// must exclude that row from duplicate detection: an UPDATE that keeps
 		// a primary/unique key unchanged is not a duplicate of itself.
@@ -1572,6 +1612,18 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findJoinResultPos(result []colexec.ResultPos, col *plan.ColRef) int32 {
+	if col == nil {
+		return -1
+	}
+	for i, pos := range result {
+		if pos.Rel == col.RelPos && pos.Pos == col.ColPos {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {

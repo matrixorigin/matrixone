@@ -114,9 +114,15 @@ const (
 	ErrFtMatchingKeyNotFound uint16 = 20327
 	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
-	ErrTooManyRows                         uint16 = 20328
-	ErrMultiUpdateKeyConflict              uint16 = 20329
-	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20330
+	ErrTooManyRows            uint16 = 20328
+	ErrMultiUpdateKeyConflict uint16 = 20329
+	// ErrCharacterSetMismatch reports MySQL's binary/nonbinary regexp
+	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
+	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
+	ErrCharacterSetMismatch uint16 = 20330
+	// Keep this distinct from ErrCharacterSetMismatch because both errors are
+	// serialized through the internal error code.
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20331
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -468,6 +474,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
 	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrCharacterSetMismatch:                {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
 	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
 
 	// Group 4: unexpected state or file io error
@@ -1138,6 +1145,10 @@ func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
+	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
 }
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {

@@ -281,9 +281,18 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
-	if metadata := e.GetPreparedNumeric(); metadata.GetFallback() {
-		if mapped, ok := rule.params[int(metadata.ParamPos)]; ok {
-			metadata.ParamPos = int32(mapped)
+	if metadata := e.GetPreparedNumeric(); metadata != nil {
+		if metadata.GetFallback() {
+			if mapped, ok := rule.params[int(metadata.ParamPos)]; ok {
+				metadata.ParamPos = int32(mapped)
+			}
+		}
+		if metadata.StringDomainSource != nil {
+			var err error
+			metadata.StringDomainSource, err = rule.ApplyExpr(metadata.StringDomainSource)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
@@ -473,10 +482,9 @@ type ResetParamRefRule struct {
 	// consumers so their provisional prepare-time envelopes are rebound too.
 	sqlExecuteNumericDependent  map[*plan.Expr]bool
 	serializedDecimalParamTypes map[*plan.Expr]types.Type
-	// preparedPlan is used only to synchronize a flattened scalar-subquery
-	// ColRef with the rebound type of its inner projection.  The explicit
-	// source node/column metadata on Expr avoids relying on AuxId or expression
-	// pointer identity after a plan copy.
+	// preparedPlan locates existing numeric scalar-subquery fallback sources.
+	// String-domain lineage is self-contained in sparse expression metadata and
+	// does not add a plan-graph walk to prepared execution.
 	preparedPlan *Plan
 	// paramKinds is populated by the execute-time replacement path.  It is
 	// deliberately kept on the rule rather than inferred from Expr.Typ: a
@@ -886,6 +894,17 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 		}
 	}
 	return nil, kind, false
+}
+
+func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Expr) bool {
+	for pos := range preparedNumericValueParamPositions(expr) {
+		if pos >= 0 && int(pos) < len(rule.paramValues) {
+			if PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
@@ -1574,6 +1593,181 @@ func (rule *ResetParamRefRule) isSQLExecuteNumericDependent(expr *plan.Expr) boo
 	return expr != nil && rule.sqlExecuteNumericDependent[expr]
 }
 
+// preparedExecutionParamType returns the current parameter type used only for
+// execute-time regexp compatibility and result-domain rebinding. COM_STMT
+// string packets deliberately keep a text-shaped transport type, so their
+// binary domain must come from IsBinaryString rather than RuntimeType.
+func (rule *ResetParamRefRule) preparedExecutionParamType(
+	expr *plan.Expr,
+	pos int,
+) (typ types.Type, dynamic, domainless bool, err error) {
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return types.Type{}, false, false,
+			moerr.NewInternalErrorf(rule.ctx, "get prepare params error, index %d not exists", pos)
+	}
+	value := rule.paramValues[pos]
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			// A NULL execution does not erase the marker's PREPARE-time type.
+			// This differs from a bare NULL literal, which has no domain. MySQL
+			// therefore still rejects a prepared text marker paired with a fixed
+			// binary regexp operand when the current marker value is NULL.
+			preparedType := makeTypeByPlan2Expr(expr)
+			return preparedType, true, preparedType.Oid == types.T_any, nil
+		}
+		if param.IsBinaryString ||
+			(param.HasSourceType && types.StaticStringDomain(param.SourceType) == types.StringDomainBinary) ||
+			(!param.HasSourceType && !param.IsBinaryProtocol && param.IsBin) {
+			return types.T_varbinary.ToType(), true, false, nil
+		}
+		if param.HasSourceType {
+			return param.SourceType, true, false, nil
+		}
+		if param.HasRuntimeType {
+			return param.RuntimeType, true, false, nil
+		}
+		if param.IsBinaryProtocol {
+			return types.T_text.ToType(), true, false, nil
+		}
+	}
+	if value == nil {
+		preparedType := makeTypeByPlan2Expr(expr)
+		return preparedType, true, preparedType.Oid == types.T_any, nil
+	}
+	if pos < len(rule.params) && rule.params[pos] != nil {
+		return makeTypeByPlan2Expr(rule.params[pos]), true, false, nil
+	}
+	return types.T_text.ToType(), true, false, nil
+}
+
+// preparedExecutionExprType evaluates only the type/domain transfer of a
+// parameter-dependent expression. It does not fold values or mutate the cached
+// plan. Explicit casts terminate the transfer; fixed-output functions keep
+// their prepared type; domain-preserving functions are resolved from current
+// child types through the normal function registry.
+func (rule *ResetParamRefRule) preparedExecutionExprType(
+	expr *plan.Expr,
+) (typ types.Type, dynamic, domainless bool, err error) {
+	if expr == nil {
+		return types.Type{}, false, false, nil
+	}
+	preparedType := makeTypeByPlan2Expr(expr)
+	if isExplicitPreparedCast(expr) {
+		return preparedType, false, false, nil
+	}
+	if isImplicitPreparedParamCast(expr) {
+		fn := expr.GetF()
+		if fn != nil && len(fn.Args) > 0 {
+			return rule.preparedExecutionExprType(fn.Args[0])
+		}
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return rule.preparedExecutionParamType(expr, int(exprImpl.P.Pos))
+	case *plan.Expr_Lit:
+		if exprImpl.Lit != nil && exprImpl.Lit.Src != nil &&
+			preparedExprContainsParam(exprImpl.Lit.Src) {
+			return rule.preparedExecutionExprType(exprImpl.Lit.Src)
+		}
+		return preparedType, false, exprImpl.Lit != nil && exprImpl.Lit.GetIsnull() &&
+			exprImpl.Lit.GetStringSource() == 0, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			return rule.preparedExecutionExprType(exprImpl.Sub.Child)
+		}
+		return preparedType, false, false, nil
+	case *plan.Expr_Col:
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			return rule.preparedExecutionExprType(source)
+		}
+		return preparedType, false, false, nil
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil ||
+			!preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
+			return preparedType, false, false, nil
+		}
+		argTypes := make([]types.Type, len(exprImpl.F.Args))
+		var stringDomainModes []planfunction.StringDomainCheckMode
+		stringOperands := preparedRegexpCompatibilityStringOperandCount(
+			strings.ToLower(exprImpl.F.Func.GetObjName()), len(exprImpl.F.Args))
+		if stringOperands > 0 {
+			stringDomainModes = make([]planfunction.StringDomainCheckMode, len(exprImpl.F.Args))
+		}
+		for i, arg := range exprImpl.F.Args {
+			currentType, _, childDomainless, childErr := rule.preparedExecutionExprType(arg)
+			if childErr != nil {
+				return types.Type{}, false, false, childErr
+			}
+			if currentType.Oid == types.T_any && !childDomainless {
+				currentType = makeTypeByPlan2Expr(arg)
+			}
+			argTypes[i] = currentType
+			if i < stringOperands {
+				if childDomainless {
+					stringDomainModes[i] = planfunction.StringDomainCheckDomainless
+				} else if _, directMarker := preparedParamPosition(arg); directMarker {
+					stringDomainModes[i] = planfunction.StringDomainCheckParamMarker
+				}
+			}
+		}
+		var resolved planfunction.FuncGetResult
+		var resolveErr error
+		if stringDomainModes != nil {
+			resolved, resolveErr = planfunction.GetFunctionByNameWithStringDomainCheckModes(
+				rule.ctx, exprImpl.F.Func.GetObjName(), argTypes, stringDomainModes)
+		} else {
+			resolved, resolveErr = planfunction.GetFunctionByName(
+				rule.ctx, exprImpl.F.Func.GetObjName(), argTypes)
+		}
+		if resolveErr != nil {
+			return types.Type{}, false, false, resolveErr
+		}
+		// A function result keeps its declared domain even when this row is
+		// NULL. Only a bare, untyped NULL literal is domainless; treating a
+		// REGEXP_SUBSTR/REPLACE result as domainless would hide a mismatch in
+		// an enclosing regexp call.
+		return resolved.GetReturnType(), true, false, nil
+	default:
+		return preparedType, false, false, nil
+	}
+}
+
+func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(
+	name string,
+	boundArgs, originalArgs []*plan.Expr,
+) ([]planfunction.StringDomainCheckMode, error) {
+	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(boundArgs))
+	if stringOperands == 0 {
+		return nil, nil
+	}
+	modes := make([]planfunction.StringDomainCheckMode, len(boundArgs))
+	for i := 0; i < stringOperands && i < len(originalArgs); i++ {
+		currentType, dynamic, currentDomainless, err :=
+			rule.preparedExecutionExprType(originalArgs[i])
+		if err != nil {
+			return nil, err
+		}
+		if currentDomainless {
+			modes[i] = planfunction.StringDomainCheckDomainless
+			continue
+		}
+		if _, directMarker := preparedParamPosition(originalArgs[i]); directMarker {
+			modes[i] = planfunction.StringDomainCheckParamMarker
+		}
+		if !dynamic {
+			continue
+		}
+		if boundArgs[i] == nil {
+			continue
+		}
+		currentArg := *boundArgs[i]
+		currentArg.Typ = makePlan2Type(&currentType)
+		boundArgs[i] = &currentArg
+	}
+	return modes, nil
+}
+
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
@@ -1581,6 +1775,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
+		}
+		if strings.EqualFold(functionName, "bit_count") && len(exprImpl.F.Args) == 1 &&
+			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) &&
+			!rule.preparedBitCountUsesNumericRuntime(exprImpl.F.Args[0]) {
+			// An unresolved BIT_COUNT marker has a binary-string default in
+			// MySQL. Text/BLOB protocol values therefore keep the prepared
+			// VARBINARY cast; only an actual numeric runtime domain reparses the
+			// function and selects a numeric overload.
+			return e, nil
 		}
 		isAbs := strings.EqualFold(functionName, "abs") && len(exprImpl.F.Args) == 1
 		var originalAbsArg *plan.Expr
@@ -1615,14 +1818,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgs[i] = DeepCopyExpr(arg)
 			}
 		}
-		needResetFunction := false
-		compareArgTypes := false
+		functionName = strings.ToLower(functionName)
+		// A regexp check deferred at PREPARE must run at every EXECUTE even
+		// when a nested dynamic result happens to resolve back to the same type.
+		// Type equality alone cannot prove that all current sibling domains are
+		// compatible.
+		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
+		needResetFunction := regexpDomainsDeferred
+		compareArgTypes := regexpDomainsDeferred
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
 		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
-		functionName = strings.ToLower(functionName)
 		// An implicit cast around a COM_STMT text marker is provisional.  For a
 		// numeric comparison, however, the column/literal side owns the
 		// comparison domain and must remain indexable.  Replace the provisional
@@ -2003,10 +2211,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			rewritten, err := BindFuncExprImplByPlanExpr(
+			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
+				functionName, boundArgs, originalArgs)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
 				rule.ctx,
 				exprImpl.F.Func.GetObjName(),
 				boundArgs,
+				stringDomainModes,
 			)
 			if err != nil {
 				return nil, err

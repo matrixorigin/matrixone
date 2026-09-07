@@ -16,7 +16,9 @@ package preinsertunique
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -29,11 +31,22 @@ import (
 
 var _ vm.Operator = new(PreInsertUnique)
 
+const (
+	preInsertUniqueAllocationSiteHashCell mpool.AllocationSite = iota + 1
+	preInsertUniqueAllocationSiteHashDescriptor
+	preInsertUniqueAllocationSiteRetainedData
+	preInsertUniqueAllocationSiteRetainedArea
+	preInsertUniqueAllocationSiteRetainedNulls
+	preInsertUniqueAllocationSiteRetainedGrouping
+)
+
 type container struct {
 	buf             *batch.Batch
 	acceptedMaps    []*hashmap.StrHashMap
 	acceptedIters   []hashmap.Iterator
 	acceptedKeyVecs [][]*vector.Vector
+	acceptedTarget  *vector.Vector
+	acceptedRows    []*vector.Vector
 }
 type PreInsertUnique struct {
 	ctr          container
@@ -41,7 +54,80 @@ type PreInsertUnique struct {
 
 	packers util.PackerList
 
+	allocationAccount  *mpool.AllocationAccount
+	hashAllocation     *hashtable.AllocationAccountSelection
+	retainedAllocation *vector.AllocationAccountSelection
+
 	vm.OperatorBase
+}
+
+// ActivatesAllocationAccountLifecycle limits the new statement-retained
+// accounting requirement to ordered ODKU arbitration. Ordinary unique-index
+// preprocessing and INSERT IGNORE retain their existing lifecycle.
+func (preInsertUnique *PreInsertUnique) ActivatesAllocationAccountLifecycle() bool {
+	return preInsertUnique != nil && preInsertUnique.PreInsertCtx != nil &&
+		preInsertUnique.PreInsertCtx.GetOdkuTargetArbitration()
+}
+
+func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if preInsertUnique == nil || account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if preInsertUnique.allocationAccount != nil {
+		if preInsertUnique.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(preInsertUnique.ctr.acceptedMaps) != 0 ||
+		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashAllocation, err := hashtable.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerDML,
+		preInsertUniqueAllocationSiteHashCell,
+		preInsertUniqueAllocationSiteHashDescriptor,
+	)
+	if err != nil {
+		return err
+	}
+	retainedAllocation, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerDML,
+		preInsertUniqueAllocationSiteRetainedData,
+		preInsertUniqueAllocationSiteRetainedArea,
+		preInsertUniqueAllocationSiteRetainedNulls,
+		preInsertUniqueAllocationSiteRetainedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	preInsertUnique.allocationAccount = account
+	preInsertUnique.hashAllocation = hashAllocation
+	preInsertUnique.retainedAllocation = retainedAllocation
+	return nil
+}
+
+func (preInsertUnique *PreInsertUnique) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if preInsertUnique == nil || preInsertUnique.allocationAccount == nil {
+		return nil
+	}
+	if preInsertUnique.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(preInsertUnique.ctr.acceptedMaps) != 0 ||
+		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	preInsertUnique.allocationAccount = nil
+	preInsertUnique.hashAllocation = nil
+	preInsertUnique.retainedAllocation = nil
+	return nil
 }
 
 func (preInsertUnique *PreInsertUnique) GetOperatorBase() *vm.OperatorBase {
@@ -82,7 +168,7 @@ func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFai
 	if preInsertUnique.packers.PackerCount() > 10 {
 		preInsertUnique.packers.Free()
 	}
-	preInsertUnique.freeAcceptedMaps()
+	preInsertUnique.freeAcceptedState(proc)
 }
 
 func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -91,10 +177,10 @@ func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFail
 		preInsertUnique.ctr.buf = nil
 	}
 	preInsertUnique.packers.Free()
-	preInsertUnique.freeAcceptedMaps()
+	preInsertUnique.freeAcceptedState(proc)
 }
 
-func (preInsertUnique *PreInsertUnique) freeAcceptedMaps() {
+func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process) {
 	for i := range preInsertUnique.ctr.acceptedMaps {
 		if preInsertUnique.ctr.acceptedMaps[i] != nil {
 			preInsertUnique.ctr.acceptedMaps[i].Free()
@@ -103,6 +189,16 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedMaps() {
 	preInsertUnique.ctr.acceptedMaps = nil
 	preInsertUnique.ctr.acceptedIters = nil
 	preInsertUnique.ctr.acceptedKeyVecs = nil
+	if preInsertUnique.ctr.acceptedTarget != nil {
+		preInsertUnique.ctr.acceptedTarget.Free(proc.Mp())
+	}
+	preInsertUnique.ctr.acceptedTarget = nil
+	for i := range preInsertUnique.ctr.acceptedRows {
+		if preInsertUnique.ctr.acceptedRows[i] != nil {
+			preInsertUnique.ctr.acceptedRows[i].Free(proc.Mp())
+		}
+	}
+	preInsertUnique.ctr.acceptedRows = nil
 }
 
 func (preInsertUnique *PreInsertUnique) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
