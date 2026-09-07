@@ -484,12 +484,21 @@ against ('Tutorial' in natural language mode) as score
 from articles;
 ➤ id[4,32,0]  ¦  score[7,5,0]  𝄀
 1  ¦  0.2276447  𝄀
-3  ¦  0.2276447
+3  ¦  0.2276447  𝄀
+2  ¦  0.0  𝄀
+4  ¦  0.0  𝄀
+5  ¦  0.0  𝄀
+6  ¦  0.0
 select id, body, match (title, body)
 against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles;
 ➤ id[4,32,0]  ¦  body[12,0,0]  ¦  score[7,5,0]  𝄀
-1  ¦  DBMS stands for DataBase ...  ¦  3.0275967
+1  ¦  DBMS stands for DataBase ...  ¦  3.0275967  𝄀
+2  ¦  After you went through a ...  ¦  0.0  𝄀
+3  ¦  In this tutorial, we show ...  ¦  0.0  𝄀
+4  ¦  1. Never run MOd as root. 2. ...  ¦  0.0  𝄀
+5  ¦  In the following database comparison ...  ¦  0.0  𝄀
+6  ¦  When configured properly, MO ...  ¦  0.0
 select id, body, match (title, body)
 against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles
@@ -523,7 +532,11 @@ against ('DataBase' in natural language mode) as score
 from article;
 ➤ id[4,32,0]  ¦  score[7,5,0]  𝄀
 1  ¦  0.2276447  𝄀
-5  ¦  0.2276447
+5  ¦  0.2276447  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.0  𝄀
+6  ¦  0.0
 select id, body, match (body)
 against ('DBMS stands for Database' in natural language mode) as score
 from article

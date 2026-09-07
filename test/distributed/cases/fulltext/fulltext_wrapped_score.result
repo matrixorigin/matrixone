@@ -123,6 +123,9 @@ from two where match(body) against('hello') order by id;
 5  ¦  0.018783102  ¦  0.019
 select id, round(match(body) against('world'),3) as r from two where match(body) against('hello') order by id;
 ➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
 5  ¦  0.158
 select id from two where match(body) against('hello') and match(body) against('world') > 0.1 order by id;
 ➤ id[4,32,0]  𝄀
@@ -156,6 +159,7 @@ select id, round(match(body) against('hello'),3) as r from two order by id;  -- 
 1  ¦  0.009  𝄀
 2  ¦  0.019  𝄀
 3  ¦  0.028  𝄀
+4  ¦  0.0  𝄀
 5  ¦  0.019
 select count(*) as n from two where match(body) against('hello') > 0.015;    -- and through an aggregate
 ➤ n[-5,64,0]  𝄀
