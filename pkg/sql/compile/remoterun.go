@@ -103,6 +103,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -156,6 +159,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		return nil, err
 	}
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
@@ -286,6 +292,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
@@ -2838,6 +2847,25 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateRemoteViewDefinitionPipelineProtocol protects the function ID that
+// occurs in the persisted VIEWS definition. It is used at both marshal and
+// unmarshal boundaries, so a stale prepared or remote pipeline fails closed
+// instead of being bound by a CN that predates the function registration.
+func validateRemoteViewDefinitionPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil || !pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) {
+		return nil
+	}
+	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"mo_view_definition remote execution requires MORPC protocol version 58",
+		)
 	}
 	return nil
 }
