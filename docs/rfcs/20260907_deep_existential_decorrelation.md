@@ -1,10 +1,10 @@
-- Status: drafted
+- Status: in-progress
 - Start Date: 2026-09-07
 - Authors: MatrixOne planner contributors
 - Implementation PR: not opened; design only
 - Issue for this RFC: [#28293](https://github.com/matrixorigin/matrixone/issues/28293)
 - Source baseline: `e7cadcf03150e9ca7a9bb3eeb789d0735295329a`
-- Design review: pending independent review of this revision
+- Design review: independent subagent approved design revision `c0c4fcd7e33790ea68e47152c45a3eec9572a88e`; implementation not started
 
 # Deep existential decorrelation without domain products
 
@@ -439,9 +439,30 @@ mutation issues by pre-mutation detection and explicit pending ownership;
 per-domain IN NULL issues by restricting normalization to truth-only IN.
 
 No algorithm-choice placeholder remains in the admitted scope. Independent
-review must verify these decisions before implementation. Implementation
-proofs, exact-revision benchmarks and owner approval are still pending, and
-are not represented as completed by this document.
+review approved the design revision recorded below. Implementation proofs,
+exact-revision benchmarks and maintainer acceptance of the eventual change
+are still pending, and are not represented as completed by this document.
+
+### Independent review record
+
+- Reviewer: independent subagent `review_decorrelation_design` (Kepler),
+  requested by the user; this is not a submitted GitHub review.
+- Reviewed design commit: `c0c4fcd7e33790ea68e47152c45a3eec9572a88e`.
+- Reviewed path in that commit:
+  `docs/rfcs/00000000_deep_existential_decorrelation.md`.
+- Decision: no remaining concrete design blocker within the declared scope;
+  ready to enter implementation, not an implementation/performance approval.
+- Final verified corrections: owner lookup precedes every depth/type fast
+  return; owner identity is independent of the final root NodeId; anchor
+  choice does not assume binding-time NDV/cost statistics.
+- Scope: two-level existence and WHERE truth-only IN, SEMI reordering,
+  restricted OR arms, pending ownership and performance acceptance contract.
+- This subsequent revision records the review, changes RFC status/name per
+  the repository process, and does not change the reviewed algorithm.
+
+The 150 handwritten SQL comparisons are supporting semantic evidence only.
+They do not establish automatic-rewrite correctness or no performance
+regression in a future implementation.
 
 ## References
 
