@@ -182,6 +182,7 @@ type remoteBackend struct {
 	writeC          chan *Future
 	waitWriteC      chan struct{}
 	stopWriteC      chan struct{}
+	stopWriteOnce   sync.Once
 	resetConnC      chan error
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
@@ -625,7 +626,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 			var writeDeadline time.Time
 			written := messages[:0]
-			for _, f := range messages {
+			for idx, f := range messages {
 				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 
 				id := f.getSendMessageID()
@@ -634,7 +635,23 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					continue
 				}
 
-				if deadline := rb.doWrite(id, f); !deadline.IsZero() {
+				deadline, err := rb.doWrite(id, f)
+				if err != nil {
+					// Encoding may have written a partial frame (including directly
+					// to the socket). Never flush or reuse this connection after it.
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					for _, pending := range written {
+						pending.messageSent(err)
+					}
+					for _, pending := range messages[idx+1:] {
+						pending.messageSent(err)
+					}
+					rb.makeAllWaitingFutureFailed(err)
+					return
+				}
+				if !deadline.IsZero() {
 					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					written = append(written, f)
 				}
@@ -651,6 +668,11 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					rb.makeAllWaitingFutureFailed(err)
+					return
 				} else {
 					// Record only transport-complete writes. A request that merely
 					// reached the userspace buffer must not extend the read window
@@ -681,23 +703,28 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) (time.Time, error) {
 	if !rb.options.filter(f.send.Message, rb.remote) {
 		f.messageSent(messageSkipped)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
 		f.messageSent(f.send.Ctx.Err())
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	deadline := time.Now().Add(v)
+	if f.streamOwner != nil &&
+		!f.streamOwner.assignSendSequence(&f.send) {
+		f.messageSent(backendClosed)
+		return time.Time{}, nil
+	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
@@ -726,9 +753,9 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, err
 	}
-	return deadline
+	return deadline, nil
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -994,7 +1021,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	close(rb.stopWriteC)
+	// Wake every admission waiter before termination waits for stream locks.
+	// The writer's failure path and Close may both own this notification.
+	rb.stopWriteOnce.Do(func() { close(rb.stopWriteC) })
 }
 
 func (rb *remoteBackend) requestDone(
@@ -1717,6 +1746,8 @@ type stream struct {
 	id                   uint64
 	sequence             uint32
 	lastReceivedSequence uint32
+	sendSequenceMu       sync.Mutex
+	sendSequenceClosed   bool
 	mu                   struct {
 		sync.RWMutex
 		closed   bool
@@ -1749,7 +1780,10 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
+	s.sendSequenceMu.Lock()
 	s.sequence = 0
+	s.sendSequenceClosed = false
+	s.sendSequenceMu.Unlock()
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	s.mu.terminal = false
@@ -1811,13 +1845,12 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
 	f.init(RPCMessage{
-		Ctx:            ctx,
-		Message:        request,
-		stream:         true,
-		streamSequence: s.sequence,
+		Ctx:     ctx,
+		Message: request,
+		stream:  true,
 	})
+	f.streamOwner = s
 	f.ref()
 	err := s.sendFunc(f)
 	if err != nil {
@@ -1840,6 +1873,9 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
@@ -1864,6 +1900,21 @@ func (s *stream) Close(closeConn bool) error {
 		panic("BUG: stream close notification channel is full")
 	}
 	return nil
+}
+
+// assignSendSequence runs in the single backend write loop after a request has
+// passed filter and context checks. Assigning at Stream.Send time would consume
+// a sequence for a queued request that expires before transport write, making
+// the next control message look out of order to the server.
+func (s *stream) assignSendSequence(message *RPCMessage) bool {
+	s.sendSequenceMu.Lock()
+	defer s.sendSequenceMu.Unlock()
+	if s.sendSequenceClosed {
+		return false
+	}
+	s.sequence++
+	message.streamSequence = s.sequence
+	return true
 }
 
 func (s *stream) ID() uint64 {
@@ -1913,6 +1964,9 @@ func (s *stream) done(
 // unregister ownership with Stream.Close, as required by the Stream contract.
 func (s *stream) terminate() {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.closed || s.mu.terminal {
