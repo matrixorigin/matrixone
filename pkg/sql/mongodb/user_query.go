@@ -534,7 +534,15 @@ func isValidUnwind(value any) bool {
 }
 
 func isMongoFieldPath(path string) bool {
-	return len(path) > 1 && strings.HasPrefix(path, "$")
+	if len(path) <= 1 || path[0] != '$' || strings.IndexByte(path, 0) >= 0 {
+		return false
+	}
+	for _, field := range strings.Split(path[1:], ".") {
+		if field == "" || field[0] == '$' {
+			return false
+		}
+	}
+	return true
 }
 
 func isStringOrStringArray(value any) bool {
