@@ -80,10 +80,12 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		if typ == VALUE_ARG {
 			return "", moerr.NewParseError(ctx, "parameter markers are not permitted")
 		}
-		// The statement delimiter is accepted by the parser but is not part of
-		// MySQL's statement digest text.  Skipping it here also keeps it from
-		// consuming the max_digest_length budget.
-		if typ == ';' {
+		// MySQL excludes only a client delimiter at the end of a statement from
+		// its digest. Semicolons inside parser-approved compound statements are
+		// ordinary tokens and must be retained. Skip a semicolon only when the
+		// remaining source has no tokens other than whitespace or comments, so it
+		// also does not consume the max_digest_length budget.
+		if typ == ';' && scanner.skipBlankAndCommentsFrom(scanner.Pos) == len(sql) {
 			continue
 		}
 

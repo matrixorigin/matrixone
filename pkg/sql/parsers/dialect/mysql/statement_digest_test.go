@@ -81,6 +81,10 @@ func TestNormalizeStatementDigestMySQLCounterexamples(t *testing.T) {
 		{name: "unary versus binary context", sql: "SELECT a=-1, (-2), 1+-3, 1=-4", want: "SELECT `a` = - ? , (?) , ? + ?, ... = - ?"},
 		{name: "trailing delimiter", sql: "SELECT 1;", want: "SELECT ?"},
 		{name: "trailing delimiter with comment", sql: "SELECT 1; /* tail */", want: "SELECT ?"},
+		{name: "compound statement internal delimiter", sql: "BEGIN SELECT 1; END", want: "BEGIN SELECT ? ; END"},
+		{name: "compound statement terminal delimiter", sql: "BEGIN SELECT 1; END;", want: "BEGIN SELECT ? ; END"},
+		{name: "compound statements internal delimiters", sql: "BEGIN SELECT 1; SELECT 2; END", want: "BEGIN SELECT ? ; SELECT ? ; END"},
+		{name: "compound statements terminal delimiter", sql: "BEGIN SELECT 1; SELECT 2; END;", want: "BEGIN SELECT ? ; SELECT ? ; END"},
 		{name: "keyword canonicalization", sql: "CREATE TABLE t(a INT, b INT1, c INT2, d INT3, e INT4, f MEDIUMINT, g BIGINT, h FLOAT, i DOUBLE, j CHAR(1), k VARCHAR(2))", want: "CREATE TABLE `t` ( `a` INTEGER , `b` TINYINT , `c` SMALLINT , `d` MIDDLEINT , `e` INTEGER , `f` MIDDLEINT , `g` INT8 , `h` FLOAT4 , `i` FLOAT8 , `j` CHARACTER (?) , `k` VARCHARACTER (?) )"},
 		{name: "statement keyword aliases", sql: "CREATE DATABASE d", want: "CREATE SCHEMA `d`"},
 		{name: "describe alias", sql: "DESCRIBE t", want: "EXPLAIN `t`"},
@@ -210,6 +214,21 @@ func TestNormalizeStatementDigestVariablesOperatorsAndLimit(t *testing.T) {
 	got, err = NormalizeStatementDigest(context.Background(), "SELECT 1;", "", 4)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT ?", got)
+
+	// Internal compound-statement delimiters remain part of the digest and its
+	// limit budget; adding only a terminal client delimiter changes neither.
+	for _, sql := range []string{
+		"BEGIN SELECT 1; END",
+		"BEGIN SELECT 1; END;",
+	} {
+		got, err = NormalizeStatementDigest(context.Background(), sql, "", 8)
+		require.NoError(t, err)
+		require.Equal(t, "BEGIN SELECT ? ;", got)
+
+		got, err = NormalizeStatementDigest(context.Background(), sql, "", 10)
+		require.NoError(t, err)
+		require.Equal(t, "BEGIN SELECT ? ; END", got)
+	}
 }
 
 func BenchmarkNormalizeStatementDigest(b *testing.B) {
