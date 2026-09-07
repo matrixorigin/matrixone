@@ -33,7 +33,7 @@ func supportsSessionTemporaryDDL(service string) bool {
 		return false
 	}
 	version, ok := v.(int64)
-	return ok && version >= defines.MORPCVersion54
+	return ok && version >= defines.MORPCVersion55
 }
 
 // A schema transaction sees its own aliases without publishing them into the

@@ -135,7 +135,7 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 			previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 			previousVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 			t.Cleanup(func() {
 				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previousVersion)
@@ -191,9 +191,9 @@ func TestSessionTemporaryDDLRollout(t *testing.T) {
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion53)
-	require.False(t, supportsSessionTemporaryDDL(proc.GetService()))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	require.False(t, supportsSessionTemporaryDDL(proc.GetService()))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 	require.True(t, supportsSessionTemporaryDDL(proc.GetService()))
 }
 
@@ -207,7 +207,7 @@ func TestSessionTemporaryDDLRejectsInvalidExecutor(t *testing.T) {
 	previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	previousVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, "invalid")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 	t.Cleanup(func() {
 		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previousVersion)

@@ -108,8 +108,8 @@ tombstone schema. The durable temporary marker and matching tenant are mandatory
 an uncommitted creation or a committed deletion never qualifies. Row/object reads,
 DML workspace ownership, write conflict checks and commit remain unchanged.
 
-This changes CN/TN semantics, so protocol version 54 gates user CREATE and DROP.
-Until the deployment gate reaches 54, user temporary DDL keeps its existing
+This changes CN/TN semantics, so protocol version 55 gates user CREATE and DROP.
+Until the deployment gate reaches 55, user temporary DDL keeps its existing
 transactional behavior. No protobuf or on-disk schema changes are introduced.
 Upgrade TN and CN before activating the gate; drain active sessions before a
 protocol downgrade. Old physical temporary names and migrated tables remain valid.
@@ -203,7 +203,7 @@ metadata and session helpers additionally preserve their existing lock disciplin
 | Independent CREATE and CTAS | R3: compile stages schema, executor finalizes its transaction, Session owns the published root; cloned plans/process state are restored on success/error/panic | Compile failure/commit/CTAS/panic tests; SQL rollback, CTAS source workspace, CTAS duplicate failure + immediate reuse |
 | Alias retirement and physical reclamation | R3: Session removes logical identity, existing physical DROP owns root + children; idle transaction boundary, reset, migration and disconnect consume distinct live/retired state | Session rollback/replacement/capacity/reset/retry tests; DROP after pending DML then COMMIT and ROLLBACK |
 | Schema visibility and binding | R3: CN name/ID cache and TN schema access admit only newer committed temporary schema for the same tenant; physical roots bind through exact session ownership, hidden references inherit metadata-lock exemption | CN marker/name/tenant controls, TN uncommitted/dropped/tenant/persistent controls; SI two-session SQL and nullable UNIQUE regression |
-| Rollout and delivery | R2: protocol 54 enables top-level behavior; old gate and internal sessions keep transactional DDL; native/protobuf formats unchanged | Protocol 53/54 unit control, owning-package normal/race, native build, existing temporary-table suite |
+| Rollout and delivery | R2: protocol 55 enables top-level behavior; old gate and internal sessions keep transactional DDL; native/protobuf formats unchanged | Protocol 54/55 unit control, owning-package normal/race, native build, existing temporary-table suite |
 
 All changed hunks, including untracked new source/tests, were reviewed against
 base `6eee64625e7e2cefd0f3dfeb61606f637111e057` and design commit `4a8b609ba6`.
