@@ -26,8 +26,9 @@ var (
 	// function returns that frozen field directly and parses only old ViewData
 	// rows that predate it, avoiding a second SQL-level lexer or inactive
 	// lifecycle dependency in this public metadata contract.
-	informationSchemaViewDefinitionSQL = "mo_view_definition(tbl.viewdef)"
-	informationSchemaViewsSourceSQL    = "FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
+	informationSchemaViewDefinitionSQL  = "mo_view_definition(tbl.viewdef)"
+	informationSchemaViewCheckOptionSQL = "mo_view_check_option(tbl.viewdef)"
+	informationSchemaViewsSourceSQL     = "FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
 		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.account_id = current_account_id() " +
 		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 )
@@ -592,7 +593,7 @@ var (
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
 		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
-		"cast(coalesce(nullif(json_extract_string(tbl.viewdef, '$.check_option'), ''), 'NONE') as varchar(9)) AS `CHECK_OPTION`," +
+		"cast(" + informationSchemaViewCheckOptionSQL + " as varchar(9)) AS `CHECK_OPTION`," +
 		"cast('NO' as varchar(3)) AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +

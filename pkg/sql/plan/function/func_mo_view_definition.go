@@ -33,8 +33,14 @@ const legacyViewDefinitionSQLMode = "PIPES_AS_CONCAT"
 type persistedViewDefinitionData struct {
 	Stmt                string
 	Definition          string  `json:"definition,omitempty"`
+	CheckOption         string  `json:"check_option,omitempty"`
 	SQLMode             *string `json:"sql_mode,omitempty"`
 	LowerCaseTableNames *int64  `json:"lower_case_table_names,omitempty"`
+}
+
+type persistedViewMetadata struct {
+	definition  string
+	checkOption string
 }
 
 // builtInViewDefinition returns the frozen parser-derived definition for a
@@ -65,14 +71,52 @@ func builtInViewDefinition(
 			}
 			continue
 		}
-		definition, ok := viewDefinitionFromPersistedData(proc.Ctx, string(persisted))
+		metadata, ok := viewMetadataFromPersistedData(proc.Ctx, string(persisted))
 		if !ok {
 			if err := results.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := results.AppendBytes([]byte(definition), false); err != nil {
+		if err := results.AppendBytes([]byte(metadata.definition), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInViewCheckOption(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	definitions := vector.GenerateFunctionStrParameter(parameters[0])
+	results := vector.MustFunctionResult[types.Varlena](result)
+
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		persisted, isNull := definitions.GetStrValue(row)
+		if isNull {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		metadata, ok := viewMetadataFromPersistedData(proc.Ctx, string(persisted))
+		if !ok {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := results.AppendBytes([]byte(metadata.checkOption), false); err != nil {
 			return err
 		}
 	}
@@ -80,15 +124,20 @@ func builtInViewDefinition(
 }
 
 func viewDefinitionFromPersistedData(ctx context.Context, persisted string) (string, bool) {
+	metadata, ok := viewMetadataFromPersistedData(ctx, persisted)
+	return metadata.definition, ok
+}
+
+func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persistedViewMetadata, bool) {
 	var data persistedViewDefinitionData
 	if err := json.Unmarshal([]byte(persisted), &data); err != nil {
-		return "", false
+		return persistedViewMetadata{}, false
 	}
 	if data.Definition != "" {
-		return data.Definition, true
+		return persistedViewMetadata{definition: data.Definition, checkOption: checkOptionOrNone(data.CheckOption)}, true
 	}
 	if data.Stmt == "" {
-		return "", false
+		return persistedViewMetadata{}, false
 	}
 
 	lowerCaseTableNames := int64(0)
@@ -107,24 +156,33 @@ func viewDefinitionFromPersistedData(ctx context.Context, persisted string) (str
 		}
 	}()
 	if err != nil || len(statements) == 0 {
-		return "", false
+		return persistedViewMetadata{}, false
 	}
 
 	// Legacy ViewData.Stmt can be the entire COM_QUERY text. View binding uses
 	// its first parsed statement, so metadata must retain that compatibility.
 	var selectStmt *tree.Select
+	checkOption := "NONE"
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
 		selectStmt = statement.AsSource
+		checkOption = checkOptionOrNone(statement.CheckOption)
 	case *tree.AlterView:
 		selectStmt = statement.AsSource
 	default:
-		return "", false
+		return persistedViewMetadata{}, false
 	}
 	if selectStmt == nil {
-		return "", false
+		return persistedViewMetadata{}, false
 	}
-	return tree.StringWithOpts(
+	return persistedViewMetadata{definition: tree.StringWithOpts(
 		selectStmt, dialect.MYSQL, tree.WithQuoteString(true),
-		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), true
+		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
+}
+
+func checkOptionOrNone(checkOption string) string {
+	if checkOption == "" {
+		return "NONE"
+	}
+	return checkOption
 }

@@ -14092,6 +14092,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_view_check_option`
+	// Shares the parser-aware legacy read path with mo_view_definition so the
+	// separate information_schema column remains consistent with its SELECT.
+	{
+		functionId: MO_VIEW_CHECK_OPTION,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInViewCheckOption
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,

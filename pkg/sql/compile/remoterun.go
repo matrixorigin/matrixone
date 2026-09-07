@@ -2525,8 +2525,9 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 	return nil
 }
 
-// validateRemoteViewDefinitionPipelineProtocol protects the function ID that
+// validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
 // occurs in the persisted VIEWS definition. It is used at both marshal and
+// occur in the persisted VIEWS definition. It is used at both marshal and
 // unmarshal boundaries, so a stale prepared or remote pipeline fails closed
 // instead of being bound by a CN that predates the function registration.
 func validateRemoteViewDefinitionPipelineProtocol(
@@ -2538,12 +2539,13 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return nil
 	}
-	if p == nil || !pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) {
+	if p == nil || (!pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) &&
+		!pipelineContainsFunctionID(p, function.MO_VIEW_CHECK_OPTION)) {
 		return nil
 	}
 	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"mo_view_definition remote execution requires MORPC protocol version 58",
+			"view metadata remote execution requires MORPC protocol version 58",
 		)
 	}
 	return nil
