@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -102,6 +103,143 @@ func TestUnsignedIntegerSubtractionOperandCombinations(t *testing.T) {
 			assertUnsignedSubtractionPlan(t, expr, types.T_uint64)
 		})
 	}
+}
+
+func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation"},
+		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation"},
+		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation"},
+	} {
+		for _, mode := range []struct {
+			name string
+			mode string
+			want types.T
+		}{
+			{name: "default", want: types.T_uint64},
+			{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+		} {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				expr := unsignedSubtractionProjection(t, mode.mode, tc.sql, false)
+				assertUnsignedSubtractionPlan(t, expr, mode.want)
+			})
+		}
+	}
+}
+
+func TestUnsignedIntegerSubtractionTreatsYearAsUnsigned(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want types.T
+	}{
+		{name: "default", want: types.T_uint64},
+		{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := unsignedSubtractionProjection(t, tc.mode, "select cast(n_nationkey as year) - 1 from nation", false)
+			assertUnsignedSubtractionPlan(t, expr, tc.want)
+		})
+	}
+}
+
+func TestBuilderlessBindersHonorNoUnsignedSubtraction(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "select u - 1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	astExpr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+
+	for _, tc := range []struct {
+		name string
+		mode bool
+		want types.T
+	}{
+		{name: "default", want: types.T_uint64},
+		{name: "no unsigned subtraction", mode: true, want: types.T_int64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			generated := NewGeneratedColBinder(context.Background(), []string{"u"}, []planpb.Type{{Id: int32(types.T_uint64)}})
+			generated.setNoUnsignedSubtractionOverride(tc.mode)
+			expr, err := generated.BindExpr(astExpr, 0, false)
+			require.NoError(t, err)
+			assertUnsignedSubtractionPlan(t, expr, tc.want)
+
+			defaults := NewDefaultBinder(context.Background(), nil, nil, planpb.Type{}, nil)
+			defaults.setNoUnsignedSubtractionOverride(tc.mode)
+			stmt, err := mysql.ParseOne(context.Background(), "select cast(0 as unsigned) - 1", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			expr, err = defaults.BindExpr(stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, 0, false)
+			require.NoError(t, err)
+			assertUnsignedSubtractionPlan(t, expr, tc.want)
+		})
+	}
+}
+
+func TestCreateTableExpressionsHonorNoUnsignedSubtraction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want types.T
+	}{
+		{name: "default", want: types.T_uint64},
+		{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			ctx.SetSqlModeOverride(tc.mode)
+			stmt, err := mysql.ParseOne(ctx.GetContext(), `create table t_ddl_mode (
+				u bigint unsigned,
+				g bigint generated always as (u - 1) stored,
+				d bigint default (cast(0 as unsigned) - 1),
+				check (u - 1 < 0)
+			)`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			built, err := BuildPlan(ctx, stmt, false)
+			if tc.mode == "" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			table := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.want, subtractionResultType(t, table.Cols[1].GetGeneratedCol().GetExpr()))
+			defaultLiteral := table.Cols[2].GetDefault().GetExpr().GetLit()
+			require.NotNil(t, defaultLiteral)
+			require.Equal(t, int64(-1), defaultLiteral.GetI64Val())
+			require.Len(t, table.Checks, 1)
+			require.Equal(t, tc.want, subtractionResultType(t, table.Checks[0].GetCheck()))
+		})
+	}
+}
+
+func subtractionResultType(t *testing.T, expr *Expr) types.T {
+	t.Helper()
+	if typ, ok := findSubtractionResultType(expr); ok {
+		return typ
+	}
+	t.Fatal("expression contains no unsigned subtraction result cast")
+	return types.T_any
+}
+
+func findSubtractionResultType(expr *Expr) (types.T, bool) {
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
+			if minus := fn.Args[0].GetF(); minus != nil && minus.Func != nil && minus.Func.ObjName == "-" {
+				return types.T(expr.Typ.Id), true
+			}
+		}
+		for _, arg := range fn.Args {
+			if typ, ok := findSubtractionResultType(arg); ok {
+				return typ, true
+			}
+		}
+	}
+	return types.T_any, false
 }
 
 func TestUnsignedSubtractionDoesNotAffectOtherNumericDomains(t *testing.T) {

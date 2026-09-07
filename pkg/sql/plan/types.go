@@ -1086,6 +1086,11 @@ type baseBinder struct {
 	bindRawMySQLSpecialType          bool
 	subqueryInAggregateInput         bool
 	aggregateInputCorrelation        bool
+	// noUnsignedSubtractionOverride lets binders which do not own a
+	// QueryBuilder (DDL expressions and stored SQL UDF bodies) bind arithmetic
+	// with the SQL mode that governs that expression.
+	noUnsignedSubtractionOverride    bool
+	hasNoUnsignedSubtractionOverride bool
 }
 
 type boundColumn struct {

@@ -1655,6 +1655,7 @@ func buildCTASDefaultFromOrigin(
 	if len(columns) > 0 {
 		binder = NewDefaultBinderWithColumns(ctx.GetContext(), typ, columns)
 	}
+	binder.setNoUnsignedSubtractionOverride(noUnsignedSubtractionMode(ctx))
 	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -3201,7 +3202,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if isGenerated {
 				// Build generated column expression using the full column list
 				// so that base columns defined later can be referenced (forward reference).
-				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess())
+				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess(), noUnsignedSubtractionMode(ctx))
 				if err != nil {
 					return err
 				}
@@ -3220,7 +3221,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
+				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs, noUnsignedSubtractionMode(ctx))
 				if err != nil {
 					return err
 				}
@@ -3228,7 +3229,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
 
-				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
+				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess(), noUnsignedSubtractionMode(ctx))
 				if err != nil {
 					return err
 				}
@@ -3947,6 +3948,7 @@ func appendCheckDef(
 	}
 
 	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	binder.setNoUnsignedSubtractionOverride(noUnsignedSubtractionMode(ctx))
 	binder.enableCanonicalNameConstValueCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {

@@ -3553,7 +3553,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
-	unsignedSubtractionResultType := b.unsignedIntegerSubtractionResultType(name, args)
+	unsignedSubtractionResultType := b.unsignedIntegerSubtractionResultType(name, astArgs, args)
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
@@ -4000,6 +4000,10 @@ func bindFuncExprImplUdf(
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
+		restoreSQLMode := b.pushNoUnsignedSubtractionOverride(
+			mysqlparser.HasSQLMode(parserSQLMode, mysqlparser.SQLModeNoUnsignedSubtraction),
+		)
+		defer restoreSQLMode()
 		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
@@ -6011,24 +6015,67 @@ func bindFuncExprImplByPlanExpr(
 // integer subtraction. This is intentionally decided before prepared numeric
 // argument reconciliation: that reconciliation may temporarily widen an
 // explicit unsigned cast containing a parameter to DECIMAL128.
-func (b *baseBinder) unsignedIntegerSubtractionResultType(name string, args []*Expr) *Type {
-	if name != "-" || len(args) != 2 {
+func (b *baseBinder) unsignedIntegerSubtractionResultType(name string, astArgs []tree.Expr, args []*Expr) *Type {
+	if name != "-" || len(astArgs) != 2 || len(args) != 2 {
 		return nil
 	}
 
-	left := types.T(args[0].Typ.Id)
-	right := types.T(args[1].Typ.Id)
-	if !integerSubtractionOperand(left) || !integerSubtractionOperand(right) ||
-		(!unsignedIntegerSubtractionOperand(left) && !unsignedIntegerSubtractionOperand(right)) {
+	leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(astArgs[0], args[0])
+	rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(astArgs[1], args[1])
+	if !leftInteger || !rightInteger || (!leftUnsigned && !rightUnsigned) {
 		return nil
 	}
 
 	resultType := types.T_uint64.ToType()
-	if b.builder != nil && b.builder.noUnsignedSubtraction {
+	if b.noUnsignedSubtractionEnabled() {
 		resultType = types.T_int64.ToType()
 	}
 	planType := makePlan2Type(&resultType)
 	return &planType
+}
+
+// integerSubtractionOperandDomain combines the parsed expression with its
+// bound expression. The bound arithmetic node may already contain implicit
+// DECIMAL casts, whereas the AST distinguishes that implementation detail from
+// a user-written DECIMAL cast, which remains a non-integer boundary.
+func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
+	astExpr = unwrapParenExpr(astExpr)
+	if literal, ok := astExpr.(*tree.NumVal); ok {
+		return literal.ValType == tree.P_int64 || literal.ValType == tree.P_uint64, literal.ValType == tree.P_uint64
+	}
+	if cast, ok := astExpr.(*tree.CastExpr); ok {
+		typ, err := getTypeFromAst(b.GetContext(), cast.Type)
+		if err != nil {
+			return false, false
+		}
+		oid := types.T(typ.Id)
+		return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+
+	if binary, ok := astExpr.(*tree.BinaryExpr); ok && integerArithmeticBinaryOperator(binary.Op) {
+		fn := expr.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return false, false
+		}
+		leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(binary.Left, fn.Args[0])
+		rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(binary.Right, fn.Args[1])
+		return leftInteger && rightInteger, leftUnsigned || rightUnsigned
+	}
+
+	if expr == nil {
+		return false, false
+	}
+	oid := types.T(expr.Typ.Id)
+	return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+}
+
+func integerArithmeticBinaryOperator(op tree.BinaryOp) bool {
+	switch op {
+	case tree.PLUS, tree.MULTI, tree.MOD:
+		return true
+	default:
+		return false
+	}
 }
 
 // castUnsignedIntegerSubtractionArgs performs the arithmetic in DECIMAL128 so
@@ -6051,7 +6098,7 @@ func (b *baseBinder) castUnsignedIntegerSubtractionArgs(args []*Expr) ([]*Expr, 
 }
 
 func integerSubtractionOperand(typ types.T) bool {
-	return typ.IsInteger() || typ == types.T_bit
+	return typ.IsInteger() || typ == types.T_bit || typ == types.T_year
 }
 
 func unsignedIntegerSubtractionOperand(typ types.T) bool {
@@ -6061,6 +6108,48 @@ func unsignedIntegerSubtractionOperand(typ types.T) bool {
 	default:
 		return false
 	}
+}
+
+func (b *baseBinder) noUnsignedSubtractionEnabled() bool {
+	if b.hasNoUnsignedSubtractionOverride {
+		return b.noUnsignedSubtractionOverride
+	}
+	return b.builder != nil && b.builder.noUnsignedSubtraction
+}
+
+func (b *baseBinder) pushNoUnsignedSubtractionOverride(enabled bool) func() {
+	oldEnabled := b.noUnsignedSubtractionOverride
+	oldHasOverride := b.hasNoUnsignedSubtractionOverride
+	var oldBuilderEnabled bool
+	if b.builder != nil {
+		oldBuilderEnabled = b.builder.noUnsignedSubtraction
+		// SELECT-form SQL UDF bodies create nested binders from this builder, so
+		// the stored mode must be visible beyond the current baseBinder too.
+		b.builder.noUnsignedSubtraction = enabled
+	}
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+	return func() {
+		if b.builder != nil {
+			b.builder.noUnsignedSubtraction = oldBuilderEnabled
+		}
+		b.noUnsignedSubtractionOverride = oldEnabled
+		b.hasNoUnsignedSubtractionOverride = oldHasOverride
+	}
+}
+
+func (b *baseBinder) setNoUnsignedSubtractionOverride(enabled bool) {
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+}
+
+func noUnsignedSubtractionMode(ctx CompilerContext) bool {
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err != nil {
+		return false
+	}
+	modeString, ok := mode.(string)
+	return ok && mysqlparser.HasSQLMode(modeString, mysqlparser.SQLModeNoUnsignedSubtraction)
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {

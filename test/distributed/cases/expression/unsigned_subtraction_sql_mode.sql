@@ -46,6 +46,31 @@ select u8 - 1, u16 - 1, u32 - 1, u64 - 1, b - 1 from t_widths;
 set session sql_mode = 'STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION';
 select cast(0 as unsigned) - 1 as result;
 
+create table t_nested (u bigint unsigned, y year);
+insert into t_nested values (0, 0);
+select (u + 0) - 1, (u * 1) - 1, (u % 1) - 1, y - 1 from t_nested;
+
+create function stored_signed_sub() returns bigint language sql as 'cast(0 as unsigned) - 1';
+set session sql_mode = '';
+select stored_signed_sub() as result;
+drop function stored_signed_sub();
+
+create function stored_unsigned_sub() returns bigint language sql as 'cast(0 as unsigned) - 1';
+set session sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+select stored_unsigned_sub() as result;
+drop function stored_unsigned_sub();
+
+create table t_ddl_mode (
+    u bigint unsigned,
+    g bigint generated always as (u - 1) stored,
+    d bigint default (cast(0 as unsigned) - 1),
+    check (u - 1 < 0)
+);
+insert into t_ddl_mode (u) values (0);
+select u, g, d from t_ddl_mode;
+drop table t_ddl_mode;
+drop table t_nested;
+
 create table t_update (u bigint unsigned);
 insert into t_update values (0);
 update t_update set u = u - 1;
