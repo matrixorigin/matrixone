@@ -637,6 +637,36 @@ select id from auto_increment_ignore_aux force index(uk_ab) where a='bb' and b=2
 select id from auto_increment_ignore_aux force index(uk_c) where c='zz2';
 drop table auto_increment_ignore_aux;
 
+-- Synchronous indexes must share accepted rows and finalized IDs, not the
+-- provisional input. A rejected token must never find a different accepted row.
+drop table if exists auto_increment_ignore_irregular;
+create table auto_increment_ignore_irregular(id bigint auto_increment primary key, uk int, g int check(g>=0), body varchar(100), unique key uq(uk,g), index mi using master(body), fulltext fi(body));
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'alpha'),(1,0,'beta'),(2,0,'gamma');
+select id,uk,body from auto_increment_ignore_irregular order by id;
+select last_insert_id();
+select id from auto_increment_ignore_irregular where match(body) against('gamma' in boolean mode);
+select id from auto_increment_ignore_irregular where match(body) against('beta' in boolean mode);
+select id from auto_increment_ignore_irregular force index(mi) where body='gamma';
+select id from auto_increment_ignore_irregular force index(mi) where body='beta';
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'rejected'),(4,-1,'rejected');
+insert ignore into auto_increment_ignore_irregular(uk,g,body) select uk,g,body from auto_increment_ignore_irregular where false;
+select count(*) from auto_increment_ignore_irregular;
+select id from auto_increment_ignore_irregular where match(body) against('rejected' in boolean mode);
+begin;
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (4,0,'rollback');
+rollback;
+select id from auto_increment_ignore_irregular where match(body) against('rollback' in boolean mode);
+select id from auto_increment_ignore_irregular force index(mi) where body='rollback';
+drop table auto_increment_ignore_irregular;
+
+-- The same final-image boundary applies without generated-ID reordering.
+drop table if exists auto_increment_ignore_manual_index;
+create table auto_increment_ignore_manual_index(id bigint primary key, body varchar(100), fulltext fi(body));
+insert ignore into auto_increment_ignore_manual_index values (1,'alpha'),(1,'beta'),(2,'gamma');
+select id from auto_increment_ignore_manual_index where match(body) against('gamma' in boolean mode);
+select id from auto_increment_ignore_manual_index where match(body) against('beta' in boolean mode);
+drop table auto_increment_ignore_manual_index;
+
 -- An all-manual INSERT reports zero in its OK packet but must not change the
 -- session value observed by LAST_INSERT_ID().
 drop table if exists auto_increment_manual_result;

@@ -127,9 +127,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	// The irregular-index maintenance source is set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert, where the resolved conflict
-	// action (plain insert vs ON DUPLICATE KEY UPDATE) is known: plain insert
-	// feeds the pre-dedup new-row image; ODKU feeds the post-merge final image
-	// plus an old-row image for dropping stale entries.
+	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
+	// shares accepted rows after arbitration; ODKU shares the post-merge final
+	// image plus an old-row image for dropping stale entries.
 	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
@@ -423,19 +423,6 @@ func splitIrregularIndexesByUpdatedColumns(
 	return affected, insertOnly, nil
 }
 
-// appendIrregularMaintSource materializes the modern new-row image (the projList2
-// PROJECT produced by appendNodesForInsertStmt: tableDef.Cols order minus Row_ID,
-// with auto-increment / composite-pk already assigned by PreInsert) into a SINK
-// step. The image must be shared rather than re-derived, because re-running the
-// source would assign different auto-increment values, so both the modern main
-// plan (base table + regular indexes) and the irregular-index (IVF/fulltext)
-// maintenance sub-plans consume sink-scans of the same step.
-//
-// It records the maintenance context on the builder and returns the node the
-// dedup path must consume in place of newRowImageID: a passthrough PROJECT over
-// a sink-scan (a PROJECT so the dedup can safely extend its projection list with
-// composite unique-index lock keys without mutating the SINK_SCAN). When the
-// table has no irregular indexes it is a no-op and returns newRowImageID.
 // modernInsertFkCheckEnabled reports whether the modern plain-INSERT path should
 // run the row-scoped child→parent foreign-key check: FK checks are enabled and the
 // table has at least one non-self-referencing foreign key. Self-referencing FKs are
@@ -553,9 +540,20 @@ func (builder *QueryBuilder) appendODKUActionNotNullAssertions(
 	}, bindCtx), nil
 }
 
+// appendIrregularMaintSource shares one row image between the base/regular-index
+// write and synchronous irregular-index maintenance. rowImage describes the
+// output columns of the stream rooted at newRowImageID: table columns minus
+// Row_ID, followed by any computed lock keys. For IGNORE, the stream must already
+// have rejected conflicts and finalized generated PKs. Re-evaluating the source
+// for each consumer could otherwise assign different IDs.
+//
+// The returned PROJECT over a SINK_SCAN lets the main write extend its projection
+// without changing the shared schema. With neither irregular indexes nor
+// RETURNING it is a no-op.
 func (builder *QueryBuilder) appendIrregularMaintSource(
 	bindCtx *BindContext,
 	newRowImageID int32,
+	rowImage *plan.Node,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
@@ -568,6 +566,19 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 		return newRowImageID
 	}
 
+	// The stream root can be a DEDUP join whose first child is the existing
+	// table, not the incoming row. Expose that row explicitly when the root
+	// does not itself project it. SINK pruning relies on its child's output
+	// schema; changing only SINK.ProjectList would lose the payload columns.
+	if newRowImageID != rowImage.NodeId {
+		projectTag := builder.genNewBindTag()
+		newRowImageID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{newRowImageID},
+			ProjectList: getProjectionByLastNodeWithTag(builder, rowImage.NodeId, projectTag),
+			BindingTags: []int32{projectTag},
+		}, bindCtx)
+	}
 	sinkTag := builder.genNewBindTag()
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, newRowImageID, sinkTag)
 	if forceMaterialize {
@@ -627,6 +638,12 @@ func (builder *QueryBuilder) appendImageSinkScanNode(
 			continue
 		}
 		cols = append(cols, &ColDef{Name: col.Name, Hidden: col.Hidden, Typ: col.Typ})
+	}
+	// IGNORE arbitration can retain computed unique-lock keys after the table
+	// columns. They remain inputs to the main write even though maintenance
+	// reads only the table prefix. Keep their physical schema in lockstep.
+	for i := len(cols); i < len(projList); i++ {
+		cols = append(cols, &ColDef{Name: fmt.Sprintf("__mo_insert_aux_%d", i), Hidden: true, Typ: projList[i].Typ})
 	}
 
 	scanNode := &plan.Node{
@@ -2809,8 +2826,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
-	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || builder.returningRequested) {
-		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
+	if onDupAction == plan.Node_FAIL && (len(irregularIndexes) > 0 || builder.returningRequested) {
+		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
 	}
@@ -3675,6 +3692,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 
+		}
+	}
+
+	if onDupAction == plan.Node_IGNORE && len(irregularIndexes) > 0 {
+		// All synchronous indexes must consume accepted rows with final PKs.
+		// Sharing the pre-dedup image indexes rejected rows and, when IGNORE
+		// reuses an allocator candidate, points postings at the wrong base row.
+		oldSelectTag := selectTag
+		lastNodeID = builder.appendIrregularMaintSource(
+			bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, objRef, false)
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectTag = selectNode.BindingTags[0]
+		for _, expr := range appendedUniqueProjs {
+			replaceColRefTag(expr, oldSelectTag, selectTag)
 		}
 	}
 

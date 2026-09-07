@@ -76,6 +76,75 @@ before publication. Candidate-vector cleanup remains owned by the operator.
 No gapless global sequence, allocator rollback, MySQL lock-mode implementation,
 new protocol revision, or expansion of generated-column/FK compatibility.
 
+## Accepted-row index maintenance boundary
+
+The follow-up review reproduced a violated consumer contract: FULLTEXT and
+MASTER maintenance materialized the pre-dedup image, while ordered IGNORE later
+changed an accepted row's PK. The base table used the final PK; index postings
+used provisional PKs and could even represent rejected rows. Exact-base and
+head public SQL distinguish this regression from legal auto-increment gaps.
+
+For INSERT IGNORE, move the existing shared SINK after all PK/UK arbitration,
+not just after the auto-increment special case. Describe the row image explicitly
+when constructing that SINK: a DEDUP join's first child is not necessarily the
+incoming row. Retain computed lock columns alongside the table-column prefix,
+including matching SINK_SCAN metadata, and retag downstream index expressions.
+All synchronous maintenance consumers use this one accepted image; no source,
+allocator, arbiter, or index expression is evaluated a second time.
+
+Ordinary INSERT/LOAD, ODKU, and tables without synchronous irregular indexes keep
+their existing plan shape. No extra SINK, state, protocol, goroutine, retry, or
+per-row copy is introduced. A single-key DEDUP root needs a pass-through PROJECT
+to expose its accepted payload to SINK column pruning; the coordinated arbiter
+already exposes that projection. The moved SINK holds only accepted rows, so
+duplicate-heavy input avoids unnecessary tokenization/index expansion.
+
+Retaining lock keys can widen the shared row on all-accepted input; it preserves
+the existing computed values instead of evaluating keys again after arbitration.
+This is not a claim of zero overhead or measured SQL throughput improvement.
+
+The earlier review checked allocation and base/regular-index writes but missed
+the independent maintenance readers. The review unit is now the complete
+accepted-row producer/consumer graph, not the allocator alone. Typed plan tests
+check downstream placement, single evaluation, connected SINK consumers, and
+auxiliary schemas; real SQL checks the base/index association and absence of
+orphan or rejected postings, not only base-table counts.
+
+### Follow-up ownership and liveness audit
+
+| Boundary | Invariant and closure |
+|---|---|
+| Row production (Q1) | One PRE_INSERT/arbiter producer; existing SINK broadcasts the same accepted image to the base, regular indexes and synchronous maintenance. No added allocator or ownership state. |
+| Fanout termination (Q2) | No back-edge from a consumer to the source. Existing dispatch/merge context cancellation, terminal signals and Reset abort/deferred cleanup remain the termination owners. Empty, all-rejected, rollback and multi-batch SQL complete. |
+| Retained data (Q3) | No new growing container or materialization stage; the existing spool/backpressure lifecycle is retained. Accepted rows only enter maintenance; auxiliary lock-key width is the explicit cost. The existing arbiter's input-dependent memory bound is not changed. |
+| Other paths | Plain INSERT/LOAD and ODKU stay at their original sharing boundaries. No synchronous index means no added sharing. No new catalog/wire/native contract, asynchronous-index dispatch or transaction retry policy. |
+
+### Follow-up validation on f86f721d plus this change
+
+- The original three-row FULLTEXT/MASTER counterexample failed at e5618d9 and
+  passed on its exact main base fdc1e0c. It now passes with the correct accepted
+  PKs, and rejected tokens have no postings.
+- Full `pkg/sql/plan`: passed (4.17s), including the new structural/pruning tests
+  and existing ordinary INSERT, ODKU and RETURNING coverage.
+- `TestIssue28349AutoIncrementPublicPaths`: passed (12.56s test / 13.77s package).
+  New scenarios cover FULLTEXT + MASTER with composite UK/CHECK, hidden posting
+  IDs, empty/all-rejected input, prepared rebind, rollback, failed INSERT,
+  subsequent UPDATE/DELETE, manual real PK and hidden-PK/UK controls. IVF entry
+  PKs **and vector values** are compared with base rows rather than trusting
+  a nearest-neighbor query that could fall back to a scan.
+- The same fixture's 40,000-row INSERT SELECT accepts 20,000 rows across batches;
+  exact ID/UK/payload agreement, both indexed lookup counts, no rejected words,
+  and no orphan postings passed (0.21s subtest including DDL and checks). This
+  adds no cluster startup and is not a before/after throughput benchmark.
+- Same-instance mo-tester normal comparison, twice: auto_increment **498/498**
+  and system_variables **177/177**, with table cleanup asserted after each pass.
+- Focused `-race -run '^Test(DispatchReset|ConnectorReset|MaterializedSinkScanReset)'`
+  passed in dispatch, connector and merge, exercising existing error/full-channel
+  terminal handling and reader cleanup. No lifecycle implementation was changed.
+- Prior allocator/arbiter race and benchmark evidence below remains applicable:
+  those implementations and native dependencies are unchanged by this follow-up.
+  Full SCA, compose CI, TPCC and mixed-version topology were not rerun.
+
 ## Validation results (2026-09-08)
 
 Environment: macOS arm64 / Apple M4, Go 1.26.4, fresh native artifacts from

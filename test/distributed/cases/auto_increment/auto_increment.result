@@ -896,6 +896,50 @@ select id from auto_increment_ignore_aux force index(uk_c) where c='zz2';
 id
 2
 drop table auto_increment_ignore_aux;
+drop table if exists auto_increment_ignore_irregular;
+create table auto_increment_ignore_irregular(id bigint auto_increment primary key, uk int, g int check(g>=0), body varchar(100), unique key uq(uk,g), index mi using master(body), fulltext fi(body));
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'alpha'),(1,0,'beta'),(2,0,'gamma');
+select id,uk,body from auto_increment_ignore_irregular order by id;
+id    uk    body
+1    1    alpha
+2    2    gamma
+select last_insert_id();
+last_insert_id()
+1
+select id from auto_increment_ignore_irregular where match(body) against('gamma' in boolean mode);
+id
+2
+select id from auto_increment_ignore_irregular where match(body) against('beta' in boolean mode);
+id
+select id from auto_increment_ignore_irregular force index(mi) where body='gamma';
+id
+2
+select id from auto_increment_ignore_irregular force index(mi) where body='beta';
+id
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'rejected'),(4,-1,'rejected');
+insert ignore into auto_increment_ignore_irregular(uk,g,body) select uk,g,body from auto_increment_ignore_irregular where false;
+select count(*) from auto_increment_ignore_irregular;
+count(*)
+2
+select id from auto_increment_ignore_irregular where match(body) against('rejected' in boolean mode);
+id
+begin;
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (4,0,'rollback');
+rollback;
+select id from auto_increment_ignore_irregular where match(body) against('rollback' in boolean mode);
+id
+select id from auto_increment_ignore_irregular force index(mi) where body='rollback';
+id
+drop table auto_increment_ignore_irregular;
+drop table if exists auto_increment_ignore_manual_index;
+create table auto_increment_ignore_manual_index(id bigint primary key, body varchar(100), fulltext fi(body));
+insert ignore into auto_increment_ignore_manual_index values (1,'alpha'),(1,'beta'),(2,'gamma');
+select id from auto_increment_ignore_manual_index where match(body) against('gamma' in boolean mode);
+id
+2
+select id from auto_increment_ignore_manual_index where match(body) against('beta' in boolean mode);
+id
+drop table auto_increment_ignore_manual_index;
 drop table if exists auto_increment_manual_result;
 create table auto_increment_manual_result(id bigint auto_increment primary key, v int);
 insert into auto_increment_manual_result(v) values (1);

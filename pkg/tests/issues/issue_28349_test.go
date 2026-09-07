@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 // TestIssue28349AutoIncrementPublicPaths exercises the three public paths added
 // by the auto-increment session/provenance work: one multi-statement COM_QUERY,
 // ordered INSERT IGNORE candidate reuse, and REPLACE LAST_INSERT_ID reporting.
+// The name refers to the PR; the covered issues are #28237, #28238 and #28239.
 func TestIssue28349AutoIncrementPublicPaths(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -134,6 +136,115 @@ func TestIssue28349AutoIncrementPublicPaths(t *testing.T) {
 				_, err = stmt.ExecContext(ctx, "xy1", 4)
 				require.NoError(t, err)
 				require.Equal(t, int64(3), queryInt64(t, "select count(*) from ai_aux"))
+			})
+		}
+
+		t.Run("irregular_indexes_final_image", func(t *testing.T) {
+			exec(t, "create table ai_irregular(id bigint auto_increment primary key, uk int, g int check(g>=0), body varchar(100), unique key uq(uk,g), index mi using master(body), fulltext fi(body))")
+			defer exec(t, "drop table ai_irregular")
+			exec(t, "insert ignore into ai_irregular(uk,g,body) values (1,0,'alpha'),(1,0,'beta'),(2,0,'gamma')")
+			require.Equal(t, [][]int64{{1, 1}, {2, 2}}, queryInt64Rows(t, "select id,uk from ai_irregular order by id", 2))
+			require.Equal(t, int64(1), queryInt64(t, "select last_insert_id()"))
+			assertIndexed := func(token string, ids [][]int64) {
+				t.Helper()
+				require.Equal(t, ids, queryInt64Rows(t, "select id from ai_irregular where match(body) against('"+token+"' in boolean mode) order by id", 1))
+				require.Equal(t, ids, queryInt64Rows(t, "select id from ai_irregular force index(mi) where body='"+token+"' order by id", 1))
+			}
+			assertIndexed("gamma", [][]int64{{2}})
+			assertIndexed("beta", nil)
+
+			// Inspect postings too: an orphan can be invisible to the join today
+			// and become a false positive when that PK is explicitly inserted later.
+			var tableID uint64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='ai_irregular'", strings.ToLower(dbName)).Scan(&tableID))
+			var postings string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select index_table_name from mo_catalog.mo_indexes where table_id=? and name='fi' limit 1", tableID).Scan(&postings))
+			require.Equal(t, [][]int64{{1}, {2}}, queryInt64Rows(t, "select distinct doc_id from `"+postings+"` order by doc_id", 1))
+			assertNoRejectedPostings := func() {
+				t.Helper()
+				require.Zero(t, queryInt64(t, "select count(*) from `"+postings+"` where word in ('beta','rejected','rollback','failed')"))
+			}
+			assertNoRejectedPostings()
+			exec(t, "insert ignore into ai_irregular(uk,g,body) values (1,0,'rejected'),(4,-1,'rejected')")
+			exec(t, "insert ignore into ai_irregular(uk,g,body) select uk,g,body from ai_irregular where false")
+			require.Equal(t, int64(2), queryInt64(t, "select count(*) from ai_irregular"))
+			assertNoRejectedPostings()
+
+			stmt, err := conn.PrepareContext(ctx, "insert ignore into ai_irregular(uk,g,body) values (?,0,?)")
+			require.NoError(t, err)
+			defer stmt.Close()
+			_, err = stmt.ExecContext(ctx, 3, "delta")
+			require.NoError(t, err)
+			_, err = stmt.ExecContext(ctx, 3, "rejected")
+			require.NoError(t, err)
+			assertIndexed("delta", queryInt64Rows(t, "select id from ai_irregular where uk=3", 1))
+			assertNoRejectedPostings()
+
+			exec(t, "begin")
+			defer exec(t, "rollback")
+			exec(t, "insert ignore into ai_irregular(uk,g,body) values (4,0,'rollback')")
+			assertIndexed("rollback", queryInt64Rows(t, "select id from ai_irregular where uk=4", 1))
+			exec(t, "rollback")
+			assertIndexed("rollback", nil)
+			_, err = conn.ExecContext(ctx, "insert into ai_irregular(uk,g,body) values (1,0,'failed')")
+			require.Error(t, err)
+			assertNoRejectedPostings()
+			exec(t, "delete from ai_irregular where uk=2")
+			assertIndexed("gamma", nil)
+			exec(t, "update ai_irregular set body='updated' where uk=1")
+			assertIndexed("alpha", nil)
+			assertIndexed("updated", [][]int64{{1}})
+		})
+
+		t.Run("irregular_ivf_final_image", func(t *testing.T) {
+			exec(t, "set experimental_ivf_index=1")
+			exec(t, "create table ai_irregular_ivf(id bigint auto_increment primary key, uk int unique, v vecf32(3))")
+			defer exec(t, "drop table ai_irregular_ivf")
+			exec(t, "create index vi using ivfflat on ai_irregular_ivf(v) lists=1 op_type 'vector_l2_ops'")
+			exec(t, "insert ignore into ai_irregular_ivf(uk,v) values (1,'[1,0,0]'),(1,'[0,0,1]'),(2,'[0,1,0]')")
+			require.Equal(t, [][]int64{{1, 1}, {2, 2}}, queryInt64Rows(t, "select id,uk from ai_irregular_ivf order by id", 2))
+			var entryTable string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select index_table_name from mo_catalog.mo_indexes where name='vi' and algo_table_type='entries' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='ai_irregular_ivf')", strings.ToLower(dbName)).Scan(&entryTable))
+			// Compare hidden entries with base rows, not just a top-K query that
+			// could fall back to a table scan on an untrained, initially empty index.
+			require.Equal(t, [][]int64{{1}, {2}}, queryInt64Rows(t, "select __mo_index_pri_col from `"+entryTable+"` order by __mo_index_pri_col", 1))
+			require.Equal(t, int64(2), queryInt64(t, "select count(*) from `"+entryTable+"` e join ai_irregular_ivf b on e.__mo_index_pri_col=b.id where l2_distance(e.__mo_index_centroid_fk_entry,b.v)=0"))
+		})
+
+		t.Run("irregular_multi_batch", func(t *testing.T) {
+			exec(t, "create table ai_irregular_batch(id bigint auto_increment primary key, uk bigint unique, body varchar(16), index mi using master(body), fulltext fi(body))")
+			defer exec(t, "drop table ai_irregular_batch")
+			// More than two accepted execution batches exercise shared-SINK
+			// fanout/backpressure as well as candidate retention across batches.
+			exec(t, "insert ignore into ai_irregular_batch(uk,body) select (result+1) div 2, if(result%2=1,'kept','rejected') from generate_series(1,40000) g order by result")
+			require.Equal(t, [][]int64{{20000, 1, 20000}}, queryInt64Rows(t, "select count(*),min(id),max(id) from ai_irregular_batch", 3))
+			require.Zero(t, queryInt64(t, "select count(*) from ai_irregular_batch where id<>uk or body<>'kept'"))
+			require.Equal(t, int64(20000), queryInt64(t, "select count(*) from ai_irregular_batch where match(body) against('kept' in boolean mode)"))
+			require.Equal(t, int64(20000), queryInt64(t, "select count(*) from ai_irregular_batch force index(mi) where body='kept'"))
+			require.Zero(t, queryInt64(t, "select count(*) from ai_irregular_batch where match(body) against('rejected' in boolean mode)"))
+			var postings string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select index_table_name from mo_catalog.mo_indexes where name='fi' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='ai_irregular_batch') limit 1", strings.ToLower(dbName)).Scan(&postings))
+			require.Equal(t, int64(20000), queryInt64(t, "select count(distinct doc_id) from `"+postings+"`"))
+			require.Zero(t, queryInt64(t, "select count(*) from `"+postings+"` p left join ai_irregular_batch b on p.doc_id=b.id where b.id is null or p.word='rejected'"))
+		})
+
+		// Non-reordering controls exercise single-key DEDUP with both real and
+		// hidden primary keys. Its accepted row is not the join's first child.
+		for _, tc := range []struct{ keyDef, indexDef, hint, match string }{
+			{"primary key", "fulltext fi(body)", "", "match(body) against('%s' in boolean mode)"},
+			{"unique", "index mi using master(body)", "force index(mi)", "body='%s'"},
+		} {
+			t.Run("irregular_"+tc.keyDef, func(t *testing.T) {
+				exec(t, "create table ai_irregular_control(k bigint "+tc.keyDef+", body varchar(100), "+tc.indexDef+")")
+				defer exec(t, "drop table ai_irregular_control")
+				exec(t, "insert ignore into ai_irregular_control values (1,'alpha'),(1,'beta'),(2,'gamma')")
+				require.Equal(t, [][]int64{{1}, {2}}, queryInt64Rows(t, "select k from ai_irregular_control order by k", 1))
+				require.Equal(t, [][]int64{{2}}, queryInt64Rows(t, "select k from ai_irregular_control "+tc.hint+" where "+fmt.Sprintf(tc.match, "gamma"), 1))
+				require.Empty(t, queryInt64Rows(t, "select k from ai_irregular_control "+tc.hint+" where "+fmt.Sprintf(tc.match, "beta"), 1))
 			})
 		}
 
