@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,6 +51,12 @@ func StatementDigestText(
 	return opUnaryBytesToBytesWithErrorCheck(
 		parameters, result, proc, length,
 		func(sql []byte) ([]byte, error) {
+			// Encoding failures never expose parser diagnostics, even when the
+			// value originated from a direct SQL literal. Invalid bytes are not
+			// valid SQL text and can contain application-owned binary data.
+			if !utf8.Valid(sql) {
+				return nil, moerr.NewUndisclosedParseErrorInDigestFunction(ctx)
+			}
 			normalized, err := mysql.NormalizeStatementDigest(ctx, string(sql), sqlMode, maxDigestLength)
 			if err != nil {
 				if discloseParseError {
@@ -151,35 +158,7 @@ func statementDigestTextHasGeometryInput(
 }
 
 func statementDigestMaxLength(proc *process.Process) int {
-	const (
-		defaultMaxDigestLength = 1024
-		maximumMaxDigestLength = 1 << 20
-	)
-	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
-		return defaultMaxDigestLength
-	}
-	value, err := proc.GetResolveVariableFunc()("max_digest_length", true, true)
-	if err != nil {
-		return defaultMaxDigestLength
-	}
-	var length int
-	switch n := value.(type) {
-	case int64:
-		length = int(n)
-	case uint64:
-		if n > maximumMaxDigestLength {
-			return defaultMaxDigestLength
-		}
-		length = int(n)
-	case int:
-		length = n
-	default:
-		return defaultMaxDigestLength
-	}
-	if length < 0 || length > maximumMaxDigestLength {
-		return defaultMaxDigestLength
-	}
-	return length
+	return process.ResolveMaxDigestLength(proc)
 }
 
 func statementDigestSQLMode(proc *process.Process) string {

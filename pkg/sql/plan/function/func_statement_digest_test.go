@@ -147,6 +147,43 @@ func TestStatementDigestTextBinaryCompatibility(t *testing.T) {
 	textResult.Free(proc.Mp())
 }
 
+func TestStatementDigestTextMalformedUTF8AlwaysUndisclosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+
+	for _, source := range []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+		types.StringSourceSQLPrepare,
+	} {
+		t.Run(fmt.Sprintf("source-%d", source), func(t *testing.T) {
+			input, err := vector.NewConstBytes(
+				types.T_varchar.ToType(), []byte{'S', 'E', 'L', 'E', 'C', 'T', ' ', 0xff, 0xc3, 0x28}, 1, proc.Mp(),
+			)
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(source))
+
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.Error(t, err)
+			require.Equal(
+				t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode(),
+			)
+		})
+	}
+
+	// Valid UTF-8 malformed SQL remains disclosed for a direct literal; the
+	// encoding guard must not broaden suppression to ordinary parser errors.
+	control, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer control.Free(proc.Mp())
+	require.NoError(t, control.SetStringSource(types.StringSourceLiteral))
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{control}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
 func TestStatementDigestTextPreparedParamProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
@@ -200,6 +237,7 @@ func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
 	first, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
 	require.NoError(t, err)
 	limit = 8
+	proc.ResetMaxDigestLengthSnapshot()
 	second, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
 	require.NoError(t, err)
 	firstBytes := first.GetBytesAt(0)
@@ -209,6 +247,7 @@ func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
 	second.Free(proc.Mp())
 
 	limit = 1024
+	proc.ResetMaxDigestLengthSnapshot()
 	modeInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`SELECT "column" FROM t`), 1, proc.Mp())
 	require.NoError(t, err)
 	defer modeInput.Free(proc.Mp())
@@ -225,6 +264,37 @@ func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "SELECT `column` FROM `t`", identifierModeResult.GetStringAt(0))
 	identifierModeResult.Free(proc.Mp())
+}
+
+func TestStatementDigestTextUsesRemoteLengthSnapshot(t *testing.T) {
+	inputSQL := []byte("SELECT a,b,c,d,e,f")
+	for _, test := range []struct {
+		name   string
+		length int64
+		want   string
+	}{
+		{name: "explicit zero", length: 0, want: ""},
+		{name: "custom", length: 8, want: "SELECT `a`"},
+		{name: "default", length: process.DefaultMaxDigestLength, want: "SELECT `a` , `b` , `c` , `d` , `e` , `f`"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(nil) // remote CNs have no session resolver
+			proc.GetSessionInfo().MaxDigestLength = test.length
+			proc.GetSessionInfo().MaxDigestLengthSet = true
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), inputSQL, 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
 }
 
 func TestStatementDigestTextDoesNotDiscloseFoldedExpression(t *testing.T) {

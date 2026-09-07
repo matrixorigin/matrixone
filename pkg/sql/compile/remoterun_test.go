@@ -1416,6 +1416,18 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}},
 		}
 	}
+	statementDigestText := func(arg *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     int64(planfunction.STATEMENT_DIGEST_TEXT) << 32,
+					ObjName: "statement_digest_text",
+				},
+				Args: []*planpb.Expr{arg},
+			}},
+		}
+	}
 	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		return &Scope{
 			Magic:  Remote,
@@ -1569,6 +1581,13 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
 		},
 		{
+			name:                "statement digest text",
+			expressions:         []*planpb.Expr{statementDigestText(cast(0))},
+			incompatibleVersion: defines.MORPCVersion53,
+			compatibleVersion:   defines.MORPCVersion54,
+			errorContains:       "statement digest remote execution requires MORPC protocol version 54",
+		},
+		{
 			name:                "numeric prefix and JSON comparison",
 			expressions:         []*planpb.Expr{comparisonParam(0), cast(255)},
 			incompatibleVersion: defines.MORPCVersion35,
@@ -1652,6 +1671,19 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.ErrorContains(t, err, "prepared JSON comparison parameters require MORPC protocol version 36")
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+
+	t.Run("statement digest instruction owner is fenced", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+			ProjectList: []*planpb.Expr{statementDigestText(cast(0))},
+		}}}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion53)
+		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "statement digest remote execution requires MORPC protocol version 54")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 }

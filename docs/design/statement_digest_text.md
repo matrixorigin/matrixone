@@ -1,7 +1,7 @@
 # `STATEMENT_DIGEST_TEXT` compatibility design
 
 - Status: proposed; implementation review blocked pending independent design approval
-- Design revision: v1 (2026-09-07)
+- Design revision: v2 (2026-09-07)
 - Owning issue: [matrixorigin/matrixone#23025](https://github.com/matrixorigin/matrixone/issues/23025)
 - Implementation PR: [matrixorigin/matrixone#27990](https://github.com/matrixorigin/matrixone/pull/27990)
 - Compatibility target: MySQL 8.0.42 behavior, with the MySQL 8.4 documented SQL surface
@@ -56,7 +56,7 @@ example such as `SELECT 1` is necessary but insufficient evidence.
   truncation.
 - Preserve error confidentiality based on the digest argument's origin.
 - Read `sql_mode` and `max_digest_length` at execution, including prepared-plan
-  reuse.
+  reuse, and preserve the statement-scoped setting across distributed fragments.
 - Keep memory and work bounded by input length and `max_digest_length` without
   retained per-row state.
 
@@ -67,7 +67,7 @@ example such as `SELECT 1` is necessary but insufficient evidence.
 - Accept every MySQL statement that MatrixOne cannot parse or execute. Only the
   narrow validation rewrites listed below are compatibility exceptions.
 - Reuse MatrixOne AST formatting as the digest representation.
-- Persist digest values, add catalog state, or introduce a distributed protocol.
+- Persist digest values, add catalog state, or introduce a new RPC service.
 - Guarantee compatibility with undocumented token changes in future MySQL
   releases without new differential evidence.
 
@@ -90,7 +90,9 @@ example such as `SELECT 1` is necessary but insufficient evidence.
    binary provenance. Vector constness and unrelated prepared parameters do not
    change this decision.
 6. **Runtime settings:** a cached/prepared plan observes the `sql_mode` and
-   `max_digest_length` values in effect for each execution. The function is not
+   `max_digest_length` values in effect for each execution. All local child and
+   remote processes of one statement observe one validated snapshot; the valid
+   value zero is distinct from an absent legacy field. The function is not
    foldable and cannot appear in stored generated expressions.
 7. **Bounded collection:** after the next complete token would exceed the token
    budget, no later token is collected. No partial identifier or token is
@@ -186,9 +188,21 @@ result and must not mutate the cached plan.
 
 ### 5.5 Token budget and truncation
 
-`max_digest_length` is read as a global system variable for every invocation.
-The accepted range is 0 through 1 MiB and the fallback is 1024 when the resolver
-is absent, fails, returns an unsupported type, or yields an out-of-range value.
+`max_digest_length` is read as a global system variable once for each statement
+generation. The accepted range is 0 through 1 MiB and the fallback is 1024 when
+the initiating process resolver is absent, fails, returns an unsupported type,
+or yields an out-of-range value. The validated result is cached in the shared
+base process, so local child pipelines cannot re-resolve a different value.
+Frontend multi-statement execution clears the presence bit at each statement
+boundary, allowing a later execution of a cached/prepared plan to observe a
+new setting.
+
+The initiating CN serializes both `max_digest_length` and
+`max_digest_length_set` in the remote `SessionInfo`. The explicit presence bit
+is required because zero means an empty digest and is not an unset sentinel. A
+remote CN has no session resolver and consumes the carried snapshot. If it
+forwards the pipeline again, it serializes the same value and presence bit.
+Absent legacy fields and malformed carried values use the bounded default 1024.
 
 The limit applies to MySQL-compatible stored token size, not directly to the
 rendered UTF-8 byte length. Collection stops before the first complete token
@@ -224,8 +238,9 @@ The end-to-end flow is:
    the overload volatile/runtime-related, and declares a `TEXT` result.
 2. Existing binder/vector machinery carries string-source and binary provenance
    from the argument expression to execution.
-3. The executor snapshots `sql_mode` and `max_digest_length` for this invocation,
-   classifies disclosure for selected rows, and rejects geometry.
+3. The executor snapshots `sql_mode` and `max_digest_length` for the statement,
+   shares the snapshot with local child processes, transports it to remote
+   processes, classifies disclosure for selected rows, and rejects geometry.
 4. `NormalizeStatementDigest` validates the complete statement, scans the
    original source, collects/reduces bounded tokens, and renders the result.
 5. The executor writes the result through the standard unary bytes-to-bytes
@@ -234,8 +249,10 @@ The end-to-end flow is:
 
 The parser invocation owns its AST and returns it with `Free`. The scanner is
 borrowed from the existing pool and returned with `PutScanner`. Token and output
-slices are invocation-local. There is no new global mutable state, goroutine,
-lock, channel, retry, file, network request, catalog object, or cleanup protocol.
+slices are invocation-local. The base process owns a small statement-setting
+mutex and value/presence pair; child processes already share that owner. There
+is no new global mutable state, goroutine, channel, retry, file, network request,
+catalog object, or cleanup protocol.
 
 ## 7. Performance and resource bounds
 
@@ -256,16 +273,26 @@ not use wall-clock thresholds as a correctness oracle.
 
 ## 8. Compatibility, rollout, and rollback
 
-This is an additive SQL capability. It adds one function ID and two internal
-error codes mapped to existing MySQL codes 3676 and 3677. It changes no catalog,
-wire, disk, backup, or replication format.
+This is an additive SQL capability. It adds one function ID, two internal error
+codes mapped to existing MySQL codes 3676 and 3677, and two additive protobuf
+fields in pipeline `SessionInfo`. It changes no catalog, disk, backup, or
+replication format.
 
-During a mixed-version rollout, an older CN cannot resolve the new function in
-a plan it builds or executes. Normal service-version routing must therefore
-avoid sending plans containing function ID 578 to nodes that predate the
-function. No persisted generated expression can contain the function because it
-is registered as non-deterministic. Rolling back all nodes restores the prior
-`function not supported` behavior and requires no data migration or cleanup.
+MORPC version 54 is the capability boundary for remotely executing function ID
+578 with its setting snapshot. Both the sender and decoded-owner boundary walk
+every expression owner. A pipeline containing this function is rejected with
+`ErrNotSupported` before remote execution when the oldest-live service protocol
+is absent or below v54. Ordinary pipelines remain wire-compatible because the
+new fields are additive. This explicit rejection is the routing contract; the
+implementation does not silently execute with an older worker or promise an
+automatic coordinator retry.
+
+No persisted generated expression can contain the function because it is
+registered as non-deterministic. Rolling back below v54 makes new senders stop
+remote execution through the same protocol fence. Rolling back all nodes
+restores the prior `function not supported` behavior and requires no data
+migration or cleanup. Values already present in an in-flight protobuf are
+statement-local and have no durable cleanup.
 
 Failure containment is per expression evaluation: invalid input returns a
 normal SQL error and allocates no durable state. There is no feature flag because
@@ -314,6 +341,20 @@ Rejected. It would make prepared-plan reuse and stored generated values depend
 on stale session/global settings. Runtime reads plus non-foldable registration
 preserve the observable contract with less state.
 
+### Resolve `max_digest_length` independently on every CN
+
+Rejected. Remote processes have no frontend variable resolver, so they would
+fall back to 1024 while the initiating CN could use zero or a custom value.
+Even if every CN queried global state, propagation timing could make fragments
+of one statement disagree. A statement-scoped transported snapshot is the
+smallest deterministic ownership model.
+
+### Treat zero as an absent protobuf value
+
+Rejected. Zero is a valid MySQL setting whose result is an empty digest. An
+explicit presence bit is required for legacy-field detection and repeated
+forwarding.
+
 ## 11. Validation matrix
 
 | Contract | Focused oracle | Public-path oracle / counterexample |
@@ -323,7 +364,9 @@ preserve the observable contract with less state.
 | literal/expression confidentiality | literal, folded expression, nested function, mixed-source vector, masked row | prepared marker returns 3677; nested call returns 3677 |
 | binary/geometry boundary | valid and malformed BINARY/VARBINARY/BLOB; GEOMETRY/GEOMETRY32; binary provenance on text OID | `_binary` and `CAST AS BINARY` valid controls |
 | runtime registration | `CannotFold` and `IsRealTimeRelated` | generated-column rejection |
-| runtime settings | same executor with changed length; resolver fallback/range/type table | SQL mode changed and restored; prepared plan reused |
+| runtime settings | statement generation cache; child sharing; resolver fallback/range/type table | SQL mode changed and restored; prepared plan reused |
+| distributed setting snapshot | encode/decode/re-encode at 0/default/custom; absent/malformed controls; resolver-free evaluation | one-CN public result plus multi-CN CI topology |
+| mixed-version fence | function ID 578 in plan and instruction owners; v53 rejects on encode and decode, v54 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
 | SQL modes | ANSI quotes, pipes, hint quoting | quoted user-variable identifier under `ANSI_QUOTES` |
 | alias compatibility | keyword/function aliases plus identifier controls | canonical function-alias BVT row |
 | delimiter boundary | simple/compound, one/multiple internal statements, with/without terminal delimiter | simple and compound BVT results |
@@ -348,17 +391,20 @@ head:
 - zero unresolved correctness findings against every invariant above;
 - passing `moerr`, MySQL parser, planner generated-expression, and function
   owning-package tests, using the repository CGo wrapper where required;
+- passing process snapshot/codec and sender/receiver MORPC v53/v54 capability
+  tests, including zero and repeated-forward controls;
 - passing exact distributed SQL case in normal comparison mode, including
   result-file review and same-instance cleanup/repeat evidence;
 - passing relevant repository CI on the exact head; and
 - a complete delivery diff with no generated, temporary, credential, container,
   or unrelated artifacts.
 
-Design-review record for v1:
+Design-review record for v2:
 
 - Trigger: more than 500 production lines and a new public SQL compatibility
   contract.
-- Status: proposed after the missing-design review on PR #27990.
+- Status: proposed after the missing-design review and distributed-setting
+  review on PR #27990.
 - Independent reviewer: pending.
 - Reviewed commit: pending.
 - Blocking design questions: none known in the document; independent review may

@@ -279,6 +279,74 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
+func TestBuildProcessInfoPreservesMaxDigestLengthAcrossForwards(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value int64
+	}{
+		{name: "explicit zero", value: 0},
+		{name: "custom", value: 37},
+		{name: "default", value: DefaultMaxDigestLength},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			defer proc.Free()
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				if name == "max_digest_length" {
+					require.True(t, system)
+					require.True(t, global)
+					return test.value, nil
+				}
+				return nil, moerr.NewInternalErrorNoCtx("unavailable")
+			})
+
+			svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+			payload, err := svc.Encode(proc, "select 1")
+			require.NoError(t, err)
+			first := pipeline.ProcessInfo{}
+			require.NoError(t, first.Unmarshal(payload))
+			require.True(t, first.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, test.value, first.SessionInfo.MaxDigestLength)
+
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Nil(t, decoded.GetResolveVariableFunc())
+			require.Equal(t, int(test.value), ResolveMaxDigestLength(decoded))
+
+			second, err := decoded.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.True(t, second.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, test.value, second.SessionInfo.MaxDigestLength)
+		})
+	}
+}
+
+func TestBuildProcessInfoNormalizesLegacyAndMalformedMaxDigestLength(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value int64
+		set   bool
+	}{
+		{name: "legacy absent", value: 0, set: false},
+		{name: "malformed negative", value: -1, set: true},
+		{name: "malformed too large", value: MaximumMaxDigestLength + 1, set: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			defer proc.Free()
+			proc.SetResolveVariableFunc(nil)
+			proc.Base.SessionInfo.MaxDigestLength = test.value
+			proc.Base.SessionInfo.MaxDigestLengthSet = test.set
+
+			info, err := proc.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.True(t, info.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, int64(DefaultMaxDigestLength), info.SessionInfo.MaxDigestLength)
+		})
+	}
+}
+
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)

@@ -575,11 +575,10 @@ func statementDigestTextFunction() FuncNew {
 // not a byte-preserving transform, so it must not inherit a binary input's
 // OID; preserve only the source charset for collation propagation.
 func statementDigestTextReturnType(parameters []types.Type) types.Type {
-	result := types.T_text.ToType()
-	if len(parameters) > 0 {
-		result.Charset = parameters[0].Charset
+	if len(parameters) == 0 {
+		return types.T_text.ToType()
 	}
-	return result
+	return textStringResultType(unknownStringResultBound(), parameters[0].Charset)
 }
 
 var supportedStringBuiltIns = []FuncNew{

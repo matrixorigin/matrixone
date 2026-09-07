@@ -141,6 +141,14 @@ type SessionInfo struct {
 	// old process payloads and internal/background processes.
 	AutoIncrementIncrement uint64
 	AutoIncrementOffset    uint64
+	// MaxDigestLength is a statement-scoped snapshot resolved on the initiating
+	// CN. MaxDigestLengthSet distinguishes the meaningful zero value from a
+	// legacy or not-yet-resolved snapshot.
+	// MaxDigestLength is a statement-scoped snapshot resolved on the initiating
+	// CN. MaxDigestLengthSet distinguishes the meaningful zero value from a
+	// legacy or not-yet-resolved snapshot.
+	MaxDigestLength    int64
+	MaxDigestLengthSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -474,6 +482,7 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	statementSettingsMu                 sync.Mutex
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
 	cteMemoryBudgetMu                   sync.Mutex

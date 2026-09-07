@@ -428,3 +428,29 @@ func TestRequiresMORPCVersion59NumericFormatArguments(t *testing.T) {
 	require.True(t, features.FormatNumericArguments)
 	require.True(t, features.Any())
 }
+
+func TestRequiredRemoteExpressionFeaturesStatementDigestText(t *testing.T) {
+	ordinary := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32},
+	}}}
+	digest := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(statementDigestTextFunctionID) << 32},
+		Args: []*Expr{ordinary},
+	}}}
+
+	features, err := RequiredRemoteExpressionFeatures(digest)
+	require.NoError(t, err)
+	require.True(t, features.StatementDigestText)
+	require.True(t, features.Any())
+
+	nested := &struct{ Expressions []*Expr }{Expressions: []*Expr{{
+		Expr: &Expr_F{F: &Function{Func: &ObjectRef{ObjName: "coalesce"}, Args: []*Expr{ordinary, digest}}},
+	}}}
+	features, err = RequiredRemoteExpressionFeatures(nested)
+	require.NoError(t, err)
+	require.True(t, features.StatementDigestText)
+
+	features, err = RequiredRemoteExpressionFeatures(ordinary)
+	require.NoError(t, err)
+	require.False(t, features.StatementDigestText)
+}

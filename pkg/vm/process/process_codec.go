@@ -166,6 +166,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxDigestLength:     int64(ResolveMaxDigestLength(proc)),
+			MaxDigestLengthSet:  true,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -468,6 +470,8 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		MaxDigestLength:                     sei.MaxDigestLength,
+		MaxDigestLengthSet:                  sei.MaxDigestLengthSet,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
