@@ -1766,7 +1766,7 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
 		}
 	})
 
@@ -1780,14 +1780,14 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 		},
 	)}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
 	data, err := encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "MORPC protocol version 55")
+	require.ErrorContains(t, err, "MORPC protocol version 56")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "MORPC protocol version 55")
+	require.ErrorContains(t, err, "MORPC protocol version 56")
 }
 
 func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
