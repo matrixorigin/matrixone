@@ -452,6 +452,13 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	s.viewMetadataCatalogFenceReady.Store(true)
+	// QueryService is an internal control-plane endpoint used by bootstrap
+	// protocol checks. It must be reachable while public admission is still
+	// closed, otherwise an active upgrade can wait for admission while the
+	// upgrade itself waits for protocol responses from the CNs.
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
+		return err
+	}
 	if err = s.waitForViewMetadataAdmission(); err != nil {
 		return err
 	}
@@ -463,9 +470,6 @@ func (s *service) Start() (err error) {
 
 	s.initSqlWriterFactory()
 
-	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
-		return err
-	}
 	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
