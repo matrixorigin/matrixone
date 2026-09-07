@@ -980,6 +980,9 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
 	}
+	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
+		ctx.sawDateTimeFormat = true
+	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
 		ctx.WriteString("INTERVAL ")
@@ -1046,6 +1049,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		node.WindowSpec.Format(ctx)
 	}
+}
+
+func isDateTimeFormatFunction(name string) bool {
+	return strings.EqualFold(name, "date_format") || strings.EqualFold(name, "time_format")
 }
 
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {

@@ -2610,7 +2610,7 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
 			require.NoError(t, err)
 			query := queryPlan.GetQuery()
-			rootNode := query.Nodes[query.Steps[0]]
+			rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 			for i, wantNotNullable := range test.notNullable {
 				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
 			}

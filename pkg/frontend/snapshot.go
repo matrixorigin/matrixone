@@ -129,6 +129,7 @@ var (
 		catalog.MOShardsMetadata:        systemCatalogRestoreCopy,
 		catalog.MO_CDC_TASK:             systemCatalogRestoreCopy,
 		catalog.MO_CDC_WATERMARK:        systemCatalogRestoreCopy,
+		catalog.MO_CDC_SNAPSHOT:         systemCatalogRestoreCopy,
 		catalog.MO_TABLE_STATS:          systemCatalogRestoreCopy,
 		catalog.MO_ACCOUNT_LOCK:         systemCatalogRestoreCopy,
 		catalog.MO_MERGE_SETTINGS:       systemCatalogRestoreCopy,

@@ -117,6 +117,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -196,6 +202,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -203,6 +212,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -627,6 +639,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := validateRemoteODKUActionRowsProtocol(
+			proc, t.PreInsertCtx.GetOdkuTargetArbitration()); err != nil {
+			return ctxId, nil, err
+		}
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
@@ -688,12 +704,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			NeedEval:       t.NeedEval,
-			SpillMem:       t.SpillMem,
-			GroupingFlag:   t.GroupingFlag,
-			Exprs:          t.GroupBy,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			NeedEval:        t.NeedEval,
+			SpillMem:        t.SpillMem,
+			GroupingFlag:    t.GroupingFlag,
+			DynamicGrouping: t.DynamicGrouping,
+			Exprs:           t.GroupBy,
+			Aggs:            convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:  t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 	case *sample.Sample:
@@ -768,6 +785,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
+		in.ProjectionGroupingFlags = t.GroupingFlags
+		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
 	case *filter.Filter:
 		in.Filters = t.FilterExprs
 		in.RuntimeFilters = t.RuntimeFilterExprs
@@ -800,9 +819,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			SpillMem:       t.SpillMem,
-			Aggs:           convertToPipelineAggregates(t.Aggs),
-			GroupByHashKey: t.GroupByHashKey,
+			SpillMem:            t.SpillMem,
+			Aggs:                convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey:      t.GroupByHashKey,
+			DynamicGrouping:     t.GroupingAware,
+			Types:               convertToPlanTypes(t.GroupByTypes),
+			EmptyGroupingSetIds: t.EmptyGroupingSetIDs,
+			EmptyGroupingSet:    t.EmptyGroupingSet,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -915,6 +938,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
 	case *dedupjoin.DedupJoin:
+		if err := validateRemoteODKUAffectedRowsProtocol(proc, t.HasODKUAffectedRows); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -938,6 +967,20 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			UpdateColExprList:               t.UpdateColExprList,
 			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
 			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
+			HasOdkuAffectedRows:             t.HasODKUAffectedRows,
+			AffectedRowsResultPos:           t.AffectedRowsResultPos,
+			PhysicalChangedRowsResultPos:    t.PhysicalChangedResultPos,
+			UpdateCheckColIdxList:           t.UpdateCheckColIdxList,
+			CountFoundRows:                  t.CountFoundRows,
+			EmitActionRows:                  t.EmitActionRows,
+			ActionFinalResultPos:            t.ActionFinalResultPos,
+		}
+		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			in.DedupJoin.ForeignKeyChecks[i] = pipeline.ODKUForeignKeyCheck{
+				ColIdxList:           append([]int32(nil), check.ColIdxList...),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
 		}
 		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
@@ -1014,6 +1057,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
+			if err := validateRemoteODKUAffectedRowsProtocol(proc,
+				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
+				return ctxId, nil, err
+			}
 			updateCtxList[i] = &plan.UpdateCtx{
 				ObjRef:                muCtx.ObjRef,
 				TableDef:              muCtx.TableDef,
@@ -1030,6 +1077,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 			if muCtx.ChangedRowsCol != nil {
 				updateCtxList[i].ChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.ChangedRowsCol)}
+			}
+			if muCtx.AffectedRowsWeightCol != nil {
+				updateCtxList[i].AffectedRowsWeightCol = &plan.ColRef{ColPos: int32(*muCtx.AffectedRowsWeightCol)}
+			}
+			if muCtx.PhysicalChangedRowsCol != nil {
+				updateCtxList[i].PhysicalChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.PhysicalChangedRowsCol)}
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1274,6 +1327,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.NeedEval = t.NeedEval
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
+		arg.DynamicGrouping = t.DynamicGrouping
 		arg.GroupBy = t.Exprs
 		arg.GroupByHashKey = t.GroupByHashKey
 		arg.Aggs = convertToAggregates(t.Aggs)
@@ -1354,6 +1408,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.ProjectList = opr.ProjectList
+		arg.GroupingFlags = opr.ProjectionGroupingFlags
+		arg.GroupingSetCount = int(opr.ProjectionGroupingSetCount)
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
@@ -1406,6 +1462,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillMem = t.SpillMem
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.GroupByHashKey = t.GroupByHashKey
+		arg.GroupingAware = t.DynamicGrouping
+		arg.GroupByTypes = convertToTypes(t.Types)
+		arg.EmptyGroupingSetIDs = t.EmptyGroupingSetIds
+		arg.EmptyGroupingSet = t.EmptyGroupingSet
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
@@ -1540,6 +1600,20 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.HasODKUAffectedRows = t.HasOdkuAffectedRows
+		arg.AffectedRowsResultPos = t.AffectedRowsResultPos
+		arg.PhysicalChangedResultPos = t.PhysicalChangedRowsResultPos
+		arg.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		arg.CountFoundRows = t.CountFoundRows
+		arg.EmitActionRows = t.EmitActionRows
+		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           append([]int32(nil), check.ColIdxList...),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		arg.SpillThreshold = opr.SpillMem
@@ -1619,6 +1693,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			if muCtx.ChangedRowsCol != nil {
 				changedRowsCol := int(muCtx.ChangedRowsCol.ColPos)
 				arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+			}
+			if muCtx.AffectedRowsWeightCol != nil {
+				col := int(muCtx.AffectedRowsWeightCol.ColPos)
+				arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+			}
+			if muCtx.PhysicalChangedRowsCol != nil {
+				col := int(muCtx.PhysicalChangedRowsCol.ColPos)
+				arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1961,6 +2043,72 @@ func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required
 	return nil
 }
 
+func validateRemoteODKUAffectedRowsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteODKUAffectedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"ODKU logical affected-row metadata requires MORPC protocol version 50",
+		)
+	}
+	return nil
+}
+
+func validateRemoteODKUActionRowsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteODKUActionRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"ODKU per-action constraint metadata requires MORPC protocol version 51",
+		)
+	}
+	return nil
+}
+
+func validateRemoteODKUAffectedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsertUnique(); preInsert != nil &&
+			preInsert.GetPreInsertUkCtx().GetOdkuTargetArbitration() {
+			if err := validateRemoteODKUActionRowsProtocol(proc, true); err != nil {
+				return err
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil &&
+			(dedup.HasOdkuAffectedRows || dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0) {
+			if err := validateRemoteODKUAffectedRowsProtocol(proc, dedup.HasOdkuAffectedRows); err != nil {
+				return err
+			}
+			if err := validateRemoteODKUActionRowsProtocol(
+				proc, dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0); err != nil {
+				return err
+			}
+		}
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
+					if err := validateRemoteODKUAffectedRowsProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteODKUAffectedRowsPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteTargetAwareUpdatePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2071,6 +2219,42 @@ func validateRemoteParquetWholeFileFanoutPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteGroupingSetPipelineProtocol is the final sender/receiver
+// compatibility fence for v49 grouping-set execution metadata. Planning can
+// happen at v49 before a cached/prepared plan is transmitted after a rollback;
+// an older receiver would silently ignore these append-only fields and execute
+// ordinary Projection/Group semantics.
+func validateRemoteGroupingSetPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction == nil {
+			continue
+		}
+		agg := instruction.GetAgg()
+		requiresV49 := len(instruction.ProjectionGroupingFlags) > 0 ||
+			instruction.ProjectionGroupingSetCount != 0 ||
+			agg != nil && (agg.DynamicGrouping || agg.EmptyGroupingSet ||
+				len(agg.EmptyGroupingSetIds) > 0)
+		if requiresV49 &&
+			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"grouping-set remote execution requires MORPC protocol version 49",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

@@ -1,5 +1,5 @@
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat','Cat', 'Tiger') 'Result';
-Result 
+Result
 Tiger Dog Tiger Dog Tiger
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', 'Tiger') 'Result';
 Result
@@ -8,7 +8,7 @@ SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 2) 'Result';
 Result
 Cat Dog Tiger Dog Cat
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 1) 'Result';
-Result 
+Result
 Cat Dog Tiger Dog Cat
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 2) 'Result';
 Result
@@ -25,6 +25,10 @@ NULL
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', NULL);
 regexp_replace(Cat Dog Cat Dog Cat, Cow, null) 
 NULL
+SELECT REGEXP_REPLACE(NULL, '', NULL, NULL, NULL);
+Illegal argument to a regular expression.
+SELECT REGEXP_REPLACE('abc', '', 'X', 0, 0);
+Illegal argument to a regular expression.
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
 insert into t1 values(2 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
@@ -56,10 +60,10 @@ insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 SELECT a, REGEXP_REPLACE(b, 'Cat', 'pig', 3) from t1;
 a    regexp_replace(b, Cat, pig, 3)
-1    pig Dog pig Dog pig pig Dog pig Dog pig
-2    pig Dog pig Dog pig pig Dog pig Dog pig
-3    pig Dog pig Dog pig pig Dog pig Dog pig
-4    pig Dog pig Dog pig pig Dog pig Dog pig
+1    Cat Dog pig Dog pig pig Dog pig Dog pig
+2    Cat Dog pig Dog pig pig Dog pig Dog pig
+3    Cat Dog pig Dog pig pig Dog pig Dog pig
+4    Cat Dog pig Dog pig pig Dog pig Dog pig
 5    Dog pig Dog pig pig Dog pig Dog pig pig
 6    Dog pig Dog pig pig Dog pig Dog pig pig
 7    Dog pig Dog pig pig Dog pig Dog pig pig
@@ -92,3 +96,38 @@ INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
 invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
 drop table t;
+SELECT REGEXP_REPLACE('aaa', 'aa', 'X', 2, 1) AS overlap_one,
+REGEXP_REPLACE('aaa', 'aa', 'X', 2, 0) AS overlap_all,
+REGEXP_REPLACE('abc', '^', 'X', 2, 0) AS anchored,
+HEX(REGEXP_REPLACE('a\nb', '(?m)a|$', 'X', 2, 1)) AS zero_width_at_pos;
+overlap_one    overlap_all    anchored    zero_width_at_pos
+aX    aX    abc    61580A62
+SELECT REGEXP_INSTR('abc', 'a*', 1, 2, 0) AS after_nonempty,
+REGEXP_INSTR('abc', 'b*', 2, 2, 0) AS after_nonempty_at_pos,
+HEX(REGEXP_REPLACE('abc', 'a*', 'X', 1, 0)) AS replace_zero_width,
+HEX(REGEXP_REPLACE('', '^$', 'X')) AS empty_subject;
+after_nonempty    after_nonempty_at_pos    replace_zero_width    empty_subject
+2    3    585862586358
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
+HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
+binary_replace    varbinary_replace
+E4B8AD58    E4B8AD58
+PREPARE regexp_replacement_charset FROM
+'SELECT HEX(REGEXP_REPLACE(''a'', ''a'', ?)) AS replacement_hex';
+SET @regexp_replacement = _binary 0xff;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+replacement_hex
+C3BF
+SET @regexp_replacement = _binary 0x80;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+replacement_hex
+E282AC
+SET @regexp_replacement = '中';
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+replacement_hex
+E4B8AD
+SET @regexp_replacement = _binary 0xe4b8ad;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+replacement_hex
+C3A4C2B8C2AD
+DEALLOCATE PREPARE regexp_replacement_charset;

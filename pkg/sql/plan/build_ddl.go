@@ -1445,13 +1445,34 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 
 		cols[i] = &plan.ColDef{
-			Name:    strings.ToLower(bindCtx.headings[i]),
+			Name: normalizeCTASColumnName(
+				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
 	return cols, query, nil
+}
+
+// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
+// Literal segments are supplied by the AST formatter; an apostrophe in an
+// identifier is therefore never mistaken for a string delimiter.
+func normalizeCTASColumnName(heading string, provenance headingProvenance) string {
+	if len(provenance.parts) == 0 {
+		return strings.ToLower(heading)
+	}
+
+	var result strings.Builder
+	result.Grow(len(heading))
+	for _, part := range provenance.parts {
+		if part.literal {
+			result.WriteString(part.text)
+		} else {
+			result.WriteString(strings.ToLower(part.text))
+		}
+	}
+	return result.String()
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {

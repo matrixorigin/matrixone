@@ -961,10 +961,8 @@ func binaryProtocolPrepareParamConcreteType(
 // a BLOB value cannot be reparsed as a numeric or JSON text value.
 func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
-	case defines.MYSQL_TYPE_BLOB,
-		defines.MYSQL_TYPE_TINY_BLOB,
-		defines.MYSQL_TYPE_MEDIUM_BLOB,
-		defines.MYSQL_TYPE_LONG_BLOB:
+	case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
 		return true
 	default:
 		return false
@@ -1388,6 +1386,12 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
+			newPreparePlan.Plan)
+		// Parameter type evolution belongs to one prepared-plan generation. The
+		// rebuilt plan has resolved against fresh metadata and must not inherit a
+		// numeric BIT_COUNT category selected by the preceding generation.
+		prepareStmt.bitCountNumericParamTypes = nil
 		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
@@ -1474,10 +1478,14 @@ func initExecuteStmtParamWithResolverInSession(
 		preparedExplain = true
 	}
 	runtimeNumericPrefixCandidate := false
-	// The planner records deferred ABS overloads explicitly on the prepared
-	// plan.  Carry this bounded metadata into execution instead of walking every
-	// expression tree for each EXECUTE.
-	runtimeNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0 &&
+	// The planner records deferred overloads explicitly on the prepared plan.
+	// Carry this bounded metadata into execution instead of walking every
+	// expression tree for each EXECUTE. ABS always rebinds; BIT_COUNT starts in
+	// the binary-string default and keeps the last canonical numeric parameter
+	// category it observes.
+	deferredNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0
+	deferredBitCountOverloadCandidate := len(prepareStmt.bitCountOverloadParamPositions) > 0
+	runtimeNumericOverloadCandidate := deferredNumericOverloadCandidate &&
 		executionPlan.GetQuery() != nil
 	runtimeDirectResultCandidate := false
 	runtimeTextComparisonSpecialization := false
@@ -1485,7 +1493,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
-		runtimeNumericOverloadCandidate
+		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
@@ -1564,9 +1572,9 @@ func initExecuteStmtParamWithResolverInSession(
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
 		binaryStringMetadata := binaryProtocolPrepareParamBinaryStringMetadata(
-			prepareStmt.ParamTypes, paramCount, prepareStmt.binaryStringMetadata)
+			prepareStmt.ParamTypes, paramCount, prepareStmt.paramBinaryStrings)
 		if binaryStringMetadata != nil {
-			prepareStmt.binaryStringMetadata = binaryStringMetadata
+			prepareStmt.paramBinaryStrings = binaryStringMetadata
 		}
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
@@ -1586,6 +1594,12 @@ func initExecuteStmtParamWithResolverInSession(
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
+			// Do not put this state transition on the right side of ||. A statement
+			// may also contain ABS(?), which already makes the left side true but
+			// must not prevent BIT_COUNT's independent marker state from advancing.
+			bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
+			runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
+				bitCountNumericOverloadCandidate
 			if runtimeDirectResultCandidate {
 				if err = applyBinaryDirectResultDecimalTypes(
 					reqCtx, cwft.paramVals, prepareStmt.ParamTypes, runtimeDirectResultPositions); err != nil {
@@ -1616,7 +1630,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
+		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
 			prepareStmt.jsonMemberOfParamPositions)
 		if err != nil {
@@ -1628,11 +1642,14 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		if paramTypes != nil {
 			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
-				params, paramIsBin, paramKinds, paramTypes)
+				params, paramIsBin, paramKinds, paramTypes, paramBinaryString)
 		} else {
-			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
+		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
+		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
+			bitCountNumericOverloadCandidate
 	} else {
 		if numParams > 0 {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
@@ -1947,6 +1964,7 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
+		fmt.Fprintf(&key, "binary:%t;", param.IsBinaryString)
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing
@@ -2303,6 +2321,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 	for i := range values {
 		paramValue := plan2.ParamValue{
 			IsBin:               proc.GetPrepareParamIsBin(i),
+			IsBinaryString:      proc.GetPrepareParamIsBinaryString(i),
 			IsBinaryProtocol:    true,
 			PrepareParamKind:    proc.GetPrepareParamKind(i),
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
@@ -2359,6 +2378,56 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) bool {
+	positions := prepareStmt.bitCountOverloadParamPositions
+	if len(positions) == 0 {
+		prepareStmt.bitCountNumericParamTypes = nil
+		return false
+	}
+	if len(prepareStmt.bitCountNumericParamTypes) != len(values) {
+		prepareStmt.bitCountNumericParamTypes = make([]types.Type, len(values))
+	}
+
+	numeric := false
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(values) {
+			continue
+		}
+		index := int(position)
+		if runtimeType, ok := plan2.PreparedParamValueNumericReprepareType(values[index]); ok {
+			prepareStmt.bitCountNumericParamTypes[index] = runtimeType
+			// The execution that triggers reprepare already runs under the canonical
+			// parameter category. Rewrite it together with the latch so planning,
+			// cache identity, and later string executions cannot observe different
+			// sides of the same state transition.
+			if paramValue, ok := values[index].(plan2.ParamValue); ok {
+				paramValue.RuntimeType = runtimeType
+				paramValue.HasRuntimeType = true
+				values[index] = paramValue
+			}
+			numeric = true
+			continue
+		}
+
+		// NULL has no runtime type and must not clear the marker's last numeric
+		// type. It does not need specialization for this execution, because both
+		// overloads return NULL. A later non-NULL value will reuse the latch.
+		paramValue, ok := values[index].(plan2.ParamValue)
+		if !ok || paramValue.Value == nil {
+			continue
+		}
+		rememberedType := prepareStmt.bitCountNumericParamTypes[index]
+		if rememberedType.Oid == types.T_any {
+			continue
+		}
+		paramValue.RuntimeType = rememberedType
+		paramValue.HasRuntimeType = true
+		values[index] = paramValue
+		numeric = true
+	}
+	return numeric
 }
 
 func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) []types.Type {
@@ -2468,6 +2537,7 @@ func buildExecuteUserParams(
 	*vector.Vector,
 	[]any,
 	[]bool,
+	[]bool,
 	[]vector.PrepareParamKind,
 	[]types.T,
 	error,
@@ -2484,6 +2554,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	params *vector.Vector,
 	paramVals []any,
 	paramIsBin []bool,
+	paramBinaryString []bool,
 	paramKinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 	err error,
@@ -2496,6 +2567,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramBinaryString = make([]bool, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -2507,6 +2579,14 @@ func buildExecuteUserParamsWithMemberOfPositions(
 		resolveIsBin := proc.GetResolveVariableIsBinFunc()
 		if resolveIsBin != nil {
 			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
+		if resolveBinaryString != nil {
+			paramBinaryString[i], err = resolveBinaryString(
+				exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
 				return
 			}
@@ -2542,33 +2622,43 @@ func buildExecuteUserParamsWithMemberOfPositions(
 		paramValue := plan2.ParamValue{
 			Value:               param,
 			IsBin:               paramIsBin[i],
+			IsBinaryString:      paramBinaryString[i],
 			PrepareParamKind:    paramKinds[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramIsBin[i] {
+		if paramBinaryString[i] && arg.Typ.Id != 0 {
+			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] {
+			paramValue.SourceType = types.T_varbinary.ToType()
+			paramValue.HasSourceType = true
+		} else if paramIsBin[i] {
 			// User variables assigned from binary literals retain a binary SQL
 			// result domain even when the EXECUTE argument itself is untyped.
 			paramValue.SourceType = types.T_varbinary.ToType()
 			paramValue.HasSourceType = true
 		} else if arg.Typ.Id != 0 {
-			sourceOID := types.T(arg.Typ.Id)
-			if arg.Typ.Charset == uint32(types.CharsetBinary) {
-				switch sourceOID {
-				case types.T_char:
-					sourceOID = types.T_binary
-				case types.T_varchar:
-					sourceOID = types.T_varbinary
-				case types.T_text:
-					sourceOID = types.T_blob
-				}
-			}
-			paramValue.SourceType = types.NewWithCharset(
-				sourceOID, arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset))
+			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue
 	}
 	return
+}
+
+func executeArgumentSourceType(typ plan.Type) types.Type {
+	sourceOID := types.T(typ.Id)
+	if typ.Charset == uint32(types.CharsetBinary) {
+		switch sourceOID {
+		case types.T_char:
+			sourceOID = types.T_binary
+		case types.T_varchar:
+			sourceOID = types.T_varbinary
+		case types.T_text:
+			sourceOID = types.T_blob
+		}
+	}
+	return types.NewWithCharset(sourceOID, typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

@@ -116,7 +116,13 @@ const (
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
 	ErrTooManyRows            uint16 = 20328
 	ErrMultiUpdateKeyConflict uint16 = 20329
-	ErrInvalidJSONCharset     uint16 = 20330
+	// ErrInvalidJSONCharset reports a string charset that cannot be converted
+	// to a JSON value. Keep this separate from the regexp charset mismatch code.
+	ErrInvalidJSONCharset uint16 = 20331
+	// ErrCharacterSetMismatch reports MySQL's binary/nonbinary regexp
+	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
+	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
+	ErrCharacterSetMismatch uint16 = 20330
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -469,6 +475,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
 	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrCharacterSetMismatch:   {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1138,6 +1145,10 @@ func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *
 
 func NewInvalidJSONCharset(ctx context.Context, charset string) *Error {
 	return newError(ctx, ErrInvalidJSONCharset, charset)
+}
+
+func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
+	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
 }
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {

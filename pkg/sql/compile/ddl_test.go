@@ -449,38 +449,135 @@ func TestIsMissingCCPRMetadataTable(t *testing.T) {
 	))
 }
 
-func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
-	lockMoDB := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
-		return nil
-	})
-	defer lockMoDB.Reset()
+func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
+	lookupFailure := errors.New("catalog lookup failed")
+	lockErr := errors.New("catalog lock failed")
+	createErr := errors.New("catalog create failed")
 
-	createErr := errors.New("create failed")
+	type lookupResult struct {
+		existing bool
+		err      error
+	}
 	for _, tc := range []struct {
 		name         string
-		existing     bool
 		ifNotExists  bool
+		lookups      []lookupResult
+		lockErr      error
 		createErr    error
-		wantErr      bool
+		wantCreate   bool
+		wantErr      error
+		wantErrCode  uint16
 		wantAffected uint64
+		wantEvents   []string
 	}{
-		{name: "physical creation", wantAffected: 1},
-		{name: "if not exists no-op", existing: true, ifNotExists: true},
-		{name: "strict duplicate", existing: true, wantErr: true},
-		{name: "create failure", createErr: createErr, wantErr: true},
+		{
+			name: "physical creation",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			wantCreate:   true,
+			wantAffected: 1,
+			wantEvents:   []string{"lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:        "if not exists fast no-op",
+			ifNotExists: true,
+			lookups:     []lookupResult{{existing: true}},
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:        "strict duplicate fast failure",
+			lookups:     []lookupResult{{existing: true}},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:       "initial lookup failure is not absence",
+			lookups:    []lookupResult{{err: lookupFailure}},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup"},
+		},
+		{
+			name:       "lock failure stops before locked recheck",
+			lookups:    []lookupResult{{err: moerr.GetOkExpectedEOB()}},
+			lockErr:    lockErr,
+			wantErr:    lockErr,
+			wantEvents: []string{"lookup", "lock"},
+		},
+		{
+			name: "locked recheck failure is not absence",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: lookupFailure},
+			},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name:        "concurrent create becomes if not exists no-op",
+			ifNotExists: true,
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "concurrent create becomes strict duplicate",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "create failure has no affected row",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			createErr:  createErr,
+			wantCreate: true,
+			wantErr:    createErr,
+			wantEvents: []string{"lookup", "lock", "lookup", "create"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			eng := mock_frontend.NewMockEngine(ctrl)
-			if tc.existing {
-				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
-					mock_frontend.NewMockDatabase(ctrl), nil,
+			events := make([]string, 0, 4)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "db1", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				return tc.lockErr
+			})
+			defer lockStub.Reset()
+
+			if len(tc.lookups) != 0 {
+				db := mock_frontend.NewMockDatabase(ctrl)
+				lookup := 0
+				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+						events = append(events, "lookup")
+						result := tc.lookups[lookup]
+						lookup++
+						if result.existing {
+							return db, result.err
+						}
+						return nil, result.err
+					},
+				).Times(len(tc.lookups))
+			}
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return tc.createErr
+					},
 				)
-			} else {
-				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
-					nil, moerr.NewBadDB(context.Background(), "db1"),
-				)
-				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).Return(tc.createErr)
 			}
 
 			proc := testutil.NewProcess(t)
@@ -499,19 +596,154 @@ func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
 			}
 
 			err := c.run(s)
-			if tc.wantErr {
-				require.Error(t, err)
-				if tc.createErr != nil {
-					require.ErrorIs(t, err, tc.createErr)
-				} else {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDBAlreadyExists))
-				}
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else if tc.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.wantErrCode), "unexpected error: %v", err)
 			} else {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantAffected, c.getAffectedRows())
+			require.Equal(t, tc.wantEvents, events)
 		})
 	}
+}
+
+func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ifNotExists   bool
+		existsOnRetry bool
+		wantCreate    bool
+		wantAffected  uint64
+		wantLockCalls int
+		wantEvents    []string
+	}{
+		{
+			name:          "retry then physical create",
+			wantCreate:    true,
+			wantAffected:  1,
+			wantLockCalls: 2,
+			wantEvents:    []string{"lookup", "lock", "lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:          "retry observes concurrent create as valid no-op",
+			ifNotExists:   true,
+			existsOnRetry: true,
+			wantLockCalls: 1,
+			wantEvents:    []string{"lookup", "lock", "lookup"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			lockCalls := 0
+			lookupCalls := 0
+			events := make([]string, 0, 6)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "retry_db", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				lockCalls++
+				if lockCalls == 1 {
+					return moerr.NewTxnNeedRetryNoCtx()
+				}
+				return nil
+			})
+			defer lockStub.Reset()
+
+			db := mock_frontend.NewMockDatabase(ctrl)
+			wantLookupCalls := 3
+			if tc.existsOnRetry {
+				wantLookupCalls = 2
+			}
+			eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+				func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+					events = append(events, "lookup")
+					lookupCalls++
+					if tc.existsOnRetry && lookupCalls == 2 {
+						return db, nil
+					}
+					return nil, moerr.GetOkExpectedEOB()
+				},
+			).Times(wantLookupCalls)
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return nil
+					},
+				).Times(1)
+			}
+
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().Buf = buffer.New()
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnClient
+			proc.Base.TxnOperator = txnOp
+			pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_CREATE_DATABASE,
+				Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+					Database: "retry_db", IfNotExists: tc.ifNotExists,
+				}},
+			}}}
+			c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+			require.NoError(t, c.Compile(ctx, pn, nil))
+
+			result, err := c.Run(0)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLockCalls, lockCalls)
+			require.Equal(t, 1, c.retryTimes)
+			require.Equal(t, tc.wantAffected, result.AffectRows)
+			require.Equal(t, tc.wantEvents, events)
+			c.Release()
+			proc.GetSessionInfo().Buf.Free()
+		})
+	}
+
+	t.Run("non-retry lock failure has no catalog side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		lockErr := errors.New("catalog lock unavailable")
+		lookupCalled := false
+		eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+			func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+				lookupCalled = true
+				return nil, moerr.GetOkExpectedEOB()
+			},
+		).Times(1)
+		lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			require.True(t, lookupCalled)
+			return lockErr
+		})
+		defer lockStub.Reset()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().Buf = buffer.New()
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+		proc.Base.TxnClient = txnClient
+		proc.Base.TxnOperator = txnOp
+		pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			DdlType: plan2.DataDefinition_CREATE_DATABASE,
+			Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+				Database: "retry_db",
+			}},
+		}}}
+		c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+		require.NoError(t, c.Compile(ctx, pn, nil))
+
+		_, err := c.Run(0)
+		require.ErrorIs(t, err, lockErr)
+		require.Zero(t, c.retryTimes)
+		c.Release()
+		proc.GetSessionInfo().Buf.Free()
+	})
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
@@ -1482,6 +1714,108 @@ func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
 	require.Equal(t, []string{
 		"delete from mo_catalog.mo_role_privs where obj_id = 88;",
 	}, sqls)
+}
+
+func TestAlterTableInplaceDropIndexUsesParentOwnedDelete(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	const (
+		indexName = "idx_v"
+		childName = "__mo_index_idx_v"
+	)
+	deleteEntered := make(chan struct{})
+	releaseDelete := make(chan struct{})
+	var releaseDeleteOnce sync.Once
+	release := func() { releaseDeleteOnce.Do(func() { close(releaseDelete) }) }
+	t.Cleanup(release)
+	deleteErr := errors.New("injected child delete failure")
+	unexpectedSQL := make(chan string, 1)
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			select {
+			case unexpectedSQL <- sql:
+			default:
+			}
+			return executor.Result{}, errors.New("unexpected nested SQL")
+		}),
+	)
+
+	tableDef := &plan2.TableDef{TblId: 42, Name: "t", Indexes: []*plan2.IndexDef{{
+		IndexName: indexName, IndexTableName: childName, TableExist: true,
+	}}}
+	parent := mock_frontend.NewMockRelation(ctrl)
+	child := mock_frontend.NewMockRelation(ctrl)
+	parent.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
+	parent.EXPECT().GetDBID(gomock.Any()).Return(uint64(7)).AnyTimes()
+	parent.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{IndexTables: []uint64{88}})
+	child.EXPECT().GetTableDef(gomock.Any()).Return(&plan2.TableDef{LogicalId: 88}).AnyTimes()
+	child.EXPECT().GetTableID(gomock.Any()).Return(uint64(88))
+
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("7")
+	gomock.InOrder(
+		database.EXPECT().Relation(gomock.Any(), "t", gomock.Any()).Return(parent, nil),
+		database.EXPECT().Relation(gomock.Any(), childName, gomock.Any()).Return(child, nil),
+		database.EXPECT().Relation(gomock.Any(), childName, gomock.Any()).Return(child, nil),
+		database.EXPECT().Delete(gomock.Any(), childName).DoAndReturn(func(context.Context, string) error {
+			close(deleteEntered)
+			<-releaseDelete
+			return deleteErr
+		}),
+	)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(database, nil)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(context.Context, engine.Relation) (*engine.ConstraintDef, error) {
+		return &engine.ConstraintDef{}, nil
+	})
+	defer getConstraintDef.Reset()
+
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		DdlType: plan2.DataDefinition_ALTER_TABLE,
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+			Database: "test", TableDef: tableDef,
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_Drop{
+				Drop: &plan2.AlterTableDrop{Name: indexName, Typ: plan2.AlterTableDrop_INDEX},
+			}}},
+		}},
+	}}}}
+	c := NewCompile("test", "test", "alter table t drop index idx_v", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = s.Plan
+	done := make(chan error, 1)
+	go func() { done <- s.AlterTableInplace(c) }()
+
+	select {
+	case <-deleteEntered:
+	case err := <-done:
+		t.Fatalf("ALTER returned before reaching direct child deletion: %v", err)
+	}
+	select {
+	case sql := <-unexpectedSQL:
+		t.Fatalf("ALTER recursively entered SQL DDL before direct child deletion: %s", sql)
+	default:
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("ALTER returned before the direct delete barrier was released: %v", err)
+	default:
+	}
+	release()
+	require.ErrorIs(t, <-done, deleteErr)
+	select {
+	case sql := <-unexpectedSQL:
+		t.Fatalf("failed child deletion must not continue catalog mutation SQL: %s", sql)
+	default:
+	}
 }
 
 func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {

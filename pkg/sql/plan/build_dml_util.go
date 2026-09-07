@@ -3486,10 +3486,12 @@ func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *
 		}
 	}
 
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial() produces the opaque byte representation stored in the hidden
+		// composite-primary-key column.  Keep its binary string domain here as
+		// well; labelling it as legacy/text VARCHAR makes the generated input PK
+		// incompatible with the same bytes read back from a base or index table.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -3524,10 +3526,9 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 			},
 		}
 	}
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial_full() is also an opaque serialized key, not user text.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{

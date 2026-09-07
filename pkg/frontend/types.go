@@ -362,10 +362,10 @@ type PrepareStmt struct {
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
 	paramMetadata              []bool
-	// binaryStringMetadata is statement-owned backing storage for the optional
+	// paramBinaryStrings is statement-owned backing storage for the optional
 	// per-execution BLOB domain sidecar. It remains available across executions
 	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
-	binaryStringMetadata []bool
+	paramBinaryStrings []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation for generic JSON comparison adapters and EXECUTE USING
 	// metadata. jsonMemberOfParamPositions is the narrower set that may use
@@ -379,6 +379,16 @@ type PrepareStmt struct {
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
+	// contract. Each marker starts with the binary-string default; after an
+	// actual numeric value reparses the statement, later text/BLOB values keep
+	// that marker's canonical numeric parameter category, matching MySQL's
+	// one-way parameter-type evolution without retaining source-width limits.
+	bitCountOverloadParamPositions []int32
+	// bitCountNumericParamTypes is bounded by the statement parameter count and
+	// belongs to the current prepared-plan generation. A zero entry means that
+	// the corresponding BIT_COUNT marker has not observed a numeric value.
+	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -856,7 +866,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
-	prepareStmt.binaryStringMetadata = nil
+	prepareStmt.paramBinaryStrings = nil
 	prepareStmt.remapDb = nil
 }
 
