@@ -257,10 +257,24 @@ the temporary catalog marker and physical-name identity. Round 3 made the CTAS
 failure BVT assert the stable duplicate-entry category rather than full error
 rendering. Each finding was fixed in its review round and committed separately.
 
+Three additional branch-review rounds were completed on the resulting branch.
+Round 4 rebuilt the transaction/failure graph for schema commit, parent DML,
+panic conversion, CTAS failure and deferred reclamation; every admitted resource
+has one terminal owner and no new defect was found. Round 5 audited shared maps,
+generation identity, concurrent idempotent cleanup, reset/close and connection
+migration CLONE behavior; the migration path remains target-owned and each
+failed cleanup retains an exact retryable generation, so no change was required.
+Round 6 reviewed the complete diff for rollout, tenant/catalog visibility,
+metadata-lock propagation and delivery compatibility. It also compared against
+the then-current `up/main` at `3d67664696e48cec0efc84308fb7de1cfda2f7db`;
+the two newer upstream commits neither conflict nor change this feature's
+ownership boundary. No empty fix commits were created for finding-free rounds.
+
 Final review decision: PASS, with the documented protocol and uncommitted-database
-boundaries. Owning normal and race commands completed successfully. Before the
-three reviews, the service passed the full temporary-table suite twice on the
-same instance; after all review fixes, the final binary passed it once more:
+boundaries. After all six reviews, owning normal and race commands completed
+successfully again on exact HEAD. Before the first three reviews, the service
+passed the full temporary-table suite twice on the same instance; after their
+review fixes, the final binary passed it once more:
 281/281 SQL statements each time, zero failures/ignored/abnormal. Catalog checks
 confirmed zero fixture tables after teardown and zero root/hidden-index tables
 immediately after DROP + ROLLBACK while the fixture database was still present.
