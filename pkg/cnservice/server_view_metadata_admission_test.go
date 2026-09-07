@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -121,10 +122,16 @@ func (*admissionStartLockService) Close() error {
 
 type admissionStartQueryService struct {
 	queryservice.QueryService
+	started     chan struct{}
+	startedOnce sync.Once
+	startErr    error
 }
 
-func (*admissionStartQueryService) Start() error {
-	return nil
+func (s *admissionStartQueryService) Start() error {
+	if s.started != nil {
+		s.startedOnce.Do(func() { close(s.started) })
+	}
+	return s.startErr
 }
 
 func (*admissionStartQueryService) Close() error {
@@ -138,7 +145,7 @@ func newViewMetadataAdmissionStartService(
 	discoveryTimeout time.Duration,
 ) *service {
 	t.Helper()
-	serviceID := t.Name()
+	serviceID := strings.ReplaceAll(t.Name(), "/", "-")
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
@@ -167,6 +174,45 @@ func newViewMetadataAdmissionStartService(
 		Admitted:             true,
 	})
 	return s
+}
+
+func TestCNStartsQueryServiceBeforeViewMetadataAdmission(t *testing.T) {
+	started := make(chan struct{})
+	var fenceBeforeQuery atomic.Bool
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		select {
+		case <-started:
+		default:
+			fenceBeforeQuery.Store(true)
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+	s.queryService = &admissionStartQueryService{started: started}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.NoError(t, s.Start())
+	require.False(t, fenceBeforeQuery.Load(),
+		"catalog admission must not run before the internal QueryService is reachable")
+}
+
+func TestCNStartPropagatesQueryServiceStartFailure(t *testing.T) {
+	startErr := errors.New("query service start failed")
+	s := newViewMetadataAdmissionStartService(
+		t,
+		&testBootService{},
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+		time.Second,
+	)
+	s.queryService = &admissionStartQueryService{startErr: startErr}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.ErrorIs(t, s.Start(), startErr)
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {

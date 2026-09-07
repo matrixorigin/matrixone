@@ -191,9 +191,10 @@ func TestCDCCases(t *testing.T) {
 		t.Skip("skipping CDC integration test on GitHub Actions; it requires an external MySQL endpoint")
 	}
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
-		db, _, err := sqlmock.New()
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
+		mock.ExpectClose()
 		return db, nil
 	})
 	defer stubOpenDbConn.Reset()

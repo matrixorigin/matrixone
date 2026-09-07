@@ -1363,7 +1363,7 @@ func RewriteError(err error, username string) (uint16, string, string) {
 	var msg string
 
 	errMsg := strings.ToLower(err.Error())
-	if needConvertedToAccessDeniedError(errMsg) {
+	if isAuthenticationRejected(err) || needConvertedToAccessDeniedError(errMsg) {
 		failed := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		if len(username) > 0 {
 			tipsFormat := "Access denied for user %s. %s"

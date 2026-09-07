@@ -29,8 +29,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -44,6 +46,23 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		// Service startup does not imply that the query coordinator's cached
+		// inventory contains both workers. Establish that precondition before
+		// asserting the distributed Top topology.
+		cluster := clusterservice.GetMOCluster(cn.ServiceID())
+		refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+		require.True(t, ok)
+		require.Eventually(t, func() bool {
+			if refresher.Refresh(ctx) != nil {
+				return false
+			}
+			workers := 0
+			cluster.GetCNService(clusterservice.NewSelector(), func(metadata.CNService) bool {
+				workers++
+				return true
+			})
+			return workers == 2
+		}, 30*time.Second, 100*time.Millisecond, "both CN workers must be discoverable")
 		internalExec := testutils.GetSQLExecutor(cn)
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
@@ -74,12 +93,82 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table forced_src (v int)")
 		execSQLDB(t, ctx, db, "insert into forced_src values (31),(31),(31),(31)")
 		execSQLDB(t, ctx, db, "create table forced_dst (b bit(4))")
+		execSQLDB(t, ctx, db, "create table forced_top_src (id bigint, k bigint, payload varchar(64))")
+		execSQLDB(t, ctx, db, "insert into forced_top_src select result, 99999-result, repeat('x',64) from generate_series(0,99999) g")
 
 		// Force only the operations under test. Applying this process-wide test
 		// hook to fixture DDL would exercise an unrelated execution path and can
 		// make setup contend with the test's frontend session.
 		defer plan.SetForceScanOnMultiCN(false)
 		plan.SetForceScanOnMultiCN(true)
+
+		t.Run("remote top gathers workers before write back", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+castDB+"`")
+			// Varlen payload selects the ordered hierarchy. Assert the actual
+			// gather topology, not just the MULTICN execution-mode header.
+			query := "select id,k,payload from forced_top_src order by k limit 1000"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			require.Contains(t, strings.ToLower(physical.Text), "merge top")
+			rows, queryErr := db.QueryContext(ctx, query)
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			count := 0
+			for rows.Next() {
+				var id, key int64
+				var payload string
+				require.NoError(t, rows.Scan(&id, &key, &payload))
+				require.Equal(t, int64(count), key)
+				require.Equal(t, int64(99999-count), id)
+				require.Equal(t, strings.Repeat("x", 64), payload)
+				count++
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.Equal(t, 1000, count)
+		})
+
+		t.Run("bounded top preserves remote order and prepared reuse", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
+			query := "select a,b from " + deleteTable + " order by a desc limit 2"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			// A tiny source can collapse to one remote worker. The larger case
+			// above proves the gather topology; this control proves exact rows
+			// and prepared reuse without requiring an unnecessary merge.
+			readRows := func(rows *sql.Rows) [][2]string {
+				t.Helper()
+				var got [][2]string
+				for rows.Next() {
+					var row [2]string
+					require.NoError(t, rows.Scan(&row[0], &row[1]))
+					got = append(got, row)
+				}
+				return got
+			}
+			rows, queryErr := db.QueryContext(ctx, query+" offset 1")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			require.Equal(t, [][2]string{{"7", "7"}, {"3", "3"}}, readRows(rows))
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			stmt, prepareErr := db.PrepareContext(ctx,
+				"select a,b from "+deleteTable+" order by a desc limit ?")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for range 2 {
+				rows, queryErr = stmt.QueryContext(ctx, 2)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				require.Equal(t, [][2]string{{"8", "8"}, {"7", "7"}}, readRows(rows))
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+			}
+		})
 
 		t.Run("delete and select retain exact rows", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
@@ -202,6 +291,9 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			})
 			t.Run("csv_rich_types_round_trip", func(t *testing.T) {
 				runCSVLoadRichTypes(t, ctx, sqlDB, dbName)
+			})
+			t.Run("csv_user_diff_prefix_identifier", func(t *testing.T) {
+				runCSVUserDiffPrefixIdentifier(t, ctx, sqlDB, dbName)
 			})
 			t.Run("output_limit_subset", func(t *testing.T) {
 				runDiffOutputLimitSubset(t, ctx, sqlDB, dbName)
@@ -797,6 +889,32 @@ insert into %s values
 	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
 	require.Equal(t, ".csv", filepath.Ext(diffPath))
 	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
+	assertTablesEqual(t, ctx, db, dbName, target, base)
+}
+
+func runCSVUserDiffPrefixIdentifier(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	base := "user_prefix_csv_base"
+	target := "__mo_diff_orders"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, value varchar(32))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` like `%s`", target, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 'first'), (2, 'second')", target))
+
+	diffStmt := fmt.Sprintf("data branch diff `%s` against `%s` output file '%s'", target, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".csv", filepath.Ext(diffPath))
+
+	records := readDiffCSVFile(t, diffPath)
+	require.ElementsMatch(t, [][]string{{"1", "first"}, {"2", "second"}}, records)
 
 	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
 	assertTablesEqual(t, ctx, db, dbName, target, base)

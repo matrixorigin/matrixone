@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -199,6 +200,58 @@ func Test_refactorScope(t *testing.T) {
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, vm.GetLeafOpParent(nil, rs.RootOp).GetOperatorBase().Idx, -1)
+}
+
+func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
+	for _, ordered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordered=%t", ordered), func(t *testing.T) {
+			c := newMergeTopFallbackTestCompile(t)
+			defer c.proc.Free()
+			limitExpr := plan.MakePlan2Uint64ConstExprWithType(20_000)
+			orderBy := []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+			}}}
+			localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy)
+			localTop.OrderedOutput = ordered
+			localTop.AppendChild(table_scan.NewArgument())
+			source := &Scope{
+				Magic: Remote, NodeInfo: engine.Node{Mcpu: 4},
+				Proc: c.proc.NewNoContextChildProc(0), RootOp: localTop,
+			}
+			defer source.release()
+			data, err := encodeRemoteScope(source, c.proc)
+			require.NoError(t, err)
+			decoded, err := decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
+			writeBack := appendWriteBackOperator(c, decoded)
+			defer writeBack.release()
+			decoded.Proc.BuildPipelineContext(c.proc.Ctx)
+			defer decoded.Proc.Cancel(nil)
+			reg := writeBack.Proc.Reg.MergeReceivers[0]
+			require.Equal(t, ordered, reg.OrderedStream)
+			gather, workers := newParallelScope(decoded)
+			require.Len(t, workers, 4)
+			if ordered {
+				require.Equal(t, 1, reg.NilBatchCnt)
+				require.Equal(t, Merge, gather.Magic)
+				out, ok := gather.RootOp.(*connector.Connector)
+				require.True(t, ok)
+				require.Same(t, reg, out.Reg)
+				merged, ok := out.GetChildren(0).(*mergetop.MergeTop)
+				require.True(t, ok)
+				require.True(t, merged.OrderedStreams)
+				for i, worker := range workers {
+					workerOut := worker.RootOp.(*connector.Connector)
+					require.NotSame(t, reg, workerOut.Reg)
+					require.Same(t, gather.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+					require.True(t, workerOut.Reg.OrderedStream)
+				}
+			} else {
+				require.Equal(t, Normal, gather.Magic)
+			}
+		})
+	}
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
@@ -531,12 +584,66 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
-	t.Run("GroupByHashKey", func(t *testing.T) {
+	t.Run("TopOrderedOutput", func(t *testing.T) {
+		original := top.NewArgument().
+			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
+			WithFs([]*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			}}).
+			WithOrderedOutput()
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredTop, ok := restored.(*top.Top)
+		require.True(t, ok)
+		require.True(t, restoredTop.OrderedOutput)
+		require.Equal(t, original.Limit, restoredTop.Limit)
+		require.Equal(t, original.Fs, restoredTop.Fs)
+	})
+
+	t.Run("MergeTopOrderedStreams", func(t *testing.T) {
+		original := mergetop.NewArgument().
+			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
+			WithFs([]*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			}}).
+			WithOrderedStreams()
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredMergeTop, ok := restored.(*mergetop.MergeTop)
+		require.True(t, ok)
+		require.True(t, restoredMergeTop.OrderedStreams)
+		require.Equal(t, original.Limit, restoredMergeTop.Limit)
+		require.Equal(t, original.Fs, restoredMergeTop.Fs)
+	})
+
+	t.Run("GroupMetadata", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}
+		original.DynamicGrouping = true
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
+		require.True(t, restored.(*group.Group).DynamicGrouping)
+	})
+
+	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
+		original := projection.NewArgument()
+		original.ProjectList = []*planpb.Expr{plan.MakePlan2Int64ConstExprWithType(1)}
+		original.GroupingFlags = []bool{true, true, true, false, false, false}
+		original.GroupingSetCount = 3
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredProjection, ok := restored.(*projection.Projection)
+		require.True(t, ok)
+		require.Equal(t, original.ProjectList, restoredProjection.ProjectList)
+		require.Equal(t, original.GroupingFlags, restoredProjection.GroupingFlags)
+		require.Equal(t, original.GroupingSetCount, restoredProjection.GroupingSetCount)
 	})
 
 	t.Run("MergeGroupByHashKey", func(t *testing.T) {
@@ -545,6 +652,29 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}
+		original.EmptyGroupingSetIDs = []int64{1, 3}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.True(t, restored.(*group.MergeGroup).GroupingAware)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
+		require.Equal(t, original.EmptyGroupingSetIDs, restored.(*group.MergeGroup).EmptyGroupingSetIDs)
+	})
+
+	t.Run("MergeGroupLegacyEmptyGroupingSetMetadata", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupingAware = true
+		original.GroupByTypes = []types.Type{types.T_int32.ToType()}
+		original.EmptyGroupingSet = true
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.True(t, restored.(*group.MergeGroup).EmptyGroupingSet)
+		require.Equal(t, original.GroupByTypes, restored.(*group.MergeGroup).GroupByTypes)
 	})
 
 	t.Run("SharedTableLock", func(t *testing.T) {
@@ -577,6 +707,132 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+}
+
+func TestRemoteRunOrderedPipelineEdgeRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	scope := &Scope{
+		Magic:  Remote,
+		Proc:   proc.NewNoContextChildProc(2),
+		RootOp: mergetop.NewArgument().WithOrderedStreams(),
+	}
+	scope.Proc.Reg.MergeReceivers[0].ResetForReuse(1, 1)
+	scope.Proc.Reg.MergeReceivers[0].OrderedStream = true
+	scope.Proc.Reg.MergeReceivers[1].ResetForReuse(3, 2)
+
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	wire := new(pipeline.Pipeline)
+	require.NoError(t, wire.Unmarshal(data))
+	require.Equal(t, []bool{true}, wire.OrderedStream,
+		"trailing unordered receivers should retain the legacy zero-value wire representation")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "requires MORPC protocol version 53")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 53")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	restored, err := decodeScope(data, proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		restored.release()
+		scope.release()
+		proc.Free()
+	})
+
+	require.Len(t, restored.Proc.Reg.MergeReceivers, 2)
+	require.True(t, restored.Proc.Reg.MergeReceivers[0].OrderedStream)
+	require.False(t, restored.Proc.Reg.MergeReceivers[1].OrderedStream)
+	require.Equal(t, 1, cap(restored.Proc.Reg.MergeReceivers[0].Ch2))
+	require.Equal(t, 1, restored.Proc.Reg.MergeReceivers[0].NilBatchCnt)
+	require.Equal(t, 3, cap(restored.Proc.Reg.MergeReceivers[1].Ch2))
+	require.Equal(t, 2, restored.Proc.Reg.MergeReceivers[1].NilBatchCnt)
+	restoredTop, ok := restored.RootOp.(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, restoredTop.OrderedStreams)
+}
+
+func TestRemoteRunOrderedMergeTopHierarchyRoundTrip(t *testing.T) {
+	nodes := engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 2},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 2},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	limitExpr := plan.MakePlan2Uint64ConstExprWithType(20_000)
+	orderBy := []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
+	}}}
+	node := &planpb.Node{Limit: limitExpr, OrderBy: orderBy}
+	inputs := []*Scope{
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+	}
+	inputs[0].NodeInfo.Mcpu = 2
+	for _, input := range inputs {
+		input.setRootOperator(top.NewArgument().
+			WithLimit(limitExpr).
+			WithFs(orderBy).
+			WithOrderedOutput())
+	}
+	group := c.newMergeTopScopeByCN(node, limitExpr, inputs, nodes[1])
+
+	data, err := encodeRemoteScope(group, c.proc)
+	require.NoError(t, err)
+	restored, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		restored.release()
+		group.release()
+		c.proc.Free()
+	})
+
+	require.Len(t, restored.PreScopes, 2)
+	require.Len(t, restored.Proc.Reg.MergeReceivers, 2)
+	restoredTop, ok := restored.RootOp.(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, restoredTop.OrderedStreams)
+	for i, input := range restored.PreScopes {
+		out, ok := input.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		require.Same(t, restored.Proc.Reg.MergeReceivers[i], out.Reg)
+		require.True(t, out.Reg.OrderedStream)
+		localTop, ok := out.GetOperatorBase().GetChildren(0).(*top.Top)
+		require.True(t, ok)
+		require.True(t, localTop.OrderedOutput)
+	}
+
+	restored.PreScopes[0].Proc.Ctx = context.Background()
+	ordered, workers := newParallelScope(restored.PreScopes[0])
+	require.Equal(t, Merge, ordered.Magic)
+	require.True(t, ordered.ConcurrentPreScopes)
+	require.Len(t, workers, 2)
+	orderedOut, ok := ordered.RootOp.(*connector.Connector)
+	require.True(t, ok)
+	gatherTop, ok := orderedOut.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, gatherTop.OrderedStreams)
 }
 
 func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
@@ -1371,6 +1627,84 @@ func TestParquetWholeFileFanoutRemoteProtocolValidationAtSendAndReceiveBoundarie
 	require.ErrorContains(t, err, "MORPC protocol version 45")
 }
 
+func TestGroupingSetRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion45)
+		}
+	})
+
+	projectionOp := projection.NewArgument()
+	projectionOp.GroupingFlags = []bool{true, false}
+	projectionOp.GroupingSetCount = 2
+	groupOp := group.NewArgument()
+	groupOp.DynamicGrouping = true
+	mergeGroupOp := group.NewArgumentMergeGroup()
+	mergeGroupOp.GroupingAware = true
+	legacyEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	legacyEmptyMergeGroupOp.EmptyGroupingSet = true
+	dynamicEmptyMergeGroupOp := group.NewArgumentMergeGroup()
+	dynamicEmptyMergeGroupOp.EmptyGroupingSetIDs = []int64{1}
+
+	for _, test := range []struct {
+		name string
+		op   vm.Operator
+	}{
+		{name: "projection", op: projectionOp},
+		{name: "group", op: groupOp},
+		{name: "merge group", op: mergeGroupOp},
+		{name: "legacy empty merge group", op: legacyEmptyMergeGroupOp},
+		{name: "dynamic empty merge group", op: dynamicEmptyMergeGroupOp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scope := &Scope{Proc: proc, RootOp: test.op}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "MORPC protocol version 49")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "MORPC protocol version 49")
+		})
+	}
+}
+
+func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+
+	legacy := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Agg: &pipeline.Group{GroupingFlag: []bool{true, false}},
+	}}}
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, legacy))
+
+	nested := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{ProjectionGroupingSetCount: 2}},
+	}}}
+	require.ErrorContains(t,
+		validateRemoteGroupingSetPipelineProtocol(proc, nested),
+		"MORPC protocol version 49")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
+}
+
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -1529,6 +1863,58 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		} else {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
+	})
+
+	t.Run("ODKU metadata rejects mixed-version remote execution", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:          [][]*plan.Expr{nil, nil},
+			HasODKUAffectedRows: true,
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		data, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{instruction}}).Marshal()
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+		_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 50")
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 50")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+		actionOp := &dedupjoin.DedupJoin{
+			Conditions: [][]*plan.Expr{nil, nil}, EmitActionRows: true,
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, actionInstruction, err := convertToPipelineInstruction(actionOp, proc, ctx, 1)
+		require.NoError(t, err)
+		actionData, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{actionInstruction}}).Marshal()
+		require.NoError(t, err)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion50)
+		_, _, err = convertToPipelineInstruction(actionOp, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		_, err = decodeScope(actionData, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+
+		targetOp := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{
+			OdkuTargetArbitration: true,
+			PkColumn:              0,
+			KeyColumns:            []int32{0, 1},
+			TargetColumns:         []int32{2, 3},
+			OutputColumns:         2,
+		}}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, targetInstruction, err := convertToPipelineInstruction(targetOp, proc, ctx, 1)
+		require.NoError(t, err)
+		targetData, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{targetInstruction}}).Marshal()
+		require.NoError(t, err)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion50)
+		_, _, err = convertToPipelineInstruction(targetOp, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		_, err = decodeScope(targetData, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	})
 
 	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
@@ -1843,19 +2229,23 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		changedRowsCol := 7
+		affectedRowsWeightCol := 11
+		physicalChangedRowsCol := 12
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
-					TableDef:           &plan.TableDef{Name: "t1"},
-					InsertCols:         []int{0, 1, 2},
-					DeleteCols:         []int{3, 4, 8},
-					PartitionCols:      []int{5, 6},
-					InsertPkColIdx:     1,
-					DedupByTargetRowID: true,
-					TargetUpdateCtxIdx: 0,
-					ChangedRowsCol:     &changedRowsCol,
-					AffectedRowsCols:   []int{9, 10},
+					ObjRef:                 &plan.ObjectRef{ObjName: "t1"},
+					TableDef:               &plan.TableDef{Name: "t1"},
+					InsertCols:             []int{0, 1, 2},
+					DeleteCols:             []int{3, 4, 8},
+					PartitionCols:          []int{5, 6},
+					InsertPkColIdx:         1,
+					DedupByTargetRowID:     true,
+					TargetUpdateCtxIdx:     0,
+					ChangedRowsCol:         &changedRowsCol,
+					AffectedRowsCols:       []int{9, 10},
+					AffectedRowsWeightCol:  &affectedRowsWeightCol,
+					PhysicalChangedRowsCol: &physicalChangedRowsCol,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -1876,6 +2266,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NotNil(t, restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, 7, *restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
+		require.Equal(t, 11, *restoredOp.MultiUpdateCtx[0].AffectedRowsWeightCol)
+		require.Equal(t, 12, *restoredOp.MultiUpdateCtx[0].PhysicalChangedRowsCol)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
@@ -1967,18 +2359,86 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)
 	})
 
-	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+	t.Run("DedupJoin_DedupBuildKeepLastAndODKUMetadata", func(t *testing.T) {
 		op := &dedupjoin.DedupJoin{
-			Conditions:         [][]*plan.Expr{nil, nil},
-			DedupBuildKeepLast: true,
+			Conditions:               [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast:       true,
+			HasODKUAffectedRows:      true,
+			AffectedRowsResultPos:    4,
+			PhysicalChangedResultPos: 5,
+			UpdateCheckColIdxList:    []int32{1, 3},
+			CountFoundRows:           true,
+			EmitActionRows:           true,
+			ActionFinalResultPos:     6,
+			ForeignKeyChecks: []dedupjoin.ODKUForeignKeyCheck{{
+				ColIdxList: []int32{1, 2}, EligibilityResultPos: 7,
+			}},
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+		require.True(t, pipeInstr.DedupJoin.HasOdkuAffectedRows)
+		require.Equal(t, int32(4), pipeInstr.DedupJoin.AffectedRowsResultPos)
+		require.Equal(t, int32(5), pipeInstr.DedupJoin.PhysicalChangedRowsResultPos)
+		require.Equal(t, []int32{1, 3}, pipeInstr.DedupJoin.UpdateCheckColIdxList)
+		require.True(t, pipeInstr.DedupJoin.CountFoundRows)
+		require.True(t, pipeInstr.DedupJoin.EmitActionRows)
+		require.Equal(t, int32(6), pipeInstr.DedupJoin.ActionFinalResultPos)
+		require.Equal(t, []int32{1, 2}, pipeInstr.DedupJoin.ForeignKeyChecks[0].ColIdxList)
+		require.Equal(t, int32(7), pipeInstr.DedupJoin.ForeignKeyChecks[0].EligibilityResultPos)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wire, err := pipeInstr.Marshal()
 		require.NoError(t, err)
-		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+		decoded := new(pipeline.Instruction)
+		require.NoError(t, decoded.Unmarshal(wire))
+
+		restored, err := convertToVmOperator(decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredDedup := restored.(*dedupjoin.DedupJoin)
+		require.True(t, restoredDedup.DedupBuildKeepLast)
+		require.True(t, restoredDedup.HasODKUAffectedRows)
+		require.Equal(t, int32(4), restoredDedup.AffectedRowsResultPos)
+		require.Equal(t, int32(5), restoredDedup.PhysicalChangedResultPos)
+		require.Equal(t, []int32{1, 3}, restoredDedup.UpdateCheckColIdxList)
+		require.True(t, restoredDedup.CountFoundRows)
+		require.True(t, restoredDedup.EmitActionRows)
+		require.Equal(t, int32(6), restoredDedup.ActionFinalResultPos)
+		require.Equal(t, []int32{1, 2}, restoredDedup.ForeignKeyChecks[0].ColIdxList)
+		require.Equal(t, int32(7), restoredDedup.ForeignKeyChecks[0].EligibilityResultPos)
+
+		// Constraint eligibility is also required by the compact final-row path:
+		// inserts remain eligible while unrelated updates bypass historical rows.
+		op.EmitActionRows = false
+		_, compactInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.False(t, compactInstr.DedupJoin.EmitActionRows)
+		require.Len(t, compactInstr.DedupJoin.ForeignKeyChecks, 1)
+		compactRestored, err := convertToVmOperator(compactInstr, ctx, nil)
+		require.NoError(t, err)
+		require.False(t, compactRestored.(*dedupjoin.DedupJoin).EmitActionRows)
+		require.Len(t, compactRestored.(*dedupjoin.DedupJoin).ForeignKeyChecks, 1)
+	})
+
+	t.Run("PreInsertUnique_ODKUTargetArbitration", func(t *testing.T) {
+		op := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{
+			OdkuTargetArbitration: true,
+			PkColumn:              0,
+			KeyColumns:            []int32{0, 1},
+			TargetColumns:         []int32{2, 3},
+			OutputColumns:         2,
+		}}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		wire, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		decoded := new(pipeline.Instruction)
+		require.NoError(t, decoded.Unmarshal(wire))
+		restored, err := convertToVmOperator(decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredPreInsert := restored.(*preinsertunique.PreInsertUnique)
+		require.True(t, restoredPreInsert.PreInsertCtx.OdkuTargetArbitration)
+		require.Equal(t, []int32{0, 1}, restoredPreInsert.PreInsertCtx.KeyColumns)
+		require.Equal(t, []int32{2, 3}, restoredPreInsert.PreInsertCtx.TargetColumns)
 	})
 
 	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {

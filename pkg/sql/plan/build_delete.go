@@ -69,8 +69,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	// todo will do not lock table now.
-	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
-	needLockTable := isDeleteWithoutFilters
+	unrestrictedDelete := isUnrestrictedDelete(stmt, len(tblInfo.tableDefs))
+	needLockTable := unrestrictedDelete
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
 		delPlanCtx := getDmlPlanCtx()
@@ -85,7 +85,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.allDelTableIDs = allDelTableIDs
 		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
-		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
+		delPlanCtx.isUnrestrictedDelete = unrestrictedDelete
 
 		lastNodeId = appendSinkScanNode(builder, deleteBindCtx, sourceStep)
 		lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx, lastNodeId)

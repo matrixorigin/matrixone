@@ -86,14 +86,31 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
 	dbName := createDatabase.GetDatabase()
+
+	// A positive catalog lookup is already authoritative for this transaction's
+	// snapshot and must not wait behind unrelated DDL that holds a shared
+	// database lock. Only the absence-to-create transition needs serialization.
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return err
 	}
 
+	// Serialize competing creators, then recheck under the lock. Another
+	// transaction may have created the database after the optimistic lookup.
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return err
 	}
 
@@ -864,9 +881,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					if indexdef.IndexName == constraintName {
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSqlWithOptions(
-								"DROP TABLE "+sqlquote.QualifiedIdent(dbName, indexdef.IndexTableName),
-								executor.StatementOption{}.WithDisableLog(),
+							// ALTER already owns the parent and index storage locks. A
+							// nested DROP TABLE tries to acquire the hidden table's catalog
+							// lock after those storage locks, reversing the DML lock order
+							// and allowing a cross-index wait cycle. Use the same
+							// parent-owned deletion path as standalone DROP INDEX.
+							if err := c.dropIndexChildRelation(
+								dbSource, indexdef.IndexTableName, oTableDef.GetIsTemporary(),
 							); err != nil {
 								return err
 							}
@@ -881,12 +902,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 						notDroppedIndex = append(notDroppedIndex, indexdef)
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
-				}
-
-				// drop index cdc task
-				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
-				if err != nil {
-					return err
 				}
 
 				// unregister index update
@@ -6159,7 +6174,7 @@ func onPreUpdateCDCTasks(
 		affectedCdcRow += int(cnt)
 
 		// Delete mo_cdc_watermark
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, true); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6182,7 +6197,11 @@ func onPreUpdateCDCTasks(
 
 	// Restart cdc task
 	if targetTaskStatus == task.TaskStatus_RestartRequested {
-		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+		// RESTART intentionally resets the watermark but retains the immutable
+		// table-generation epoch. A bounded snapshot may already have committed
+		// target groups at that epoch, so choosing a new one would strand stale
+		// DELETE/PK-change rows.
+		if cnt, err = deleteManyWatermark(ctx, tx, keys, false); err != nil {
 			return
 		}
 		affectedCdcRow += int(cnt)
@@ -6242,6 +6261,7 @@ func deleteManyWatermark(
 	ctx context.Context,
 	tx taskservice.SqlExecutor,
 	keys map[taskservice.CDCTaskKey]struct{},
+	deleteSnapshotEpochs bool,
 ) (deletedCnt int64, err error) {
 	var (
 		cnt int64
@@ -6262,6 +6282,21 @@ func deleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		if !deleteSnapshotEpochs {
+			continue
+		}
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Info(
+			"cdc.compile.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, tx, sql); err != nil {
+			return
+		}
 	}
 	return
 }
@@ -6272,9 +6307,13 @@ const (
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	executor := task.TaskCode_InitCdc
+	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcStableEpoch
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
-		Executor: task.TaskCode_InitCdc,
+		Executor: executor,
 		Options: task.TaskOptions{
 			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
 			RetryInterval: defaultCDCTaskRetryInterval,
@@ -6500,10 +6539,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sourceConn, sourceConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
+		)
+		if sourceConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", sourceConnErr)
+			return
+		}
+		if closeErr := sourceConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close source connection check: %v", closeErr)
 			return
 		}
 	}
@@ -6528,10 +6573,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sinkConn, sinkConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		)
+		if sinkConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", sinkConnErr)
+			return
+		}
+		if closeErr := sinkConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close sink connection check: %v", closeErr)
 			return
 		}
 	}
@@ -6625,6 +6676,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
+	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
+	// remain eligible for legacy executors because they cannot partially commit
+	// an initial snapshot.
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+			return
+		}
+	}
 
 	var extraOptsBytes []byte
 	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {
@@ -6634,6 +6695,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func validateStableInitialSnapshotCompileProtocol(
+	ctx context.Context,
+	c *Compile,
+	stable bool,
+) error {
+	protocolVersion := int64(defines.MORPCVersion4)
+	if c != nil && c.proc != nil {
+		if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				if version, valid := value.(int64); valid {
+					protocolVersion = version
+				}
+			}
+		}
+	}
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
 }
 
 func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
