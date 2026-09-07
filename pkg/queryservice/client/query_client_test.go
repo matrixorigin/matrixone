@@ -35,8 +35,15 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 }
 
 func TestRefreshSessionAuthRequiresCurrentProtocolVersion(t *testing.T) {
-	assert.Equal(t, defines.MORPCVersion54, defines.MORPCLatestVersion)
+	// A method's entry in methodVersions records the protocol it SHIPPED with, not whatever is
+	// newest -- nearly every other entry is MORPCVersion1 for that reason. Gating a method on
+	// the latest version would make it unusable until every peer in the cluster had upgraded,
+	// which is the opposite of what the gate is for. So RefreshSessionAuth stays at 54.
 	assert.Equal(t, defines.MORPCVersion54, methodVersions[query.CmdMethod_RefreshSessionAuth])
+	// The canary: this fires whenever the latest version moves, so whoever moves it has to
+	// confirm the gate above should stay put. Moved to 55 by the index metadata provenance
+	// columns (v4_0_7), which do not touch session auth.
+	assert.Equal(t, defines.MORPCVersion55, defines.MORPCLatestVersion)
 }
 
 func TestNewCacheClient(t *testing.T) {
