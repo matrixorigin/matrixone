@@ -66,26 +66,6 @@ id    body    title    score
 3    blue is not red    colorful    0.0
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
-1    car is yellow    crazy car    0.0
-2    sky is blue    no limit    0.0
-3    blue is not red    colorful    0.0
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
-1    car is yellow    crazy car    0.0
-2    sky is blue    no limit    0.0
-3    blue is not red    colorful    0.0
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說    0.0
 7    59個簡單的英文和中文短篇小說    適合初學者    0.0
 8    null    NOT INCLUDED    0.0
@@ -112,24 +92,6 @@ id    body    title    score
 1    car is yellow    crazy car    0.0
 2    sky is blue    no limit    0.0
 3    blue is not red    colorful    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
-0    color is red    t1    0.0
-1    car is yellow    crazy car    0.0
-2    sky is blue    no limit    0.0
-3    blue is not red    colorful    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
-0    color is red    t1    0.0
-1    car is yellow    crazy car    0.0
-2    sky is blue    no limit    0.0
-3    blue is not red    colorful    0.0
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說    0.0
 7    59個簡單的英文和中文短篇小說    適合初學者    0.0
 8    null    NOT INCLUDED    0.0
@@ -138,16 +100,6 @@ id    body    title    score
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.2537473
-0    color is red    t1    0.0
-1    car is yellow    crazy car    0.0
-2    sky is blue    no limit    0.0
-3    blue is not red    colorful    0.0
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
 0    color is red    t1    0.0
 1    car is yellow    crazy car    0.0
 2    sky is blue    no limit    0.0
@@ -202,24 +154,6 @@ select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.7411132
 3    blue is not red    colorful    0.7411132
-0    color is red    t1    0.0
-1    car is yellow    crazy car    0.0
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
-0    color is red    t1    0.0
-1    car is yellow    crazy car    0.0
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
-7    59個簡單的英文和中文短篇小說    適合初學者    0.0
-8    null    NOT INCLUDED    0.0
-9    NOT INCLUDED BODY    null    0.0
-10    null    null    0.0
 0    color is red    t1    0.0
 1    car is yellow    crazy car    0.0
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
@@ -281,6 +215,16 @@ id    body    title
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
 0    color is red    t1    3.1378522
+1    car is yellow    crazy car    0.0
+2    sky is blue    no limit    0.0
+3    blue is not red    colorful    0.0
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說
@@ -298,9 +242,28 @@ select *, match(body, title) against('遠東兒童中文' in natural language mo
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.0109811
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.6560832
+0    color is red    t1    0.0
+1    car is yellow    crazy car    0.0
+2    sky is blue    no limit    0.0
+3    blue is not red    colorful    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.2537473
+0    color is red    t1    0.0
+1    car is yellow    crazy car    0.0
+2    sky is blue    no limit    0.0
+3    blue is not red    colorful    0.0
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -332,6 +295,15 @@ select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.7411132
 3    blue is not red    colorful    0.7411132
+0    color is red    t1    0.0
+1    car is yellow    crazy car    0.0
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -367,8 +339,6 @@ select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09538849
 id3    3    blue red    t4    0.07879918
-id0    0    red    t1    0.0
-id1    1    yellow    t2    0.0
 id0    0    red    t1    0.0
 id1    1    yellow    t2    0.0
 update src2 set body = 'orange' where id1='id0';
@@ -466,6 +436,16 @@ id    body    title
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
 0    color is red    t1    3.1378522
+1    car is yellow    crazy car    0.0
+2    sky is blue    no limit    0.0
+3    blue is not red    colorful    0.0
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
@@ -483,6 +463,15 @@ select *, match(body, title) against('遠東兒童中文' in natural language mo
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.0109811
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.6560832
+0    color is red    t1    0.0
+1    car is yellow    crazy car    0.0
+2    sky is blue    no limit    0.0
+3    blue is not red    colorful    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -514,6 +503,15 @@ select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.7411132
 3    blue is not red    colorful    0.7411132
+0    color is red    t1    0.0
+1    car is yellow    crazy car    0.0
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.0
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.0
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n    0.0
+7    59個簡單的英文和中文短篇小說    適合初學者    0.0
+8    null    NOT INCLUDED    0.0
+9    NOT INCLUDED BODY    null    0.0
+10    null    null    0.0
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -574,6 +572,8 @@ select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09538849
 id3    3    blue red    t4    0.07879918
+id0    0    red    t1    0.0
+id1    1    yellow    t2    0.0
 desc src2;
 Field    Type    Null    Key    Default    Extra    Comment
 id1    VARCHAR(65535)    NO    PRI    null        
