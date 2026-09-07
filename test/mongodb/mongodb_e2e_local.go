@@ -269,6 +269,11 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindQuery+"'", "10"); err != nil {
 		return err
 	}
+	unwindOptionsQuery := `{"pipeline":[{"$set":{"fanout":[]}},{"$unwind":{"path":"$fanout","includeArrayIndex":"fanout_index","preserveNullAndEmptyArrays":true}}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindOptionsQuery+"'", "5"); err != nil {
+		return err
+	}
 	r.Cases = append(r.Cases, "explicit-sort-and-unwind-pipeline")
 
 	if err := expectExplainRedacted(ctx, db,

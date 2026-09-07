@@ -31,7 +31,8 @@ subject to the existing cursor batch, statement row, statement raw-byte, value,
 and decoded-batch limits. Both stages remain bounded by one operation at
 `max_parallelism=1`, the source limiter, and the shorter configured timeout or
 30-second client deadline. The minimum real-MongoDB regression sorts five
-documents and exercises a two-output-per-input unwind. Array accumulators, disk
+documents, exercises a two-output-per-input unwind, and preserves five empty
+arrays through the options-document form. Array accumulators, disk
 spill, cross-collection stages, and user-controlled resource options remain
 excluded.
 
