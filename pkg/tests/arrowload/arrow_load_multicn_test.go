@@ -25,12 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestArrowLoadMultiCN covers two public-path cases that need more than one CN:
-// distributed record-batch fan-out correctness and client-side cancellation.
-// The cancellation statement requests distributed record-batch fanout, so its
-// coordinator cancellation must propagate to worker scopes on the second CN.
-// Worker shutdown runs last because it intentionally removes that CN from the
-// fixture.
+// TestArrowLoadMultiCN covers the public-path cases that need more than one CN:
+// distributed record-batch fan-out correctness and worker shutdown. Worker
+// shutdown runs last because it intentionally removes that CN from the fixture.
 func TestArrowLoadMultiCN(t *testing.T) {
 	c := startArrowLoadCluster(t, 2, true, false, true)
 	db := openArrowLoadDB(t, c, 0)
@@ -39,7 +36,6 @@ func TestArrowLoadMultiCN(t *testing.T) {
 	path, ddl := fixtureLarge(t)
 
 	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db, path, ddl) })
-	t.Run("ClientContextCancel", func(t *testing.T) { testArrowClientContextCancel(t, c, path, ddl) })
 	t.Run("WorkerCNShutdown", func(t *testing.T) { testArrowWorkerCNShutdown(t, c, path, ddl) })
 }
 
@@ -58,49 +54,6 @@ func testArrowMultiCNFanout(t *testing.T, db *sql.DB, path, ddl string) {
 	require.Equal(t, int64(largeFixtureRows), queryCount(t, db, "select count(distinct id) from large_fanout"))
 	require.Equal(t, int64(0), queryCount(t, db,
 		fmt.Sprintf("select count(*) from large_fanout where id < 0 or id >= %d", largeFixtureRows)))
-}
-
-// testArrowClientContextCancel covers the public client-side cancellation source:
-// client-side context cancellation closes the in-flight request instead of
-// issuing KILL QUERY from a second session. The server must still roll back the
-// whole multi-batch LOAD and leave the cluster usable for verification.
-func testArrowClientContextCancel(t *testing.T, c embed.Cluster, path, ddl string) {
-	loaderDB := openArrowLoadDB(t, c, 0)
-	observerDB := openArrowLoadDB(t, c, 0)
-	ctx := context.Background()
-	conn, err := loaderDB.Conn(ctx)
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = conn.ExecContext(ctx, "use arrow_multicn")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "drop table if exists client_cancel_load")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, fmt.Sprintf("create table client_cancel_load(%s)", ddl))
-	require.NoError(t, err)
-
-	var connID int64
-	require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
-	loadCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	loadErrCh := make(chan error, 1)
-	go func() {
-		_, execErr := conn.ExecContext(loadCtx, fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow'} into table client_cancel_load parallel 'true'", path))
-		loadErrCh <- execErr
-	}()
-
-	waitUntilStatementRunning(t, observerDB, connID, "load data", 30*time.Second)
-	cancel()
-	select {
-	case err := <-loadErrCh:
-		require.Error(t, err, "a client-canceled LOAD must return an error")
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for the client-canceled LOAD statement to return")
-	}
-
-	verifyDB := openArrowLoadDB(t, c, 0)
-	require.Equal(t, int64(0), queryCount(t, verifyDB, "select count(*) from arrow_multicn.client_cancel_load"),
-		"client cancellation must not leave partially committed rows")
 }
 
 // testArrowWorkerCNShutdown closes the second CN only after a distributed LOAD

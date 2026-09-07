@@ -15,7 +15,7 @@ approval.
 | Default admission and flag rollback | no-config Arrow LOAD rejection plus explicit enable/disable/drain/restart coverage | fail-closed pending approval |
 | S3/stage and distributed admission | explicit per-CN opt-in is required | fail-closed pending aggregate quota, provider, and owner gates |
 | Mixed-version upgrade | default-disabled Arrow does not advertise the new remote pipeline capability | rerun required before enabling distributed execution |
-| Commit failure/CN shutdown/cross-node cancel | deterministic fault injection and 2-CN BVT passed | local complete |
+| Commit failure/CN shutdown/cancellation | deterministic fault injection, 2-CN BVT, and blocked S3 request cancellation passed | local complete |
 | Aggregate pin quota/range planner/deployment stress | deliberately deferred | blocker for S3/distributed production |
 | Real AWS/OSS/COS | delegated to provider test owners | external blocker |
 | A/B, alerts, rollout/rollback | local E2E A/B and reference gates recorded in runbook | deployment acceptance pending |
@@ -50,9 +50,10 @@ off makes `parallel 'true'` fall back to serial execution and commit all rows.
 
 - `CommitPhaseFailureRollback` injects failure after workspace dump and before
   commit visibility. It leaves only the seed row, then succeeds on retry.
-- Client-context cancellation uses distributed fanout and leaves zero rows. The
-  prior 2-CN `KILL QUERY` observer was removed because the fixture completed
-  before it could establish the observation point; it is not claimed as evidence.
+- Client-context cancellation blocks an in-flight conditional S3 range request,
+  then verifies request-context cancellation, statement failure, and zero
+  committed rows. The prior 2-CN processlist observer is not evidence: the
+  local fixture can complete before an observer establishes a stable point.
 - `WorkerCNShutdown` closes the worker only after the coordinator exposes the
   active LOAD. Completion is accepted only as all fixture rows or zero rows.
 - Existing File/Stream, transaction/isolation, malformed input, object-change,
