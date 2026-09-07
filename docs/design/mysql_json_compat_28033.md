@@ -28,10 +28,16 @@ Absence of a session sink is safe. The exact warning text is:
 > 'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
 
 Emit once per syntactic call site, never per row or batch. Two call sites
-produce two warnings. Prepared statements warn during prepare/bind, not
-subsequent execute. CREATE VIEW warns at creation; consuming a stored view
-does not warn again. Changing SHOW CREATE VIEW or persisted SQL spelling is
-outside this issue.
+produce two warnings. The binder carries an explicit warning origin through
+the plan-building path: a direct statement and a user's initial PREPARE use
+the session diagnostic sink, while an internal `rebuildPreparePlan` during
+EXECUTE (for schema, SQL-mode or protocol invalidation) suppresses the
+duplicate deprecation diagnostic. Rebuilding the executable plan is still
+required; only the warning side effect is suppressed. A later user PREPARE is
+a new bind lifecycle and warns once per call site. CREATE VIEW warns at
+creation; stored-view expansion and any internal plan rebuild while consuming
+that view suppress the warning. Changing SHOW CREATE VIEW or persisted SQL
+spelling is outside this issue.
 
 ## JSON_DEPTH
 
@@ -57,8 +63,13 @@ Add dedicated JsonModifyArrayInsert behavior: JSON_INSERT is unsuitable
 because it does nothing at existing targets. Permit simple paths ending in
 an array index, including last/last-N. Reject root, object-member terminals,
 wildcards, recursive descent and ranges. Missing parents or non-array parents
-leave the document unchanged. Insert before an existing target; out-of-range
-indices append. Later pairs resolve indices against earlier modifications.
+leave the document unchanged. Insert before an existing target. A forward
+(nonnegative) index beyond the current array length appends at the tail; a
+reverse `last-N` index that crosses before the array head clamps to index 0
+and inserts at the head. For example,
+`JSON_ARRAY_INSERT('[1,2]', '$[last-5]', 9)` returns `[9,1,2]`; an empty array
+does not distinguish this rule from tail insertion, so the test must also use
+a nonempty array. Later pairs resolve indices against earlier modifications.
 Continue enforcing document size and depth limits.
 
 ## JSON_SEARCH
@@ -71,11 +82,20 @@ NULL. One match returns a JSON string location; multiple all matches return
 a JSON array of string locations.
 
 Reuse the LIKE regexp converter with case-sensitive matching, percent and
-underscore wildcards, default backslash, one Unicode rune custom escape, or
-empty escape. SQL NULL escape selects default backslash. Reject multi-rune
-escape. Binder must prove an explicitly supplied escape constant; columns,
-subqueries and ParamRef are rejected during prepare. Path filters can be
-dynamic or prepared values and support wildcard, recursive descent and range.
+underscore wildcards. In the normal SQL mode, an omitted escape uses
+backslash, an explicit SQL NULL also selects backslash, an explicit empty
+escape disables escaping, and one Unicode rune is accepted as a custom
+escape. With `NO_BACKSLASH_ESCAPES`, an omitted escape has no escape
+character, an explicit SQL NULL still selects backslash, an explicit empty
+escape is rejected with `ER_WRONG_ARGUMENTS`, and a one-rune custom escape is
+validated and applied explicitly. Reject multi-rune escapes. For a prepared
+statement, the binder receives the SQL mode for the bind or rebuild event and
+resolves omitted/NULL/empty/custom escape there; a mode-invalidated internal
+reprepare rebuilds the pattern under the current mode rather than reusing
+stale escape semantics. Binder must prove an explicitly supplied escape
+constant; columns, subqueries and ParamRef are rejected during prepare. Path
+filters can be dynamic or prepared values and support wildcard, recursive
+descent and range.
 
 A ByteJSON traversal accepts filters, a string-matching callback and
 stopAfterFirst, and returns actual complete locations. Deduplicate overlapping
@@ -94,16 +114,21 @@ for packages with direct or transitive CGo dependencies. No sleep or skip
 workarounds; preserve exact expected errors.
 
 - MERGE: alias equivalence, three arguments, NULL, invalid JSON, arity,
-  warning sink absence, scans, two call sites, prepare/execute and views.
+  warning sink absence, scans, two call sites, initial PREPARE, schema-change
+  reprepare followed by EXECUTE/SHOW WARNINGS, and views.
   Extend func_json_merge.test/.result, including exact warning 1287.
 - DEPTH: scalars, empty/nonempty and mixed containers, maximum depth,
   over-limit JSON, malformed documents, NULL and rejected types.
   Add func_json_depth.sql/.result.
-- ARRAY_INSERT: empty/middle/boundary insertion, last/last-N, out-of-range,
+- ARRAY_INSERT: empty/middle/boundary insertion, last/last-N, forward
+  out-of-range tail append, nonempty reverse underflow head insertion,
   missing/non-array parents, pair shifts, NULL values, invalid paths and
   document limits. Add func_json_array_insert.sql/.result.
-- SEARCH: one/all, no matches, nested strings, case, LIKE/escape variants,
-  prepared restrictions, overlapping filters, real locations, special keys,
+- SEARCH: one/all, no matches, nested strings, case, and the matrix of
+  normal/`NO_BACKSLASH_ESCAPES` modes crossed with omitted, SQL NULL, empty
+  and custom escapes. Include the exact `ER_WRONG_ARGUMENTS` empty-escape
+  error under `NO_BACKSLASH_ESCAPES`, prepared mode-change/reprepare and
+  constant restrictions, overlapping filters, real locations, special keys,
   Chinese and emoji. Add func_json_search.sql/.result. Compare all results
   across databases by length and membership; pin local traversal order in UT.
 
