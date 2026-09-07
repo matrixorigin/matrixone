@@ -67,12 +67,6 @@ const (
 	maxIndexCacheSizeVar    = "max_index_cache_size"
 	maxGpuIndexCacheSizeVar = "max_gpu_index_cache_size"
 
-	// sysLimitTTL bounds how stale the SYS account's value may be. The read costs one
-	// auto-commit SQL and runs on a cache miss or a TTL-gated housekeeping refresh; the
-	// miss has just paid for a full index load, while housekeeping keeps warm-cache policy
-	// changes from waiting for another miss.
-	sysLimitTTL = 15 * time.Second
-
 	// maxRepresentableBudget keeps a derived budget inside int64. It is NOT policy and not a
 	// hardware figure -- the budget comes from the machine (defaults.go).
 	//
@@ -703,6 +697,18 @@ const catalogReadTimeout = 10 * time.Second
 // capRefreshPassBudget bounds a whole housekeeping cap-refresh pass, however many tenants it
 // visits. Without an aggregate bound the pass is N x catalogReadTimeout on a slow catalog.
 const capRefreshPassBudget = 10 * time.Second
+
+// sysLimitTTL bounds how stale a MEMOIZED cap may be: the SYS account's, and another tenant's
+// read on its behalf. It is derived from the housekeeping tick rather than set independently,
+// because the tick is what consumes it -- a memo shorter than the tick is re-read on a cadence
+// nothing acts on, and one longer than the tick makes a pass find its own value still fresh and
+// skip the refresh it exists to perform. A quarter of the TTL sits comfortably under the
+// half-TTL tick, so every pass refreshes without the two racing at the boundary.
+//
+// A tenant reading its OWN cap does not come through here at all: that is the session resolver
+// (see tenantCacheLimits), which is always current, so `SET GLOBAL` on a tenant takes effect at
+// that tenant's very next miss regardless of this value.
+var sysLimitTTL = VectorIndexCacheTTL / 4
 
 // noAskingAccount is the account id enforce() is given when no load triggered the pass, so its
 // "the account asking for room pays first" sub-pass matches no resident and coldest-first

@@ -885,3 +885,58 @@ func TestGovernorHousekeepingRefreshesOnlyResidentTenantsUnderOneBudget(t *testi
 	_, dead := c.gov().acctLimits.Load(uint32(99))
 	require.False(t, dead, "the departed one does not")
 }
+
+// A tenant's cap is memoized -- tenantCacheLimits writes the resolver's answer into acctLimits
+// so a later housekeeping pass can apply it to a warm cache. That memo must never become the
+// value a MISS decides on: the resolver is authoritative and current, and a stale memo would let
+// a tenant keep loading against a cap it has already lowered.
+func TestTenantCapOnAMissComesFromTheResolverNotTheMemo(t *testing.T) {
+	c := newBoundCache(t)
+
+	// The memo holds a LARGE stale cap, as it would right after a miss taken before the
+	// operator lowered the value.
+	const account = uint32(4)
+	c.gov().acctLimits.Store(account, acctLimitEntry{
+		value: hostCap(1 << 30), fetched: time.Now(), service: "gov-test-cn"})
+
+	// The session resolves the CURRENT, much smaller cap.
+	sp := govProc(t, c, account, hostCap(250), caps{})
+
+	first := "__mo_index_secondary_tenant_a"
+	second := "__mo_index_secondary_tenant_b"
+	loadInto(t, c, sp, first, 200, 0)
+	entryOf(t, c, first).accountID.Store(account)
+	loadInto(t, c, sp, second, 200, 0)
+	entryOf(t, c, second).accountID.Store(account)
+
+	require.False(t, isResident(c, first),
+		"400 bytes exceeds the resolver's 250 byte cap, so the first entry is reclaimed")
+	require.True(t, isResident(c, second))
+
+	// And the miss refreshed the memo, so housekeeping enforces the same number rather than
+	// the one it was seeded with.
+	v, ok := c.gov().acctLimits.Load(account)
+	require.True(t, ok)
+	require.EqualValues(t, 250, v.(acctLimitEntry).value.host,
+		"the miss writes the resolver's answer back, which is what keeps the two paths agreeing")
+}
+
+// The memo's TTL therefore cannot delay a cap: the only thing that keeps it fresh is a miss, and
+// a miss enforces the current value itself. So a changed tenant cap is applied at the tenant's
+// next miss, or at a housekeeping tick, whichever comes first -- never later than one tick.
+func TestAFreshMemoDoesNotOutrankALoweredTenantCap(t *testing.T) {
+	c := newBoundCache(t)
+	const account = uint32(5)
+
+	sp := govProc(t, c, account, hostCap(250), caps{})
+	loadInto(t, c, sp, "__mo_index_secondary_warm", 200, 0)
+	entryOf(t, c, "__mo_index_secondary_warm").accountID.Store(account)
+
+	// Whatever the memo says now, it says what the resolver said -- not what it held before.
+	v, ok := c.gov().acctLimits.Load(account)
+	require.True(t, ok, "a miss records the account so housekeeping can reach it")
+	require.EqualValues(t, 250, v.(acctLimitEntry).value.host)
+	require.Equal(t, "gov-test-cn", v.(acctLimitEntry).service)
+	require.WithinDuration(t, time.Now(), v.(acctLimitEntry).fetched, 5*time.Second,
+		"and stamps it, so the next housekeeping pass trusts it for one TTL")
+}
