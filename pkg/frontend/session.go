@@ -2537,6 +2537,41 @@ func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
 	return nil
 }
 
+type authenticationRejectedError struct {
+	cause error
+}
+
+func (e *authenticationRejectedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *authenticationRejectedError) Unwrap() error {
+	return e.cause
+}
+
+func markAuthenticationRejected(err error) error {
+	if err == nil {
+		return nil
+	}
+	var rejected *authenticationRejectedError
+	if errors.As(err, &rejected) {
+		return err
+	}
+	return &authenticationRejectedError{cause: err}
+}
+
+func isAuthenticationRejected(err error) bool {
+	var rejected *authenticationRejectedError
+	return errors.As(err, &rejected)
+}
+
+// isAuthenticationRequestRejected identifies a deterministic login-request
+// validation failure. Unlike credential rejection, the same client request
+// cannot succeed by trying another cached backend generation.
+func isAuthenticationRequestRejected(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2621,7 +2656,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant()))
 	}
 
 	//account id
@@ -2649,7 +2685,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant()))
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
@@ -2680,7 +2717,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(userRsset) {
-		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser()))
 	}
 
 	userID, err = userRsset[0].GetInt64(tenantCtx, 0, 0)
@@ -2730,7 +2768,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole()))
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -2744,8 +2783,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
-				tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, markAuthenticationRejected(moerr.NewInternalErrorf(tenantCtx,
+				"the role %s has not been granted to the user %s", tenant.GetDefaultRole(), tenant.GetUser()))
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -2822,7 +2861,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if userStatus == userStatusLockForever {
-		return nil, moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock")
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock"))
 	} else if userStatus == userStatusLock {
 		/*
 			if user lock status is locked
@@ -2833,7 +2873,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !lockTimeExpired {
-			return nil, moerr.NewInternalError(tenantCtx, "user is locked, please try again later")
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalError(tenantCtx, "user is locked, please try again later"))
 		}
 	}
 
@@ -2904,7 +2945,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 		}
 
-		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
+		return nil, markAuthenticationRejected(moerr.NewInternalError(tenantCtx, "check password failed"))
 	}
 
 	// If the login information contains the database name, verify if the database exists
@@ -2986,8 +3027,8 @@ func resolveImplicitDefaultRole(
 		}
 
 		if roleID == publicRoleID {
-			return 0, "", moerr.NewInternalErrorf(ctx,
-				"get a valid default role of the user %d failed", userID)
+			return 0, "", markAuthenticationRejected(moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID))
 		}
 		roleID = publicRoleID
 	}
