@@ -301,5 +301,5 @@ func metadataProvenance(proc *process.Process, dbName, metadataTable string) boo
 		return false
 	}
 	return sqlexec.HasProvenanceColumns(
-		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.Hnsw_TblCol_Metadata_Build_Ts)
+		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
 }

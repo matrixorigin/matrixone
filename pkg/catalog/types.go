@@ -642,6 +642,27 @@ const (
 	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
 	FullText2Search_OutCol_Score = "__mo_ft_score"
 
+	/************ Shared vector-index metadata columns ************/
+
+	// hnsw, cagra and ivfpq create the SAME metadata table shape, and three separate things
+	// write to it: each algo's schema builder (CREATE), sqlexec's row/INSERT builder (WRITE),
+	// and the v4_0_7 provenance migration (ALTER). Before these existed, each of those reached
+	// into whichever algo's namespace was nearest -- the writer and the migration both named
+	// the Hnsw_ constants while building SQL for cagra and ivfpq tables. That compiled and ran
+	// only because the strings happened to coincide: renaming one algo's column would have
+	// moved its CREATE and left the INSERT and the ALTER behind, failing at runtime with
+	// "unknown column" rather than at build time.
+	//
+	// These are the names. The per-algo constants below alias them, so the shared shape is a
+	// compile-time fact and a divergence has to be written deliberately (replace an alias with
+	// its own literal) instead of happening by omission.
+	IndexMetadata_TblCol_Index_Id  = "index_id"
+	IndexMetadata_TblCol_Timestamp = "timestamp"
+	IndexMetadata_TblCol_Checksum  = "checksum"
+	IndexMetadata_TblCol_Filesize  = "filesize"
+	IndexMetadata_TblCol_Nrow      = "nrow"
+	IndexMetadata_TblCol_Build_Ts  = "build_ts"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types
@@ -656,12 +677,12 @@ const (
 	Hnsw_TblCol_Storage_Tag      = "tag"
 
 	// HNSW Metadata - Column names
-	Hnsw_TblCol_Metadata_Index_Id  = "index_id"
-	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
-	Hnsw_TblCol_Metadata_Checksum  = "checksum"
-	Hnsw_TblCol_Metadata_Filesize  = "filesize"
-	Hnsw_TblCol_Metadata_Nrow      = "nrow"
-	Hnsw_TblCol_Metadata_Build_Ts  = "build_ts"
+	Hnsw_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Hnsw_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Hnsw_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Hnsw_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Hnsw_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Hnsw_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ Cagra Index *************/
 
@@ -677,12 +698,12 @@ const (
 	Cagra_TblCol_Storage_Tag      = "tag"
 
 	// CAGRA Metadata - Column names
-	Cagra_TblCol_Metadata_Index_Id  = "index_id"
-	Cagra_TblCol_Metadata_Timestamp = "timestamp"
-	Cagra_TblCol_Metadata_Checksum  = "checksum"
-	Cagra_TblCol_Metadata_Filesize  = "filesize"
-	Cagra_TblCol_Metadata_Nrow      = "nrow"
-	Cagra_TblCol_Metadata_Build_Ts  = "build_ts"
+	Cagra_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Cagra_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Cagra_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Cagra_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Cagra_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Cagra_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ IVF-PQ Index *************/
 
@@ -698,12 +719,12 @@ const (
 	Ivfpq_TblCol_Storage_Tag      = "tag"
 
 	// IVF-PQ Metadata - Column names
-	Ivfpq_TblCol_Metadata_Index_Id  = "index_id"
-	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
-	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
-	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
-	Ivfpq_TblCol_Metadata_Nrow      = "nrow"
-	Ivfpq_TblCol_Metadata_Build_Ts  = "build_ts"
+	Ivfpq_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Ivfpq_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Ivfpq_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Ivfpq_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Ivfpq_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Ivfpq_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ 5. Logical ID Index (mo_tables) ************/
 

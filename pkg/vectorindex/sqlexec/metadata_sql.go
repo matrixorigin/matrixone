@@ -25,7 +25,8 @@ import (
 // MetadataRow formats one row of an index metadata table: the four columns every version has,
 // plus nrow and build_ts when the table carries them.
 //
-// hnsw, cagra and ivfpq share the column list, so they share this.
+// hnsw, cagra and ivfpq share the column list, so they share this -- named from the shared
+// catalog.IndexMetadata_TblCol_* set rather than any one algo's aliases of it.
 func MetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, buildTS int64) string {
 	if !provenance {
 		return fmt.Sprintf("(%s, %s, %d, %d)",
@@ -48,15 +49,15 @@ func MetadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, 
 // documented "unknown" sentinel, so the conservative direction costs provenance and nothing else.
 func MetadataInsertSql(db, table string, provenance bool, rows []string) string {
 	cols := []string{
-		catalog.Hnsw_TblCol_Metadata_Index_Id,
-		catalog.Hnsw_TblCol_Metadata_Checksum,
-		catalog.Hnsw_TblCol_Metadata_Timestamp,
-		catalog.Hnsw_TblCol_Metadata_Filesize,
+		catalog.IndexMetadata_TblCol_Index_Id,
+		catalog.IndexMetadata_TblCol_Checksum,
+		catalog.IndexMetadata_TblCol_Timestamp,
+		catalog.IndexMetadata_TblCol_Filesize,
 	}
 	if provenance {
 		cols = append(cols,
-			catalog.Hnsw_TblCol_Metadata_Nrow,
-			catalog.Hnsw_TblCol_Metadata_Build_Ts)
+			catalog.IndexMetadata_TblCol_Nrow,
+			catalog.IndexMetadata_TblCol_Build_Ts)
 	}
 	quoted := make([]string, len(cols))
 	for i, c := range cols {

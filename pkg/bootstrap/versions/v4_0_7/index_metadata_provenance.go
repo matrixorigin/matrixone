@@ -51,7 +51,7 @@ func indexMetadataProvenanceColumns(tblType string) []string {
 	if tblType == catalog.FullText2Index_TblType_Metadata {
 		return []string{catalog.FullText2Index_TblCol_Metadata_Build_Ts}
 	}
-	return []string{catalog.Hnsw_TblCol_Metadata_Nrow, catalog.Hnsw_TblCol_Metadata_Build_Ts}
+	return []string{catalog.IndexMetadata_TblCol_Nrow, catalog.IndexMetadata_TblCol_Build_Ts}
 }
 
 // listIndexMetadataTables returns (database, table, algo_table_type) for every index metadata
