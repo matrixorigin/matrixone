@@ -340,9 +340,13 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 	// Keep the stage allowlist and the stage-specific validation in one switch so
 	// a reviewed stage cannot be accidentally rejected by a second, stale list.
 	switch operator {
-	case "$match", "$project", "$set", "$addFields", "$group", "$sort":
+	case "$match", "$project", "$set", "$addFields", "$group":
 		if _, ok := asBSONDocument(value); !ok {
 			return moerr.NewInvalidInputf(ctx, "MongoDB pipeline stage %s requires an object", operator)
+		}
+	case "$sort":
+		if !isValidSortDocument(value) {
+			return moerr.NewInvalidInput(ctx, "MongoDB $sort requires a non-empty object with 1 or -1 directions")
 		}
 	case "$limit", "$skip":
 		if !isNonNegativeInteger(value) {
@@ -361,10 +365,8 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 			return moerr.NewInvalidInput(ctx, "MongoDB $unset requires a field name or array of field names")
 		}
 	case "$unwind":
-		if _, stringForm := value.(string); !stringForm {
-			if _, documentForm := asBSONDocument(value); !documentForm {
-				return moerr.NewInvalidInput(ctx, "MongoDB $unwind requires a field path or object")
-			}
+		if !isValidUnwind(value) {
+			return moerr.NewInvalidInput(ctx, "MongoDB $unwind requires a valid field path or options object")
 		}
 	default:
 		return moerr.NewInvalidInput(ctx, "MongoDB pipeline stage is not allowed")
@@ -464,6 +466,72 @@ func isZeroInteger(value any) bool {
 	default:
 		return false
 	}
+}
+
+func isValidSortDocument(value any) bool {
+	document, ok := asBSONDocument(value)
+	if !ok || len(document) == 0 || len(document) > 32 {
+		return false
+	}
+	for _, element := range document {
+		if element.Key == "" || !isOneOrMinusOneInteger(element.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func isOneOrMinusOneInteger(value any) bool {
+	switch typed := value.(type) {
+	case int32:
+		return typed == 1 || typed == -1
+	case int64:
+		return typed == 1 || typed == -1
+	default:
+		return false
+	}
+}
+
+func isValidUnwind(value any) bool {
+	if path, ok := value.(string); ok {
+		return isMongoFieldPath(path)
+	}
+	document, ok := asBSONDocument(value)
+	if !ok || len(document) == 0 {
+		return false
+	}
+	seenPath := false
+	seen := make(map[string]struct{}, len(document))
+	for _, element := range document {
+		if _, exists := seen[element.Key]; exists {
+			return false
+		}
+		seen[element.Key] = struct{}{}
+		switch element.Key {
+		case "path":
+			path, ok := element.Value.(string)
+			if !ok || !isMongoFieldPath(path) {
+				return false
+			}
+			seenPath = true
+		case "includeArrayIndex":
+			name, ok := element.Value.(string)
+			if !ok || name == "" || strings.HasPrefix(name, "$") {
+				return false
+			}
+		case "preserveNullAndEmptyArrays":
+			if _, ok := element.Value.(bool); !ok {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return seenPath
+}
+
+func isMongoFieldPath(path string) bool {
+	return len(path) > 1 && strings.HasPrefix(path, "$")
 }
 
 func isStringOrStringArray(value any) bool {

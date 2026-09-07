@@ -122,8 +122,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "limit negative", source: `{"pipeline":[{"$limit":-1}]}`, want: "non-negative integer"},
 		{name: "count field path", source: `{"pipeline":[{"$count":"a.b"}]}`, want: "valid output field"},
 		{name: "unset empty", source: `{"pipeline":[{"$unset":[]}]}`, want: "field name"},
-		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires an object"},
-		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a field path or object"},
+		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires a non-empty object"},
+		{name: "sort is empty", source: `{"pipeline":[{"$sort":{}}]}`, want: "$sort requires a non-empty object"},
+		{name: "sort direction is zero", source: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "1 or -1 directions"},
+		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind string is not path", source: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object missing path", source: `{"pipeline":[{"$unwind":{"preserveNullAndEmptyArrays":true}}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object unknown option", source: `{"pipeline":[{"$unwind":{"path":"$site_id","futureOption":true}}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object invalid index", source: `{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"$index"}}]}`, want: "$unwind requires a valid field path"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
