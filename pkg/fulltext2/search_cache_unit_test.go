@@ -78,11 +78,11 @@ func TestFulltext2SearchLoad(t *testing.T) {
 		case 2, 4:
 			return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
 		case 1, 3:
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		case 5:
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 11, 0)}}, nil
 		case 6:
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 22, 0)}}, nil
 		default:
 			t.Fatalf("unexpected Load SQL call %d", calls)
 			return executor.Result{}, nil
@@ -116,7 +116,7 @@ func TestFulltext2SearchLoadErrors(t *testing.T) {
 		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 			calls++
 			if calls == 1 {
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 			}
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("base enumeration failed")
 		})
@@ -132,7 +132,7 @@ func TestFulltext2SearchLoadErrors(t *testing.T) {
 			calls++
 			switch calls {
 			case 1, 3:
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 			case 2:
 				return executor.Result{Mp: mp}, nil // no base ids
 			default:
@@ -151,7 +151,7 @@ func TestFulltext2SearchLoadErrors(t *testing.T) {
 			calls++
 			switch calls {
 			case 1, 3:
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 			case 2, 4:
 				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
 			default:

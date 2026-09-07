@@ -90,7 +90,9 @@ type Fulltext2Search struct {
 	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
 	// never ran" -- a caller may reach Load directly.
 	preloadNdoc int64
-	preloaded   bool
+	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
+	preloadBytes int64
+	preloaded    bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -109,11 +111,11 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // from -- without loading or mapping any of them, so the cache can reclaim room for this index
 // before Load claims it.
 func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
-	ndoc, err := baseDocCount(sqlproc, s.cfg)
+	ndoc, bytes, err := baseDocCountAndBytes(sqlproc, s.cfg)
 	if err != nil {
 		return err
 	}
-	s.preloadNdoc, s.preloaded = ndoc, true
+	s.preloadNdoc, s.preloadBytes, s.preloaded = ndoc, bytes, true
 	return nil
 }
 
@@ -163,18 +165,27 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 // for the same reason they are excluded there: they are views into a shared read-only mmap --
 // reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
 // resident, so the device figure is 0.
+// GetIndexSize charges the doc heap PLUS the file this entry maps.
+//
+// The mapping is not shared between cache entries: LoadFromStorage spills to a fresh LOCAL file
+// per load and mmaps it whole, so a second named-snapshot key of the same index maps its own
+// copy. Reporting only the heap made a multi-megabyte mapping look like a few hundred bytes, and
+// N generations could pin N files while the governor saw almost nothing. Same shape as hnsw:
+// rows x per-row heap, plus the mapped file.
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
-		// Between Preload and Load: report what Load is about to cost.
-		return s.preloadNdoc * estBytesPerDocHeap, 0
+		// Between Preload and Load: report what Load is about to cost, mapping included.
+		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0), 0
 	}
-	var ndoc int64
+	var ndoc, mapped int64
 	for _, seg := range s.idx.segments {
-		if seg != nil {
-			ndoc += seg.N
+		if seg == nil {
+			continue
 		}
+		ndoc += seg.N
+		mapped += int64(len(seg.mmapData))
 	}
-	return ndoc * estBytesPerDocHeap, 0
+	return ndoc*estBytesPerDocHeap + mapped, 0
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by

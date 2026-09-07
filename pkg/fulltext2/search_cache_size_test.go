@@ -71,14 +71,15 @@ func TestFulltext2SearchGetIndexSize(t *testing.T) {
 	})
 }
 
-// baseDocCount sums nrow across the tag=0 bases. Empty batches are skipped.
+// baseDocCountAndBytes sums nrow AND filesize across the tag=0 bases, in one round trip: the
+// cache charges for the doc heap and for the file each entry maps. Empty batches are skipped.
 func TestBaseDocCount(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cfg := TableConfig{DbName: "db", MetadataTable: "meta"}
 
 	t.Run("sum", func(t *testing.T) {
 		swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 42)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 42, 4096)}}, nil
 		})
 		got, err := baseDocCount(nil, cfg)
 		require.NoError(t, err)
@@ -86,10 +87,10 @@ func TestBaseDocCount(t *testing.T) {
 	})
 
 	t.Run("empty batches are skipped", func(t *testing.T) {
-		empty := int64Batch(mp, 0)
+		empty := docsAndBytesBatch(mp, 0, 0)
 		empty.SetRowCount(0)
 		swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{empty, int64Batch(mp, 7)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{empty, docsAndBytesBatch(mp, 7, 512)}}, nil
 		})
 		got, err := baseDocCount(nil, cfg)
 		require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestBaseDocCount(t *testing.T) {
 func TestFulltext2SearchPreload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 9)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 9, 0)}}, nil
 	})
 
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta"})
@@ -139,4 +140,48 @@ func TestFulltext2SearchPreload_Error(t *testing.T) {
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta"})
 	require.Error(t, s.Preload(nil))
 	require.False(t, s.preloaded)
+}
+
+// The mapping is the dominant cost and belongs to ONE cache entry: LoadFromStorage spills each
+// base to a fresh LOCAL file and mmaps it whole, so N named-snapshot keys of the same index map
+// N copies. Charging the doc heap alone reported a few hundred bytes for a multi-megabyte
+// mapping, and the governor bounded N of them at nothing.
+func TestGetIndexSizeChargesTheMappingItOwns(t *testing.T) {
+	const mapped = 16 << 20
+
+	t.Run("after load, the mapping dominates", func(t *testing.T) {
+		s := NewFulltext2Search(TableConfig{})
+		s.idx = &Index{segments: []*Segment{{N: 1, mmapData: make([]byte, mapped)}}}
+		s.loaded = true
+
+		host, device := s.GetIndexSize()
+		require.Zero(t, device)
+		require.Equal(t, int64(1*estBytesPerDocHeap+mapped), host)
+		require.Greater(t, host, int64(mapped),
+			"a one-doc segment holding a 16 MiB mapping must not read as a few hundred bytes")
+	})
+
+	t.Run("before load, the metadata filesize stands in for it", func(t *testing.T) {
+		s := NewFulltext2Search(TableConfig{})
+		s.preloadNdoc, s.preloadBytes, s.preloaded = 1, mapped, true
+
+		host, _ := s.GetIndexSize()
+		require.Equal(t, int64(1*estBytesPerDocHeap+mapped), host,
+			"admission must reserve the mapping before Load creates it")
+	})
+
+	t.Run("N generations are charged N mappings", func(t *testing.T) {
+		one := &Fulltext2Search{idx: &Index{segments: []*Segment{{N: 1, mmapData: make([]byte, mapped)}}}, loaded: true}
+		hostOne, _ := one.GetIndexSize()
+
+		// A second snapshot key maps its own copy; the charge is per entry, not shared.
+		three := int64(0)
+		for i := 0; i < 3; i++ {
+			s := &Fulltext2Search{idx: &Index{segments: []*Segment{{N: 1, mmapData: make([]byte, mapped)}}}, loaded: true}
+			h, _ := s.GetIndexSize()
+			three += h
+		}
+		require.Equal(t, 3*hostOne, three)
+		require.Greater(t, three, int64(3*mapped))
+	})
 }

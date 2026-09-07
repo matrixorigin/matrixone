@@ -328,23 +328,38 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 // the index cache's size estimate are derived from. Split out so Preload can read it before any
 // base is loaded.
 func baseDocCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	// CAST AS SIGNED so the sum reads back as int64 regardless of how SUM types its
+	ndoc, _, err := baseDocCountAndBytes(sqlproc, cfg)
+	return ndoc, err
+}
+
+// baseDocCountAndBytes reads both figures the cache charges for, in one round trip: the doc
+// count that sizes the heap, and the total on-disk size of the bases.
+//
+// The FILESIZE matters as much as the docs. LoadFromStorage spills each base to a fresh LOCAL
+// file and mmaps it whole, and that mapping belongs to ONE cache entry -- a second
+// named-snapshot key of the same index maps its own copy. Charging the doc heap alone reported
+// a few hundred bytes for a multi-megabyte mapping, so N snapshot generations could pin N full
+// files while the governor saw almost nothing. This is the same shape hnsw charges:
+// rows x per-row heap, plus the file it maps.
+func baseDocCountAndBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ndoc int64, bytes int64, err error) {
+	// CAST AS SIGNED so the sums read back as int64 regardless of how SUM types its
 	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Nrow, catalog.FullText2Index_TblCol_Metadata_Filesize,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer res.Close()
-	var ndoc int64
 	for _, bat := range res.Batches {
-		if bat == nil || bat.RowCount() == 0 {
+		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) < 2 {
 			continue
 		}
 		ndoc = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+		bytes = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
 	}
-	return ndoc, nil
+	return ndoc, bytes, nil
 }
 
 // checkBaseLoadBudgetFor is the budget decision itself, over an already-counted ndoc.
