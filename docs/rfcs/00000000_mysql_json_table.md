@@ -226,7 +226,18 @@ rules.
 
 The existing terminal JSON envelope is extended, without a protobuf/catalog
 migration, with a statement diagnostic scope, attempt/contribution identity,
-and three independent transport facts:
+an explicit diagnostic transport version, and three independent transport
+facts. The diagnostic transport version is independent of both the
+`TableFunction.Param` payload version and the existing terminal resource
+version. For a remote execution that can run JSON_TABLE, version **1** is
+mandatory. `warning_scope`, `warning_attempt`, and `warning_contribution_id`
+must be non-empty; `warning_once_keys`, `warning_each_event_count`, and
+`warning_diagnostics` must be present even when their values are respectively
+`[]`, `0`, and `[]`. A missing, unknown, malformed, or incomplete diagnostic
+transport is a deterministic protocol/version error before any warning facts
+are committed. A legacy envelope is valid only for a statement that cannot
+produce JSON_TABLE diagnostics; `warning_count` is never a fallback for a
+JSON_TABLE-capable execution.
 
 1. `warning_once_keys` is the complete set of keyed-once identities observed
    by the contribution. It is bounded by the finite statement key space
@@ -246,6 +257,7 @@ The wire shape is equivalent to:
 
 ```json
 {
+  "warning_transport_version": 1,
   "warning_scope": "<coordinator statement id>",
   "warning_attempt": "<statement execution attempt id>",
   "warning_contribution_id": "<logical terminal contribution id>",
@@ -267,19 +279,31 @@ The stable key contains the coordinator statement id, table-function/operator
 ordinal, diagnostic kind, and column/parse-occurrence ordinal; it deliberately
 does not contain CN id, fragment id, batch id, or retry id. `warning_scope` is
 stable for the user statement. `warning_attempt` identifies one complete
-execution attempt, and `warning_contribution_id` is stable for that logical
-terminal contribution when the same terminal envelope is retransmitted. A
-new retry uses a new attempt identity; an intermediate CN preserves the
-scope, attempt, and contribution identity while forwarding the contribution
-or maintains an equivalent child-contribution ledger before emitting its
-aggregate. It must never reconstruct keyed-once identity from retained
-records or forward only an aggregate total.
+execution attempt. `warning_contribution_id` identifies one terminal source
+(a fragment or an intermediate aggregate), is unique within the
+`(warning_scope, warning_attempt)` pair, and is stable when that terminal
+envelope is retransmitted. The coordinator's idempotence key is the complete
+`(warning_scope, warning_attempt, warning_contribution_id)` tuple, not the
+contribution id alone. A new retry uses a new attempt identity, so late
+messages from a discarded attempt cannot enter the retry ledger.
+
+The existing remote-run lifecycle supplies the expected terminal-source set
+and the statement-level success barrier. A zero-warning source still sends a
+version-1 contribution with the required empty fields. The coordinator keeps
+contributions provisional until every required source for the attempt reaches
+the successful terminal state; an error, cancellation, timeout, missing
+source, or protocol error discards the whole provisional ledger. An
+intermediate CN either forwards one contribution unchanged or keeps a ledger
+of child contribution tuples and merges each child exactly once before
+emitting a new, uniquely identified aggregate contribution. It must never
+reconstruct keyed-once identity from retained records or forward only an
+aggregate total.
 
 Execution warning state is attempt-owned. The collector first accumulates an
 attempt-local key set, ordinary count, and presentation list. The coordinator
-merges a terminal contribution into a provisional attempt ledger keyed by
-`warning_contribution_id`; a duplicate terminal envelope is a no-op. Only
-when every required terminal for the statement attempt succeeds are the
+merges a terminal contribution into a provisional attempt ledger keyed by the
+complete contribution tuple above; a duplicate terminal envelope is a no-op.
+Only when every required terminal for the statement attempt succeeds are the
 provisional facts committed to the statement. A failed, cancelled, timed-out,
 or otherwise uncommitted execution attempt discards its keyed-once keys,
 ordinary count, and presentation records. If a retry follows a partial
@@ -394,7 +418,11 @@ The frozen MySQL 8.0.46 corpus covers:
   attempt counts are discarded, committed each-event counts are summed, and
   a retry contributes only its successful attempt once. The key-set bound is
   the planned operator/column/diagnostic space; exceeding that bound is a
-  deterministic protocol error rather than key eviction.
+  deterministic protocol error rather than key eviction. They also cover
+  missing or unknown transport versions, missing required empty fields, a
+  legacy envelope from a JSON_TABLE-capable execution, duplicate contribution
+  replay, and a missing terminal source; all fail closed without using
+  `warning_count` as a fallback.
 - single-column multi-match conversion: JSON array aggregation versus
   non-JSON `ON ERROR`, the 64 MiB cell boundary, allocation failure cleanup,
   and peak iterator memory/first-batch latency for documents with increasing
@@ -420,6 +448,9 @@ forbidden auxiliary match slice with a concrete size limit and allocation-
 failure rule. This revision closes the remaining diagnostic information-loss
 gap by separating complete keyed-once identity, committed each-event counting,
 bounded presentation, failed-attempt ownership, and terminal retry
-deduplication. No unresolved design question remains.
+deduplication. It also freezes the diagnostic-version gate, required empty
+representations, contribution uniqueness, terminal completeness barrier, and
+intermediate child-ledger rule, so a legacy or partial envelope cannot be
+silently counted. No unresolved design question remains.
 Any behavior not explicitly listed above is resolved by the pinned MySQL 8.0.46
 differential corpus before PR4 is marked Ready.
