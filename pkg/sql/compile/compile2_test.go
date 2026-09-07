@@ -416,28 +416,83 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 	}
 }
 
-func TestSelectMetaLockRequirementOptimizedFullText(t *testing.T) {
-	for index, sql := range []string{
-		"select id from constraint_test.docs_ft where match(body) against('hello')",
-		"select count(*) from constraint_test.docs_ft where match(body) against('hello')",
-		"select match(body) against('hello') from constraint_test.docs_ft",
-		"select id from constraint_test.docs_ft where match(body) against('hello') > 0",
-		"select id from constraint_test.docs_ft order by match(body) against('hello') desc",
-	} {
-		t.Run(sql, func(t *testing.T) {
+func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
+	tests := []struct {
+		name               string
+		sql                string
+		wantLock           bool
+		wantUnresolvedFull bool
+		wantRetainedFilter bool
+	}{
+		{
+			name:               "unindexed order by placeholder",
+			sql:                "select empno from constraint_test.emp order by match(ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed join on placeholder",
+			sql:                "select left_emp.empno from constraint_test.emp left_emp join constraint_test.emp right_emp on match(left_emp.ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed group by placeholder",
+			sql:                "select count(*) from constraint_test.emp group by match(ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed aggregate placeholder",
+			sql:                "select max(match(ename) against('hello')) from constraint_test.emp",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed window order placeholder",
+			sql:                "select row_number() over (order by match(ename) against('hello')) from constraint_test.emp",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "indexed filter",
+			sql:                "select id from constraint_test.docs_ft where match(body) against('hello')",
+			wantRetainedFilter: true,
+		},
+		{
+			name:               "indexed count filter",
+			sql:                "select count(*) from constraint_test.docs_ft where match(body) against('hello')",
+			wantRetainedFilter: true,
+		},
+		{
+			name: "indexed projection",
+			sql:  "select match(body) against('hello') from constraint_test.docs_ft",
+		},
+		{
+			name: "indexed score filter",
+			sql:  "select id from constraint_test.docs_ft where match(body) against('hello') > 0",
+		},
+		{
+			name: "indexed order by placeholder",
+			sql:  "select id from constraint_test.docs_ft order by match(body) against('hello') desc",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			optimizer := plan2.NewMockOptimizer(true)
 			ctx := optimizer.CurrentContext()
 			ctx.GetProcess().SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return "BM25", nil
 			})
-			statements, err := mysql.Parse(context.Background(), sql, 1)
+			statements, err := mysql.Parse(context.Background(), test.sql, 1)
 			require.NoError(t, err)
 			defer statements[0].Free()
 			built, err := plan2.BuildPlan(ctx, statements[0], false)
 			require.NoError(t, err)
-			if index < 2 {
+			if test.wantRetainedFilter {
 				// These optimizer outputs retain the abandoned original filter.
-				// The previous all-Nodes classifier would lock both queries.
+				// The executable plan must still be classified from reachable nodes.
 				retainedMatch := false
 				for _, node := range built.GetQuery().Nodes {
 					retainedMatch = retainedMatch || expressionsContainUnresolvedFullText(node.FilterList)
@@ -445,10 +500,104 @@ func TestSelectMetaLockRequirementOptimizedFullText(t *testing.T) {
 				require.True(t, retainedMatch)
 			}
 			needsLock, unresolved := selectMetaLockRequirement(built.GetQuery())
-			require.False(t, unresolved)
-			require.False(t, needsLock)
+			require.Equal(t, test.wantUnresolvedFull, unresolved)
+			require.Equal(t, test.wantLock, needsLock)
 		})
 	}
+}
+
+func TestNodeContainsUnresolvedFullTextRuntimeSlots(t *testing.T) {
+	match := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		node *plan.Node
+	}{
+		{
+			name: "index reader lower distance bound",
+			node: &plan.Node{IndexReaderParam: &plan.IndexReaderParam{
+				DistRange: &plan.DistRange{LowerBound: match()},
+			}},
+		},
+		{
+			name: "index reader upper distance bound",
+			node: &plan.Node{IndexReaderParam: &plan.IndexReaderParam{
+				DistRange: &plan.DistRange{UpperBound: match()},
+			}},
+		},
+		{
+			name: "vector query vector",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: match()}},
+		},
+		{
+			name: "vector candidate limit",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{CandidateLimit: match()}},
+		},
+		{
+			name: "vector first round limit",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{FirstRoundLimit: match()}},
+		},
+		{
+			name: "vector lower distance bound",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+				DistanceRange: &plan.DistRange{LowerBound: match()},
+			}},
+		},
+		{
+			name: "vector upper distance bound",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+				DistanceRange: &plan.DistRange{UpperBound: match()},
+			}},
+		},
+		{
+			name: "vector prefilter",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{match()}}},
+		},
+		{
+			name: "runtime filter probe expression",
+			node: &plan.Node{RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Expr: match()}}},
+		},
+		{
+			name: "runtime filter build expression",
+			node: &plan.Node{RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{{BuildExpr: match()}}},
+		},
+		{
+			name: "rowset expression",
+			node: &plan.Node{RowsetData: &plan.RowsetData{Cols: []*plan.ColData{{
+				Data: []*plan.RowsetExpr{{Expr: match()}},
+			}}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.True(t, nodeContainsUnresolvedFullText(test.node))
+		})
+	}
+}
+
+func TestNodeContainsUnresolvedFullTextIgnoresSourceTableDefaults(t *testing.T) {
+	match := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+	}}}
+	node := &plan.Node{
+		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		VectorIndexScan: &plan.VectorIndexScan{
+			SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+				Default: &plan.Default{Expr: match},
+			}}},
+		},
+	}
+
+	require.False(t, nodeContainsUnresolvedFullText(node))
+	query := &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{node}}
+	needsLock, unresolved := selectMetaLockRequirement(query)
+	require.False(t, needsLock)
+	require.False(t, unresolved)
 }
 
 func TestSelectMetaLockRequirementReachability(t *testing.T) {

@@ -288,12 +288,70 @@ func selectMetaLockRequirement(query *plan.Query) (needsLock, hasUnresolvedFullT
 		if node.NodeType == plan.Node_LOCK_OP {
 			needsLock = true
 		}
-		if expressionsContainUnresolvedFullText(node.FilterList) ||
-			expressionsContainUnresolvedFullText(node.ProjectList) {
+		if nodeContainsUnresolvedFullText(node) {
 			return true, true
 		}
 	}
 	return needsLock, false
+}
+
+func nodeContainsUnresolvedFullText(node *plan.Node) bool {
+	// Inspect execution expressions, not TableDef defaults or optimizer metadata.
+	// MATCH can survive rewriting in SORT, aggregate, join and window expressions
+	// without appearing in this node's filter or projection.
+	for _, expressions := range [][]*plan.Expr{
+		node.FilterList, node.ProjectList, node.OnList, node.GroupBy,
+		node.AggList, node.WinSpecList, node.TblFuncExprList,
+		node.BlockFilterList, node.FillVal, node.TimeWindowPartitionBy,
+		node.PhysicalEqualityKeyList,
+		{node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp,
+			node.WEnd, node.GapFillStart, node.GapFillEnd},
+	} {
+		if expressionsContainUnresolvedFullText(expressions) {
+			return true
+		}
+	}
+	for _, order := range node.OrderBy {
+		if expressionsContainUnresolvedFullText([]*plan.Expr{order.GetExpr()}) {
+			return true
+		}
+	}
+	if reader := node.IndexReaderParam; reader != nil {
+		for _, order := range reader.OrderBy {
+			if expressionsContainUnresolvedFullText([]*plan.Expr{order.GetExpr()}) {
+				return true
+			}
+		}
+		if expressionsContainUnresolvedFullText([]*plan.Expr{
+			reader.Limit, reader.DistRange.GetLowerBound(), reader.DistRange.GetUpperBound(),
+		}) {
+			return true
+		}
+	}
+	if scan := node.VectorIndexScan; scan != nil {
+		if expressionsContainUnresolvedFullText(scan.PreFilters) ||
+			expressionsContainUnresolvedFullText([]*plan.Expr{
+				scan.QueryVector, scan.CandidateLimit, scan.FirstRoundLimit,
+				scan.DistanceRange.GetLowerBound(), scan.DistanceRange.GetUpperBound(),
+			}) {
+			return true
+		}
+	}
+	for _, filters := range [][]*plan.RuntimeFilterSpec{node.RuntimeFilterProbeList, node.RuntimeFilterBuildList} {
+		for _, filter := range filters {
+			if expressionsContainUnresolvedFullText([]*plan.Expr{filter.GetExpr(), filter.GetBuildExpr()}) {
+				return true
+			}
+		}
+	}
+	for _, column := range node.RowsetData.GetCols() {
+		for _, value := range column.GetData() {
+			if expressionsContainUnresolvedFullText([]*plan.Expr{value.GetExpr()}) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {

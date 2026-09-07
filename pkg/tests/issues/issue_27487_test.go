@@ -42,6 +42,7 @@ type issue27487IndexCase struct {
 	heldInsertSQL  string
 	createIndexSQL string
 	probeWhileDDL  string
+	probeExpected  int
 	prepareDDL     func(context.Context, *sql.Conn) error
 	verify         func(*testing.T, context.Context, *sql.Conn)
 }
@@ -133,6 +134,36 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 							"where body like '%heldtoken%'").Scan(&scannedRows))
 					require.Equal(t, 1, scannedRows)
 					require.Equal(t, scannedRows, indexedRows)
+				},
+			},
+			{
+				name:           "fulltext index order by",
+				table:          "fulltext_order_docs",
+				createTableSQL: "create table `" + database + "`.`fulltext_order_docs` (id bigint primary key, body text)",
+				seedSQL:        "insert into `" + database + "`.`fulltext_order_docs` values (1, 'heldtoken')",
+				heldInsertSQL:  "insert into `" + database + "`.`fulltext_order_docs` values (2, 'heldtoken')",
+				createIndexSQL: "create fulltext index ft_body on `" + database + "`.`fulltext_order_docs` (`body`)",
+				probeWhileDDL: "select id from `" + database + "`.`fulltext_order_docs` " +
+					"order by match(body) against('heldtoken') desc, id desc",
+				probeExpected: 2,
+				prepareDDL: func(ctx context.Context, conn *sql.Conn) error {
+					return execIssue27487(ctx, conn, "set experimental_fulltext_index = 1")
+				},
+				verify: func(t *testing.T, ctx context.Context, conn *sql.Conn) {
+					t.Helper()
+					rows, err := conn.QueryContext(ctx,
+						"select id from `"+database+"`.`fulltext_order_docs` "+
+							"order by match(body) against('heldtoken') desc, id desc")
+					require.NoError(t, err)
+					defer rows.Close()
+					var ids []int
+					for rows.Next() {
+						var id int
+						require.NoError(t, rows.Scan(&id))
+						ids = append(ids, id)
+					}
+					require.NoError(t, rows.Err())
+					require.Equal(t, []int{2, 1}, ids)
 				},
 			},
 		}
@@ -265,10 +296,16 @@ func runIssue27487IndexCase(
 		defer cancelProbe()
 		probeDone = make(chan error, 1)
 		go func() {
-			var rows int
-			err := verifier.QueryRowContext(probeCtx, testCase.probeWhileDDL).Scan(&rows)
-			if err == nil && rows != 1 {
-				err = fmt.Errorf("pre-DDL probe returned %d rows, expected 1", rows)
+			var value int
+			err := verifier.QueryRowContext(probeCtx, testCase.probeWhileDDL).Scan(&value)
+			if err == nil {
+				want := testCase.probeExpected
+				if want == 0 {
+					want = 1
+				}
+				if value != want {
+					err = fmt.Errorf("pre-DDL probe returned %d, expected %d", value, want)
+				}
 			}
 			probeDone <- err
 		}()
