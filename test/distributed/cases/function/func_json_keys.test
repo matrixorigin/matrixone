@@ -27,6 +27,7 @@ select json_keys('{"*": {"x": 1}}', '$."*"');
 
 -- null arguments
 select json_keys(null);
+select json_keys(null, '$.*');
 select json_keys('{"a":1}', null);
 
 -- via json functions

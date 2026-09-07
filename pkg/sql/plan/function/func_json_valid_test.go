@@ -214,20 +214,21 @@ func TestJsonKeys(t *testing.T) {
 						`{"a":[1]}`,
 						``,
 						`{"a":{"x":1}}`,
+						``,
 					},
-					[]bool{false, false, false, false, false, true, false}),
+					[]bool{false, false, false, false, false, true, false, true}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`$`, `$.a`, `$.a`, `$.b`, `$.a`, `$.a`, ``},
-					[]bool{false, false, false, false, false, false, true}),
+					[]string{`$`, `$.a`, `$.a`, `$.b`, `$.a`, `$.a`, ``, `$.*`},
+					[]bool{false, false, false, false, false, false, true, false}),
 			},
 			NewFunctionTestResult(types.T_json.ToType(), false,
 				[]string{
 					mustJsonBinaryString(t, `["a"]`),
 					mustJsonBinaryString(t, `["x"]`),
 					mustJsonBinaryString(t, `[]`),
-					``, ``, ``, ``,
+					``, ``, ``, ``, ``,
 				},
-				[]bool{false, false, false, true, true, true, true}),
+				[]bool{false, false, false, true, true, true, true, true}),
 			JsonKeys)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
@@ -280,6 +281,49 @@ func TestJsonKeys(t *testing.T) {
 								require.Equal(t, "42000", moErr.SqlState())
 							})
 						}
+					})
+				}
+			})
+		}
+	})
+
+	t.Run("unmasked row error after valid row", func(t *testing.T) {
+		paths := []struct {
+			name string
+			path string
+		}{
+			{name: "key wildcard", path: `$.*`},
+			{name: "array wildcard", path: `$[*]`},
+			{name: "double wildcard", path: `$**.x`},
+			{name: "array range", path: `$[0 to 1]`},
+		}
+
+		for _, path := range paths {
+			t.Run(path.name, func(t *testing.T) {
+				for _, doc := range []struct {
+					name  string
+					typ   types.Type
+					value string
+				}{
+					{name: "varchar", typ: types.T_varchar.ToType(), value: `{"a":{"x":1}}`},
+					{name: "json", typ: types.T_json.ToType(), value: mustJsonBinaryString(t, `{"a":{"x":1}}`)},
+				} {
+					t.Run(doc.name, func(t *testing.T) {
+						fcTC := NewFunctionTestCase(proc,
+							[]FunctionTestInput{
+								NewFunctionTestInput(doc.typ, []string{doc.value, doc.value}, []bool{false, false}),
+								NewFunctionTestInput(types.T_varchar.ToType(), []string{`$`, path.path}, []bool{false, false}),
+							},
+							NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
+							JsonKeys)
+						require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+						_, err := fcTC.DebugRun()
+						require.Error(t, err)
+						var moErr *moerr.Error
+						require.ErrorAs(t, err, &moErr)
+						require.Equal(t, moerr.ErrInvalidJSONPathWildcard, moErr.ErrorCode())
+						require.Equal(t, uint16(moerr.ER_INVALID_JSON_PATH_WILDCARD), moErr.MySQLCode())
+						require.Equal(t, "42000", moErr.SqlState())
 					})
 				}
 			})

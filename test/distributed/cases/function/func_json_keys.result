@@ -42,6 +42,9 @@ json_keys({"*": {"x": 1}}, $."*")
 select json_keys(null);
 json_keys(null)
 null
+select json_keys(null, '$.*');
+json_keys(null, $.*)
+null
 select json_keys('{"a":1}', null);
 json_keys({"a":1}, null)
 null
