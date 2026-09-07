@@ -114,7 +114,19 @@ func TestRunProxyServerUntilCanceled(t *testing.T) {
 		startErr := errors.New("listener failed")
 		closeErr := errors.New("close failed")
 		server := &testProxyServerLifecycle{startErr: startErr, closeErr: closeErr}
-		require.ErrorIs(t, runProxyServerUntilCanceled(context.Background(), server), startErr)
+		err := runProxyServerUntilCanceled(context.Background(), server)
+		require.ErrorIs(t, err, startErr)
+		require.ErrorIs(t, err, closeErr)
+		require.Equal(t, 1, server.closeCalls)
+	})
+
+	t.Run("close error after cancellation is propagated", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		server := &testProxyServerLifecycle{closeErr: errors.New("close failed")}
+		done := make(chan error, 1)
+		go func() { done <- runProxyServerUntilCanceled(ctx, server) }()
+		cancel()
+		require.ErrorIs(t, <-done, server.closeErr)
 		require.Equal(t, 1, server.closeCalls)
 	})
 }
