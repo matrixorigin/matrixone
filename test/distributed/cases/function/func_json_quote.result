@@ -10,6 +10,21 @@ select json_quote('a"b');
 select json_quote(null);
 ➤ json_quote(null)[12,2,0]  𝄀
 null
+-- @regex("binary data not supported by json_quote", true)
+select json_quote(cast('abc' as binary));
+invalid input: binary data not supported by json_quote
+-- @regex("binary data not supported by json_quote", true)
+select json_quote(cast('abc' as varbinary(3)));
+invalid input: binary data not supported by json_quote
+-- @regex("binary data not supported by json_quote", true)
+select json_quote(cast('abc' as blob));
+invalid input: binary data not supported by json_quote
+-- @regex("binary data not supported by json_quote", true)
+select json_quote(cast(x'ff' as varbinary(1)));
+invalid input: binary data not supported by json_quote
+select json_quote(cast(null as binary));
+➤ json_quote(cast(null as binary))[12,65535,0]  𝄀
+null
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
 select json_quote(a) from t1;

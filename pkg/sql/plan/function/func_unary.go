@@ -1076,14 +1076,17 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	single := func(str string) ([]byte, error) {
+	single := func(str string, row int) ([]byte, error) {
+		if ivecs[0].GetIsBinaryStringAt(row) {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_quote")
+		}
 		if !utf8.ValidString(str) {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_quote")
 		}
 		return appendJSONQuotedString(nil, str), nil
 	}
 
-	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
+	return opUnaryStrToBytesWithRowErrorCheck(ivecs, result, length, single, selectList)
 }
 
 func appendJSONQuotedString(dst []byte, str string) []byte {

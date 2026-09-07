@@ -3,6 +3,15 @@ select json_quote('a"');
 select json_quote('a"b');
 -- JDBC reports character precision (2), not the utf8mb4 wire byte bound (8).
 select json_quote(null);
+-- @regex("binary data not supported by json_quote",true)
+select json_quote(cast('abc' as binary));
+-- @regex("binary data not supported by json_quote",true)
+select json_quote(cast('abc' as varbinary(3)));
+-- @regex("binary data not supported by json_quote",true)
+select json_quote(cast('abc' as blob));
+-- @regex("binary data not supported by json_quote",true)
+select json_quote(cast(x'ff' as varbinary(1)));
+select json_quote(cast(null as binary));
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
 select json_quote(a) from t1;

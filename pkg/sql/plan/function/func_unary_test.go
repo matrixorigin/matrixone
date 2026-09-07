@@ -3571,6 +3571,72 @@ func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
 	require.False(t, s)
 }
 
+func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		data []string
+	}{
+		{name: "binary ascii", typ: types.New(types.T_binary, 3, 0), data: []string{"abc"}},
+		{name: "varbinary ascii", typ: types.New(types.T_varbinary, 3, 0), data: []string{"abc"}},
+		{name: "blob ascii", typ: types.T_blob.ToType(), data: []string{"abc"}},
+		{name: "binary invalid utf8", typ: types.New(types.T_varbinary, 1, 0), data: []string{string([]byte{0xff})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ftc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.typ, tc.data, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				JsonQuote)
+			succeed, info := ftc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	t.Run("typed binary NULL remains NULL", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			JsonQuote)
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("mixed runtime domains", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+			JsonQuote)
+		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("masked binary row is not evaluated", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", `"text"`}, []bool{true, false}),
+			JsonQuote).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{false, true},
+		})
+		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestJsonQuoteReturnType(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
