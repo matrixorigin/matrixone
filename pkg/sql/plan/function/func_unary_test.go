@@ -3700,6 +3700,64 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 	}
 }
 
+func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{"", ""}, []bool{false, false}),
+			JsonUnquote)
+		require.NoError(t, tc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"text", ""}, []bool{false, true}),
+			JsonUnquote).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		})
+		require.NoError(t, tc.parameters[0].SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("prepared text binary text rebind", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"plain"}, []bool{false}),
+			JsonUnquote)
+
+		run := func(binary bool) error {
+			tc.parameters[0].SetIsBinaryString(binary)
+			require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+			return JsonUnquote(tc.parameters, tc.result, proc, tc.fnLength, nil)
+		}
+		assertResult := func() {
+			value, isNull := vector.GenerateFunctionStrParameter(tc.GetResultVectorDirectly()).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, "plain", string(value))
+		}
+
+		require.NoError(t, run(false))
+		assertResult()
+		require.Error(t, run(true))
+		require.NoError(t, run(false))
+		assertResult()
+	})
+}
+
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
 		"plain",

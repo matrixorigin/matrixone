@@ -1093,17 +1093,6 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return bj.Unquote()
 	}
 
-	// Binary-domain values are rejected only when a non-NULL row reaches the
-	// kernel.  opUnaryBytesToStrWithErrorCheck checks NULLs before invoking the
-	// callback, which preserves MySQL's NULL propagation for typed BINARY/BLOB
-	// expressions while keeping their byte domain intact through binding.
-	if types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary {
-		binarySingle := func([]byte) (string, error) {
-			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
-		}
-		return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, binarySingle, selectList)
-	}
-
 	stringSingle := func(v []byte) (string, error) {
 		if !utf8.Valid(v) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_unquote")
@@ -1118,12 +1107,21 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return bj.Unquote()
 	}
 
-	fSingle := jsonSingle
-	if ivecs[0].GetType().Oid.IsMySQLString() {
-		fSingle = stringSingle
+	single := func(v []byte, row int) (string, error) {
+		// Evaluate the selected row's domain after the template has filtered
+		// NULL and masked rows.  Runtime binary provenance can vary within a
+		// VARCHAR vector, and a selected text row can override a static binary
+		// result type.
+		if ivecs[0].GetIsBinaryStringAt(row) {
+			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
+		}
+		if ivecs[0].GetType().Oid.IsMySQLString() {
+			return stringSingle(v)
+		}
+		return jsonSingle(v)
 	}
 
-	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle, selectList)
+	return opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, single, selectList)
 }
 
 // QuoteString quotes a string for use in SQL statements
