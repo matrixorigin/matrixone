@@ -468,6 +468,13 @@ func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
 	if old == nil {
 		return nil
 	}
+	var work *plan.VectorIndexScanWork
+	if old.ScanWork != nil {
+		work = &plan.VectorIndexScanWork{
+			Rows: old.ScanWork.Rows, Blocks: old.ScanWork.Blocks,
+			VectorBytesPerRow: old.ScanWork.VectorBytesPerRow, Objects: old.ScanWork.Objects,
+		}
+	}
 	hidden := make([]*plan.VectorIndexTableRef, len(old.HiddenTables))
 	for i, table := range old.HiddenTables {
 		if table == nil {
@@ -480,6 +487,7 @@ func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
 		}
 	}
 	return &plan.VectorIndexScan{
+		ScanWork:            work,
 		SourceTable:         DeepCopyObjectRef(old.SourceTable),
 		SourceTableDef:      DeepCopyTableDef(old.SourceTableDef, true),
 		Index:               DeepCopyIndexDef(old.Index),

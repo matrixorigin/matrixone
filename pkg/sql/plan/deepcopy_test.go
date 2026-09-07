@@ -83,6 +83,7 @@ func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 
 func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	source := &planpb.VectorIndexScan{
+		ScanWork:            &planpb.VectorIndexScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 3072, Objects: 2},
 		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
 		SourceTableDef:      &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
 		Index:               &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
@@ -111,6 +112,22 @@ func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	require.NotSame(t, source.QueryVector, cloned.QueryVector)
 	require.NotSame(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.Equal(t, source.ScanWork, cloned.ScanWork)
+	require.NotSame(t, source.ScanWork, cloned.ScanWork)
+	cloned.ScanWork.Blocks = 7
+	require.Equal(t, int32(2), source.ScanWork.Blocks)
+	encoded, err := source.Marshal()
+	require.NoError(t, err)
+	decoded := new(planpb.VectorIndexScan)
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, source.ScanWork, decoded.ScanWork)
+	source.ScanWork = nil
+	require.Nil(t, DeepCopyVectorIndexScan(source).ScanWork)
+	encoded, err = source.Marshal()
+	require.NoError(t, err)
+	decoded = new(planpb.VectorIndexScan)
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Nil(t, decoded.ScanWork)
 }
 
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {

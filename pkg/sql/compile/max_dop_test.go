@@ -19,8 +19,13 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -608,6 +613,63 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	require.Len(t, scopes, 1)
 	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu,
 		"one reader must own the adaptive search cursor")
+}
+
+func TestVectorScanWorkDOPReachesReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.addr = "cn-local:6001"
+	c.ncpu = 16
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{isFirst: true}
+	ctrl := gomock.NewController(t)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	txn.EXPECT().GetWorkspace().Return(nil).AnyTimes()
+	txn.EXPECT().Txn().Return(pbtxn.TxnMeta{}).AnyTimes()
+	c.proc.Base.TxnOperator = txn
+	c.proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
+	node := &plan.Node{
+		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}}}},
+		Stats:    &plan.Stats{Rowsize: 16, Outcnt: 10, ForceOneCN: true},
+		VectorIndexScan: &plan.VectorIndexScan{
+			SourceTable: &plan.ObjectRef{SchemaName: "db", ObjName: "source"},
+			Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
+			QueryVector: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))}}},
+			},
+			CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(10),
+			ScanWork:       &plan.VectorIndexScanWork{Rows: 15812, Blocks: 2, VectorBytesPerRow: 3072, Objects: 20},
+		},
+	}
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}}}}
+	for _, cpu := range []int32{16, 1} {
+		plan2.CalcQueryDOP(p, cpu, 1, c.execType)
+		scopes, err := c.compileVectorIndexScan(node)
+		require.NoError(t, err)
+		require.Len(t, scopes, 1)
+		scope := scopes[0]
+		want := int(min(cpu, 2))
+		require.Equal(t, want, scope.NodeInfo.Mcpu)
+		require.Equal(t, c.addr, scope.NodeInfo.Addr)
+		require.NotSame(t, node.VectorIndexScan.ScanWork, scope.DataSource.node.VectorIndexScan.ScanWork)
+		// Pipeline setup normally installs the child execution context.
+		scope.Proc.Ctx = c.proc.Ctx
+		readers, err := scope.buildVectorIndexReaders(nil)
+		require.NoError(t, err)
+		require.Len(t, readers, want)
+		for _, reader := range readers {
+			require.NoError(t, reader.Close())
+		}
+	}
+	node.Stats.Dop = 8
+	require.Equal(t, 1, vectorIndexScanParallelism(node, engine.Nodes{{Mcpu: 8}, {Mcpu: 8}}, 16))
+	node.VectorIndexScan.ScanWork.Objects = 1
+	require.Equal(t, 1, vectorIndexScanParallelism(node, engine.Nodes{{Mcpu: 8}}, 16))
+	node.VectorIndexScan.ScanWork = nil
+	node.VectorIndexScan.FirstRoundLimit = plan2.MakePlan2Uint64ConstExprWithType(10)
+	require.Equal(t, 1, vectorIndexScanParallelism(node, engine.Nodes{{Mcpu: 8}}, 16))
 }
 
 func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {

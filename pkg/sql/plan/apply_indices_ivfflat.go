@@ -823,6 +823,18 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 	}
 	tableFuncNode.Stats.ForceOneCN = asyncIndex
+	if !asyncIndex && candidateNodeID == tableFuncNodeID && bucketExpandStep == 0 && firstRoundLimitExpr == nil {
+		work, workErr := builder.estimateIvfScanWork(scanNode.ObjRef, scanNode.ScanSnapshot,
+			ivfCtx.entriesDef.IndexTableName, ivfCtx.totalLists, ivfCtx.nProbe)
+		if workErr != nil {
+			return nodeID, workErr
+		}
+		tableFuncNode.VectorIndexScan.ScanWork = work
+		if work != nil {
+			tableFuncNode.Stats.Cost = work.Rows
+			tableFuncNode.Stats.BlockNum = work.Blocks
+		}
+	}
 
 	// Determine join structure based on the effective filtering strategy:
 	//   no pre-filter: JOIN(scanNode, vectorScan)

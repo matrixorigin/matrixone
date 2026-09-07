@@ -714,6 +714,13 @@ func (ndesc *NodeDescribeImpl) GetVectorIndexScanInfo(ctx context.Context, optio
 	}
 	buf.WriteString(", NProbe: ")
 	buf.WriteString(strconv.FormatUint(uint64(spec.GetInitialProbeCount()), 10))
+	if work := spec.GetScanWork(); work != nil {
+		fmt.Fprintf(buf, ", Estimated Scan Rows: %.0f, Blocks: %d, Vector Bytes/Row: %.0f, Objects: %d",
+			work.Rows, work.Blocks, work.VectorBytesPerRow, work.Objects)
+	}
+	if dop := ndesc.Node.GetStats().GetDop(); dop > 0 {
+		fmt.Fprintf(buf, ", Planned DOP: %d", dop)
+	}
 	if len(spec.GetPreFilters()) > 0 {
 		buf.WriteString(", Index Filter: ")
 		filters := NewExprListDescribeImpl(spec.GetPreFilters())

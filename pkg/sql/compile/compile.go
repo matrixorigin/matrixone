@@ -4690,8 +4690,17 @@ func vectorIndexScanParallelism(node *plan.Node, nodes engine.Nodes, _ int) int 
 	if node != nil && node.Stats != nil && node.Stats.Dop > 0 {
 		parallelism = int(node.Stats.Dop)
 	}
-	if node != nil && node.GetVectorIndexScan().GetBucketExpandStep() > 0 {
+	if node != nil && (node.GetVectorIndexScan().GetBucketExpandStep() > 0 || node.GetVectorIndexScan().GetFirstRoundLimit() != nil) {
 		parallelism = 1
+	}
+	if work := node.GetVectorIndexScan().GetScanWork(); work != nil {
+		// Work is estimated for the complete scan. Each CN owns only its
+		// partition; required PRE scans still have exactly one CN here.
+		partitions := int64(max(1, len(nodes)))
+		parallelism = min(parallelism, int((int64(work.Blocks)+partitions-1)/partitions))
+		if work.Objects > 0 {
+			parallelism = min(parallelism, int((int64(work.Objects)+partitions-1)/partitions))
+		}
 	}
 	if parallelism <= 0 {
 		parallelism = 1

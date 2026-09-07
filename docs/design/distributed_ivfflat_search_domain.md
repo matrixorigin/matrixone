@@ -114,3 +114,54 @@ Local persisted-object evidence on an AMD Ryzen 9 7950X3D, Go 1.26.4,
 The storage path is 1.64-1.70x faster at this boundary. This result does not
 justify cross-CN rollout; that route remains absent until the representative
 deployment gate above is satisfied.
+
+## Scan-work costing revision
+
+Approved in the design-first conversation for #28002 before implementation:
+use hidden entries-table statistics for physical scan work, keep output width
+separate, and require controlled Wiki A/B before default enablement. This is an
+advisory costing fix, not a new distributed protocol or memory owner.
+
+The typed rewrite currently scales source-table blocks by nprobe/lists and
+uses the 16-byte `(pk, score)` output width to select reader DOP. A data-free
+planner diagnostic with 10M rows, 3162 lists and five probes selects DOP 1 for
+1221, 2442 and 8192 source blocks. The former TVF separately planned its wide
+entries scan; restoring reader capability alone does not restore that costing.
+
+Resolve the entries relation using the source identity and snapshot. Its row
+and block counts, scaled by `min(1, max(1,nprobe)/lists)`, form the proportional
+initial-scan estimate. Scalar selectivity, distance thresholds and LIMIT do not
+discount this work. Vector bytes per entry come from the entry column's size
+statistics, or its stored element type and dimension. Positive object counts
+cap reader DOP; missing or invalid estimates choose one reader. Statistics
+errors must not create new query failures, except that cancellation propagates.
+
+Optional `VectorIndexScan.scan_work` records estimated rows, blocks, vector
+bytes per entry and object count. Output row width and result cardinality keep
+their original meanings. The generic DOP pass uses the existing wide-scan
+policy on this separate estimate and respects operator, query and worker caps.
+Only synchronous, uncorrelated, single-round scans get an estimate; async,
+adaptive and correlated paths remain single-reader. Copies and serialization
+preserve the advisory fields; old plans without them remain safe. Ignoring
+these fields only affects scheduling, so no MORPC capability is introduced.
+
+The estimate is not a physical pruning guarantee: skew, object fragmentation,
+historical index versions and the small-domain full-centroid fallback can make
+actual reads differ. EXPLAIN must label these numbers as estimates and show DOP.
+Changing output Rowsize to the vector width, forcing every query to all CPUs,
+and reintroducing nested SQL are rejected alternatives.
+
+Validation covers hidden/source-stat divergence, stored vector widths,
+missing/invalid estimates, snapshots/tenant identity, copy/serialization,
+single-reader exceptions, DOP caps and rewrite-to-reader execution. Public PRE
+results and lifecycle coverage remain mandatory. No new resource lifecycle,
+catalog format or index representation is introduced.
+
+This revision's default-enablement gate is separate from the future cross-CN
+gate: pinned main/candidate, identical index contents and queries, fixed warm-up,
+three ABBA blocks at concurrency 1 and 100, and per-run latency/QPS/recall,
+CPU, peak memory and scanned bytes. Require lower median single-client latency,
+concurrency-100 median QPS at least main, p95/p99 and CPU/memory within 110% of
+main, and recall loss at most 0.001. Missing or inconclusive evidence does not
+pass. The existing two-round measurements predate this revision and do not
+satisfy it. No large dataset download or remote dispatch is automatic.

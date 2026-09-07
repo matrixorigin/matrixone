@@ -27,8 +27,9 @@ import (
 func TestVectorIndexScanInfoIsTypedAndVisible(t *testing.T) {
 	node := &plan.Node{
 		NodeType: plan.Node_VECTOR_INDEX_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    &plan.Stats{Dop: 2},
 		VectorIndexScan: &plan.VectorIndexScan{
+			ScanWork:          &plan.VectorIndexScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 3072, Objects: 3},
 			Index:             &plan.IndexDef{IndexName: "idx_v", IndexAlgo: "ivfflat"},
 			DistanceFunction:  "l2_distance",
 			CandidateLimit:    plan2.MakePlan2Uint64ConstExprWithType(12),
@@ -47,4 +48,12 @@ func TestVectorIndexScanInfoIsTypedAndVisible(t *testing.T) {
 	require.Contains(t, info[0], "Candidate Limit: 12")
 	require.Contains(t, info[0], "NProbe: 4")
 	require.Contains(t, info[0], "Index Filter: true")
+	require.Contains(t, info[0], "Estimated Scan Rows: 100, Blocks: 2, Vector Bytes/Row: 3072, Objects: 3")
+	require.Contains(t, info[0], "Planned DOP: 2")
+	node.VectorIndexScan.ScanWork = nil
+	node.Stats = nil
+	info, err = (&NodeDescribeImpl{Node: node}).GetExtraInfo(context.Background(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.NotContains(t, info[0], "Estimated Scan")
+	require.NotContains(t, info[0], "Planned DOP")
 }

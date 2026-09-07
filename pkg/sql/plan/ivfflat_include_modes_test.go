@@ -619,6 +619,8 @@ func TestApplyIndicesForSortUsingIvfflat_AsyncIndexForcesOneCN(t *testing.T) {
 	tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.Nil(t, tableFuncNode.VectorIndexScan.ScanWork)
+	require.Equal(t, int32(1), vectorScanDOP(16, tableFuncNode.VectorIndexScan, false))
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t *testing.T) {
@@ -723,6 +725,8 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.VectorIndexScan.PreFilters, 1)
 	assert.Equal(t, uint64(12), tableFuncNode.VectorIndexScan.FirstRoundLimit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.VectorIndexScan.ScanWork)
+	require.Equal(t, int32(1), vectorScanDOP(16, tableFuncNode.VectorIndexScan, false))
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffsetCompensatedK(t *testing.T) {
