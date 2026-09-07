@@ -1385,6 +1385,9 @@ func extractSubInfosFromExecResultOld(ctx context.Context, erArray []ExecResult)
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}
@@ -1463,6 +1466,9 @@ func extractSubInfosFromExecResult(ctx context.Context, erArray []ExecResult) (s
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}
@@ -1569,6 +1575,175 @@ func getSubInfosFromPub(ctx context.Context, bh BackgroundExec, pubAccountName, 
 
 // getSubInfosFromSub return subInfo map for given subName
 func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) (subInfo []*pubsub.SubInfo, err error) {
+	subInfo, _, err = getSubInfosFromSubWithOptions(ctx, bh, subName, false, 0)
+	return
+}
+
+// getActiveSubInfosFromSubBounded admits catalog candidates before the caller
+// allocates metadata or builds the subscriber-visibility query. The SQL reads
+// at most maxCandidates+1 rows so overflow can fail closed without returning a
+// partial subscription set.
+func getActiveSubInfosFromSubBounded(
+	ctx context.Context,
+	bh BackgroundExec,
+	maxCandidates int,
+) ([]*pubsub.SubInfo, error) {
+	if maxCandidates < 0 {
+		return nil, moerr.NewInvalidInput(ctx, "negative subscription metadata candidate budget")
+	}
+	subInfos, legacyCatalog, err := getSubInfosFromSubWithOptions(
+		ctx, bh, "", true, maxCandidates+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(subInfos) > maxCandidates {
+		return nil, moerr.NewInvalidInputf(
+			ctx,
+			"information_schema.statistics subscription candidate enumeration exceeds planning budget of %d branches; reduce active subscriptions or STATISTICS occurrences",
+			maxCandidates,
+		)
+	}
+	// Old mo_subs rows have pub_account_name but no pub_account_id. Resolve the
+	// missing identity only after the candidate-count admission above, through
+	// this same BackgroundExec, so current and historical requests use the same
+	// transaction snapshot. The fixed-size batches keep the compatibility path
+	// bounded even if this helper is reused with a larger caller budget.
+	if legacyCatalog {
+		if err := resolveMissingSubscriptionPublisherAccountIDs(ctx, bh, subInfos); err != nil {
+			return nil, err
+		}
+	}
+	return subInfos, nil
+}
+
+const subscriptionPublisherAccountLookupBatchSize = 64
+
+func subscriptionPublisherAccountLookupSQL(accountNames []string) string {
+	literals := make([]string, 0, len(accountNames))
+	for _, accountName := range accountNames {
+		literals = append(literals, escapeSQLString(accountName))
+	}
+	return fmt.Sprintf(
+		"select account_id, account_name from mo_catalog.mo_account where account_name in (%s) order by account_name limit %d",
+		strings.Join(literals, ","), len(accountNames)+1,
+	)
+}
+
+func resolveMissingSubscriptionPublisherAccountIDs(
+	ctx context.Context,
+	bh BackgroundExec,
+	subInfos []*pubsub.SubInfo,
+) error {
+	missing := make(map[string]struct{})
+	for _, subInfo := range subInfos {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if subInfo == nil || subInfo.PubAccountId != int32(sysAccountID) {
+			continue
+		}
+		if strings.EqualFold(subInfo.PubAccountName, sysAccountName) {
+			continue
+		}
+		if subInfo.PubAccountName == "" {
+			return moerr.NewInternalErrorf(
+				ctx, "cannot resolve empty publication account for subscription %s", subInfo.SubName,
+			)
+		}
+		missing[subInfo.PubAccountName] = struct{}{}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	accountNames := make([]string, 0, len(missing))
+	for accountName := range missing {
+		accountNames = append(accountNames, accountName)
+	}
+	slices.Sort(accountNames)
+
+	resolved := make(map[string]int32, len(accountNames))
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	for start := 0; start < len(accountNames); start += subscriptionPublisherAccountLookupBatchSize {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		end := min(start+subscriptionPublisherAccountLookupBatchSize, len(accountNames))
+		batchNames := accountNames[start:end]
+		batchRequested := make(map[string]struct{}, len(batchNames))
+		for _, accountName := range batchNames {
+			batchRequested[accountName] = struct{}{}
+		}
+
+		sql := subscriptionPublisherAccountLookupSQL(batchNames)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+		results, err := getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		for _, result := range results {
+			for row := uint64(0); row < result.GetRowCount(); row++ {
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
+				accountID, getErr := result.GetInt64(ctx, row, 0)
+				if getErr != nil {
+					return getErr
+				}
+				accountName, getErr := result.GetString(ctx, row, 1)
+				if getErr != nil {
+					return getErr
+				}
+				if _, ok := batchRequested[accountName]; !ok {
+					return moerr.NewInternalErrorf(
+						ctx, "unexpected publication account %s while resolving subscription metadata", accountName,
+					)
+				}
+				if accountID <= int64(sysAccountID) || accountID > int64(1<<31-1) {
+					return moerr.NewInternalErrorf(
+						ctx, "invalid publication account id %d for account %s", accountID, accountName,
+					)
+				}
+				if _, duplicate := resolved[accountName]; duplicate {
+					return moerr.NewInternalErrorf(
+						ctx, "ambiguous publication account %s while resolving subscription metadata", accountName,
+					)
+				}
+				resolved[accountName] = int32(accountID)
+			}
+		}
+	}
+
+	for _, accountName := range accountNames {
+		if _, ok := resolved[accountName]; !ok {
+			return moerr.NewInternalErrorf(
+				ctx, "cannot resolve publication account %s for subscription metadata", accountName,
+			)
+		}
+	}
+	// Do not mutate any candidate until every requested identity has been
+	// resolved and validated, so an error cannot leave a usable partial set.
+	for _, subInfo := range subInfos {
+		if subInfo == nil || subInfo.PubAccountId != int32(sysAccountID) ||
+			strings.EqualFold(subInfo.PubAccountName, sysAccountName) {
+			continue
+		}
+		subInfo.PubAccountId = resolved[subInfo.PubAccountName]
+	}
+	return nil
+}
+
+func getSubInfosFromSubWithOptions(
+	ctx context.Context,
+	bh BackgroundExec,
+	subName string,
+	activeOnly bool,
+	limit int,
+) (subInfo []*pubsub.SubInfo, legacyCatalog bool, err error) {
 	subAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -1587,7 +1762,16 @@ func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) 
 	}
 	sql += fmt.Sprintf(" and sub_account_id = %d", subAccountId)
 	if len(subName) > 0 {
-		sql += fmt.Sprintf(" and sub_name = '%s'", subName)
+		sql += fmt.Sprintf(" and sub_name = '%s'", sanitizeSQLInput(subName))
+	}
+	if activeOnly {
+		sql += fmt.Sprintf(
+			" and status = %d and sub_name is not null and sub_name <> ''",
+			pubsub.SubStatusNormal,
+		)
+	}
+	if limit > 0 {
+		sql += fmt.Sprintf(" limit %d", limit)
 	}
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1602,9 +1786,12 @@ func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) 
 	}
 
 	if subAccountNameColExists {
-		return extractSubInfosFromExecResult(ctx, erArray)
+		subInfo, err = extractSubInfosFromExecResult(ctx, erArray)
+		return
 	}
-	return extractSubInfosFromExecResultOld(ctx, erArray)
+	legacyCatalog = true
+	subInfo, err = extractSubInfosFromExecResultOld(ctx, erArray)
+	return
 }
 
 func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublications) (err error) {
@@ -2227,12 +2414,17 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	}
 
 	tablesNames := make([]string, 0, len(table))
+	seenTables := make(map[string]struct{}, len(table))
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
 			err = moerr.NewInternalErrorf(ctx, "table '%s' not exists", tblName)
 			return
 		}
+		if _, duplicate := seenTables[tblName]; duplicate {
+			continue
+		}
+		seenTables[tblName] = struct{}{}
 		tablesNames = append(tablesNames, tblName)
 	}
 	slices.Sort(tablesNames)

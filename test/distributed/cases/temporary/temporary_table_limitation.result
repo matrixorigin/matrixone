@@ -65,41 +65,107 @@ partition p2023 values less than (2024),
 partition p2024 values less than (2025)
 );  -- 失败
 Cannot create temporary table with partitions
-create temporary table temp_alter_column (
-id int,
-name varchar(50)
-);
-alter table temp_alter_column add column age int;  -- 失败
-alter table for temporary table is not yet implemented
+create table temp_alter_column (id int primary key, v int);
+insert into temp_alter_column values (90, 900);
+create table temp_alter_renamed (id int primary key, v int);
+insert into temp_alter_renamed values (91, 910);
+create temporary table temp_alter_column (id int primary key auto_increment, v int, key idx_v(v));
+insert into temp_alter_column values (1, 10), (2, null);
+alter table temp_alter_column add column extra int default 7;
+select * from temp_alter_column order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  extra[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  null  ¦  7
+alter table temp_alter_column drop column extra;
+alter table temp_alter_column modify column v bigint;
+insert into temp_alter_column(v) values (2147483648);
+select v from temp_alter_column order by id;
+➤ v[-5,64,0]  𝄀
+10  𝄀
+null  𝄀
+2147483648
+select id > 2 as allocator_preserved from temp_alter_column where v = 2147483648;
+➤ allocator_preserved[-7,1,0]  𝄀
+1
+alter table temp_alter_column rename column v to value_col;
+select id, value_col from temp_alter_column where value_col = 10;
+➤ id[4,32,0]  ¦  value_col[-5,64,0]  𝄀
+1  ¦  10
+alter table temp_alter_column rename to temp_alter_renamed;
+select * from temp_alter_column;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+90  ¦  900
+select value_col from temp_alter_renamed order by id;
+➤ value_col[-5,64,0]  𝄀
+10  𝄀
+null  𝄀
+2147483648
+show create table temp_alter_renamed;
+➤ Table[12,18,0]  ¦  Create Table[12,168,0]  𝄀
+temp_alter_renamed  ¦  CREATE TEMPORARY TABLE `temp_alter_renamed` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `value_col` bigint DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_v` (`value_col`)
+)
+alter table temp_alter_renamed modify column value_col tinyint;
+Data truncation: data out of range: data type int8, value '2147483648'
+select value_col from temp_alter_renamed order by id;
+➤ value_col[-5,64,0]  𝄀
+10  𝄀
+null  𝄀
+2147483648
+create temporary table temp_alter_occupied (id int);
+alter table temp_alter_renamed rename to temp_alter_occupied;
+table temp_alter_occupied already exists
+select value_col from temp_alter_renamed order by id;
+➤ value_col[-5,64,0]  𝄀
+10  𝄀
+null  𝄀
+2147483648
+drop temporary table temp_alter_occupied;
+create temporary table temp_alter_width (s varchar(50));
+insert into temp_alter_width values ('a');
+alter table temp_alter_width modify column s varchar(100);
+insert into temp_alter_width values (repeat('b', 100));
+select length(s) from temp_alter_width order by s;
+➤ length(s)[-5,64,0]  𝄀
+1  𝄀
+100
+drop temporary table temp_alter_width;
+begin;
+alter table temp_alter_renamed add column rolled_back int default 9;
+alter table temp_alter_renamed rename to temp_alter_rollback;
+select rolled_back from temp_alter_rollback order by id;
+➤ rolled_back[4,32,0]  𝄀
+9  𝄀
+9  𝄀
+9
+rollback;
+select value_col from temp_alter_renamed order by id;
+➤ value_col[-5,64,0]  𝄀
+10  𝄀
+null  𝄀
+2147483648
+select * from temp_alter_rollback;
+SQL parser error: table "temp_alter_rollback" does not exist
+select count(*) as leaked_copy_tables from mo_catalog.mo_tables
+where reldatabase = 'unnormal_db' and relname like '%\_\_mo\_alter\_copy\_%';
+➤ leaked_copy_tables[-5,64,0]  𝄀
+0
+use unnormal_db;
+select * from temp_alter_column;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+90  ¦  900
+select * from temp_alter_renamed;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+91  ¦  910
+drop temporary table temp_alter_renamed;
+select * from temp_alter_renamed;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+91  ¦  910
 drop table temp_alter_column;
-create temporary table temp_drop_column (
-id int,
-name varchar(50),
-age int
-);
-alter table temp_drop_column drop column age;  -- 失败
-alter table for temporary table is not yet implemented
-drop table temp_drop_column;
-create temporary table temp_modify_column (
-id int,
-name varchar(50)
-);
-alter table temp_modify_column modify column name varchar(100);  -- 失败
-alter table for temporary table is not yet implemented
-drop table temp_modify_column;
-create temporary table temp_rename_column (
-id int,
-old_name varchar(50)
-);
-alter table temp_rename_column rename column old_name to new_name;  -- 失败
-alter table for temporary table is not yet implemented
-drop table temp_rename_column;
-create temporary table temp_old_name (
-id int
-);
-alter table temp_old_name rename to temp_new_name;  -- 失败
-alter table for temporary table is not yet implemented
-drop table temp_old_name;
+drop table temp_alter_renamed;
 create temporary table temp_duplicate (
 id int
 );
