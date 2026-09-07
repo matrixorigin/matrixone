@@ -433,7 +433,11 @@ func (e *Engine) Database(
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if txn.databaseOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
+		// Keep all authoritative "database does not exist" results on the same
+		// typed contract.  In particular, DROP DATABASE followed by CREATE
+		// DATABASE in the same transaction (used by PITR and snapshot restore)
+		// reaches this transaction-local tombstone before consulting the catalog.
+		return nil, moerr.GetOkExpectedEOB()
 	}
 
 	if v := txn.databaseOps.existAndActive(key); v != nil {
@@ -1308,6 +1312,18 @@ func (e *Engine) RefreshTableStatsWithOptions(
 	options engine.StatsRefreshOptions,
 ) (*pb.StatsInfo, error) {
 	return refreshTableStats(ctx, key, options, e.globalStats)
+}
+
+// PublishAnalyzedStats installs one successfully collected manual generation.
+// Collection and publication are separate so failed scans never expose a
+// partially populated statistics object.
+func (e *Engine) PublishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	tableDefVersion uint32,
+	stats *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	return e.globalStats.publishAnalyzedStats(ctx, key, tableDefVersion, stats)
 }
 
 type optimizerStatsStore interface {

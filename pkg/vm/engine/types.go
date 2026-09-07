@@ -871,7 +871,12 @@ type Tombstoner interface {
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
 
-	PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid)
+	PrefetchTombstones(
+		ctx context.Context,
+		srvId string,
+		fs fileservice.FileService,
+		bid []objectio.Blockid,
+	)
 
 	// it applies the block related in-memory tombstones to the rowsOffset
 	// `bid` is the block id
@@ -1394,6 +1399,56 @@ type StatsRefresherWithOptions interface {
 		ctx context.Context,
 		key pb.StatsInfoKey,
 		options StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
+}
+
+// AnalyzeTableRequest is the storage-facing contract for a manual ANALYZE
+// collection. The relation owns snapshot visibility and physical range
+// selection; callers provide only bounded policy inputs and resolved columns.
+type AnalyzeTableRequest struct {
+	Process           any
+	Columns           []string
+	FullScan          bool
+	Seed              [32]byte
+	TargetRows        uint64
+	MinBlocks         uint64
+	MaxBlocks         uint64
+	MaxStrata         uint32
+	MaxDistinctValues uint64
+	ColumnsPerPass    uint32
+}
+
+// AnalyzeTableResult contains the StatsInfo compatibility adapter and explicit
+// collection diagnostics. The relation never publishes this result itself.
+type AnalyzeTableResult struct {
+	Stats             *pb.StatsInfo
+	Mode              string
+	Coverage          string
+	PopulationRows    uint64
+	PopulationExact   bool
+	PopulationBlocks  uint64
+	SampleRows        uint64
+	SampleBlocks      uint64
+	SampleBytes       uint64
+	ColumnsAnalyzed   uint32
+	SampleNumerator   uint64
+	SampleDenominator uint64
+}
+
+// AnalyzableRelation is optional so non-disttae engines and existing relation
+// mocks are not forced to implement a storage-specific maintenance operation.
+type AnalyzableRelation interface {
+	AnalyzeTable(ctx context.Context, request AnalyzeTableRequest) (*AnalyzeTableResult, error)
+}
+
+// AnalyzedStatsPublisher owns the publication boundary after successful data
+// collection. Durable publication can evolve behind this same capability.
+type AnalyzedStatsPublisher interface {
+	PublishAnalyzedStats(
+		ctx context.Context,
+		key pb.StatsInfoKey,
+		tableDefVersion uint32,
+		stats *pb.StatsInfo,
 	) (*pb.StatsInfo, error)
 }
 

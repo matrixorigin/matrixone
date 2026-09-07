@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -36,11 +37,16 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 }
 
 func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := int64(0)
+	if viewName == "TABLES" || viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion46
+	}
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: viewName,
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    viewDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  viewDDL,
+		RequiredProtocolVersion: requiredProtocol,
 		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
 			if err != nil {

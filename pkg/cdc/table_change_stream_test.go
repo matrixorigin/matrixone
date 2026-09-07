@@ -42,7 +42,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -102,7 +101,9 @@ func (m *watermarkUpdaterStub) withUpdateError(fn func(call int) error) *waterma
 	return m
 }
 
-func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *watermarkUpdaterStub) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	if m.skipRemove {
 		return nil
 	}
@@ -208,7 +209,9 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *test
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
 	stream1 := createTestStream(
 		mp,
 		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
@@ -265,9 +268,12 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	limiter := semaphore.NewWeighted(1)
-	require.NoError(t, limiter.Acquire(context.Background(), 1))
-	defer limiter.Release(1)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 1, func() (uint64, bool) {
+		return 0, false
+	})
+	limiterPermit, err := limiter.acquire(context.Background())
+	require.NoError(t, err)
+	defer limiterPermit.Release()
 
 	stream := createTestStream(
 		mp,
@@ -279,6 +285,22 @@ func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *t
 	permit, err := stream.acquireInitialSnapshotPermit(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, permit)
+}
+
+func TestTableChangeStream_OwnerFencedProgressAlwaysBindsSourceGeneration(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "explicit_start", SourceTblId: 77},
+		WithOwnerFence(NewOwnerFence(func(context.Context) error { return nil })),
+	)
+	defer stream.Close()
+
+	require.False(t, stream.initSnapshotSplitTxn,
+		"the counterexample intentionally does not use a split initial snapshot")
+	require.Equal(t, uint64(77), stream.txnManager.watermarkGeneration)
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
@@ -761,6 +783,19 @@ type immediateChangesHandle struct {
 	batches []changeBatch
 	nextIdx int
 	closed  bool
+}
+
+type beforeNextChangesHandle struct {
+	engine.ChangesHandle
+	before func()
+}
+
+func (h *beforeNextChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.before()
+	return h.ChangesHandle.Next(ctx, mp)
 }
 
 func newImmediateChangesHandle(batches []changeBatch) *immediateChangesHandle {
@@ -1452,6 +1487,7 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.NotNil(t, tracker, "tracker should be created even if begin fails")
 	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
 	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB(), "failed TailDone must have one cleanup owner")
 }
 
 func TestTableChangeStream_BeginFailure_NetworkError_Retryable(t *testing.T) {
@@ -1761,9 +1797,7 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 }
 
 // TestTableChangeStream_FullPipeline_RandomDelaysAndErrors verifies the entire pipeline
-// under random delays and error injections, ensuring orderliness, idempotency, and consistency.
-// This test uses pausableChangesHandle, watermarkUpdaterStub, and error injection to simulate
-// realistic failure scenarios including StaleRead, commit failures, and rollback failures.
+// with deterministic error injection, ensuring recovery and terminal cleanup.
 func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
 	noopStop := func() {}
@@ -1781,10 +1815,8 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 
 	// Track operation order and counts for verification
 	var (
-		collectCalls         atomic.Int32
-		staleReadInjected    atomic.Bool
-		commitFailInjected   atomic.Bool
-		rollbackFailInjected atomic.Bool
+		collectCalls      atomic.Int32
+		staleReadInjected atomic.Bool
 	)
 
 	// Inject StaleRead error on first collect, then succeed
@@ -1813,163 +1845,45 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 		return ts
 	})
 
-	// Inject commit failure on first commit attempt, then succeed
+	// Install both faults before Run: observing SendCommit is not a barrier
+	// preventing its cleanup from already executing SendRollback.
 	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
-	h.Sinker().setCommitError(commitErr)
-	commitFailInjected.Store(true)
-
-	ar := h.NewActiveRoutine()
-	errCh, done := h.RunStreamAsync(ar)
-
-	// Wait for stale read recovery (multiple collect calls)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Stale read recovery may involve retry backoff: base=5ms, max=20ms, factor=2.0, maxRetries=3
-	// Worst case delay per retry cycle: ~35ms, plus processing time
-	require.Eventually(t, func() bool {
-		return collectCalls.Load() >= 2
-	}, 10*time.Second, 10*time.Millisecond, "should see stale read recovery")
-
-	// Wait for commit attempt (which will fail)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Calculate worst-case retry delay: base=5ms, max=20ms, factor=2.0, maxRetries=3
-	// Worst case: 5ms + 10ms + 20ms = 35ms per retry cycle, plus processing time
-	// Use 10s timeout to handle multiple retry cycles and slow CI environments
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		for _, op := range ops {
-			if op == "commit" {
-				return true
-			}
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "should see commit attempt")
-
-	// Keep commit error and inject rollback failure (rollback happens during cleanup after commit failure)
-	// To eliminate race condition: set rollback error immediately after confirming commit attempt,
-	// then add a small synchronization delay to ensure the error is set in sinker before cleanup rollback happens.
-	// This reduces the race window to near zero.
 	rollbackErr := moerr.NewInternalError(h.Context(), "rollback failure")
+	h.Sinker().setCommitError(commitErr)
 	h.Sinker().setRollbackError(rollbackErr)
-	rollbackFailInjected.Store(true)
-	// Small synchronization delay to ensure rollback error is set before cleanup rollback happens
-	// This eliminates the race condition where rollback might occur before error is set.
-	// 50ms is sufficient for error injection to propagate, even in slow environments.
-	time.Sleep(50 * time.Millisecond)
 
-	// Wait for rollback attempt (which will fail during cleanup after commit failure)
-	// Use longer timeout for slow CI environments, but keep frequent checks
-	// Rollback happens during EnsureCleanup after commit failure, which may have retry delays
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		for _, op := range ops {
-			if op == "rollback" {
-				return true
-			}
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "should see rollback attempt")
-
-	// Verify that rollback failure marks stream as non-retryable (system state may be inconsistent)
-	// This is the core behavior: rollback failure indicates system state may be inconsistent,
-	// so the stream should not be retryable even if the original error (commit failure) is retryable
-	// Use longer timeout for slow CI environments to ensure state propagation, but keep frequent checks
-	// State propagation may take time due to retry backoff and processing delays
-	// To make the check more stable and reduce flakiness, we verify the state is stable by checking
-	// multiple consecutive times. This ensures the state has settled after recovery path + backoff + scheduling.
-	// The state must remain non-retryable for 3 consecutive checks (30ms total) to be considered stable.
-	var stableCount int
-	const requiredStableChecks = 3 // Require 3 consecutive checks to ensure state is stable
-	require.Eventually(t, func() bool {
-		isNonRetryable := !h.Stream().GetRetryable()
-		if isNonRetryable {
-			stableCount++
-			if stableCount >= requiredStableChecks {
-				return true
-			}
-		} else {
-			// State changed or not yet stable, reset counter
-			stableCount = 0
-		}
-		return false
-	}, 10*time.Second, 10*time.Millisecond, "stream should be non-retryable after rollback failure (with stable state check)")
-
-	// Clear rollback error so stream can remain retryable after rollback failure is verified
-	// Note: The test verifies that rollback failure marks stream as non-retryable.
-	// After clearing the rollback error, the next round will succeed (rollback will succeed),
-	// and cleanupRollbackErr will not be set, so the stream will become retryable again.
-	// However, this depends on other factors (e.g., no other errors), so we don't assert it here.
-	// The core behavior (rollback failure -> non-retryable) is already verified above.
-	h.Sinker().setRollbackError(nil)
-
-	// Cancel to exit
-	h.Cancel()
-	done()
-
-	var runErr error
-	// Use longer timeout for resource cleanup in slow CI environments
-	// Cleanup may involve rollback operations and state synchronization
+	errCh, done := h.RunStreamAsync(h.NewActiveRoutine())
+	defer done()
 	select {
-	case runErr = <-errCh:
+	case runErr := <-errCh:
+		require.ErrorIs(t, runErr, commitErr)
 	case <-time.After(10 * time.Second):
-		t.Fatal("stream did not exit after cancellation")
-	}
-	// The stream may return either the commit failure error or context.Canceled
-	if runErr != nil {
-		if !errors.Is(runErr, context.Canceled) {
-			// If not canceled, it should be the commit failure error
-			require.Contains(t, runErr.Error(), "commit failure", "if not canceled, should be commit failure")
-		}
+		t.Fatal("stream did not terminate after rollback failure")
 	}
 
-	// Verify orderliness: begin should always come before commit/rollback
-	ops := h.Sinker().opsSnapshot()
-	// Track the last begin index seen so far
-	lastBeginIdx := -1
-	for i, op := range ops {
+	// Run has completed: no polling of an intermediate retryability state.
+	require.False(t, h.Stream().GetRetryable())
+	require.True(t, staleReadInjected.Load())
+	require.GreaterOrEqual(t, collectCalls.Load(), int32(2))
+	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1)
+	require.ErrorIs(t, h.Sinker().Error(), rollbackErr)
+
+	var txnOps []string
+	for _, op := range h.Sinker().opsSnapshot() {
 		switch op {
-		case "begin":
-			lastBeginIdx = i
-		case "commit":
-			require.Greater(t, i, lastBeginIdx, "commit at index %d should come after begin", i)
-		case "rollback":
-			require.Greater(t, i, lastBeginIdx, "rollback at index %d should come after begin", i)
+		case "begin", "commit", "rollback":
+			txnOps = append(txnOps, op)
 		}
 	}
-
-	// Verify idempotency: EnsureCleanup should be idempotent
-	// Count rollbacks - should be at least one, but not excessive
-	rollbackCount := 0
-	beginCount := 0
-	for _, op := range ops {
-		if op == "rollback" {
-			rollbackCount++
-		}
-		if op == "begin" {
-			beginCount++
-		}
-	}
-	require.GreaterOrEqual(t, rollbackCount, 1, "should have at least one rollback after commit failure")
-	require.GreaterOrEqual(t, beginCount, 1, "should have at least one begin")
-
-	// Verify consistency: retryable flag and sinker reset
-	// Note: After rollback failure, stream is marked as non-retryable (system state may be inconsistent).
-	// If rollback error was cleared and next round succeeded, stream should be retryable again.
-	// However, other factors (e.g., watermark mismatch) may also affect retryability.
-	// The core behavior (rollback failure -> non-retryable) is verified earlier in the test.
-	// Here we just verify that the stream has processed the scenarios (stale read, commit failure, rollback failure).
-	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1, "sinker should reset at least once for stale read")
-
-	// Verify all error injections occurred
-	require.True(t, staleReadInjected.Load(), "stale read should have been injected")
-	require.True(t, commitFailInjected.Load(), "commit failure should have been injected")
-	require.True(t, rollbackFailInjected.Load(), "rollback failure should have been injected")
-
-	// Verify tracker state is consistent (may be nil if cleanup completed)
+	// One transaction, one commit attempt and exactly one cleanup rollback.
+	require.Equal(t, []string{"begin", "commit", "rollback"}, txnOps)
 	tracker := h.Stream().txnManager.GetTracker()
 	if tracker != nil {
-		// After EnsureCleanup, tracker should not need rollback (even if rollback failed)
-		require.False(t, tracker.NeedsRollback(), "tracker should be marked as not needing rollback after EnsureCleanup")
+		require.False(t, tracker.NeedsRollback())
+		require.True(t, tracker.IsCompleted())
 	}
+	h.Sinker().releaseOutputs()
+	require.Zero(t, h.MP().CurrNB(), "terminal stream and sink must release all batch ownership")
 }
 
 type noopTxnOperator struct {
@@ -2122,16 +2036,18 @@ func (n *noopTxnOperator) Delete(key string) {}
 // tableStreamHarnessConfig captures the configurable parts of the test harness
 // so individual test cases can focus on behavior rather than boilerplate setup.
 type tableStreamHarnessConfig struct {
-	initSnapshotSplitTxn bool
-	noFull               bool
-	startTs              types.TS
-	endTs                types.TS
-	frequency            time.Duration
-	tableDef             *plan.TableDef
-	tableInfo            *DbTableInfo
-	watermarkUpdater     WatermarkUpdater
-	updaterStop          func()
-	runningReaders       *sync.Map
+	initSnapshotSplitTxn   bool
+	initialSnapshotEpoch   types.TS
+	initialSnapshotPending *bool
+	noFull                 bool
+	startTs                types.TS
+	endTs                  types.TS
+	frequency              time.Duration
+	tableDef               *plan.TableDef
+	tableInfo              *DbTableInfo
+	watermarkUpdater       WatermarkUpdater
+	updaterStop            func()
+	runningReaders         *sync.Map
 	// Retry configuration for testing (use shorter delays to speed up tests)
 	retryOptions []TableChangeStreamOption
 }
@@ -2165,6 +2081,12 @@ func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
 
 type tableStreamHarnessOption func(*tableStreamHarnessConfig)
 
+func withHarnessInitSnapshotSplitTxn(split bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initSnapshotSplitTxn = split
+	}
+}
+
 func withHarnessNoFull(noFull bool) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.noFull = noFull
@@ -2186,6 +2108,18 @@ func withHarnessEndTs(ts types.TS) tableStreamHarnessOption {
 func withHarnessFrequency(freq time.Duration) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.frequency = freq
+	}
+}
+
+func withHarnessInitialSnapshotEpoch(ts types.TS) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotEpoch = ts
+	}
+}
+
+func withHarnessInitialSnapshotPending(pending bool) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.initialSnapshotPending = &pending
 	}
 }
 
@@ -2285,6 +2219,12 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 			WithMaxRetryCount(3),
 			WithRetryBackoff(5*time.Millisecond, 20*time.Millisecond, 2.0),
 		}
+	}
+	if !cfg.initialSnapshotEpoch.IsEmpty() {
+		retryOptions = append(retryOptions, WithInitialSnapshotEpoch(cfg.initialSnapshotEpoch))
+	}
+	if cfg.initialSnapshotPending != nil {
+		retryOptions = append(retryOptions, WithInitialSnapshotPending(*cfg.initialSnapshotPending))
 	}
 
 	stream := NewTableChangeStream(
@@ -2387,6 +2327,7 @@ func (h *tableStreamHarness) Close() {
 		h.cancel()
 		h.stream.Close()
 		h.stream.Wait()
+		h.sinker.releaseOutputs()
 		for _, stub := range h.stubs {
 			stub.Reset()
 		}
@@ -2494,6 +2435,249 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 		}
 		return ts
 	}
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	var current atomic.Int64
+	current.Store(100)
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: current.Load()}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	current.Store(120)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 2)
+	assert.True(t, calls[0].from.IsEmpty())
+	assert.Equal(t, epoch, calls[0].to)
+	assert.Equal(t, epoch, calls[1].from)
+	assert.Equal(t, types.BuildTS(120, 0), calls[1].to)
+}
+
+func TestTableChangeStream_StableSnapshotRecordsTransferredRows(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		return newImmediateChangesHandle([]changeBatch{{
+			insert: createTestBatch(t, h.MP(), to, []int32{1, 2, 3}),
+			hint:   engine.ChangesHandle_Snapshot,
+		}}), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	require.Equal(t, uint64(3), h.Stream().progressTracker.totalRowsProcessed.Load())
+}
+
+func TestTableChangeStream_SnapshotRotationFailureCleansIncomingBatch(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	commitErr := moerr.NewInternalErrorNoCtx("target commit failed")
+	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
+		first := createTestBatch(t, h.MP(), to, []int32{1})
+		incoming := createTestBatch(t, h.MP(), to, []int32{2})
+		nextCalls := 0
+		return &beforeNextChangesHandle{
+			ChangesHandle: newImmediateChangesHandle([]changeBatch{
+				{insert: first, hint: engine.ChangesHandle_Snapshot},
+				{insert: incoming, hint: engine.ChangesHandle_Snapshot},
+			}),
+			before: func() {
+				nextCalls++
+				if nextCalls == 2 {
+					// Force rotation without allocating a 512 MiB test batch.
+					h.Stream().dataProcessor.snapshotTxnBytes = uint64(initialSnapshotTxnByteLimit) - 1
+					h.Sinker().setCommitError(commitErr)
+				}
+			},
+		}, nil
+	})
+
+	require.ErrorIs(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()), commitErr)
+	h.Sinker().releaseOutputs()
+	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB())
+}
+
+func TestTableChangeStream_RecreatedGenerationStartsFromEmptyPosition(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	epoch := types.BuildTS(80, 0)
+	key := (&WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"})
+	updater.watermarks[updater.keyString(key)] = types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+		withHarnessInitialSnapshotPending(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done()
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.True(t, calls[0].from.IsEmpty(), "retired generation watermark must not skip the new full snapshot")
+	require.Equal(t, epoch, calls[0].to)
+}
+
+func TestTableChangeStream_CompletedRestartsBypassSharedSnapshotLimiter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	limiter := newInitialSnapshotLimiter(1, 1, 1, 100, func() (uint64, bool) {
+		return 400, true
+	})
+
+	for _, table := range []string{"t1", "t2", "t3"} {
+		stream := createTestStream(
+			mp,
+			&DbTableInfo{SourceDbName: "db", SourceTblName: table, SourceTblId: 10},
+			WithInitialSnapshotLimiter(limiter),
+			WithInitialSnapshotPending(false),
+		)
+		permit, err := stream.acquireInitialSnapshotPermit(context.Background())
+		require.NoError(t, err)
+		require.Nil(t, permit)
+		stream.Close()
+	}
+
+	limiter.mu.Lock()
+	require.Zero(t, limiter.inFlight)
+	require.Zero(t, limiter.nextTicket, "completed restart must not enter global FIFO admission")
+	limiter.mu.Unlock()
+
+	pending := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "pending", SourceTblId: 11},
+		WithInitialSnapshotLimiter(limiter),
+		WithInitialSnapshotPending(true),
+	)
+	permit, err := pending.acquireInitialSnapshotPermit(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, permit)
+	permit.Release()
+	pending.Close()
+}
+
+func TestTableChangeStream_StableInitialSnapshotEpochHonorsEndTs(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	end := types.BuildTS(70, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
+		withHarnessEndTs(end),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, end, calls[0].to)
+}
+
+func TestTableChangeStream_LegacySplitTaskFallsBackToAtomicCurrentSnapshot(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+
+	assert.False(t, h.Stream().initSnapshotSplitTxn)
+	assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, types.BuildTS(100, 0), calls[0].to)
+}
+
+func TestTableChangeStream_StableEpochRequiresAnInitialSnapshot(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	for _, tc := range []struct {
+		name    string
+		options []tableStreamHarnessOption
+	}{
+		{
+			name: "no full",
+			options: []tableStreamHarnessOption{
+				withHarnessNoFull(true),
+			},
+		},
+		{
+			name: "explicit start timestamp",
+			options: []tableStreamHarnessOption{
+				withHarnessStartTs(types.BuildTS(10, 0)),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := []tableStreamHarnessOption{
+				withHarnessInitSnapshotSplitTxn(true),
+				withHarnessInitialSnapshotEpoch(epoch),
+			}
+			opts = append(opts, tc.options...)
+			h := newTableStreamHarness(t, opts...)
+			h.Stream().start.Done() // The test does not invoke Run.
+			assert.False(t, h.Stream().initSnapshotSplitTxn)
+			assert.False(t, h.Stream().dataProcessor.initSnapshotSplitTxn)
+		})
+	}
+}
+
+func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(types.BuildTS(120, 0)),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 100}
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	assert.Empty(t, h.CollectCallsSnapshot())
+	assert.Zero(t, updater.updateCalls.Load())
+}
+
+func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
+	epoch := types.BuildTS(80, 0)
+	h := newTableStreamHarness(
+		t,
+		withHarnessInitSnapshotSplitTxn(true),
+		withHarnessInitialSnapshotEpoch(epoch),
+	)
+	h.Stream().start.Done() // The test invokes handleStaleRead directly, not Run.
+
+	err := h.Stream().handleStaleRead(h.Context(), newNoopTxnOperator())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stable initial snapshot")
+	assert.Zero(t, h.Sinker().ResetCountSnapshot())
 }
 
 func (h *tableStreamHarness) SetTryEnterRunSql(fn func(context.Context, client.TxnOperator, string) (func(), error)) {
@@ -2650,6 +2834,19 @@ func (s *tableStreamRecordingSinker) Reset() {
 	s.mu.Lock()
 	s.resetCnt++
 	s.mu.Unlock()
+}
+
+// The recording sink owns outputs just like a real sink, but retains them for
+// assertions. The harness calls this only after Run has joined, before deleting
+// the pool. Detaching the slice makes repeated teardown harmless.
+func (s *tableStreamRecordingSinker) releaseOutputs() {
+	s.mu.Lock()
+	outputs := s.sinkCalls
+	s.sinkCalls = nil
+	s.mu.Unlock()
+	for _, output := range outputs {
+		output.Close()
+	}
 }
 
 func (s *tableStreamRecordingSinker) reset() {
@@ -2904,6 +3101,22 @@ func TestTableChangeStream_DetermineRetryable_TableNotFoundError(t *testing.T) {
 			assert.Equal(t, tc.wantRetry, retryable, tc.description)
 		})
 	}
+}
+
+func TestTableChangeStream_DetermineRetryable_TargetLockFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stream := createTestStream(mp, &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	})
+	require.True(t, stream.determineRetryable(
+		newRetryableTargetLockError(errors.New("target unavailable")),
+	))
+	require.True(t, stream.determineRetryable(
+		newRetryableConnectionError(errors.New("target unavailable")),
+	))
 }
 
 // TestTableChangeStream_TableNotFoundError_Integration verifies end-to-end behavior

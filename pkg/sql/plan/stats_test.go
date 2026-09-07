@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
@@ -503,6 +504,38 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 		},
 	}
 	return builder
+}
+
+func TestMissingColumnMapsUseUnknownStatsFallbacks(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 10)
+	wrapper := builder.compCtx.GetStatsCache().Get(1)
+	stats := wrapper.GetStats()
+	delete(stats.NdvMap, "d")
+	col := &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}
+	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: col}}
+
+	require.Equal(t, float64(-1), builder.getColNdv(col))
+	require.Equal(t, 0.1, getNullSelectivity(expr, builder, true))
+	require.Equal(t, 0.9, getNullSelectivity(expr, builder, false))
+}
+
+func TestCompleteStatsSizeMapRejectsPartialGenerations(t *testing.T) {
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "a"}, {Name: "b"}, {Name: "__hidden", Hidden: true},
+	}}
+	stats := NewStatsInfo()
+	stats.SizeMap["a"] = 10
+	_, complete := completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+
+	stats.SizeMap["b"] = 20
+	total, complete := completeStatsSizeMap(stats, tableDef)
+	require.True(t, complete)
+	require.Equal(t, uint64(30), total)
+
+	stats.SizeMap["a"] = math.MaxUint64
+	_, complete = completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
 }
 
 func TestPrimaryKeyStatsShortcutsRequireSQLEqualityCompatibleKey(t *testing.T) {
@@ -1443,6 +1476,108 @@ func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
 	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[5]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[3]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[6]))
+}
+
+func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(scanOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: scanOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_SEMI,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("unmarked build retains cost choice", func(t *testing.T) {
+		builder := makeBuilder("")
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("marked LEFT build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_LEFT
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+}
+
+func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(leftOption, rightOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+				ExtraOptions: leftOption,
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: rightOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked logical left moves to build", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption, "")
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{1, 0}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains shuffle build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].Stats.HashmapStats.Shuffle = true
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+		require.True(t, builder.qry.Nodes[2].Stats.HashmapStats.Shuffle)
+	})
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

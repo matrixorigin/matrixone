@@ -517,6 +517,58 @@ func TestArgumentArenaGrowthFallsBackAtAllocatorLimit(t *testing.T) {
 	require.Equal(t, fallback, account.Snapshot().Used)
 }
 
+func TestAccountedArgumentGrowthFailurePreservesPublishedState(t *testing.T) {
+	const capacity = 16 << 10
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(capacity)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, capacity)
+	require.NoError(t, err)
+	state := aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+	defer func() {
+		state.free(mp)
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	var inserter arenaskl.Inserter
+	require.NoError(t,
+		state.insertArgValueWithInserter(mp, []byte("kept"), nil, &inserter))
+	originalArena := state.argSkl.Arena()
+	originalSize := originalArena.Size()
+
+	// The account is exactly full, so a key that requires growth must fail
+	// before arena publication. The existing arena and the caller's cached
+	// inserter must both remain usable after that rejection.
+	err = state.insertArgValueWithInserter(
+		mp, make([]byte, capacity), nil, &inserter)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Same(t, originalArena, state.argSkl.Arena())
+	require.Equal(t, originalSize, state.argSkl.Arena().Size())
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, uint64(capacity), account.Snapshot().Used)
+
+	require.NoError(t,
+		state.insertArgValueWithInserter(mp, []byte("kept-next"), nil, &inserter))
+	require.True(t, state.argSkl.Contains([]byte("kept-next")))
+}
+
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
 	tests := []aggregateAllocationTestCase{
 		{name: "any", id: AggIdOfAny, params: []types.Type{types.T_varchar.ToType()}},

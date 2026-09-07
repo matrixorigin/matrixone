@@ -133,7 +133,7 @@ FROM employees
 GROUP BY department
 ) dept_summary;
 ➤ company_structure[-1,2147483647,0]  𝄀
-{"departments": {"Engineering": {"avg_salary": 75000.00000000, "employee_count": 3, "employees": ["Alice Johnson", "Bob Smith", "Carol Davis"]}, "Marketing": {"avg_salary": 58500.00000000, "employee_count": 2, "employees": ["David Wilson", "Eva Brown"]}, "Sales": {"avg_salary": 49500.00000000, "employee_count": 2, "employees": ["Frank Miller", "Grace Lee"]}}}
+{"departments": {"Engineering": {"avg_salary": 75000.000000, "employee_count": 3, "employees": ["Alice Johnson", "Bob Smith", "Carol Davis"]}, "Marketing": {"avg_salary": 58500.000000, "employee_count": 2, "employees": ["David Wilson", "Eva Brown"]}, "Sales": {"avg_salary": 49500.000000, "employee_count": 2, "employees": ["Frank Miller", "Grace Lee"]}}}
 drop table if exists user_permissions;
 CREATE TABLE user_permissions (
 user_id INT,

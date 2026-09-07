@@ -39,8 +39,11 @@ import (
 )
 
 const (
-	countstar_sql     = "SELECT COUNT(*) from %s where word = '%s'"
-	countstar_avg_sql = "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
+	countstar_sql = "SELECT COUNT(*) from %s where word = '%s'"
+	// BM25 consumes AvgDocLen as float64. Keep the internal query on the
+	// floating-point AVG path because exact AVG over integer pos now returns a
+	// DECIMAL vector.
+	countstar_avg_sql = "SELECT COUNT(*), AVG(CAST(pos AS DOUBLE)) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
 )
 
 var ft_runSql = sqlexec.RunSql

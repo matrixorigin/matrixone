@@ -1,5 +1,11 @@
 # ANALYZE Statistics Publication and Plan-Cache Freshness
 
+> The publication, schema-fencing, and cache-invalidation contracts in this
+> document remain active. The collection path is superseded by
+> `docs/rfcs/20260904_manual_analyze_sampled_stats.md`, which performs bounded
+> storage sampling instead of a derived full-table aggregate plus metadata
+> refresh.
+
 - Status: mandatory design review pending (stateful cache/concurrency lifecycle)
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#27758](https://github.com/matrixorigin/matrixone/pull/27758)

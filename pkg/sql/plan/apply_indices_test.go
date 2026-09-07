@@ -6568,6 +6568,141 @@ func TestHandleMessageFromTopToScanPushesOrderedLimitWithCursorRange(t *testing.
 	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 }
 
+func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *testing.T) {
+	const (
+		tag   = int32(100)
+		pkPos = int32(1)
+	)
+	pkType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	pkExpr := GetColExpr(pkType, tag, pkPos)
+	pkExpr.GetCol().Name = catalog.CPrimaryKeyColName
+	upperBound, err := BindFuncExprImplByPlanExpr(context.Background(), "<=", []*planpb.Expr{
+		DeepCopyExpr(pkExpr),
+		makePlan2StringConstExprWithType("upper", true),
+	})
+	require.NoError(t, err)
+	lowerBound, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*planpb.Expr{
+		DeepCopyExpr(pkExpr),
+		makePlan2StringConstExprWithType("cursor", true),
+	})
+	require.NoError(t, err)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	scanNode := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		NodeId:      0,
+		BindingTags: []int32{tag},
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "role_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: pkType, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{catalog.CPrimaryKeyColName: pkPos},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName},
+		},
+		FilterList: []*planpb.Expr{upperBound, lowerBound},
+	}
+	sortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   1,
+		Children: []int32{0},
+		OrderBy:  []*planpb.OrderBySpec{{Expr: DeepCopyExpr(pkExpr)}},
+		Limit:    makePlan2Uint64ConstExprWithType(1000),
+	}
+	builder.qry.Nodes = []*planpb.Node{scanNode, sortNode}
+
+	builder.handleMessageFromTopToScan(1)
+
+	require.Len(t, scanNode.OrderBy, 1)
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	require.Equal(t, pkPos, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, uint64(1000), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+
+	// A column-independent function is a runtime constant to the SQL executor,
+	// but it is not necessarily compiled into the storage PK filter. It must not
+	// let the reader truncate before the upper-layer residual is evaluated.
+	runtimeBound := &planpb.Expr{
+		Typ: pkType,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "concat"},
+			Args: []*planpb.Expr{makePlan2StringConstExprWithType("cursor", true)},
+		}},
+	}
+	runtimeFilter := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: ">"},
+			Args: []*planpb.Expr{DeepCopyExpr(pkExpr), runtimeBound},
+		}},
+	}
+	rejectBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	rejectScanNode := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		NodeId:      0,
+		BindingTags: []int32{tag},
+		TableDef:    scanNode.TableDef,
+		FilterList:  []*planpb.Expr{runtimeFilter},
+	}
+	rejectSortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   1,
+		Children: []int32{0},
+		OrderBy:  []*planpb.OrderBySpec{{Expr: DeepCopyExpr(pkExpr)}},
+		Limit:    makePlan2Uint64ConstExprWithType(1000),
+	}
+	rejectBuilder.qry.Nodes = []*planpb.Node{rejectScanNode, rejectSortNode}
+
+	rejectBuilder.handleMessageFromTopToScan(1)
+
+	require.Len(t, rejectScanNode.OrderBy, 1)
+	require.Nil(t, rejectScanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanRejectsCompositePrimaryKeyOrderedLimitWithResidualFilter(t *testing.T) {
+	const (
+		tag   = int32(100)
+		pkPos = int32(1)
+	)
+	pkType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	pkExpr := GetColExpr(pkType, tag, pkPos)
+	pkExpr.GetCol().Name = catalog.CPrimaryKeyColName
+	residual, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+		GetColExpr(planpb.Type{Id: int32(types.T_int32)}, tag, 0),
+		makePlan2Int64ConstExprWithType(1),
+	})
+	require.NoError(t, err)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	scanNode := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		NodeId:      0,
+		BindingTags: []int32{tag},
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "role_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: pkType, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{catalog.CPrimaryKeyColName: pkPos},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName},
+		},
+		FilterList: []*planpb.Expr{residual},
+	}
+	sortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   1,
+		Children: []int32{0},
+		OrderBy:  []*planpb.OrderBySpec{{Expr: DeepCopyExpr(pkExpr)}},
+		Limit:    makePlan2Uint64ConstExprWithType(1000),
+	}
+	builder.qry.Nodes = []*planpb.Node{scanNode, sortNode}
+
+	builder.handleMessageFromTopToScan(1)
+
+	require.Len(t, scanNode.OrderBy, 1)
+	require.Nil(t, scanNode.IndexReaderParam)
+}
+
 func TestHandleMessageFromTopToScanSkipsOrderedLimitAcrossFilter(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
 	scanNode := builder.qry.Nodes[0]
@@ -8378,6 +8513,80 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
+}
+
+func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
+	makeScan := func(t *testing.T, columnType planpb.Type, filters []*planpb.Expr) (*QueryBuilder, int32, *planpb.IndexDef) {
+		t.Helper()
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		ctx := NewBindContext(builder, nil)
+		bindTag := builder.genNewBindTag()
+		idxDef := &planpb.IndexDef{
+			IndexName:      "idx_price",
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_idx_price",
+			Parts:          []string{"price", "id"},
+			Unique:         false,
+			TableExist:     true,
+		}
+		registerMockIndexTable(t, builder, idxDef.IndexTableName)
+		for _, filter := range filters {
+			filter.GetF().Args[0].GetCol().RelPos = bindTag
+			setIndexRangeArgumentType(filter, columnType)
+			filter.Selectivity = 0.2
+		}
+		node := &planpb.Node{
+			NodeType:    planpb.Node_TABLE_SCAN,
+			ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+			BindingTags: []int32{bindTag},
+			TableDef: &planpb.TableDef{
+				Name: "t",
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "price", Typ: columnType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "price": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 4, Selectivity: 0.04, Cost: 100},
+			FilterList: filters,
+		}
+		return builder, builder.appendNode(node, ctx), idxDef
+	}
+
+	t.Run("closed fixed-width bounds become one prefix_between", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeRangeFilterExpr(0, 1, ">=", 20),
+			makeRangeFilterExpr(0, 1, "<=", 50),
+		}
+		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_int64)}, filters)
+		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+
+		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+		require.NotEqual(t, int32(-1), idxNodeID)
+		indexScan := builder.qry.Nodes[idxNodeID]
+		require.Len(t, indexScan.FilterList, 1)
+		require.Equal(t, "prefix_between", indexScan.FilterList[0].GetF().Func.ObjName)
+	})
+
+	t.Run("byte-string bounds retain exact residuals", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeStringRangeFilterExpr(0, 1, ">", "a"),
+			makeStringRangeFilterExpr(0, 1, "<=", "b"),
+		}
+		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_varbinary), Width: 8}, filters)
+		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+
+		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+		require.NotEqual(t, int32(-1), idxNodeID)
+		indexScan := builder.qry.Nodes[idxNodeID]
+		require.Len(t, indexScan.FilterList, 3)
+		require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
+		require.Equal(t, ">", indexScan.FilterList[1].GetF().Func.ObjName)
+		require.Equal(t, "<=", indexScan.FilterList[2].GetF().Func.ObjName)
+	})
 }
 
 func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {

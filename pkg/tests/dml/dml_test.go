@@ -203,6 +203,9 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Run("csv_rich_types_round_trip", func(t *testing.T) {
 				runCSVLoadRichTypes(t, ctx, sqlDB, dbName)
 			})
+			t.Run("csv_user_diff_prefix_identifier", func(t *testing.T) {
+				runCSVUserDiffPrefixIdentifier(t, ctx, sqlDB, dbName)
+			})
 			t.Run("output_limit_subset", func(t *testing.T) {
 				runDiffOutputLimitSubset(t, ctx, sqlDB, dbName)
 			})
@@ -802,6 +805,32 @@ insert into %s values
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
+func runCSVUserDiffPrefixIdentifier(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	base := "user_prefix_csv_base"
+	target := "__mo_diff_orders"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, value varchar(32))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` like `%s`", target, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 'first'), (2, 'second')", target))
+
+	diffStmt := fmt.Sprintf("data branch diff `%s` against `%s` output file '%s'", target, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".csv", filepath.Ext(diffPath))
+
+	records := readDiffCSVFile(t, diffPath)
+	require.ElementsMatch(t, [][]string{{"1", "first"}, {"2", "second"}}, records)
+
+	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
+	assertTablesEqual(t, ctx, db, dbName, target, base)
+}
+
 func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
@@ -843,7 +872,7 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 	projectedFullRows := fetchDiffRowsAsStrings(t, ctx, db, projectedFullStmt)
 	require.GreaterOrEqual(t, len(projectedFullRows), 6)
 	for _, row := range projectedFullRows {
-		require.Len(t, row, 4, "projected diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected diff should include table, flag, primary key, and requested columns")
 	}
 
 	projectedLimitStmt := fmt.Sprintf("data branch diff %s against %s columns (val, note) output limit %d", branch, base, limit)
@@ -856,7 +885,7 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 		projectedFullSet[strings.Join(row, "||")] = struct{}{}
 	}
 	for _, row := range projectedLimitedRows {
-		require.Len(t, row, 4, "projected limited diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected limited diff should include table, flag, primary key, and requested columns")
 		_, ok := projectedFullSet[strings.Join(row, "||")]
 		require.Truef(t, ok, "projected limited diff row not contained in projected full diff: %v", row)
 	}

@@ -11,7 +11,7 @@ Stats(tableID)
 cache.Get(tableID)
     │
     ▼
-w.Exists() && accessed within 3s && AccurateObjectNumber > 0 ?
+w.Exists() && accessed within 3s && StatsInfoUsable(stats) ?
     │
     ├─ Yes → Return cached
     │
@@ -44,7 +44,8 @@ Return stats
 
 ## Key Design
 
-1. **Validity Check**: `AccurateObjectNumber > 0` indicates valid stats
+1. **Validity Check**: `StatsInfoUsable` accepts real metadata statistics and
+   completed table-wide observations, including an analyzed empty table
 2. **Empty Table Handling**: Returns `nil`, letting caller use `DefaultStats()` (Outcnt=1000)
 3. **Aggressive Retry**: When stats are invalid, re-fetch every time to ensure data changes are captured promptly. This is critical for BVT tests—when tables are just created/inserted and immediately queried, timely stats updates are needed to generate correct execution plans (e.g., LEFT/RIGHT JOIN selection)
 4. **Value-Type Cache**: `map[uint64]StatsInfoWrapper` uses value types, checking existence via `lastVisit == 0`, reducing small object allocations

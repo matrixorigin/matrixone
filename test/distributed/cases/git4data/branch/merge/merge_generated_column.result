@@ -23,10 +23,10 @@ stored_branch  ¦  UPDATE  ¦  1  ¦  11  ¦  20  ¦  31  𝄀
 stored_branch  ¦  DELETE  ¦  2  ¦  30  ¦  40  ¦  70  𝄀
 stored_branch  ¦  INSERT  ¦  3  ¦  50  ¦  60  ¦  110
 data branch diff stored_branch against stored_base columns(c, id);
-➤ diff stored_branch against stored_base[12,0,0]  ¦  flag[12,0,0]  ¦  c[4,32,0]  ¦  id[4,32,0]  𝄀
-stored_branch  ¦  UPDATE  ¦  31  ¦  1  𝄀
-stored_branch  ¦  DELETE  ¦  70  ¦  2  𝄀
-stored_branch  ¦  INSERT  ¦  110  ¦  3
+➤ diff stored_branch against stored_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  c[4,32,0]  𝄀
+stored_branch  ¦  UPDATE  ¦  1  ¦  31  𝄀
+stored_branch  ¦  DELETE  ¦  2  ¦  70  𝄀
+stored_branch  ¦  INSERT  ¦  3  ¦  110
 data branch diff stored_branch against stored_base columns(c, id) output as stored_generated_diff;
 ➤ TABLE CREATED[12,0,0]  𝄀
 `data_branch_generated_column`.`stored_generated_diff`

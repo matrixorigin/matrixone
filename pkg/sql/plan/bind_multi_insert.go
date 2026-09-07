@@ -490,6 +490,9 @@ func validateMultiInsertTarget(ctx context.Context, tableDef *plan.TableDef) err
 			"multi-table INSERT into external table '%s'", tableDef.Name)
 	case catalog.SystemSourceRel:
 		return moerr.NewNYIf(ctx, "insert stream %s", tableDef.Name)
+	case catalog.SystemClusterRel:
+		return moerr.NewNotSupportedf(ctx,
+			"multi-table INSERT into cluster table '%s'", tableDef.Name)
 	}
 	return nil
 }

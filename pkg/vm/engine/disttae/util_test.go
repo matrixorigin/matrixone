@@ -654,6 +654,16 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 		x := slices.Index(have, int64(offset))
 		require.NotEqual(t, -1, x)
 	}
+
+	selected := rowIds[0].CloneBlockID()
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selected]))
+	delBlks.getDeletedRowIDsForBlocks([]types.Blockid{selected}, func(row types.Rowid) {
+		scoped = append(scoped, row)
+	})
+	require.Len(t, scoped, len(delBlks.offsets[selected]))
+	for i := range scoped {
+		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
+	}
 }
 
 func TestConcurrentExecutor_Run(t *testing.T) {

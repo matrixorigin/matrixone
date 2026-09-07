@@ -204,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
+		op.DynamicGrouping = t.DynamicGrouping
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -314,6 +315,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.GroupingSetCount = t.GroupingSetCount
+		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -341,6 +344,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.Algorithm = t.Algorithm
+		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
 		return op
 	case vm.Window:
@@ -679,6 +684,20 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.HasODKUAffectedRows = t.HasODKUAffectedRows
+		op.AffectedRowsResultPos = t.AffectedRowsResultPos
+		op.PhysicalChangedResultPos = t.PhysicalChangedResultPos
+		op.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		op.CountFoundRows = t.CountFoundRows
+		op.EmitActionRows = t.EmitActionRows
+		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -992,6 +1011,14 @@ func constructMultiUpdate(
 		if updateCtx.ChangedRowsCol != nil {
 			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
 			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+		}
+		if updateCtx.AffectedRowsWeightCol != nil {
+			col := int(updateCtx.AffectedRowsWeightCol.ColPos)
+			arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+		}
+		if updateCtx.PhysicalChangedRowsCol != nil {
+			col := int(updateCtx.PhysicalChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 		}
 	}
 	arg.Action = action
@@ -1350,6 +1377,10 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
+		arg.GroupingSetCount = count
+		arg.GroupingFlags = node.GroupingFlag
+	}
 	return arg
 }
 
@@ -1533,6 +1564,24 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
+			arg.HasODKUAffectedRows = true
+			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
+			arg.PhysicalChangedResultPos = findJoinResultPos(result, node.DedupJoinCtx.PhysicalChangedRowsCol)
+			arg.UpdateCheckColIdxList = node.DedupJoinCtx.UpdateCheckColIdxList
+			arg.CountFoundRows = node.DedupJoinCtx.CountFoundRows
+		}
+		arg.EmitActionRows = node.DedupJoinCtx.EmitActionRows
+		if arg.EmitActionRows {
+			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
+		}
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
+		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
 		// must exclude that row from duplicate detection: an UPDATE that keeps
 		// a primary/unique key unchanged is not a duplicate of itself.
@@ -1563,6 +1612,18 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findJoinResultPos(result []colexec.ResultPos, col *plan.ColRef) int32 {
+	if col == nil {
+		return -1
+	}
+	for i, pos := range result {
+		if pos.Rel == col.RelPos && pos.Pos == col.ColPos {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
@@ -1810,6 +1871,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.NeedEval = needEval
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
+	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -2105,13 +2167,52 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) *group.MergeGroup {
+func constructMergeGroup(
+	node *plan.Node,
+	childNode *plan.Node,
+	aggs []aggexec.AggFuncExecExpression,
+	groupingAware bool,
+) *group.MergeGroup {
 	arg := group.NewArgumentMergeGroup()
 	// here the node is a Group node, merge group is "generated" by the
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
+	arg.GroupingAware = groupingAware
+	if groupingSetCount, ok := plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions); ok {
+		groupCount := len(childNode.GroupingFlag) / groupingSetCount
+		if groupCount > 0 && len(childNode.GroupingFlag) == groupingSetCount*groupCount &&
+			len(node.GroupBy) == groupCount+1 {
+			for set := 0; set < groupingSetCount; set++ {
+				active := false
+				for key := 0; key < groupCount; key++ {
+					if childNode.GroupingFlag[set*groupCount+key] {
+						active = true
+						break
+					}
+				}
+				if !active {
+					arg.EmptyGroupingSetIDs = append(arg.EmptyGroupingSetIDs, int64(set))
+				}
+			}
+		}
+	} else if len(node.GroupingFlag) == len(node.GroupBy) && len(node.GroupBy) > 0 {
+		arg.EmptyGroupingSet = true
+		for _, active := range node.GroupingFlag {
+			if active {
+				arg.EmptyGroupingSet = false
+				break
+			}
+		}
+	}
+	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
+		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
+		for i, expr := range node.GroupBy {
+			arg.GroupByTypes[i] = types.NewWithCharset(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+		}
+	}
 	return arg
 }
 
@@ -2134,6 +2235,8 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.Algorithm = node.PartitionAlgorithm
+	arg.SpillMem = node.SpillMem
 	return arg
 }
 
