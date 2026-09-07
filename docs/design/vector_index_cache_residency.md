@@ -808,8 +808,21 @@ admissions, which have no deadline of their own, and the memo is refreshed by th
 housekeeping tick well before it expires — so on the steady-state path nobody
 waits at all.
 
-**`DeleteAllBasesSqls` deletes tail frame rows but leaves the tail chunks.** Read
-alone this orphans the chunks. Every caller is compaction, which issues
-`DeleteTailSqls` in the same transaction, and that statement removes both the
-chunks and the frame rows. The pairing is what makes it correct; the function is
-not exported for any other use.
+**`DeleteAllBasesSqls` spares the tail's frame rows.** It was written to delete
+every metadata row (`WHERE TRUE`), which contradicted its own contract that "the
+tag=1 CdcTail is untouched". `fulltext2_create`'s `sealSegment` calls it WITHOUT
+`DeleteTailSqls` -- a REBUILD deliberately keeps the tail's bytes -- so the rows
+went while the chunks they described stayed. That stripped `build_ts` off a live
+tail permanently, and left `tailPeakBytes` summing only whichever frames a later
+flush appended: the fallback fires only when there are NO rows, so one new frame
+would be reported as the size of the entire tail and the load budget would
+under-reserve. The metadata delete is now predicated on
+`index_id NOT LIKE 'cdc_tail:%'`. Compaction and re-index are unaffected -- both
+call `DeleteTailSqls`, which removes the tail's chunks and rows together.
+
+The other algorithms need no equivalent change: cagra and ivfpq clear the tail
+only through re-index's full `DELETE FROM` of both hidden tables, so chunks and
+frame rows always go together. `CagraModel.ToDeleteSql` / `IvfpqModel.ToDeleteSql`
+would match `index_id = 'cdc_tail'` exactly and miss the `cdc_tail:N` rows, but
+neither is reachable -- `hnsw` is the only caller of that method, and hnsw writes
+no frame rows.

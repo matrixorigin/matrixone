@@ -52,6 +52,12 @@ func TestDeleteSqls(t *testing.T) {
 	require.Len(t, all, 2)
 	require.Contains(t, all[0], "__store")
 	require.Contains(t, all[1], "__meta")
+	// A REBUILD clears the bases and KEEPS the tail's bytes, so the tail's frame rows have to
+	// survive with them: stripping the rows off chunks that are still there loses their
+	// build_ts and leaves tailPeakBytes summing whichever frames a later flush appends.
+	require.Contains(t, all[1], "NOT LIKE", "the bases' delete must spare the tail frame rows")
+	require.Contains(t, all[1], TailFrameMetaPrefix)
+	require.NotContains(t, all[1], "WHERE TRUE")
 
 	// The tail's chunks AND its per-frame metadata rows: leaving the rows behind would report
 	// a tail that no longer exists.

@@ -401,7 +401,9 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
 		default: // DELETE / INSERT writes succeed
-			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, "TRUE") {
+			// The bases' metadata delete is the one that SPARES the tail frame rows;
+			// DeleteTailSqls' own delete names the same prefix with a plain LIKE.
+			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, "NOT LIKE") {
 				deleteAllRan = true
 			}
 			if strings.HasPrefix(sql, "INSERT") {

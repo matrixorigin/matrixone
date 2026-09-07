@@ -338,13 +338,27 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 	}
 }
 
-// DeleteAllBasesSqls removes every tag=0 base (all sub-index chunk rows + all
+// DeleteAllBasesSqls removes every tag=0 base (all sub-index chunk rows + their
 // metadata rows); the tag=1 CdcTail is untouched. Makes CREATE idempotent.
+//
+// "Untouched" has to include the tail's frame rows. A REBUILD (fulltext2_create's
+// sealSegment) calls this WITHOUT DeleteTailSqls, deliberately keeping the tail's
+// bytes -- so deleting the frame rows here would strip the provenance off chunks
+// that are still there, and leave the tail described by the rows of whichever
+// frames a later flush happens to append. tailPeakBytes sums the frame rows and
+// only falls back to the chunk count when there are NONE, so that mixed state
+// reports one new frame as the size of the whole tail and under-reserves the
+// load this budget exists to refuse.
+//
+// The predicate also keeps this a DELETE: a bare "DELETE FROM t" is rewritten to
+// TRUNCATE, which swaps the table id out from under the statement's snapshot.
 func DeleteAllBasesSqls(cfg TableConfig) []string {
 	return []string{
 		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_ModelChunk)),
-		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)),
+		fmt.Sprintf("DELETE FROM %s WHERE %s NOT LIKE %s",
+			sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%")),
 	}
 }
 
