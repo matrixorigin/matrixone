@@ -151,6 +151,7 @@ func main() {
 		runner.accessLifecycleCase,
 		runner.concurrentCreateMappingAndDropCase,
 		runner.appendReadAndTimeTravelCase,
+		runner.emptyStringReadCase,
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
 		runner.mergeOnReadDeleteCase,
@@ -861,6 +862,12 @@ func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		// A slow query or instrumented test run can make the ticker and
+		// context deadline ready at the same time. Do not start another
+		// database poll after the context has expired.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rows, err := queryLines(ctx, db, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(waitersPoint)))
 		if err != nil {
 			return err
@@ -980,6 +987,32 @@ func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult
 	}
 	details["case_wall_s"] = formatSeconds(time.Since(caseStarted))
 	return passedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, details)
+}
+
+func (r *caseRunner) emptyStringReadCase(ctx context.Context) caseResult {
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
+	sqls := []string{
+		fmt.Sprintf("INSERT INTO %s VALUES (101,10,10,''),(102,10,20,'中文'),(103,10,30,NULL)", table),
+		fmt.Sprintf("SELECT COUNT(*), COUNT(region), COUNT(NULLIF(region,'')) FROM %s WHERE order_id BETWEEN 101 AND 103", table),
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE order_id BETWEEN 101 AND 103 AND region = ''", table),
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE order_id BETWEEN 101 AND 103 AND region = '中文'", table),
+	}
+	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
+		return failedCase("ICE-CI-E2E-025", "empty-string-read", sqls, nil, nil, err.Error())
+	}
+	expected := []string{"3\t2\t1", "1", "1"}
+	actual := make([]string, 0, len(expected))
+	for _, stmt := range sqls[1:] {
+		lines, err := queryLines(ctx, r.db, stmt)
+		actual = append(actual, lines...)
+		if err != nil {
+			return failedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, err.Error())
+		}
+	}
+	if !sameLines(expected, actual) {
+		return failedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, "empty string read result mismatch")
+	}
+	return passedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, nil)
 }
 
 func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {

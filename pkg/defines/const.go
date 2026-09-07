@@ -81,7 +81,16 @@ const (
 	MORPCVersion43     int64 = 43 // scalar-predicate runtime-filter terminal states
 	MORPCVersion44     int64 = 44 // validated MongoDB explicit-query scan payload
 	MORPCVersion45     int64 = 45 // bounded Parquet whole-file fanout payload
-	MORPCLatestVersion       = MORPCVersion45
+	MORPCVersion46     int64 = 46 // subscription-aware information-schema metadata table functions
+	MORPCVersion47     int64 = 47 // ordinary window hash partition pipeline algorithm
+	MORPCVersion48     int64 = 48 // generation-aware CDC watermark catalog
+	MORPCVersion49     int64 = 49 // vector-level grouping-set projection expansion
+	MORPCVersion50     int64 = 50 // ordered ODKU evaluation and logical affected-row metadata
+	MORPCVersion51     int64 = 51 // per-action ODKU validation and statement-local target arbitration
+	MORPCVersion52     int64 = 52 // MySQL binary JSON subtype tags
+	MORPCVersion53     int64 = 53 // ordered-stream distributed Top-N merge
+	MORPCVersion54     int64 = 54 // catalog-authenticated proxy cache reuse
+	MORPCLatestVersion       = MORPCVersion54
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

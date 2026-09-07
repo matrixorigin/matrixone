@@ -218,6 +218,7 @@ func init() {
 		"format":                     FORMAT,
 		"from":                       FROM,
 		"full":                       FULL,
+		"fullscan":                   FULLSCAN,
 		"fulltext":                   FULLTEXT,
 		"fulltext2":                  FULLTEXT2,
 		"function":                   FUNCTION,

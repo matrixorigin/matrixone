@@ -102,19 +102,21 @@ type dmlPlanCtx struct {
 	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
 	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
 	// the aggregation is skipped; the NULL-row filter must stay.
-	needAggFilter          bool
-	dedupByRowNumber       bool
-	updateColLength        int
-	rowIdPos               int
-	insertColPos           []int
-	updateColPosMap        map[string]int
-	allDelTableIDs         map[uint64]struct{}
-	allDelTables           map[FkReferKey]struct{}
-	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
-	lockTable              bool //we need lock table in stmt: delete from tbl
-	updatePkCol            bool //if update stmt will update the primary key or one of pks
-	pkFilterExprs          []*Expr
-	isDeleteWithoutFilters bool
+	needAggFilter     bool
+	dedupByRowNumber  bool
+	updateColLength   int
+	rowIdPos          int
+	insertColPos      []int
+	updateColPosMap   map[string]int
+	allDelTableIDs    map[uint64]struct{}
+	allDelTables      map[FkReferKey]struct{}
+	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
+	lockTable         bool //we need lock table in stmt: delete from tbl
+	updatePkCol       bool //if update stmt will update the primary key or one of pks
+	pkFilterExprs     []*Expr
+	// isUnrestrictedDelete means the statement semantically selects the entire
+	// target table. Physical truncate eligibility is decided separately.
+	isUnrestrictedDelete bool
 	// skipTargetDelete reuses the parent-reference action planner for a row set
 	// whose base-table delete is owned by another operator (modern REPLACE).
 	// Recursive child actions still build their normal delete/update branches.
@@ -1027,7 +1029,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
 	// we have build SK using UK code path. So we might see UK in function signature even thought it could be for
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
-	canTruncate := delCtx.isDeleteWithoutFilters
+	canTruncate := delCtx.isUnrestrictedDelete
 
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
@@ -3486,10 +3488,12 @@ func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *
 		}
 	}
 
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial() produces the opaque byte representation stored in the hidden
+		// composite-primary-key column.  Keep its binary string domain here as
+		// well; labelling it as legacy/text VARCHAR makes the generated input PK
+		// incompatible with the same bytes read back from a base or index table.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -3524,10 +3528,9 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 			},
 		}
 	}
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial_full() is also an opaque serialized key, not user text.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -5973,7 +5976,7 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 			var entriesTblPkPos int
 			var entriesTblPkTyp Type
 
-			if delCtx.isDeleteWithoutFilters {
+			if delCtx.isUnrestrictedDelete {
 				lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
 				entriesDeleteIdx = getRowIdPos(entriesTableDef)
 				entriesTblPkPos, entriesTblPkTyp = getPkPos(entriesTableDef, false)
@@ -6256,7 +6259,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
 		uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
 		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
@@ -6462,7 +6465,7 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	var masterTblPkPos int
 	var masterTblPkTyp Type
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
 		masterDeleteIdx = getRowIdPos(masterTableDef)
 		masterTblPkPos, masterTblPkTyp = getPkPos(masterTableDef, false)
@@ -6646,7 +6649,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	canTruncate := delCtx.isDeleteWithoutFilters
+	canTruncate := delCtx.isUnrestrictedDelete
 
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
@@ -6987,7 +6990,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexObjRef *ObjectRef, indexTableDef *TableDef, indexdef *plan.IndexDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		// truncate and create a table scan of index table
 
 		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
@@ -7323,7 +7326,7 @@ func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 	}
 
 	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, delCtx.tableDef,
-		delCtx.sourceStep, indexdef, idx, isDelete, isInsert, delCtx.isDeleteWithoutFilters)
+		delCtx.sourceStep, indexdef, idx, isDelete, isInsert, delCtx.isUnrestrictedDelete)
 }
 
 // Post Insert FullText Index to use PostDml node to save INSERT SQL and execute after the pipelines

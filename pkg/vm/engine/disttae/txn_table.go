@@ -258,13 +258,17 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+	key := pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
 		TableID:    tbl.tableId,
 		TableName:  tbl.tableName,
 		DbName:     tbl.db.databaseName,
-	}, sync), nil
+	}
+	if versioned, ok := tbl.getEngine().(engine.TableVersionedStats); ok {
+		return versioned.StatsAtTableVersion(ctx, key, sync, tbl.version), nil
+	}
+	return tbl.getEngine().Stats(ctx, key, sync), nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
@@ -695,7 +699,26 @@ func (tbl *txnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
+	return tbl.collectTombstones(ctx, txnOffset, policy, nil)
+}
+
+func (tbl *txnTable) collectTombstones(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	blocks []objectio.Blockid,
+) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
+	if blocks != nil {
+		blocks = slices.Clone(blocks)
+		slices.SortFunc(blocks, func(a, b objectio.Blockid) int {
+			return a.Compare(&b)
+		})
+		blocks = slices.CompactFunc(blocks, func(a, b objectio.Blockid) bool {
+			return a.EQ(&b)
+		})
+		tombstone = readutil.NewBlockScopedTombstoneData(blocks)
+	}
 
 	//collect uncommitted tombstones
 
@@ -731,9 +754,14 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+		appendDeletedRow := func(row types.Rowid) {
 			tombstone.AppendInMemory(row)
-		})
+		}
+		if blocks == nil {
+			tbl.getTxn().deletedBlocks.getDeletedRowIDs(appendDeletedRow)
+		} else {
+			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(blocks, appendDeletedRow)
+		}
 
 		//collect uncommitted persisted tombstones.
 		if err := tbl.getTxn().getUncommittedS3Tombstone(
@@ -753,15 +781,32 @@ func (tbl *txnTable) CollectTombstones(
 		if err != nil {
 			return nil, err
 		}
-		{
+		collectRows := func(block *types.Blockid) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			ts := tbl.db.op.SnapshotTS()
-			iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
+			iter := state.NewRowsIter(types.TimestampToTS(ts), block, true)
+			defer iter.Close()
 			for iter.Next() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				entry := iter.Entry()
-				//bid, o := entry.RowID.Decode()
 				tombstone.AppendInMemory(entry.RowID)
 			}
-			iter.Close()
+			return nil
+		}
+		if blocks == nil {
+			if err = collectRows(nil); err != nil {
+				return nil, err
+			}
+		} else {
+			for i := range blocks {
+				if err = collectRows(&blocks[i]); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		//tombstone.SortInMemory()

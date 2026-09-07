@@ -410,10 +410,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			recordRefresh(result)
 		}
 		if result.remove {
-			bind := result.bind
-			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-				return !v.getBind().Changed(bind)
-			}, closeReasonKeeperFailed)
+			// A non-retryable transport failure means the recorded owner can no
+			// longer preserve this transaction's lock contract. Detaching only the
+			// route leaves the transaction live and its remote-bind lease indexed,
+			// so the keeper retries the departed owner forever. Fence every exact
+			// consumer and remove the exact route if it is still cached. Transaction
+			// cleanup remains the owner of releasing the corresponding remoteBindRef.
+			k.invalidateRemoteBind(result.bind)
 		}
 	}
 
@@ -479,7 +482,7 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	if err != nil {
 		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
 		if invalidateOnRefreshFailure {
-			k.invalidateRemoteBind(bind, requestAllocator)
+			k.invalidateRemoteBind(bind)
 		}
 		return
 	}
@@ -499,20 +502,19 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 
 func (k *lockTableKeeper) invalidateRemoteBind(
 	bind pb.LockTable,
-	allocator allocatorState,
 ) {
 	k.service.bindChangeMu.Lock()
 	defer k.service.bindChangeMu.Unlock()
 
-	k.service.removeLockTablesWithFence(
-		k.groupTables,
-		func(candidate pb.LockTable) bool {
-			return candidate.Group == bind.Group &&
-				candidate.Table == bind.Table &&
-				!candidate.Changed(bind)
-		},
-		allocator,
-	)
+	key := makeRemoteBindKey(bind)
+	removed := k.groupTables.detachWithFilter(func(_ uint64, table lockTable) bool {
+		return makeRemoteBindKey(table.getBind()) == key
+	})
+	// A transaction-owned remoteBindRef intentionally outlives route-cache
+	// membership. Fence exact consumers even when another path already removed
+	// or replaced the route, without disturbing users of a newer generation.
+	k.service.fenceByExactBind(bind)
+	closeLockTables(removed, closeReasonBindChanged)
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {

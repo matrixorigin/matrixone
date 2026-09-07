@@ -27,15 +27,14 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		outputColumnProvenance: make(map[int32]OutputColumnProvenance),
-		groupByAst:             make(map[string]int32),
-		groupByCanonicalAst:    make(map[string]int32),
-		groupByParamAst:        make(map[string]int32),
-		aggregateByAst:         make(map[string]int32),
-		sampleByAst:            make(map[string]int32),
-		projectByExpr:          make(map[string]int32),
-		windowByAst:            make(map[string]int32),
-		timeByAst:              make(map[string]int32),
+		groupByAst:          make(map[string]int32),
+		groupByCanonicalAst: make(map[string]int32),
+		groupByParamAst:     make(map[string]int32),
+		aggregateByAst:      make(map[string]int32),
+		sampleByAst:         make(map[string]int32),
+		projectByExpr:       make(map[string]int32),
+		windowByAst:         make(map[string]int32),
+		timeByAst:           make(map[string]int32),
 
 		projectColByAst: make(map[string]int32),
 
@@ -77,6 +76,78 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	return bc
+}
+
+func (bc *BindContext) appendHeading(heading string, provenance headingProvenance) {
+	index := int32(len(bc.headings))
+	bc.headings = append(bc.headings, heading)
+	bc.setHeadingProvenance(index, provenance)
+}
+
+func (bc *BindContext) setHeading(index int, heading string, provenance headingProvenance) {
+	bc.headings[index] = heading
+	bc.setHeadingProvenance(int32(index), provenance)
+}
+
+func (bc *BindContext) headingProvenanceFor(index int) headingProvenance {
+	return cloneHeadingProvenance(bc.headingProvenance[int32(index)])
+}
+
+func (bc *BindContext) setHeadingProvenance(index int32, provenance headingProvenance) {
+	if len(provenance.parts) == 0 {
+		if bc.headingProvenance != nil {
+			delete(bc.headingProvenance, index)
+		}
+		return
+	}
+	if bc.headingProvenance == nil {
+		bc.headingProvenance = make(headingProvenanceMap)
+	}
+	bc.headingProvenance[index] = cloneHeadingProvenance(provenance)
+}
+
+// headingProvenanceForBindingColumn returns the structural heading metadata
+// for a column exposed by a derived binding. The lookup is deliberately based
+// on the binding's column ordinal: the binding name is lower-cased for name
+// resolution, while headingProvenance retains the original expression syntax.
+func headingProvenanceForBindingColumn(binding *Binding, col string) headingProvenance {
+	if binding == nil {
+		return headingProvenance{}
+	}
+	colPos, ok := binding.colIdByName[col]
+	if !ok || colPos < 0 || int(colPos) >= len(binding.cols) {
+		return headingProvenance{}
+	}
+	return cloneHeadingProvenance(binding.headingProvenance[colPos])
+}
+
+// headingProvenanceForUsing returns metadata for the visible column emitted
+// by a JOIN ... USING clause. A non-FOJ USING column is the chosen side's
+// value, so only that binding contributes to its heading. A coalesced column
+// can contain values from every listed arm; preserve metadata only when all
+// arms have identical structural provenance. If any arm is ordinary or the
+// arms disagree, returning empty metadata applies the existing safe
+// full-lowercase normalization deterministically.
+func (bc *BindContext) headingProvenanceForUsing(using NameTuple) headingProvenance {
+	if len(using.coalesceArms) < 2 {
+		return headingProvenanceForBindingColumn(bc.bindingByTable[using.table], using.col)
+	}
+
+	var provenance headingProvenance
+	for i, table := range using.coalesceArms {
+		candidate := headingProvenanceForBindingColumn(bc.bindingByTable[table], using.col)
+		if len(candidate.parts) == 0 {
+			return headingProvenance{}
+		}
+		if i == 0 {
+			provenance = candidate
+			continue
+		}
+		if !headingProvenanceEqual(provenance, candidate) {
+			return headingProvenance{}
+		}
+	}
+	return provenance
 }
 
 // newCTEDeclarationContext records the name-resolution scope at a WITH
@@ -423,20 +494,21 @@ func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType,
 	return nil, moerr.NewBadFieldErrorf(bc.binder.GetContext(), "invalid input: column '%s' specified in USING clause does not exist in left or right table", col)
 }
 
-func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, error) {
+func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, headingProvenanceMap, error) {
 	if len(table) == 0 {
 		// unfold *
 		var exprs []tree.SelectExpr
 		var names []string
+		var provenances headingProvenanceMap
 
-		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]bool), &exprs, &names, isSysAccount)
+		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]bool), &exprs, &names, &provenances, isSysAccount)
 
-		return exprs, names, nil
+		return exprs, names, provenances, nil
 	} else {
 		// unfold tbl.*
 		binding, ok := bc.bindingByTable[table]
 		if !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
+			return nil, nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
 
 		displayCols := binding.originCols
@@ -446,6 +518,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 
 		exprs := make([]tree.SelectExpr, 0)
 		names := make([]string, 0)
+		var provenances headingProvenanceMap
 
 		for i, col := range binding.cols {
 			if binding.colIsHidden[i] {
@@ -461,13 +534,19 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
 			exprs = append(exprs, tree.SelectExpr{Expr: expr})
 			names = append(names, displayCols[i])
+			if provenance, ok := binding.headingProvenance[int32(i)]; ok {
+				if provenances == nil {
+					provenances = make(headingProvenanceMap)
+				}
+				provenances[int32(len(exprs)-1)] = cloneHeadingProvenance(provenance)
+			}
 		}
 
-		return exprs, names, nil
+		return exprs, names, provenances, nil
 	}
 }
 
-func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, isSysAccount bool) {
+func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, provenances *headingProvenanceMap, isSysAccount bool) {
 	if root == nil {
 		return
 	}
@@ -492,6 +571,12 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 				*names = append(*names, displayCols[i])
+				if provenance, ok := root.binding.headingProvenance[int32(i)]; ok {
+					if *provenances == nil {
+						*provenances = make(headingProvenanceMap)
+					}
+					(*provenances)[int32(len(*exprs)-1)] = cloneHeadingProvenance(provenance)
+				}
 			}
 		}
 
@@ -524,11 +609,17 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			}
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
+			if provenance := bc.headingProvenanceForUsing(using); len(provenance.parts) > 0 {
+				if *provenances == nil {
+					*provenances = make(headingProvenanceMap)
+				}
+				(*provenances)[int32(len(*exprs)-1)] = provenance
+			}
 		}
 	}
 
-	bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, isSysAccount)
-	bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, isSysAccount)
+	bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
 
 	for _, col := range handledUsingCols {
 		delete(visitedUsingCols, col)

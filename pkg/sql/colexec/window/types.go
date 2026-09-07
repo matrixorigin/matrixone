@@ -45,14 +45,16 @@ type container struct {
 	batAggs []aggexec.AggFuncExec
 
 	// runningAgg retains the one-group aggregate for cumulative and bounded
-	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// sliding frames between output chunks. runningNextRow guards against
 	// accidentally reusing the state out of order; runningLeft/runningRight
-	// describe the current half-open sliding frame.
+	// describe the current half-open sliding frame. For RANGE frames,
+	// runningPeerEnd lets every row in one peer group reuse the same boundaries.
 	runningAgg       aggexec.AggFuncExec
 	runningNextRow   int
 	runningPartition int
 	runningLeft      int
 	runningRight     int
+	runningPeerEnd   int
 
 	desc      []bool
 	nullsLast []bool
@@ -250,6 +252,7 @@ func (ctr *container) freeRunningAgg() {
 	ctr.runningPartition = 0
 	ctr.runningLeft = 0
 	ctr.runningRight = 0
+	ctr.runningPeerEnd = 0
 }
 
 func (ctr *container) freeExes() {

@@ -56,13 +56,32 @@ const (
 	selectedRowsSourceRows    = byte(2)
 )
 
+// selectedFixedRowsWriter lets an execution-owned buffered writer gather a
+// sparse fixed-width selection without paying one io.Writer call per value.
+// The ordinary io.Writer path remains the wire-format reference and fallback.
+type selectedFixedRowsWriter interface {
+	WriteSelectedFixedRows(data []byte, width int, rows []int32) (int, error)
+}
+
 // MarshalSelectedRowsTo writes a bounded, private execution codec for the
 // selected rows. Unlike MarshalBinaryTo it does not first materialize a
 // selection Vector, which lets spill make progress when retained state has
 // reached its allocation-account capacity.
 func (v *Vector) MarshalSelectedRowsTo(w io.Writer, rows []int32) error {
-	return v.marshalSelectedRowsTo(w, len(rows), func(i int) int {
+	return v.marshalSelectedRowsTo(w, len(rows), rows, func(i int) int {
 		return int(rows[i])
+	})
+}
+
+// MarshalRowRangeTo writes one contiguous half-open row range without first
+// allocating a row-index slice. Large spill batches use it to split records
+// while keeping the split path bounded by the encoded output buffer alone.
+func (v *Vector) MarshalRowRangeTo(w io.Writer, start, end int) error {
+	if v == nil || start < 0 || end < start || end > v.Length() {
+		return moerr.NewInvalidInputNoCtx("invalid selected vector row range")
+	}
+	return v.marshalSelectedRowsTo(w, end-start, nil, func(i int) int {
+		return start + i
 	})
 }
 
@@ -77,7 +96,7 @@ func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error)
 	}
 	next := 0
 	lastRequest := -1
-	err := v.marshalSelectedRowsTo(w, count, func(i int) int {
+	err := v.marshalSelectedRowsTo(w, count, nil, func(i int) int {
 		// marshalSelectedRowsTo makes multiple ordered passes over the selected
 		// rows (metadata, values, and optionally parameter kinds). Reset the
 		// cursor at the start of each pass without materializing row indexes.
@@ -98,14 +117,16 @@ func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error)
 func (v *Vector) marshalSelectedRowsTo(
 	w io.Writer,
 	count int,
+	rows []int32,
 	rowAt func(int) int,
 ) error {
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
-	// Reuse one framing word for the row count and every value length. Keeping
-	// it at this streaming scope avoids one tiny escaping allocation per row
-	// when the destination is an io.Writer interface.
+	isVarlen := v.typ.IsVarlen()
+	// Reuse one framing word for the row count, the fixed width recorded once
+	// per vector, and variable-length value sizes. Repeating a fixed width for
+	// every row only adds bytes and codec work.
 	var encodedInt32 [4]byte
 	if err := writeSelectedRowsInt32(w, int32(count), &encodedInt32); err != nil {
 		return err
@@ -211,9 +232,35 @@ func (v *Vector) marshalSelectedRowsTo(
 			return err
 		}
 	}
+	if !isVarlen {
+		fixedWidth := v.typ.TypeSize()
+		if fixedWidth < 0 || fixedWidth > math.MaxInt32 {
+			return moerr.NewInvalidInputNoCtx("invalid selected vector fixed-width type")
+		}
+		if err := writeSelectedRowsInt32(w, int32(fixedWidth), &encodedInt32); err != nil {
+			return err
+		}
+	}
 
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
+	if !v.IsConst() && !isVarlen && !withRowFlags && rows != nil {
+		fixedWidth := v.typ.TypeSize()
+		if fixedWidth != 0 && count > math.MaxInt/fixedWidth {
+			return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
+		}
+		if fastWriter, ok := w.(selectedFixedRowsWriter); ok {
+			expected := count * fixedWidth
+			written, err := fastWriter.WriteSelectedFixedRows(v.data, fixedWidth, rows)
+			if err != nil {
+				return err
+			}
+			if written != expected {
+				return io.ErrShortWrite
+			}
+			goto metadataTrailers
+		}
+	}
 	for i := 0; i < count; i++ {
 		row := rowAt(i)
 		nullValue := v.IsNull(uint64(row))
@@ -241,16 +288,20 @@ func (v *Vector) marshalSelectedRowsTo(
 			continue
 		}
 		value := v.GetRawBytesAt(row)
-		if len(value) > math.MaxInt32 {
-			return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
-		}
-		if err := writeSelectedRowsInt32(w, int32(len(value)), &encodedInt32); err != nil {
-			return err
+		if isVarlen {
+			if len(value) > math.MaxInt32 {
+				return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
+			}
+			if err := writeSelectedRowsInt32(w, int32(len(value)), &encodedInt32); err != nil {
+				return err
+			}
 		}
 		if err := writeVectorMarshalBytes(w, value); err != nil {
 			return err
 		}
 	}
+
+metadataTrailers:
 	if kindMode == selectedRowsKindRows {
 		for i := 0; i < count; i++ {
 			if err := writeVectorMarshalByte(w, byte(v.GetPrepareParamKindAt(rowAt(i)))); err != nil {
@@ -283,6 +334,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		return moerr.NewInvalidInputNoCtx(
 			"selected vector decoder requires a non-constant destination")
 	}
+	isVarlen := v.typ.IsVarlen()
 	count, err := types.ReadInt32AsInt(r)
 	if err != nil {
 		return err
@@ -324,6 +376,17 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 		}
 	}
+	fixedWidth := v.typ.TypeSize()
+	if !isVarlen {
+		encodedWidth, err := types.ReadInt32AsInt(r)
+		if err != nil {
+			return err
+		}
+		if encodedWidth != fixedWidth || fixedWidth < 0 ||
+			(fixedWidth > 0 && count > math.MaxInt/fixedWidth) {
+			return moerr.NewInvalidInputNoCtx("invalid selected vector value size")
+		}
+	}
 
 	v.CleanOnlyData()
 	// Once decoding starts, an error must not publish a partially restored
@@ -357,46 +420,60 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	v.SetLength(count)
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
-	for row := 0; row < count; row++ {
-		rowFlags := byte(0)
-		if withRowFlags {
-			rowFlags, err = types.ReadByte(r)
-			if err != nil {
+	if !isVarlen && !withRowFlags {
+		// Fixed-width, non-null data is encoded as one dense byte stream. Decode
+		// it in one operation instead of one length read and one value read per
+		// row. PreExtend and SetLength above have already reserved and published
+		// exactly this type-derived extent.
+		valueBytes := count * fixedWidth
+		if _, err = io.ReadFull(r, v.data[:valueBytes]); err != nil {
+			return err
+		}
+	} else {
+		for row := 0; row < count; row++ {
+			rowFlags := byte(0)
+			if withRowFlags {
+				rowFlags, err = types.ReadByte(r)
+				if err != nil {
+					return err
+				}
+				if rowFlags&^(selectedRowsHasNull|selectedRowsHasGrouping|
+					selectedRowsRowBinary|selectedRowsRowText) != 0 ||
+					rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
+					rowFlags&selectedRowsHasGrouping != 0 && metadata&selectedRowsHasGrouping == 0 ||
+					rowFlags&selectedRowsRowBinary != 0 && binaryMode != selectedRowsBinaryRows ||
+					rowFlags&selectedRowsRowText != 0 && binaryMode != selectedRowsBinaryRows ||
+					rowFlags&selectedRowsRowBinary != 0 && rowFlags&selectedRowsRowText != 0 ||
+					rowFlags&selectedRowsHasNull != 0 && rowFlags&(selectedRowsRowBinary|selectedRowsRowText) != 0 {
+					return moerr.NewInvalidInputNoCtx("invalid selected vector row metadata")
+				}
+			}
+			if rowFlags&selectedRowsHasGrouping != 0 {
+				v.gsp.Set(uint64(row))
+			}
+			if rowFlags&selectedRowsHasNull != 0 {
+				v.SetNull(uint64(row))
+				continue
+			}
+			if rowFlags&selectedRowsRowBinary != 0 {
+				v.binaryStringRows.Add(uint64(row))
+			}
+			if rowFlags&selectedRowsRowText != 0 {
+				v.textStringRows.Add(uint64(row))
+			}
+			valueSize := fixedWidth
+			if isVarlen {
+				valueSize, err = types.ReadInt32AsInt(r)
+				if err != nil {
+					return err
+				}
+				if valueSize < 0 {
+					return moerr.NewInvalidInputNoCtx("invalid selected vector value size")
+				}
+			}
+			if err := v.readRawBytesAt(r, row, valueSize, mp); err != nil {
 				return err
 			}
-			if rowFlags&^(selectedRowsHasNull|selectedRowsHasGrouping|
-				selectedRowsRowBinary|selectedRowsRowText) != 0 ||
-				rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
-				rowFlags&selectedRowsHasGrouping != 0 && metadata&selectedRowsHasGrouping == 0 ||
-				rowFlags&selectedRowsRowBinary != 0 && binaryMode != selectedRowsBinaryRows ||
-				rowFlags&selectedRowsRowText != 0 && binaryMode != selectedRowsBinaryRows ||
-				rowFlags&selectedRowsRowBinary != 0 && rowFlags&selectedRowsRowText != 0 ||
-				rowFlags&selectedRowsHasNull != 0 && rowFlags&(selectedRowsRowBinary|selectedRowsRowText) != 0 {
-				return moerr.NewInvalidInputNoCtx("invalid selected vector row metadata")
-			}
-		}
-		if rowFlags&selectedRowsHasGrouping != 0 {
-			v.gsp.Set(uint64(row))
-		}
-		if rowFlags&selectedRowsHasNull != 0 {
-			v.SetNull(uint64(row))
-			continue
-		}
-		if rowFlags&selectedRowsRowBinary != 0 {
-			v.binaryStringRows.Add(uint64(row))
-		}
-		if rowFlags&selectedRowsRowText != 0 {
-			v.textStringRows.Add(uint64(row))
-		}
-		valueSize, err := types.ReadInt32AsInt(r)
-		if err != nil {
-			return err
-		}
-		if valueSize < 0 || !v.typ.IsVarlen() && valueSize != v.typ.TypeSize() {
-			return moerr.NewInvalidInputNoCtx("invalid selected vector value size")
-		}
-		if err := v.readRawBytesAt(r, row, valueSize, mp); err != nil {
-			return err
 		}
 	}
 	switch kindMode {
