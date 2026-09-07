@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -112,6 +113,92 @@ func TestNewMergeScopePreservesIndependentRemoteInputs(t *testing.T) {
 
 	require.Equal(t, inputs, result.PreScopes,
 		"independent remote pipelines should not pay for an extra per-CN merge")
+}
+
+func TestNewMergeTopScopeGroupsRemoteCrossTreeDependenciesByCN(t *testing.T) {
+	nodes := engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 2},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 2},
+	}
+
+	for _, operator := range []vm.OpType{vm.Dispatch, vm.Connector} {
+		t.Run(operator.String(), func(t *testing.T) {
+			c := newCompileForShuffleJoinTest(t, nodes)
+			enableDistributedOrderedTopForTest(t, c.proc)
+			owner := newRemoteMergeInputForTest(c, nodes[1], 1)
+			producer := newRemoteMergeInputForTest(c, nodes[1], 0)
+			dependency := &Scope{
+				Magic:    Remote,
+				NodeInfo: scopeNodeWithMcpu(nodes[1], 1),
+				Proc:     c.proc.NewNoContextChildProc(0),
+			}
+			switch operator {
+			case vm.Dispatch:
+				op := dispatch.NewArgument()
+				op.LocalRegs = []*process.WaitRegister{owner.Proc.Reg.MergeReceivers[0]}
+				dependency.setRootOperator(op)
+			case vm.Connector:
+				dependency.setRootOperator(connector.NewArgument().WithReg(owner.Proc.Reg.MergeReceivers[0]))
+			}
+			producer.PreScopes = append(producer.PreScopes, dependency)
+
+			limitExpr := plan2.MakePlan2Uint64ConstExprWithType(20_000)
+			node := &plan.Node{
+				Limit: limitExpr,
+				OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+					Typ:  plan.Type{Id: int32(types.T_int64)},
+				}}},
+			}
+			result := c.compileTop(node, limitExpr, []*Scope{producer, owner})
+			require.Len(t, result, 1)
+			require.Len(t, result[0].PreScopes, 1)
+
+			cnGroup := result[0].PreScopes[0]
+			require.Len(t, cnGroup.PreScopes, 2)
+			cnGroup.Proc.Base.TxnOperator = fakeTxnOperator{}
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(cnGroup))
+			out, ok := cnGroup.RootOp.(*connector.Connector)
+			require.True(t, ok)
+			require.True(t, out.Reg.OrderedStream)
+			cnTop, ok := out.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+			require.True(t, ok)
+			require.True(t, cnTop.OrderedStreams)
+			require.Len(t, cnGroup.Proc.Reg.MergeReceivers, 2)
+			for _, reg := range cnGroup.Proc.Reg.MergeReceivers {
+				require.True(t, reg.OrderedStream)
+				require.Equal(t, 1, reg.NilBatchCnt)
+				require.Equal(t, 1, cap(reg.Ch2))
+			}
+		})
+	}
+}
+
+func TestNewMergeTopScopePreservesIndependentRemoteInputs(t *testing.T) {
+	nodes := engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 2},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 2},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	enableDistributedOrderedTopForTest(t, c.proc)
+	inputs := []*Scope{
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+	}
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(20_000)
+	node := &plan.Node{
+		Limit: limitExpr,
+		OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}}},
+	}
+
+	result := c.compileTop(node, limitExpr, inputs)
+
+	require.Len(t, result, 1)
+	require.Len(t, result[0].PreScopes, 2,
+		"independent ordered remote pipelines should not pay for an extra per-CN gather")
 }
 
 func TestCompileWindowKeepsDistributedShuffleJoinTreesStandalone(t *testing.T) {
