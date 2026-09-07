@@ -485,6 +485,10 @@ type BindContext struct {
 	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
+	// whereFilters keeps the complete bound WHERE domain while correlated
+	// subqueries are being flattened. It is cleared/replaced with the
+	// flattened filters once the walk is complete.
+	whereFilters []*plan.Expr
 	// outerUsingCols maps an unqualified column name to the ordered list of
 	// leaf tables whose values must be COALESCEd to produce the merged value.
 	// Only populated when the column has been merged through at least one
