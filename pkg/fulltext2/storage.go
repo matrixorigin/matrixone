@@ -240,7 +240,7 @@ func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset
 // order (recency identical to a per-frame persist); the next free chunk_id (end of the tail range)
 // is returned.
 func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegment) (sqls []string, nextChunkId int64) {
-	return TailFramesInsertSqlsAt(cfg, startChunkId, frames, 0)
+	return TailFramesInsertSqlsAt(nil, cfg, startChunkId, frames, 0)
 }
 
 // TailFrameMetaId / TailFrameMetaPrefix name a tail frame's metadata row. Defined once in
@@ -262,14 +262,14 @@ func notTailFrame() string {
 // The row goes in the same statement batch as the chunks, so the two commit together: a
 // generation's recorded coverage can never disagree with the bytes actually stored. That is the
 // point of keeping it here rather than deriving it from an ISCP watermark elsewhere.
-func TailFramesInsertSqlsAt(cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) (sqls []string, nextChunkId int64) {
+func TailFramesInsertSqlsAt(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) (sqls []string, nextChunkId int64) {
 	ranges := make([]fileChunkRange, len(frames))
 	for i, f := range frames {
 		ranges[i] = fileChunkRange{path: f.Path, offset: f.Offset, length: f.FrameLen}
 	}
 	sqls, nextChunkId = framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
 
-	return append(sqls, tailFrameMetaSqls(cfg, startChunkId, frames, buildTS)...), nextChunkId
+	return append(sqls, tailFrameMetaSqls(sqlproc, cfg, startChunkId, frames, buildTS)...), nextChunkId
 }
 
 // tailFrameMetaSqls writes the frames' rows, BATCHED at maxInsertTuples rows per statement the
@@ -278,8 +278,26 @@ func TailFramesInsertSqlsAt(cfg TableConfig, startChunkId int64, frames []TailSe
 //
 // nrow is 0: a frame's doc count is not known at persist time (TailBuilder seals by byte
 // capacity), and the tail's cost is estimated from its bytes, not its docs.
-func tailFrameMetaSqls(cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) []string {
+func tailFrameMetaSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) []string {
 	if len(frames) == 0 {
+		return nil
+	}
+	// The frame rows are written ONLY once this table has the provenance columns, and that is
+	// also what makes them safe to write at all.
+	//
+	// Two hazards, one condition. Naming build_ts on a table that lacks it fails every CDC
+	// flush with "unknown column", so the ISCP transaction never commits its watermark and the
+	// iteration retries forever -- the index silently stops advancing. And a row written
+	// WITHOUT build_ts is still a row: an un-upgraded CN reads this table with SELECT *,
+	// treats every row as a base segment, and would try to load 'cdc_tail:N' as one.
+	//
+	// The table is widened by the v4_0_7 tenant migration, which cannot start until every
+	// service reports the protocol carrying this code (RequiredProtocolVersion). So a widened
+	// table means no un-upgraded reader is left, and skipping the row until then costs only
+	// provenance: tailPeakBytes falls back to bounding the tail by its chunk count.
+	provenance := sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts)
+	if !provenance {
 		return nil
 	}
 	cols := fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s)",
@@ -292,7 +310,7 @@ func tailFrameMetaSqls(cfg TableConfig, startChunkId int64, frames []TailSegment
 
 	now := time.Now().UnixMicro()
 	var out []string
-	var values []string
+	values := make([]string, 0, min(len(frames), maxInsertTuples))
 	chunkId := startChunkId
 	for _, f := range frames {
 		values = append(values, fmt.Sprintf("(%s, %d, %s, %d, %d, %d, %d)",
@@ -667,9 +685,8 @@ var (
 // admission needs it, instead of only at load time where it is too late to serialize anything.
 func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 	// EXACT, from the per-frame rows: each frame recorded its own byte length when it was
-	// written, in the same transaction as its chunks. This replaces counting chunk rows and
-	// multiplying by the chunk cap, which was an upper bound, and replaces summing
-	// LENGTH(data), which made the scan read the entire tail off storage to answer it.
+	// written, in the same transaction as its chunks. Cheap -- it reads metadata rows, not the
+	// blob column, which SUM(LENGTH(data)) would have made the scan read in full.
 	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s WHERE %s LIKE %s",
 		catalog.FullText2Index_TblCol_Metadata_Filesize,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
@@ -678,11 +695,17 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) 
 	if err != nil {
 		return 0, err
 	}
-	defer res.Close()
-
 	stored := resultScalarInt64(res)
+	res.Close()
+
 	if stored <= 0 {
-		return 0, nil
+		// A tail written BEFORE frame rows existed, or by a CN whose metadata table was still
+		// the narrow shape, has chunks but no rows to sum. Reading 0 there would report "no
+		// tail" and hand the OOM guard nothing to refuse with, on exactly the clusters that
+		// carry the largest un-compacted tails. Fall back to bounding it by the chunk count:
+		// every chunk is written at <= MaxChunkSize, so count x MaxChunkSize is an upper bound,
+		// which is the direction a budget wants.
+		return tailPeakBytesFromChunks(sqlproc, cfg)
 	}
 	// Saturate rather than wrap: a corrupt total would otherwise go negative, compare below
 	// the budget, and admit the load the check exists to refuse.
@@ -690,6 +713,31 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) 
 		return math.MaxInt64, nil
 	}
 	return stored * tailLoadPeakFactor, nil
+}
+
+// g_tailPeakBytesFromChunks bounds the tail by counting its chunk rows, for tails that predate
+// the per-frame metadata rows. COUNT(*) references only the predicate columns, so the blob is
+// not read.
+func tailPeakBytesFromChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT CAST(COUNT(*) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	chunks := resultScalarInt64(res)
+	if chunks <= 0 {
+		return 0, nil
+	}
+	const perChunk = int64(vectorindex.MaxChunkSize) * tailLoadPeakFactor
+	if chunks > math.MaxInt64/perChunk {
+		return math.MaxInt64, nil
+	}
+	return chunks * perChunk, nil
 }
 
 // checkTailLoadBudget refuses a tail that cannot fit in the memory left for it.

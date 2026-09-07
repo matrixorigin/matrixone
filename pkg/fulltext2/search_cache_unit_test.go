@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,21 +72,21 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 func TestFulltext2SearchLoad(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
-	calls := 0
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		calls++
-		switch calls {
-		case 2, 4:
-			return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
-		case 1, 3:
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
-		case 5:
+	// Dispatch on the SQL, not on call ORDER: a stub keyed by sequence renumbers every case
+	// the moment the load path gains or drops a query, which is how it breaks for reasons
+	// unrelated to what it asserts.
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "MAX(timestamp"):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 11, 0)}}, nil
-		case 6:
+		case strings.Contains(sql, "MAX(chunk_id"):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 22, 0)}}, nil
+		case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+			// base doc/byte sums, the tail frame sum, and the chunk-count fallback
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		default:
-			t.Fatalf("unexpected Load SQL call %d", calls)
-			return executor.Result{}, nil
+			// base id enumeration and tail chunk data: neither has rows here
+			return executor.Result{Mp: mp}, nil
 		}
 	})
 
@@ -146,16 +147,16 @@ func TestFulltext2SearchLoadErrors(t *testing.T) {
 
 	t.Run("generation capture", func(t *testing.T) {
 		sp, mp := mockSqlProc(t)
-		calls := 0
-		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-			calls++
-			switch calls {
-			case 1, 3:
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
-			case 2, 4:
-				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
-			default:
+		// Only the generation reads fail; everything the load itself needs succeeds. Keyed on
+		// the SQL rather than call order, which renumbers whenever the load path changes.
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "MAX("):
 				return executor.Result{}, moerr.NewInternalErrorNoCtx("generation capture failed")
+			case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			default:
+				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
 			}
 		})
 

@@ -103,7 +103,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// recorded coverage can never disagree with what it actually stores,
 						// which a watermark read from elsewhere cannot promise.
 						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
-							w.cfg, startChunk, segs, r.GetToTS().Physical())
+							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
 							res, e := sqlexec.RunSql(sqlproc, s)
 							if e != nil {

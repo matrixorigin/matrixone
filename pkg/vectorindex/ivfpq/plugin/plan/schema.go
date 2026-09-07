@@ -210,7 +210,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Width: 0,
 				Scale: 0,
 			},
-			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
+			Default: planplugin.ZeroInt64Default(),
 		}
 		tableDefs[0].Cols[5] = &plan.ColDef{
 			Name: catalog.Ivfpq_TblCol_Metadata_Build_Ts,
@@ -220,7 +220,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Width: 0,
 				Scale: 0,
 			},
-			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
+			Default: planplugin.ZeroInt64Default(),
 		}
 
 		tableDefs[0].Pkey = &plan.PrimaryKeyDef{

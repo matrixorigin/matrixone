@@ -206,8 +206,8 @@ func (Hooks) BuildFullTextIndexDefs(
 			{Name: catalog.FullText2Index_TblCol_Metadata_Checksum, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Default: &plan.Default{}},
 			{Name: catalog.FullText2Index_TblCol_Metadata_Filesize, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
 			{Name: catalog.FullText2Index_TblCol_Metadata_Recency, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
-			{Name: catalog.FullText2Index_TblCol_Metadata_Nrow, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
-			{Name: catalog.FullText2Index_TblCol_Metadata_Build_Ts, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Nrow, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: planplugin.ZeroInt64Default()},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Build_Ts, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: planplugin.ZeroInt64Default()},
 		},
 	}
 	metaTbl.Pkey = &plan.PrimaryKeyDef{

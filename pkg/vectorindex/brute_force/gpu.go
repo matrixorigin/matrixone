@@ -234,6 +234,20 @@ type GpuBruteForceIndex[T cuvs.VectorType] struct {
 	index     *cuvs.GpuBruteForce[T, T]
 	dimension uint
 	count     uint
+	// device is the GPU this index was built on. Retained so the cache can charge its bytes
+	// to that card: an index whose placement is unknown is charged to EVERY card, which
+	// inflates each one's usage and can evict for pressure it does not relieve.
+	device int
+}
+
+// DeviceResidency reports this index's bytes on the one card it occupies. Implements the
+// cache's devicePlacement interface.
+func (idx *GpuBruteForceIndex[T]) DeviceResidency() map[int]int64 {
+	_, device := idx.GetIndexSize()
+	if device <= 0 {
+		return nil
+	}
+	return map[int]int64{idx.device: device}
 }
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
@@ -357,6 +371,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		index:     km,
 		dimension: dimension,
 		count:     uint(len(dataset)),
+		device:    deviceID,
 	}, nil
 }
 

@@ -314,15 +314,20 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 		// at, carrying its byte length, its record count, and the base-table version it
 		// applied. Written in THIS transaction with the chunks it describes, so an index's
 		// recorded coverage cannot disagree with the bytes it stores.
-		// ONE shape decision, used for both the column list and the values: naming six
-		// columns and supplying four (or the reverse) is a malformed statement, and the
-		// table may still be the narrow pre-v4_0_7 shape.
+		// The frame row is written ONLY once the table has the provenance columns, which is
+		// also what makes it safe to write. A row without build_ts is still a row, and an
+		// un-upgraded CN reads this table with SELECT * and treats every row as a sub-index --
+		// it would try to load 'cdc_tail:N' as one and find no tar. The v4_0_7 migration that
+		// widens the table cannot start until every service reports this code's protocol, so a
+		// widened table means no such reader is left.
 		provenance := sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
 			catalog.Cagra_TblCol_Metadata_Build_Ts)
-		sqls = append(sqls, sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
-			[]string{sqlexec.MetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
-				time.Now().UnixMicro(), int64(len(s.pendingRecords)),
-				int64(len(s.pendingSizes)), s.buildTS)}))
+		if provenance {
+			sqls = append(sqls, sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
+				[]string{sqlexec.MetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
+					time.Now().UnixMicro(), int64(len(s.pendingRecords)),
+					int64(len(s.pendingSizes)), s.buildTS)}))
+		}
 	}
 	if serr != nil {
 		return serr

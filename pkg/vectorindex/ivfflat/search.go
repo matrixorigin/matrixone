@@ -1208,6 +1208,19 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // resident: the entries stay in the index table and are read per query. Centroids is itself a
 // VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come
 // straight from it -- in GPU mode those centroids are device resident.
+// DeviceResidency delegates to the centroid index, which is what actually occupies a GPU when
+// NewBruteForceIndex dispatched there. Without this the ivfflat entry -- the one the cache holds
+// -- publishes no placement, and its device bytes are charged to every card.
+func (s *IvfflatSearch[T]) DeviceResidency() map[int]int64 {
+	if s.Index == nil || s.Index.Centroids == nil {
+		return nil
+	}
+	if placed, ok := s.Index.Centroids.(interface{ DeviceResidency() map[int]int64 }); ok {
+		return placed.DeviceResidency()
+	}
+	return nil
+}
+
 func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if s.Index == nil {
 		return s.preloadHostBytes, s.preloadDeviceBytes

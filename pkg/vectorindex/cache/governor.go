@@ -429,11 +429,23 @@ func (g *VectorIndexGovernor) overBudget(account uint32, tenant, sys caps, key s
 		if want <= 0 {
 			continue
 		}
-		// Sole occupant of this arena: nothing to protect, so nothing to refuse for.
+		// Sole occupant of this arena: nothing to protect, so nothing to refuse for. Applied at
+		// the scope of the cap being enforced -- the CN-wide check below asks whether the CN
+		// holds anything, and the tenant check just below asks whether THIS TENANT does.
+		//
+		// Using the CN-wide total for both was wrong in a way that only shows with neighbours:
+		// a tenant holding nothing, whose first index exceeds its own cap, was refused because
+		// some OTHER account had something warm -- and the refusal protected nobody, since
+		// enforce() only reclaims that tenant's own entries and it has none. It cleared only
+		// when the neighbour's entry aged out. enforceDevicePlacement already scopes the same
+		// rule per card; this brings the tenant branch in line.
 		if total.of(a) == 0 {
 			continue
 		}
-		if limit := tenant.of(a); limit > 0 && perAccount[account].of(a)+want > limit {
+		// perAccount already includes the arrivals ahead of this one (see above), so a burst
+		// from the SAME tenant still cannot each claim to be its sole occupant.
+		if limit := tenant.of(a); limit > 0 && perAccount[account].of(a) > 0 &&
+			perAccount[account].of(a)+want > limit {
 			return moerr.NewInternalErrorNoCtxf(
 				"index cache is full: loading %q needs %d more %s bytes, but account %d already holds "+
 					"%d of its %d byte budget and nothing idle is left to reclaim -- retry, or raise the "+
@@ -481,7 +493,12 @@ func (g *VectorIndexGovernor) enforceDevicePlacement(incoming map[int]int64, pro
 			continue
 		}
 		list, _, _, perDevice := g.snapshotResidentsByDevice(protect)
-		used := perDevice[device]
+		// Arrivals ahead in line have promised bytes on this card that are not resident yet.
+		// Counting only STATUS_LOADED residents lets N concurrent loads each admit against the
+		// same apparently-empty card -- the arena check folds pendingAhead in for exactly this
+		// reason, and the per-card check has to as well.
+		ahead := g.pendingAheadOnDevice(self, device)
+		used := perDevice[device] + ahead
 		if used+want <= limit {
 			continue
 		}
@@ -499,7 +516,7 @@ func (g *VectorIndexGovernor) enforceDevicePlacement(incoming map[int]int64, pro
 		}
 		// Sole occupant of this card: nothing to protect, so nothing to refuse for -- the same
 		// rule the arena-wide check applies.
-		if used == 0 && g.pendingAheadOnDevice(self, device) == 0 {
+		if used == 0 {
 			continue
 		}
 		return moerr.NewInternalErrorNoCtxf(

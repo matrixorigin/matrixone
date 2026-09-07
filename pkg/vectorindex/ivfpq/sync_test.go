@@ -127,10 +127,11 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 
 	require.NoError(t, s.Save(sqlproc))
-	// The chunk statement, plus the frame's metadata row recording its bytes and the version
-	// it applied.
-	require.Len(t, rec.statements, 2)
-	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
+	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
@@ -160,10 +161,11 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	}
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
-	// The chunk statement, plus the frame's metadata row recording its bytes and the version
-	// it applied.
-	require.Len(t, rec.statements, 2)
-	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
+	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 16, 0)

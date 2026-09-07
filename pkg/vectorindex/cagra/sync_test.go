@@ -159,10 +159,11 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 		"expected 2 INSERT records buffered")
 
 	require.NoError(t, s.Save(sqlproc))
-	// The chunk statement, plus the frame's metadata row recording its bytes and the version
-	// it applied.
-	require.Len(t, rec.statements, 2)
-	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
+	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
@@ -202,10 +203,11 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 
 	require.NoError(t, s.Save(sqlproc))
-	// The chunk statement, plus the frame's metadata row recording its bytes and the version
-	// it applied.
-	require.Len(t, rec.statements, 2)
-	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
+	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	// chunk_id == 7 (nextChunkId mock).
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
@@ -516,8 +518,7 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, flush2))
 	require.NoError(t, s.Save(sqlproc))
 
-	// First flush at chunk_id=0, second at chunk_id=1 -- and each flush also writes the
-	// metadata row naming the chunk id its frame starts at.
+	// First flush at chunk_id=0, second at chunk_id=1.
 	var chunkStmts, metaStmts []string
 	for _, st := range rec.statements {
 		if strings.Contains(st, "__meta") {
@@ -529,8 +530,46 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	require.Len(t, chunkStmts, 2)
 	require.Contains(t, chunkStmts[0], "'cdc_tail', 0,")
 	require.Contains(t, chunkStmts[1], "'cdc_tail', 1,")
-	require.Len(t, metaStmts, 2)
-	require.Contains(t, metaStmts[0], "'cdc_tail:0'")
-	require.Contains(t, metaStmts[1], "'cdc_tail:1'",
-		"each frame's row is keyed by the chunk id it starts at")
+	require.Empty(t, metaStmts, "narrow table: no frame rows yet")
+}
+
+// On a WIDENED metadata table the flush also writes the frame's row: its bytes, its record
+// count, and the version ISCP applied. The row is gated on the table shape because an
+// un-upgraded CN reads this table with SELECT * and would treat 'cdc_tail:N' as a sub-index.
+func TestCagraSyncWritesTheFrameRowOnceTheTableHasIt(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	defer installNextChunkIdMock(t, proc, 0)()
+	rec := &recordingTxn{}
+	defer rec.install(t)()
+
+	// Its own metadata table name: provenanceShape is process-wide, so sharing "__meta" with
+	// the other sync tests would let them switch this one's shape out from under it.
+	const meta = "__meta_frame_row"
+	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
+		idxdefs(meta, "__storage"), 4, types.T_array_float32, "")
+	require.NoError(t, err)
+
+	sqlexec.MarkProvenanceColumns("db", meta)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape("db", meta) })
+	s.SetBuildTS(4242)
+
+	cdc := &vectorindex.VectorIndexCdc[float32]{
+		Data: []vectorindex.VectorIndexCdcEntry[float32]{
+			{Type: vectorindex.CDC_INSERT, PKey: 1, Vec: []float32{1, 2, 3, 4}},
+		},
+	}
+	require.NoError(t, s.Update(sqlproc, cdc))
+	require.NoError(t, s.Save(sqlproc))
+
+	var metaSql string
+	for _, st := range rec.statements {
+		if strings.Contains(st, meta) {
+			metaSql += st
+		}
+	}
+	require.Contains(t, metaSql, "'cdc_tail:0'", "keyed by the chunk id the frame starts at")
+	require.Contains(t, metaSql, "4242", "and carrying the version this flush applied")
 }

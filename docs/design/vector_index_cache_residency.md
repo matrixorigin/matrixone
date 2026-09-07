@@ -778,3 +778,38 @@ cache, its VRAM, the import's own footprint — comes off that sample. The four 
 above rotated into 1, 3, 2 and 4 sub-indexes respectively, and each one pays its
 own GPU build, save and tar. A single build sample on a warm CN measures the
 previous build.
+
+## 11. Decision log
+
+Items raised by the self-review gate and deliberately not changed. Each is
+recorded so a later review can dismiss it in one line instead of re-litigating it.
+
+**`cachegen.CdcGenerationSqls` counts tail frame rows in `MAX(timestamp)`.**
+Unlike `fulltext2`, it does not exclude the `cdc_tail:` rows. It is redundant
+rather than wrong: a frame row's timestamp is written by the same flush that
+writes the chunks it describes, so it can never exceed the generation the base
+rows already report. Excluding it would change no result. Left alone because the
+predicate is on the hot generation-probe path and the exclusion would only add a
+term that never fires.
+
+**The `provenanceShape` memo is never pruned.** It holds one entry per
+`(db, table)` that has been observed widened, and entries are only added once the
+table has the columns — a state that never reverts short of a DROP. The bound is
+the number of index metadata tables in the cluster, each a few tens of bytes, so
+the growth is bounded by schema size and not by traffic. A DROP + CREATE of the
+same name re-creates the table already widened, so the stale positive is also
+the correct answer.
+
+**The first SYS cap read holds `sysLimit.mu` across the query.** One caller
+queries while the others block, up to the 10 s SQL timeout, once per
+`sysLimitTTL`. This is the pre-existing shape and it is what keeps a startup
+thundering herd from issuing N identical queries. The blocked callers are cache
+admissions, which have no deadline of their own, and the memo is refreshed by the
+housekeeping tick well before it expires — so on the steady-state path nobody
+waits at all.
+
+**`DeleteAllBasesSqls` deletes tail frame rows but leaves the tail chunks.** Read
+alone this orphans the chunks. Every caller is compaction, which issues
+`DeleteTailSqls` in the same transaction, and that statement removes both the
+chunks and the frame rows. The pairing is what makes it correct; the function is
+not exported for any other use.

@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"strings"
 	"testing"
 
@@ -121,8 +122,12 @@ func TestBaseDocCount(t *testing.T) {
 func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailBytes int64) {
 	t.Helper()
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		if strings.Contains(sql, TailFrameMetaPrefix) && !strings.Contains(sql, "NOT LIKE") {
+		switch {
+		case strings.Contains(sql, TailFrameMetaPrefix) && !strings.Contains(sql, "NOT LIKE"):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailBytes, 0)}}, nil
+		case strings.Contains(sql, "COUNT(*)"):
+			// The legacy fallback: no frame rows to sum, so it counts chunks instead.
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, ndoc, bytes)}}, nil
 	})
@@ -258,4 +263,30 @@ func TestTailBudgetSubtractsWhatIsAlreadyPromised(t *testing.T) {
 	err := checkTailLoadBudget(sp, cfg, need)
 	require.Error(t, err, "with one tail already promised, the second does not")
 	require.Contains(t, err.Error(), "promised to loads already in flight")
+}
+
+// A tail written before the per-frame rows existed has chunks but nothing to sum. Reading 0
+// there would report "no tail" and leave the OOM guard with nothing to refuse -- on exactly the
+// clusters carrying the largest un-compacted tails. It falls back to bounding by chunk count.
+func TestTailPeakBytesFallsBackWhenAFrameHasNoRow(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	const chunks = 4
+	var sawCount bool
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			sawCount = true
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, chunks, 0)}}, nil
+		}
+		// No frame rows: the legacy shape.
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+	})
+
+	got, err := tailPeakBytes(sp, cfg)
+	require.NoError(t, err)
+	require.True(t, sawCount, "it must fall back rather than report no tail")
+	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize*tailLoadPeakFactor), got,
+		"bounded from above by the chunk cap, which is the safe direction")
+	require.Positive(t, got)
 }

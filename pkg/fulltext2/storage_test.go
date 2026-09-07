@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,8 +111,14 @@ func TestTailFramesInsertSqls(t *testing.T) {
 	for i := 0; i < n; i++ {
 		frames[i] = TailSegment{Path: "/tmp/spool", Offset: int64(i * 8), FrameLen: 8}
 	}
+	// Its own table name, and marked widened: provenanceShape is process-wide, so a test that
+	// shares a name with another can be switched off by it.
+	cfg.MetadataTable = "__meta_tailframes_batching"
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+
 	startChunk := int64(7)
-	sqls, next := TailFramesInsertSqls(cfg, startChunk, frames)
+	sqls, next := TailFramesInsertSqlsAt(nil, cfg, startChunk, frames, 0)
 
 	// Chunk rows AND the per-frame metadata rows, each batched at maxInsertTuples per
 	// statement: 3 of each, never one statement per frame.
@@ -291,7 +298,10 @@ func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
 		{Path: "/tmp/s", Offset: 100, FrameLen: 10},                         // 1 chunk
 	}
 	const start = int64(5)
-	sqls, next := TailFramesInsertSqlsAt(cfg, start, frames, 4242)
+	cfg.MetadataTable = "__meta_tailframes_refer"
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+	sqls, next := TailFramesInsertSqlsAt(nil, cfg, start, frames, 4242)
 
 	var meta string
 	for _, s := range sqls {
@@ -304,4 +314,28 @@ func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
 	require.Contains(t, meta, "'cdc_tail:7'")
 	require.Contains(t, meta, "4242", "each frame records the version it applied")
 	require.Equal(t, start+3, next, "and the chunk ids they name are the ones written")
+}
+
+// On a metadata table that predates build_ts, the frame rows must OMIT it rather than fail.
+// Naming a column the table does not have fails every CDC flush: the ISCP transaction never
+// commits its watermark and the iteration retries the same statement forever, so the index stops
+// advancing silently. Its sibling writer, Segment.ToInsertSqls, has always probed for this.
+func TestTailFrameRowsAreWithheldFromALegacyTable(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_never_widened"}
+	sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable)
+
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
+	sqls, next := TailFramesInsertSqlsAt(nil, cfg, 1, frames, 4242)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	// Naming build_ts on a table without it fails the flush; writing the row without build_ts
+	// leaves an un-upgraded CN reading 'cdc_tail:1' as a base segment. Neither row is written.
+	require.Empty(t, meta, "no metadata row at all until the table carries the columns")
+	require.NotEmpty(t, sqls, "the chunks themselves are still written")
+	require.Equal(t, int64(2), next, "and the chunk id still advances past the frame")
 }

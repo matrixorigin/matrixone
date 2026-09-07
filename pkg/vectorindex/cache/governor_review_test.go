@@ -1179,3 +1179,69 @@ func TestGovernorAdmitsALoneIndexTooBigForItsCard(t *testing.T) {
 	require.NoError(t, err, "nobody to protect on that card, so nothing to refuse for")
 	require.True(t, isResident(c, "__mo_index_secondary_huge"))
 }
+
+// An algorithm that reports device bytes but no placement is charged on EVERY card, which
+// inflates each one and can evict for pressure the eviction does not relieve. GPU brute force --
+// which is what an ivfflat index puts on a card -- knows its device at construction, so it says
+// so, and ivfflat delegates to it.
+func TestUnplacedDeviceBytesAreChargedEverywhere(t *testing.T) {
+	c := newBoundCache(t)
+	twoCards(t, c)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	// No DeviceResidency: countingSearch reports an aggregate only.
+	unplaced := &countingSearch{device: 5 << 30}
+	_, _, err := c.Search(sp, "__mo_index_secondary_unplaced", unplaced, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+
+	// It is counted on both cards, so an arrival for either one sees the pressure. That is the
+	// conservative reading: not knowing where the bytes are is not a reason to assume they are
+	// somewhere else.
+	list, _, _, perDevice := c.gov().snapshotResidentsByDevice("")
+	require.Empty(t, perDevice, "an unplaced entry contributes to no per-card total directly")
+	require.Len(t, list, 1)
+	require.EqualValues(t, 5<<30, list[0].deviceBytesOn(0), "but it is a victim for either card")
+	require.EqualValues(t, 5<<30, list[0].deviceBytesOn(1))
+}
+
+// The only-occupant rule must be applied at the scope of the cap it is relaxing. Using the
+// CN-wide total for the TENANT check meant a tenant holding nothing, whose first index exceeds
+// its own cap, was refused because some OTHER account had something warm -- and the refusal
+// protected nobody, because enforce() only reclaims that tenant's own entries and it has none.
+// It cleared only when the neighbour's entry aged out.
+func TestTenantSoleOccupantIsScopedToTheTenant(t *testing.T) {
+	c := newBoundCache(t)
+
+	// A neighbour, on another account, holds something warm. No CN-wide cap.
+	neighbour := govProc(t, c, 1, caps{}, caps{})
+	loadInto(t, c, neighbour, "__mo_index_secondary_neighbour", 50, 0)
+	entryOf(t, c, "__mo_index_secondary_neighbour").accountID.Store(1)
+
+	// Account 9 holds nothing and has a small cap of its own.
+	mine := govProc(t, c, 9, hostCap(100), caps{})
+	_, _, err := c.Search(mine, "__mo_index_secondary_mine",
+		&countingSearch{host: 500}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err,
+		"account 9 is the only occupant of its own budget; refusing protects nobody")
+	require.True(t, isResident(c, "__mo_index_secondary_mine"))
+	require.True(t, isResident(c, "__mo_index_secondary_neighbour"),
+		"and the neighbour is untouched -- it was never this tenant's to reclaim")
+}
+
+// But a tenant that already holds bytes is still bounded by its own cap: the carve-out is for
+// the first index, not a licence to ignore the budget.
+func TestTenantWithResidencyIsStillBounded(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 9, hostCap(250), caps{})
+
+	busy := "__mo_index_secondary_busy9"
+	held := &mappedHeavy{countingSearch: countingSearch{host: 200},
+		searching: make(chan struct{}), release: make(chan struct{})}
+	go func() { _, _, _ = c.Search(sp, busy, held, nil, vectorindex.RuntimeConfig{}) }()
+	<-held.searching
+	defer close(held.release)
+	entryOf(t, c, busy).accountID.Store(9)
+
+	loadRefused(t, c, sp, "__mo_index_secondary_second9", 200, 0)
+	require.True(t, isResident(c, busy), "the busy incumbent is what the refusal protects")
+}
