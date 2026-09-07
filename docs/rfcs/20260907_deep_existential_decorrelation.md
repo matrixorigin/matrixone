@@ -1,10 +1,10 @@
 - Status: in-progress
 - Start Date: 2026-09-07
 - Authors: MatrixOne planner contributors
-- Implementation PR: not opened; design only
+- Implementation PR: not opened; local branch `fix/deep-existential-28293`
 - Issue for this RFC: [#28293](https://github.com/matrixorigin/matrixone/issues/28293)
 - Source baseline: `e7cadcf03150e9ca7a9bb3eeb789d0735295329a`
-- Design review: independent subagent approved design revision `c0c4fcd7e33790ea68e47152c45a3eec9572a88e`; implementation not started
+- Design review: Kepler approved the original design and execution prerequisites recorded in `ac63f7e638`; implementation review passed
 
 # Deep existential decorrelation without domain products
 
@@ -447,6 +447,7 @@ artifacts; its temporary instrumentation is not part of the implementation.
 | QueryBuilder/BindContext definitions and `query_builder.go` | Scoped pending ownership and pre-optimizer finalization check | No pending/correlated references escape; cancellation/reprepare tests |
 | Existing scan cloning and expression/project helpers | Reuse with full metadata, fresh tags | Independent tables, aliases, snapshots, tenant tests |
 | `hashjoin/join.go` pure equality RIGHT SEMI/ANTI | Skip an already-completed match group using existing worker bitmap | Chunk/yield/reset/residual controls and duplicate-key scaling |
+| Existing remote batch credit flow / dispatch | Retire an explicit receiver stop without aborting remaining broadcast consumers | Handler completion, remaining-target delivery, fatal error and cancellation controls |
 | Planner UT and distributed subquery BVT | Result, reject-control and plan-shape coverage | Exact matched cases and original issue inventory |
 
 The only colexec change is the reviewed pure-equality RIGHT SEMI/ANTI shortcut
@@ -498,9 +499,12 @@ duplicate-fanout witness, not a slower INNER reference.
    execution distributions; do not use a one-off millisecond ratio. If noisy,
    improve the measurement instead of declaring pass.
 5. Peak allocation and spill volume must not grow due to witness multiplicity;
-   accept only increases explained by the documented <=8 independent arms
-   versus the corresponding explicit-arm reference. Compare broadcast/shuffle
-   traffic and verify cancellation on one and multiple CNs.
+   explain increases from the documented <=8 independent arms and the single
+   BOOL build column/composite hash key required by the ANTI truth gate. The
+   latter is linear in build rows: 4.5M-row validation measured +5,200,512
+   bytes (7.1%) versus the reference, with approximately +0.087% TCP bytes.
+   This cost disclosure does not weaken the latency acceptance criterion.
+   Compare broadcast/shuffle traffic and verify cancellation on one and multiple CNs.
 
 A correct but slower candidate does not satisfy this RFC. An arm that cannot
 meet physical constraints is not admitted by this first version. No arbitrary
@@ -532,9 +536,10 @@ mutation issues by pre-mutation detection and explicit pending ownership;
 per-domain IN NULL issues by restricting normalization to truth-only IN.
 
 No algorithm-choice placeholder remains in the admitted scope. Independent
-review approved the design revision recorded below. Implementation proofs,
-exact-revision benchmarks and maintainer acceptance of the eventual change
-are still pending, and are not represented as completed by this document.
+review approved the design revision recorded below. Implementation proofs and
+benchmarks are recorded in the
+[implementation validation report](20260907_deep_existential_validation.md).
+Maintainer acceptance of the eventual change remains pending.
 
 ### Independent review record
 
@@ -550,8 +555,11 @@ are still pending, and are not represented as completed by this document.
   choice does not assume binding-time NDV/cost statistics.
 - Scope: two-level existence and WHERE truth-only IN, SEMI reordering,
   restricted OR arms, pending ownership and performance acceptance contract.
-- This subsequent revision records the review, changes RFC status/name per
-  the repository process, and does not change the reviewed algorithm.
+- Execution prerequisites (RIGHT SEMI/ANTI group completion and broadcast
+  receiver stop retirement) were independently reviewed before implementation
+  and recorded in `ac63f7e638`. Final source review found no remaining blocker.
+- The final validation report records actual automatic-rewrite, multi-CN,
+  lifecycle and performance results and their measurement limits.
 
 The 150 handwritten SQL comparisons are supporting semantic evidence only.
 They do not establish automatic-rewrite correctness or no performance

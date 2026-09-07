@@ -370,6 +370,13 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// Deep existential regions are owned by a SQL block, never by a partially
+	// constructed node. The registry stays nil on the ordinary flattening path.
+	nextExistentialBlock    uint64
+	pendingExistentials     map[uint64]*pendingExistential
+	hadPendingExistentials  bool
+	existentialGateProjects map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
 	// queryingSubscriptionMetadata is scoped to binding one account-wide
@@ -782,6 +789,9 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
+
 	binder Binder
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity

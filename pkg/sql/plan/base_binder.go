@@ -836,6 +836,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	b.builder.nextExistentialBlock++
+	subCtx.existentialBlock = b.builder.nextExistentialBlock
+	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
 	if b.subqueryInAggregateInput {
 		subCtx.aggregateInputParent = b.ctx
 	}

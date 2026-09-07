@@ -643,6 +643,9 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	if _, protected := builder.existentialGateProjects[nodeId]; protected {
+		builder.existentialGateProjects[newNodeId] = struct{}{}
+	}
 	return newNodeId
 }
 
@@ -3697,6 +3700,11 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if builder.hadPendingExistentials {
+		if err := builder.checkPendingExistentials(); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
