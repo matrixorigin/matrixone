@@ -51,13 +51,14 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 		execSQLRequire(t, ctx, db, fmt.Sprintf(`create table %s(
 			id int primary key,
 			g int,
+			start_pos bigint,
 			v510 varbinary(510),
 			v511 varbinary(511),
 			v512 varbinary(512),
 			v600 varbinary(600),
 			vbytes varbinary(511))`, tableName))
 		execSQLRequire(t, ctx, db, fmt.Sprintf(
-			"insert into %s values (1,1,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('E4B8AD')),(2,1,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('FF0001')),(3,2,null,null,null,null,null)",
+			"insert into %s values (1,1,2,unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('00FF'),unhex('E4B8AD')),(2,1,2,unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('0F0F'),unhex('FF0001')),(3,2,2,null,null,null,null,null)",
 			tableName))
 
 		expectedAggregate := map[string]string{
@@ -201,6 +202,83 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 						require.Equal(t, substringCase.expected[functionName], got)
 					}
 				})
+			}
+		})
+
+		t.Run("substring dynamic start with constant length", func(t *testing.T) {
+			expression := "substring(v512, start_pos, 511)"
+			expected := map[string]string{
+				"bit_and": "0F",
+				"bit_or":  "FF",
+				"bit_xor": "F0",
+			}
+			expectedWindow := map[string][]string{
+				"bit_and": {"FF", "0F"},
+				"bit_or":  {"FF", "FF"},
+				"bit_xor": {"FF", "F0"},
+			}
+			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+				queries := []string{
+					fmt.Sprintf("select hex(%s(%s)) from %s where g=1", functionName, expression, tableName),
+					fmt.Sprintf("select hex(%s(s)) from (select %s as s from %s where g=1) q", functionName, expression, tableName),
+					fmt.Sprintf("with q as (select %s as s from %s where g=1) select hex(%s(s)) from q", expression, tableName, functionName),
+				}
+				for _, query := range queries {
+					var got string
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got), query)
+					require.Equal(t, expected[functionName], got, query)
+				}
+
+				prepared, err := db.PrepareContext(ctx, fmt.Sprintf(
+					"select hex(%s(substring(v512, ?, 511))) from %s where g=1",
+					functionName, tableName))
+				require.NoError(t, err)
+				var rebound string
+				require.NoError(t, prepared.QueryRowContext(ctx, 2).Scan(&rebound))
+				require.Equal(t, expected[functionName], rebound)
+				require.NoError(t, prepared.Close())
+
+				_, err = db.ExecContext(ctx, fmt.Sprintf(
+					"select %s(substring(v512, start_pos, 512)) from %s where g=1",
+					functionName, tableName))
+				require.Error(t, err)
+				require.ErrorContains(t, err,
+					"Aggregate bitwise functions cannot accept arguments longer than 511 bytes")
+				var mysqlErr *mysql.MySQLError
+				require.True(t, errors.As(err, &mysqlErr), "%T: %v", err, err)
+				require.Equal(t, uint16(3514), mysqlErr.Number)
+
+				var grouped string
+				require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(
+					"select hex(%s(%s)) from %s where g=1 group by g",
+					functionName, expression, tableName)).Scan(&grouped))
+				require.Equal(t, expected[functionName], grouped)
+
+				rows, err := db.QueryContext(ctx, fmt.Sprintf(
+					"select id,hex(%s(%s) over (order by id)) from %s where id <= 2 order by id",
+					functionName, expression, tableName))
+				require.NoError(t, err)
+				var windowValues []string
+				for rows.Next() {
+					var id int
+					var value string
+					require.NoError(t, rows.Scan(&id, &value))
+					windowValues = append(windowValues, value)
+				}
+				require.NoError(t, rows.Close())
+				require.Equal(t, expectedWindow[functionName], windowValues)
+			}
+
+			viewName := fmt.Sprintf("`%s`.bitwise_28227_dynamic_start", dbName)
+			execSQLRequire(t, ctx, db, fmt.Sprintf(
+				"create view %s as select %s as s from %s where g=1",
+				viewName, expression, tableName))
+			defer execSQLMaybe(t, ctx, db, "drop view if exists "+viewName)
+			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+				var got string
+				require.NoError(t, db.QueryRowContext(ctx,
+					fmt.Sprintf("select hex(%s(s)) from %s", functionName, viewName)).Scan(&got))
+				require.Equal(t, expected[functionName], got)
 			}
 		})
 

@@ -5804,31 +5804,41 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
+	var (
+		bound      uint64
+		boundKnown bool
+	)
 	if len(args) == 3 {
-		if length, known := binarySubstringLengthBound(args[2].GetLit()); known && length == 0 {
-			refineKnownStringResultType(returnType, 0, binary)
-			return
-		}
-	}
-
-	sourceBound, known := stringExprBound(args[0], binary)
-	if !known {
-		return
-	}
-	bound, known := binarySubstringStartBound(sourceBound, args[1].GetLit())
-	if !known {
-		return
-	}
-
-	if len(args) == 3 {
-		if length, known := binarySubstringLengthBound(args[2].GetLit()); known && length < bound {
+		if length, known := binarySubstringLengthBound(args[2].GetLit()); known {
+			if length == 0 {
+				refineKnownStringResultType(returnType, 0, binary)
+				return
+			}
 			bound = length
+			boundKnown = true
 		}
 	}
 
-	// Binary SUBSTRING is byte-preserving. A constant start and, when present,
-	// length therefore give a truthful stored-byte upper bound even when the
-	// source declaration is wider than the aggregate limit.
+	if sourceBound, known := stringExprBound(args[0], binary); known {
+		// The source bound remains sound for a dynamic start; a literal start
+		// can only tighten it further.
+		if startBound, startKnown := binarySubstringStartBound(sourceBound, args[1].GetLit()); startKnown && startBound < sourceBound {
+			sourceBound = startBound
+		}
+		if !boundKnown || sourceBound < bound {
+			bound = sourceBound
+		}
+		boundKnown = true
+	}
+
+	if !boundKnown {
+		return
+	}
+
+	// Binary SUBSTRING is byte-preserving. The source bound, a constant start,
+	// and a constant length are independent truthful upper bounds, even when
+	// one of the other inputs is dynamic or the source declaration is wider
+	// than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
 }
 

@@ -182,6 +182,22 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 		startExpr,
 	}, &returnType)
 	require.Equal(t, int32(512), returnType.Width)
+
+	returnType = newReturnType()
+	refineSubstringLiteralReturnType([]*planpb.Expr{
+		sourceExpr(varbinaryType),
+		startExpr,
+		makePlan2Int64ConstExprWithType(511),
+	}, &returnType)
+	require.Equal(t, int32(511), returnType.Width)
+
+	returnType = newReturnType()
+	refineSubstringLiteralReturnType([]*planpb.Expr{
+		sourceExpr(unboundedBinary),
+		startExpr,
+		makePlan2Int64ConstExprWithType(511),
+	}, &returnType)
+	require.Equal(t, int32(511), returnType.Width)
 }
 
 func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
