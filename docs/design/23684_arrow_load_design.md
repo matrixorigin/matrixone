@@ -5,6 +5,10 @@ is the stable, versioned design artifact for implementation PR #28145, not
 evidence of approval. Until approval is recorded, all Arrow LOAD modes are
 fail-closed by default. The release-readiness matrix is maintained in
 [`evidence/23684_arrow_load_release_readiness.md`](evidence/23684_arrow_load_release_readiness.md).
+The separately versioned
+[`implementation delivery decision`](evidence/23684_arrow_load_delivery_decision.md)
+defines the mergeable shared substrate and deliberately separates it from
+deployment enablement.
 
 ## Problem and scope
 
