@@ -102,11 +102,11 @@ func FromVector(
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
 		return typed(bytejson.TpCodeDecimal, value.Format(typ.Scale)), nil
 	case types.T_binary:
-		return bytejson.NewMySQLOpaque(mysqlTypeString, v.GetBytesAt(row)), nil
+		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeString, v.GetBytesAt(row))
 	case types.T_varbinary:
-		return bytejson.NewMySQLOpaque(mysqlTypeVarchar, v.GetBytesAt(row)), nil
+		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeVarchar, v.GetBytesAt(row))
 	case types.T_blob:
-		return bytejson.NewMySQLOpaque(mysqlTypeBlob, v.GetBytesAt(row)), nil
+		return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, mysqlTypeBlob, v.GetBytesAt(row))
 	case types.T_year:
 		return uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), nil
 	case types.T_bit:
@@ -186,5 +186,5 @@ func bit(value uint64, width int32, ctx context.Context) (bytejson.ByteJson, err
 	byteLen := int((width + 7) / 8)
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], value)
-	return bytejson.NewMySQLOpaque(16, raw[8-byteLen:]), nil
+	return bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, 16, raw[8-byteLen:])
 }
