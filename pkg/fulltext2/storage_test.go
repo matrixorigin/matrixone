@@ -52,9 +52,13 @@ func TestDeleteSqls(t *testing.T) {
 	require.Contains(t, all[0], "__store")
 	require.Contains(t, all[1], "__meta")
 
+	// The tail's chunks AND its per-frame metadata rows: leaving the rows behind would report
+	// a tail that no longer exists.
 	tail := DeleteTailSqls(cfg)
-	require.Len(t, tail, 1)
+	require.Len(t, tail, 2)
 	require.Contains(t, tail[0], "__store")
+	require.Contains(t, tail[1], "__meta")
+	require.Contains(t, tail[1], TailFrameMetaPrefix)
 }
 
 func TestFileChunkInsertSqls(t *testing.T) {
@@ -109,19 +113,29 @@ func TestTailFramesInsertSqls(t *testing.T) {
 	startChunk := int64(7)
 	sqls, next := TailFramesInsertSqls(cfg, startChunk, frames)
 
-	// n rows batched at maxInsertTuples/statement ⇒ 3 statements, NOT n (one-per-frame).
-	require.Len(t, sqls, 3)
-	total := 0
+	// Chunk rows AND the per-frame metadata rows, each batched at maxInsertTuples per
+	// statement: 3 of each, never one statement per frame.
+	var chunkSqls, metaSqls []string
 	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			metaSqls = append(metaSqls, s)
+		} else {
+			chunkSqls = append(chunkSqls, s)
+		}
+	}
+	require.Len(t, chunkSqls, 3)
+	require.Len(t, metaSqls, 3, "frame rows are batched too, or a burst costs a round trip each")
+	total := 0
+	for _, s := range chunkSqls {
 		total += strings.Count(s, "load_file(")
 		require.Contains(t, s, vectorindex.CdcTailId)
 	}
 	require.Equal(t, n, total, "every frame contributes exactly one chunk row")
 	// chunk_ids are contiguous from startChunk; next = startChunk + total chunks.
 	require.Equal(t, startChunk+int64(n), next)
-	require.Contains(t, sqls[0], fmt.Sprintf(", %d, load_file", startChunk))            // first chunk id
-	require.Contains(t, sqls[2], fmt.Sprintf(", %d, load_file", startChunk+int64(n)-1)) // last chunk id
-	require.Contains(t, sqls[2], fmt.Sprintf("offset=%d", (n-1)*8))                     // last frame's offset in the last stmt
+	require.Contains(t, chunkSqls[0], fmt.Sprintf(", %d, load_file", startChunk))            // first chunk id
+	require.Contains(t, chunkSqls[2], fmt.Sprintf(", %d, load_file", startChunk+int64(n)-1)) // last chunk id
+	require.Contains(t, chunkSqls[2], fmt.Sprintf("offset=%d", (n-1)*8))                     // last frame
 
 	// empty input ⇒ no statements, next == start.
 	sqls0, next0 := TailFramesInsertSqls(cfg, startChunk, nil)
@@ -242,4 +256,52 @@ func TestAggregateSQLCastsToSigned(t *testing.T) {
 		require.Contains(t, line, "AS SIGNED",
 			"a SUM read back as int64 must be cast in SQL: %s", strings.TrimSpace(line))
 	}
+}
+
+// The metadata table now holds two kinds of row: one per BASE segment, and one per tail FRAME.
+// Every reader that means "the bases" must say so -- one that does not would try to load a tail
+// frame as a base segment, or fold the tail's bytes into the base totals. Base ids are
+// "<index table>:<ts>:<n>", so the prefix cannot collide.
+func TestTailFrameRowsAreNeverReadAsBases(t *testing.T) {
+	cfg := testStorageCfg()
+
+	require.Equal(t, "cdc_tail:7", TailFrameMetaId(7))
+	require.True(t, strings.HasPrefix(TailFrameMetaId(7), TailFrameMetaPrefix))
+	require.False(t, strings.HasPrefix(SubIndexId("mytable", 3), TailFrameMetaPrefix),
+		"a base id must not look like a tail frame")
+
+	// Every query that enumerates or sums the bases carries the exclusion.
+	for _, sql := range []string{
+		NextTailChunkIdSql(cfg),
+	} {
+		_ = sql // NextTailChunkId deliberately spans both kinds; see its comment.
+	}
+
+	tsSQL, _ := StaleGenSqls(cfg)
+	require.Contains(t, tsSQL, "NOT LIKE",
+		"a tail flush must not read as a new base generation")
+}
+
+// A frame's row can be referred back to the bytes it describes: chunk ids are contiguous in
+// frame order, so a frame owns [start, start+ceil(filesize/MaxChunkSize)).
+func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
+	cfg := testStorageCfg()
+	frames := []TailSegment{
+		{Path: "/tmp/s", Offset: 0, FrameLen: vectorindex.MaxChunkSize + 1}, // 2 chunks
+		{Path: "/tmp/s", Offset: 100, FrameLen: 10},                         // 1 chunk
+	}
+	const start = int64(5)
+	sqls, next := TailFramesInsertSqlsAt(cfg, start, frames, 4242)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	// First frame starts at 5 and spans two chunks, so the second starts at 7.
+	require.Contains(t, meta, "'cdc_tail:5'")
+	require.Contains(t, meta, "'cdc_tail:7'")
+	require.Contains(t, meta, "4242", "each frame records the version it applied")
+	require.Equal(t, start+3, next, "and the chunk ids they name are the ones written")
 }

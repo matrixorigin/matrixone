@@ -390,9 +390,13 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
-		case strings.Contains(sql, "LENGTH("): // checkTailLoadBudget
+		// Scalar sums come first: the tail-size and base-total queries both mention the tail
+		// id (one selects those rows, the other excludes them), so matching on the id alone
+		// would hand them a batch of chunk data.
+		case strings.Contains(sql, "SUM("):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
-		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT"): // tail data
+		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT") &&
+			!strings.Contains(sql, "NOT LIKE"): // tail chunk data
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil

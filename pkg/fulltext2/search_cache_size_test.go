@@ -15,7 +15,6 @@
 package fulltext2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"strings"
 	"testing"
 
@@ -117,13 +116,13 @@ func TestBaseDocCount(t *testing.T) {
 	})
 }
 
-// preloadStub answers the two reads Preload makes: the base doc/byte sums, and the tail's
-// chunk count.
-func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailChunks int64) {
+// preloadStub answers the two reads Preload makes: the base doc/byte sums, which EXCLUDE the
+// tail rows, and the tail's own byte sum, which selects only them.
+func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailBytes int64) {
 	t.Helper()
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		if strings.Contains(sql, "COUNT(*)") {
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailChunks, 0)}}, nil
+		if strings.Contains(sql, TailFrameMetaPrefix) && !strings.Contains(sql, "NOT LIKE") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailBytes, 0)}}, nil
 		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, ndoc, bytes)}}, nil
 	})
@@ -202,33 +201,34 @@ func TestGetIndexSizeChargesTheMappingItOwns(t *testing.T) {
 // makeRoom takes its "nothing to account for" exit before registering a reservation.
 func TestFulltext2PreloadDeclaresTheCdcTail(t *testing.T) {
 	mp := mpool.MustNewZero()
-	const chunks = 128
-	preloadStub(t, mp, 0, 0, chunks)
+	const stored = 8 << 20
+	preloadStub(t, mp, 0, 0, stored)
 
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta", IndexTable: "idx"})
 	require.NoError(t, s.Preload(nil))
 
 	host, device := s.GetIndexSize()
 	require.Zero(t, device)
-	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize*tailLoadPeakFactor), host,
+	require.Equal(t, int64(stored*tailLoadPeakFactor), host,
 		"a tail-only index must declare the tail at the peak the load holds")
 }
 
-// The tail size is COUNTED, not summed: data is a blob, and SUM(LENGTH(data)) would make the
-// scan read the whole tail off storage just to size it.
-func TestTailPeakBytesCountsChunksWithoutReadingThem(t *testing.T) {
+// The tail size is read from the per-frame metadata rows, which recorded it when the frames were
+// written. Not SUM(LENGTH(data)): data is a blob, so that would make the scan read the whole tail
+// off storage just to size it.
+func TestTailPeakBytesReadsTheFrameRows(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 
 	var seen string
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		seen = sql
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4, 0)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4096, 0)}}, nil
 	})
 	got, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
-	require.Equal(t, int64(4*vectorindex.MaxChunkSize*tailLoadPeakFactor), got)
-	require.Contains(t, seen, "COUNT(*)")
+	require.Equal(t, int64(4096*tailLoadPeakFactor), got)
+	require.Contains(t, seen, TailFrameMetaPrefix)
 	require.NotContains(t, seen, "LENGTH(",
 		"LENGTH over a blob column makes the scan read every byte of the tail")
 }
@@ -240,11 +240,11 @@ func TestTailBudgetSubtractsWhatIsAlreadyPromised(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 
-	// One tail needs 3 chunks x 64 KiB x 3 = 576 KiB. Give the machine room for one, not two.
-	const chunks = 3
-	need := int64(chunks * vectorindex.MaxChunkSize * tailLoadPeakFactor)
+	// One tail stores 192 KiB, so its peak is 576 KiB. Give the machine room for one, not two.
+	const stored = 192 << 10
+	need := int64(stored * tailLoadPeakFactor)
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, chunks, 0)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, stored, 0)}}, nil
 	})
 
 	origTotal, origGo := memTotalFn, memGolangFn

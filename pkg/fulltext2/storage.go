@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -239,11 +240,85 @@ func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset
 // order (recency identical to a per-frame persist); the next free chunk_id (end of the tail range)
 // is returned.
 func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegment) (sqls []string, nextChunkId int64) {
+	return TailFramesInsertSqlsAt(cfg, startChunkId, frames, 0)
+}
+
+// TailFrameMetaId is the metadata row that describes ONE tail frame. Frames are keyed by the
+// chunk id they start at, which is what lets a row be referred back to its bytes: chunk ids are
+// assigned contiguously in frame order (see NextTailChunkIdSql), so a frame owns
+// [startChunkId, startChunkId+ceil(filesize/MaxChunkSize)) and any chunk belongs to the row with
+// the greatest start id at or below it.
+func TailFrameMetaId(startChunkId int64) string {
+	return fmt.Sprintf("%s:%d", vectorindex.CdcTailId, startChunkId)
+}
+
+// notTailFrame excludes the per-frame tail rows from a metadata query.
+//
+// The metadata table now holds two kinds of row: one per BASE segment, and one per tail FRAME.
+// Every reader that means "the bases" has to say so -- a reader that does not would try to load
+// a tail frame as a base, or fold the tail's bytes into the base totals. The prefix cannot
+// collide: base ids are "<index table>:<ts>:<n>".
+func notTailFrame() string {
+	return fmt.Sprintf("%s NOT LIKE %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%"))
+}
+
+// TailFrameMetaPrefix matches every tail frame row, and NOTHING else: base ids are
+// "<index table>:<ts>:<n>", so they cannot begin with this.
+var TailFrameMetaPrefix = vectorindex.CdcTailId + ":"
+
+// TailFramesInsertSqlsAt persists the frames AND one metadata row each, recording the size of
+// the frame and the base-table version buildTS its content reflects.
+//
+// The row goes in the same statement batch as the chunks, so the two commit together: a
+// generation's recorded coverage can never disagree with the bytes actually stored. That is the
+// point of keeping it here rather than deriving it from an ISCP watermark elsewhere.
+func TailFramesInsertSqlsAt(cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) (sqls []string, nextChunkId int64) {
 	ranges := make([]fileChunkRange, len(frames))
 	for i, f := range frames {
 		ranges[i] = fileChunkRange{path: f.Path, offset: f.Offset, length: f.FrameLen}
 	}
-	return framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
+	sqls, nextChunkId = framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
+
+	return append(sqls, tailFrameMetaSqls(cfg, startChunkId, frames, buildTS)...), nextChunkId
+}
+
+// tailFrameMetaSqls writes the frames' rows, BATCHED at maxInsertTuples rows per statement the
+// same way the chunk rows are. One statement per frame would undo the batching the chunk writer
+// exists to do: a flush of many small frames would cost one round trip each.
+//
+// nrow is 0: a frame's doc count is not known at persist time (TailBuilder seals by byte
+// capacity), and the tail's cost is estimated from its bytes, not its docs.
+func tailFrameMetaSqls(cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) []string {
+	if len(frames) == 0 {
+		return nil
+	}
+	cols := fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s)",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
+		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
+		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts)
+	prefix := fmt.Sprintf("INSERT INTO %s %s VALUES ",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), cols)
+
+	now := time.Now().UnixMicro()
+	var out []string
+	var values []string
+	chunkId := startChunkId
+	for _, f := range frames {
+		values = append(values, fmt.Sprintf("(%s, %d, %s, %d, %d, %d, %d)",
+			sqlquote.String(TailFrameMetaId(chunkId)), now, sqlquote.String(""),
+			int64(f.FrameLen), chunkId, 0, buildTS))
+		chunkId += int64((f.FrameLen + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
+		if len(values) == maxInsertTuples {
+			out = append(out, prefix+strings.Join(values, ", "))
+			values = values[:0]
+		}
+	}
+	if len(values) > 0 {
+		out = append(out, prefix+strings.Join(values, ", "))
+	}
+	return out
 }
 
 // DeleteSqls removes one index id's chunks + metadata row (rebuild idempotency).
@@ -271,6 +346,11 @@ func DeleteTailSqls(cfg TableConfig) []string {
 	return []string{
 		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents)),
+		// The frames' metadata rows go with their bytes. Leaving them would report a tail that
+		// no longer exists: the next load would reserve memory for it, and its build_ts would
+		// claim coverage the folded generation now carries instead.
+		fmt.Sprintf("DELETE FROM %s WHERE %s LIKE %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%")),
 	}
 }
 
@@ -344,9 +424,9 @@ func baseDocCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 func baseDocCountAndBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ndoc int64, bytes int64, err error) {
 	// CAST AS SIGNED so the sums read back as int64 regardless of how SUM types its
 	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, catalog.FullText2Index_TblCol_Metadata_Filesize,
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), notTailFrame())
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, 0, err
@@ -386,8 +466,9 @@ func checkBaseLoadBudgetFor(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ndoc i
 // suggests, but MERGE must load the bases to reclaim dead docs. The query path calls
 // the guard itself (Fulltext2Search.Load); MERGE stays exempt so it can always run.
 func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, error) {
-	idSQL := fmt.Sprintf("SELECT %s FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	idSQL := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), notTailFrame())
 	res, err := runSql(sqlproc, idSQL)
 	if err != nil {
 		return nil, err
@@ -596,28 +677,30 @@ var (
 // never leaves disk. That is what makes this figure cheap enough to take in Preload, where
 // admission needs it, instead of only at load time where it is too late to serialize anything.
 func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT CAST(COUNT(*) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	// EXACT, from the per-frame rows: each frame recorded its own byte length when it was
+	// written, in the same transaction as its chunks. This replaces counting chunk rows and
+	// multiplying by the chunk cap, which was an upper bound, and replaces summing
+	// LENGTH(data), which made the scan read the entire tail off storage to answer it.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s WHERE %s LIKE %s",
+		catalog.FullText2Index_TblCol_Metadata_Filesize,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%"))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err
 	}
 	defer res.Close()
 
-	chunks := resultScalarInt64(res)
-	if chunks <= 0 {
+	stored := resultScalarInt64(res)
+	if stored <= 0 {
 		return 0, nil
 	}
-	// Saturate rather than wrap. Multiplying a COUNT by a constant can overflow where summing
-	// real bytes could not -- a corrupt or absurd count would wrap negative, compare below the
-	// budget, and admit the very load the check exists to refuse.
-	const perChunk = int64(vectorindex.MaxChunkSize) * tailLoadPeakFactor
-	if chunks > math.MaxInt64/perChunk {
+	// Saturate rather than wrap: a corrupt total would otherwise go negative, compare below
+	// the budget, and admit the load the check exists to refuse.
+	if stored > math.MaxInt64/tailLoadPeakFactor {
 		return math.MaxInt64, nil
 	}
-	return chunks * perChunk, nil
+	return stored * tailLoadPeakFactor, nil
 }
 
 // checkTailLoadBudget refuses a tail that cannot fit in the memory left for it.
@@ -877,9 +960,11 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // timestamp). The tail read is scoped to (CdcTailId, tag=1) — the exact CDC delta — so an
 // unrelated base sub-index's higher chunk_id can't mask a fresh append.
 func StaleGenSqls(cfg TableConfig) (tsSQL, tailSQL string) {
-	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+	// BASE rows only. The tail's own freshness is the chunk-id watermark below; letting a tail
+	// frame's row bump this one too would report a new base generation on every CDC flush.
+	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Metadata_Timestamp,
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), notTailFrame())
 	tailSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
@@ -962,8 +1047,9 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // dead-doc estimate (compared to the live source row count).
 func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 	// CAST AS SIGNED: SUM yields DECIMAL128, and scanInt64 reads an int64.
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s WHERE %s",
+		catalog.FullText2Index_TblCol_Metadata_Nrow,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), notTailFrame())
 	return scanInt64(sqlproc, sql)
 }
 
