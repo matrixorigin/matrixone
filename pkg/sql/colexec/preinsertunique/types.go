@@ -47,6 +47,19 @@ type container struct {
 	acceptedKeyVecs [][]*vector.Vector
 	acceptedTarget  *vector.Vector
 	acceptedRows    []*vector.Vector
+	// INSERT ... SELECT can feed PRE_INSERT_UK in multiple batches. Keep
+	// generated candidates which were not consumed by accepted rows until the
+	// next batch, but only for this operator/statement. The stream stores
+	// arithmetic runs instead of one vector element per rejected row, keeping
+	// the common unit-step reservation O(number of allocator ranges) in memory.
+	autoIncrementCandidates autoIncrementCandidateStream
+	// acceptedAutoIncrementValues contains final primary-key values already
+	// accepted by this statement. It is separate from acceptedKeyVecs: those
+	// vectors contain input candidates, while ordered INSERT IGNORE may publish
+	// a different candidate after another unique key rejects a row. The type is
+	// fixed by the table's AUTO_INCREMENT column, so a numeric set avoids a
+	// per-row formatted-string allocation on large INSERT ... SELECT statements.
+	acceptedAutoIncrementValues map[uint64]struct{}
 }
 type PreInsertUnique struct {
 	ctr          container
@@ -199,6 +212,8 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 		}
 	}
 	preInsertUnique.ctr.acceptedRows = nil
+	preInsertUnique.ctr.autoIncrementCandidates.reset()
+	preInsertUnique.ctr.acceptedAutoIncrementValues = nil
 }
 
 func (preInsertUnique *PreInsertUnique) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

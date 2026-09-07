@@ -72,6 +72,17 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 	if insertIgnore && len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.ConflictColumns) {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup context")
 	}
+	if preInsertUnique.PreInsertCtx.AutoIncrementReorder {
+		ctx := preInsertUnique.PreInsertCtx
+		if !insertIgnore || ctx.AutoIncrementKeyIndex < 0 ||
+			int(ctx.AutoIncrementKeyIndex) >= len(ctx.KeyColumns) ||
+			ctx.AutoIncrementColumn < 0 || ctx.AutoIncrementGeneratedColumn < 0 {
+			return moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE auto-increment reorder context")
+		}
+		if ctx.AutoIncrementOutputColumn < 0 || ctx.AutoIncrementOutputColumn >= ctx.OutputColumns {
+			return moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE auto-increment output column")
+		}
+	}
 	if odkuArbitration && len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.TargetColumns) {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU target arbitration context")
 	}
@@ -351,8 +362,39 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	result vm.CallResult,
 ) (vm.CallResult, error) {
 	inputBat := result.Batch
-	keyColumns := preInsertUnique.PreInsertCtx.KeyColumns
-	conflictColumns := preInsertUnique.PreInsertCtx.ConflictColumns
+	ctx := preInsertUnique.PreInsertCtx
+	keyColumns := ctx.KeyColumns
+	conflictColumns := ctx.ConflictColumns
+	autoIncrementReorder := ctx.AutoIncrementReorder
+	outputColumns := int(ctx.OutputColumns)
+	if len(keyColumns) == 0 || len(keyColumns) != len(conflictColumns) ||
+		outputColumns <= 0 || outputColumns > len(inputBat.Vecs) {
+		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup output width")
+	}
+	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector
+	var assignedCandidates map[int]*autoIncrementCandidate
+	autoOutputColumn := -1
+	if autoIncrementReorder {
+		autoColumn := int(ctx.AutoIncrementColumn)
+		autoOutputColumn = int(ctx.AutoIncrementOutputColumn)
+		markerColumn := int(ctx.AutoIncrementGeneratedColumn)
+		if autoColumn < 0 || markerColumn < 0 || markerColumn >= len(inputBat.Vecs) ||
+			autoOutputColumn < 0 || autoOutputColumn >= outputColumns {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE auto-increment reorder column")
+		}
+		if autoColumn >= len(inputBat.Vecs) {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE auto-increment input column")
+		}
+		autoIncrementVec = inputBat.Vecs[autoColumn]
+		autoIncrementGeneratedVec = inputBat.Vecs[markerColumn]
+		if autoIncrementGeneratedVec.GetType().Oid != types.T_bool {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "INSERT IGNORE auto-increment provenance is not boolean")
+		}
+		if preInsertUnique.ctr.acceptedAutoIncrementValues == nil {
+			preInsertUnique.ctr.acceptedAutoIncrementValues = make(map[uint64]struct{})
+		}
+		assignedCandidates = make(map[int]*autoIncrementCandidate)
+	}
 	for i := range keyColumns {
 		if keyColumns[i] < 0 || int(keyColumns[i]) >= len(inputBat.Vecs) ||
 			conflictColumns[i] < 0 || int(conflictColumns[i]) >= len(inputBat.Vecs) {
@@ -368,16 +410,52 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	defer vector.PutSels(sels)
 	sels = sels[:0]
 	for row := 0; row < inputBat.RowCount(); row++ {
+		generated := false
+		var autoValue uint64
+		var explicitAdvancesSequence bool
+		if autoIncrementReorder {
+			markerRow := vectorRowIndex(autoIncrementGeneratedVec, row)
+			generated = !autoIncrementGeneratedVec.IsNull(uint64(markerRow)) &&
+				vector.GetFixedAtNoTypeCheck[bool](autoIncrementGeneratedVec, markerRow)
+			var err error
+			if generated {
+				autoValue, err = autoIncrementCandidateValue(autoIncrementVec, row)
+			} else {
+				autoValue, explicitAdvancesSequence, err = autoIncrementValue(autoIncrementVec, row)
+			}
+			if err != nil {
+				return vm.CancelResult, err
+			}
+		}
 		accepted := true
+		primaryKeyConflict := false
 		for keyIdx, conflictPos := range conflictColumns {
 			conflictVec := inputBat.Vecs[conflictPos]
-			if !conflictVec.GetNulls().Contains(uint64(row)) &&
-				vector.GetFixedAtNoTypeCheck[bool](conflictVec, row) {
+			conflictRow := vectorRowIndex(conflictVec, row)
+			if !conflictVec.GetNulls().Contains(uint64(conflictRow)) &&
+				vector.GetFixedAtNoTypeCheck[bool](conflictVec, conflictRow) {
+				if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
+					primaryKeyConflict = true
+				}
 				accepted = false
 				break
 			}
 			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
-			if keyVec.GetNulls().Contains(uint64(row)) {
+			keyRow := vectorRowIndex(keyVec, row)
+			if keyVec.GetNulls().Contains(uint64(keyRow)) {
+				continue
+			}
+			if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
+				if _, exists := preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue]; exists {
+					// The input candidate may differ from the final value of a
+					// previously accepted row after ordered reuse.  Enforce the
+					// primary-key postcondition against final values.
+					accepted = false
+					break
+				}
+				// acceptedIters contains input candidates for the old path. It
+				// cannot be consulted for this primary key because ordered
+				// assignment may replace a candidate with an earlier final key.
 				continue
 			}
 			vals, zvals, err := preInsertUnique.ctr.acceptedIters[keyIdx].Find(
@@ -391,6 +469,18 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			}
 		}
 		if !accepted {
+			if autoIncrementReorder && generated && !primaryKeyConflict {
+				// A row rejected by a secondary unique key did not publish a
+				// primary key. Its allocator candidate remains available to the
+				// next accepted generated row, preserving input order across
+				// PRE_INSERT_UK batches. Candidates rejected by the primary-key
+				// join, or already represented by a final key, remain unusable.
+				if _, alreadyFinal := preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue]; !alreadyFinal {
+					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
+						return vm.CancelResult, err
+					}
+				}
+			}
 			continue
 		}
 
@@ -399,7 +489,13 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		// reserving another key for later rows.
 		for keyIdx := range keyColumns {
 			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
-			if keyVec.GetNulls().Contains(uint64(row)) {
+			keyRow := vectorRowIndex(keyVec, row)
+			if keyVec.GetNulls().Contains(uint64(keyRow)) {
+				continue
+			}
+			if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
+				// The primary-key state is the final-value map for ordered
+				// assignment; acceptedIters retains only input candidates.
 				continue
 			}
 			isNew, err := preInsertUnique.ctr.acceptedIters[keyIdx].DetectDup(
@@ -412,16 +508,42 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 					"INSERT IGNORE multi-key dedup accepted-set changed during row commit")
 			}
 		}
+		if autoIncrementReorder {
+			if generated {
+				// Assign at the acceptance boundary, before a later input row is
+				// considered. This preserves input-order ownership even when the
+				// candidate was retained from a preceding input batch.
+				if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
+					return vm.CancelResult, err
+				}
+				candidate, ok, err := preInsertUnique.popAutoIncrementCandidate()
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				if !ok {
+					return vm.CancelResult, moerr.NewInternalError(proc.Ctx,
+						"INSERT IGNORE accepted generated row has no reusable auto-increment candidate")
+				}
+				assignedCandidates[row] = candidate
+				preInsertUnique.ctr.acceptedAutoIncrementValues[candidate.value] = struct{}{}
+			} else {
+				if explicitAdvancesSequence {
+					if err := preInsertUnique.ctr.autoIncrementCandidates.discardThrough(autoValue); err != nil {
+						return vm.CancelResult, err
+					}
+				}
+				preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue] = struct{}{}
+			}
+		}
 		sels = append(sels, int64(row))
 	}
 
 	if len(sels) == 0 {
+		if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
+			return vm.CancelResult, err
+		}
 		result.Batch = batch.EmptyBatch
 		return result, nil
-	}
-	outputColumns := int(preInsertUnique.PreInsertCtx.OutputColumns)
-	if outputColumns > len(inputBat.Vecs) {
-		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup output width")
 	}
 	if preInsertUnique.ctr.buf == nil {
 		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns)
@@ -437,6 +559,374 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
 		return vm.CancelResult, err
 	}
+	if autoIncrementReorder {
+		if len(assignedCandidates) > 0 {
+			autoIncrementOutput := vector.NewVec(*autoIncrementVec.GetType())
+			for _, selected := range sels {
+				row := int(selected)
+				candidate, ok := assignedCandidates[row]
+				if ok {
+					if err := appendAutoIncrementValue(
+						proc, autoIncrementOutput, candidate.typ, candidate.value); err != nil {
+						autoIncrementOutput.Free(proc.Mp())
+						return vm.CancelResult, err
+					}
+				} else if err := autoIncrementOutput.UnionOne(
+					autoIncrementVec, int64(vectorRowIndex(autoIncrementVec, row)), proc.Mp()); err != nil {
+					autoIncrementOutput.Free(proc.Mp())
+					return vm.CancelResult, err
+				}
+			}
+			preInsertUnique.ctr.buf.Vecs[autoOutputColumn].Free(proc.Mp())
+			preInsertUnique.ctr.buf.Vecs[autoOutputColumn] = autoIncrementOutput
+			for _, candidate := range assignedCandidates {
+				proc.SetStatementLastInsertIDIfEarlier(candidate.value)
+			}
+		}
+		if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
+			return vm.CancelResult, err
+		}
+	}
 	result.Batch = preInsertUnique.ctr.buf
 	return result, nil
+}
+
+type autoIncrementCandidate struct {
+	typ   types.Type
+	value uint64
+}
+
+func vectorRowIndex(vec *vector.Vector, row int) int {
+	if vec != nil && vec.IsConst() {
+		return 0
+	}
+	return row
+}
+
+func autoIncrementValue(vec *vector.Vector, row int) (uint64, bool, error) {
+	if vec == nil {
+		return 0, false, moerr.NewInvalidInputNoCtx("missing auto-increment value vector")
+	}
+	row = vectorRowIndex(vec, row)
+	if vec.IsNull(uint64(row)) {
+		return 0, false, moerr.NewInvalidInputNoCtx("NULL auto-increment value cannot be arbitrated")
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		value := vector.GetFixedAtNoTypeCheck[int8](vec, row)
+		return uint64(value), value > 0, nil
+	case types.T_int16:
+		value := vector.GetFixedAtNoTypeCheck[int16](vec, row)
+		return uint64(value), value > 0, nil
+	case types.T_int32:
+		value := vector.GetFixedAtNoTypeCheck[int32](vec, row)
+		return uint64(value), value > 0, nil
+	case types.T_int64:
+		value := vector.GetFixedAtNoTypeCheck[int64](vec, row)
+		return uint64(value), value > 0, nil
+	case types.T_uint8:
+		value := uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row))
+		return value, value > 0, nil
+	case types.T_uint16:
+		value := uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, row))
+		return value, value > 0, nil
+	case types.T_uint32:
+		value := uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, row))
+		return value, value > 0, nil
+	case types.T_uint64:
+		value := vector.GetFixedAtNoTypeCheck[uint64](vec, row)
+		return value, value > 0, nil
+	default:
+		return 0, false, moerr.NewInvalidInputNoCtxf("unsupported auto-increment value type %s", vec.GetType().Oid.String())
+	}
+}
+
+func autoIncrementCandidateValue(vec *vector.Vector, row int) (uint64, error) {
+	if vec == nil {
+		return 0, moerr.NewInvalidInputNoCtx("missing auto-increment value vector")
+	}
+	row = vectorRowIndex(vec, row)
+	if vec.IsNull(uint64(row)) {
+		return 0, moerr.NewInvalidInputNoCtx("NULL auto-increment value cannot be a generated candidate")
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		value := vector.GetFixedAtNoTypeCheck[int8](vec, row)
+		if value < 0 {
+			return 0, moerr.NewInvalidInputNoCtx("negative auto-increment candidate")
+		}
+		return uint64(value), nil
+	case types.T_int16:
+		value := vector.GetFixedAtNoTypeCheck[int16](vec, row)
+		if value < 0 {
+			return 0, moerr.NewInvalidInputNoCtx("negative auto-increment candidate")
+		}
+		return uint64(value), nil
+	case types.T_int32:
+		value := vector.GetFixedAtNoTypeCheck[int32](vec, row)
+		if value < 0 {
+			return 0, moerr.NewInvalidInputNoCtx("negative auto-increment candidate")
+		}
+		return uint64(value), nil
+	case types.T_int64:
+		value := vector.GetFixedAtNoTypeCheck[int64](vec, row)
+		if value < 0 {
+			return 0, moerr.NewInvalidInputNoCtx("negative auto-increment candidate")
+		}
+		return uint64(value), nil
+	case types.T_uint8:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row)), nil
+	case types.T_uint16:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, row)), nil
+	case types.T_uint32:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, row)), nil
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, row), nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("unsupported auto-increment value type %s", vec.GetType().Oid.String())
+	}
+}
+
+type autoIncrementCandidateRun struct {
+	start uint64
+	step  uint64
+	count uint64
+}
+
+type autoIncrementCandidateStream struct {
+	typ         types.Type
+	initialized bool
+	runs        []autoIncrementCandidateRun
+	runIndex    int
+	runOffset   uint64
+	// lowerBound is the highest explicit AUTO_INCREMENT value accepted by this
+	// statement.  Recycled candidates below it must not be assigned to a later
+	// generated row, including when a later PRE_INSERT_UK batch arrives after
+	// the explicit row.
+	lowerBound    uint64
+	hasLowerBound bool
+}
+
+func (stream *autoIncrementCandidateStream) reset() {
+	*stream = autoIncrementCandidateStream{}
+}
+
+func (stream *autoIncrementCandidateStream) append(typ types.Type, value uint64) error {
+	if stream.hasLowerBound && value <= stream.lowerBound {
+		return nil
+	}
+	if !stream.initialized {
+		stream.typ = typ
+		stream.initialized = true
+	} else if !stream.typ.Eq(typ) {
+		return moerr.NewInvalidInputNoCtx("auto-increment candidate type changed within INSERT IGNORE")
+	}
+
+	// Do not extend a run that has already been fully consumed. The next
+	// candidate must remain visible to popAutoIncrementCandidate, even when
+	// the previous accepted row consumed the stream's tail.
+	if stream.runIndex < len(stream.runs) {
+		last := &stream.runs[len(stream.runs)-1]
+		if last.count == 1 && value > last.start {
+			last.step = value - last.start
+			last.count = 2
+			return nil
+		}
+		if last.count > 1 && last.step != 0 &&
+			value >= last.start && last.step <= (value-last.start)/last.count &&
+			last.start+last.step*last.count == value {
+			last.count++
+			return nil
+		}
+	}
+	stream.runs = append(stream.runs, autoIncrementCandidateRun{start: value, count: 1})
+	return nil
+}
+
+// discardThrough invalidates retained generated candidates at or below an
+// accepted explicit key.  It also records the bound so a later input batch
+// cannot reintroduce an already-invalidated candidate.  The stream normally
+// receives monotonic allocator output, but filtering every remaining run keeps
+// this contract correct if a batch is split or an allocator implementation
+// supplies a non-monotonic run.
+func (stream *autoIncrementCandidateStream) discardThrough(value uint64) error {
+	if !stream.hasLowerBound || value > stream.lowerBound {
+		stream.lowerBound = value
+		stream.hasLowerBound = true
+	}
+	if stream.runIndex >= len(stream.runs) {
+		stream.runs = nil
+		stream.runIndex = 0
+		stream.runOffset = 0
+		return nil
+	}
+
+	remaining := stream.runs[stream.runIndex:]
+	if stream.runOffset != 0 {
+		first := remaining[0]
+		start, err := stream.valueAt(first, stream.runOffset)
+		if err != nil {
+			return err
+		}
+		first.start = start
+		first.count -= stream.runOffset
+		remaining[0] = first
+	}
+	filtered := remaining[:0]
+	for _, run := range remaining {
+		if run.count == 0 {
+			continue
+		}
+		if run.step == 0 {
+			if run.start > value {
+				filtered = append(filtered, run)
+			}
+			continue
+		}
+		if run.start > value {
+			filtered = append(filtered, run)
+			continue
+		}
+		skip := (value-run.start)/run.step + 1
+		if skip >= run.count {
+			continue
+		}
+		start, err := stream.valueAt(run, skip)
+		if err != nil {
+			return err
+		}
+		filtered = append(filtered, autoIncrementCandidateRun{
+			start: start,
+			step:  run.step,
+			count: run.count - skip,
+		})
+	}
+	stream.runs = append([]autoIncrementCandidateRun(nil), filtered...)
+	stream.runIndex = 0
+	stream.runOffset = 0
+	return nil
+}
+
+func (stream *autoIncrementCandidateStream) valueAt(run autoIncrementCandidateRun, offset uint64) (uint64, error) {
+	if offset >= run.count {
+		return 0, moerr.NewInvalidInputNoCtx("auto-increment candidate stream offset is out of range")
+	}
+	if run.step != 0 && offset > (^uint64(0)-run.start)/run.step {
+		return 0, moerr.NewInvalidInputNoCtx("auto-increment candidate stream overflows")
+	}
+	return run.start + run.step*offset, nil
+}
+
+func (preInsertUnique *PreInsertUnique) appendAutoIncrementCandidate(
+	proc *process.Process,
+	source *vector.Vector,
+	row int,
+) error {
+	value, err := autoIncrementCandidateValue(source, row)
+	if err != nil {
+		return err
+	}
+	return preInsertUnique.ctr.autoIncrementCandidates.append(*source.GetType(), value)
+}
+
+func (preInsertUnique *PreInsertUnique) popAutoIncrementCandidate() (*autoIncrementCandidate, bool, error) {
+	queue := &preInsertUnique.ctr.autoIncrementCandidates
+	for queue.runIndex < len(queue.runs) {
+		run := queue.runs[queue.runIndex]
+		value, err := queue.valueAt(run, queue.runOffset)
+		if err != nil {
+			return nil, false, err
+		}
+		queue.runOffset++
+		if queue.runOffset == run.count {
+			queue.runIndex++
+			queue.runOffset = 0
+		}
+		if _, blocked := preInsertUnique.ctr.acceptedAutoIncrementValues[value]; blocked {
+			continue
+		}
+		return &autoIncrementCandidate{typ: queue.typ, value: value}, true, nil
+	}
+	return nil, false, nil
+}
+
+func (preInsertUnique *PreInsertUnique) compactAutoIncrementCandidates(proc *process.Process) error {
+	queue := &preInsertUnique.ctr.autoIncrementCandidates
+	if queue.runIndex == 0 && queue.runOffset == 0 {
+		return nil
+	}
+	if queue.runIndex >= len(queue.runs) {
+		queue.reset()
+		return nil
+	}
+	if queue.runIndex < 1024 || queue.runIndex < len(queue.runs)/2 {
+		return nil
+	}
+	remaining := queue.runs[queue.runIndex:]
+	if queue.runOffset != 0 {
+		first := remaining[0]
+		start, err := queue.valueAt(first, queue.runOffset)
+		if err != nil {
+			return err
+		}
+		first.start = start
+		first.count -= queue.runOffset
+		remaining[0] = first
+	}
+	queue.runs = append([]autoIncrementCandidateRun(nil), remaining...)
+	queue.runIndex = 0
+	queue.runOffset = 0
+	return nil
+}
+
+func appendAutoIncrementValue(
+	proc *process.Process,
+	vec *vector.Vector,
+	typ types.Type,
+	value uint64,
+) error {
+	if vec == nil || !vec.GetType().Eq(typ) {
+		return moerr.NewInvalidInput(proc.Ctx, "auto-increment output type does not match candidate type")
+	}
+	switch typ.Oid {
+	case types.T_int8:
+		if value > 1<<7-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows int8")
+		}
+		return vector.AppendFixed(vec, int8(value), false, proc.Mp())
+	case types.T_int16:
+		if value > 1<<15-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows int16")
+		}
+		return vector.AppendFixed(vec, int16(value), false, proc.Mp())
+	case types.T_int32:
+		if value > 1<<31-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows int32")
+		}
+		return vector.AppendFixed(vec, int32(value), false, proc.Mp())
+	case types.T_int64:
+		if value > ^uint64(0)>>1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows int64")
+		}
+		return vector.AppendFixed(vec, int64(value), false, proc.Mp())
+	case types.T_uint8:
+		if value > 1<<8-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows uint8")
+		}
+		return vector.AppendFixed(vec, uint8(value), false, proc.Mp())
+	case types.T_uint16:
+		if value > 1<<16-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows uint16")
+		}
+		return vector.AppendFixed(vec, uint16(value), false, proc.Mp())
+	case types.T_uint32:
+		if value > 1<<32-1 {
+			return moerr.NewInvalidInput(proc.Ctx, "auto-increment candidate overflows uint32")
+		}
+		return vector.AppendFixed(vec, uint32(value), false, proc.Mp())
+	case types.T_uint64:
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	default:
+		return moerr.NewInvalidInputf(proc.Ctx, "unsupported auto-increment output type %s", typ.Oid.String())
+	}
 }

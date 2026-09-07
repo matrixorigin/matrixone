@@ -980,12 +980,36 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	})
 
 	autoPreInsert := &preinsert.PreInsert{HasAutoCol: true}
+	orderedPreInsert := &preinsert.PreInsert{
+		HasAutoCol:                  true,
+		TrackAutoIncrementGenerated: true,
+	}
+	orderedPreInsertUnique := &preinsertunique.PreInsertUnique{
+		PreInsertCtx: &planpb.PreInsertUkCtx{AutoIncrementReorder: true},
+	}
 	ordinaryPreInsert := &preinsert.PreInsert{}
 	autoPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
 			Op:        int32(vm.PreInsert),
 			PreInsert: &pipeline.PreInsert{HasAutoCol: true},
 		}},
+	}}}
+	orderedPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{
+			{
+				Op: int32(vm.PreInsert),
+				PreInsert: &pipeline.PreInsert{
+					HasAutoCol:                  true,
+					TrackAutoIncrementGenerated: true,
+				},
+			},
+			{
+				Op: int32(vm.PreInsertUnique),
+				PreInsertUnique: &pipeline.PreInsertUnique{
+					PreInsertUkCtx: &planpb.PreInsertUkCtx{AutoIncrementReorder: true},
+				},
+			},
+		},
 	}}}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
@@ -1011,6 +1035,35 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	decoded, err := decodeScope(encodedPipeline, proc, true, nil)
 	require.NoError(t, err)
 	decoded.release()
+
+	proc.Base.SessionInfo.AutoIncrementIncrement = 3
+	proc.Base.SessionInfo.AutoIncrementOffset = 2
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	_, _, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline),
+		"requires MORPC protocol version 55")
+
+	// New wire metadata is not optional merely because the session happens to
+	// use the default 1/1 series. An older receiver would silently drop these
+	// fields and execute the old, incorrect positional semantics.
+	proc.Base.SessionInfo.AutoIncrementIncrement = 1
+	proc.Base.SessionInfo.AutoIncrementOffset = 1
+	_, _, err = convertToPipelineInstruction(orderedPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	_, _, err = convertToPipelineInstruction(orderedPreInsertUnique, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, orderedPipeline),
+		"requires MORPC protocol version 55")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	_, instruction, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.HasAutoCol)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {

@@ -3965,6 +3965,14 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementOffset)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_increment", int64(7)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_offset", int64(4)))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, uint64(7), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(4), proc.Base.SessionInfo.AutoIncrementOffset)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
 	refreshStatementScopedSessionInfo(ses, proc)

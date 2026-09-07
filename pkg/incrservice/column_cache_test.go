@@ -93,6 +93,25 @@ func TestColumnCacheInsert(t *testing.T) {
 	)
 }
 
+func TestColumnCacheInsertHonorsStatementSeries(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	input := newTestVector[uint64](5, types.New(types.T_uint64, 0, 0), nil, nil)
+	runColumnCacheTests(
+		t,
+		10,
+		1,
+		func(ctx context.Context, c *columnCache) {
+			statementCtx := WithAutoIncrementOptions(ctx, 3, 2)
+			lastInsertValue, err := c.insertAutoValues(
+				statementCtx, 0, input, input.Length(), nil)
+			require.NoError(t, err)
+			require.Equal(t, uint64(2), lastInsertValue)
+			require.Equal(t, []uint64{2, 5, 8, 11, 14},
+				vector.MustFixedColWithTypeCheck[uint64](input))
+		},
+	)
+}
+
 func TestInsertInt8(t *testing.T) {
 	fillValues := []int8{1, 2, 3, 4, 5, 6, 7, 8}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
@@ -358,7 +377,8 @@ func TestOverflow(t *testing.T) {
 						require.Equal(t, uint64(0), u)
 						return nil
 					},
-					nil))
+					nil,
+					AutoIncrementOptions{}))
 		},
 	)
 }
@@ -385,7 +405,8 @@ func TestOverflowWithInit(t *testing.T) {
 						require.Equal(t, uint64(0), u)
 						return nil
 					},
-					nil))
+					nil,
+					AutoIncrementOptions{}))
 		},
 	)
 }
@@ -421,7 +442,8 @@ func TestMergeAllocate(t *testing.T) {
 								added.Add(1)
 								return nil
 							},
-							nil)
+							nil,
+							AutoIncrementOptions{})
 					}
 				}()
 			}

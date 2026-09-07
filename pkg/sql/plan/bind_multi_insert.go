@@ -561,10 +561,11 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	tCtx.snapshot = bindCtx.snapshot
 
 	var (
-		lastNodeID    int32
-		colName2Idx   map[string]int32
-		skipUniqueIdx []bool
-		err           error
+		lastNodeID                   int32
+		colName2Idx                  map[string]int32
+		skipUniqueIdx                []bool
+		autoIncrementGeneratedColumn int32 = -1
+		err                          error
 	)
 	if len(group.branches) == 1 {
 		// Single clause: bind its row image in clause column order and hand it
@@ -574,7 +575,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		if err != nil {
 			return err
 		}
-		lastNodeID, colName2Idx, skipUniqueIdx, err = builder.appendInsertReplaceSourceCasts(
+		lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err = builder.appendInsertReplaceSourceCasts(
 			tCtx, lastNodeID, branch.insertColumns, objRef, tableDef, false)
 		if err != nil {
 			return err
@@ -611,7 +612,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 				},
 			}
 		}
-		lastNodeID, colName2Idx, skipUniqueIdx, err = builder.appendNodesForInsertStmt(
+		lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err = builder.appendNodesForInsertStmt(
 			tCtx, unionID, tableDef, objRef, insertColToExpr)
 		if err != nil {
 			return err
@@ -619,7 +620,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	}
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
+		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
 	if err != nil {
 		return err
 	}

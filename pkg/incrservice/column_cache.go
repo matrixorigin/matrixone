@@ -37,6 +37,13 @@ var (
 	maxRetryTimes = 2
 )
 
+// A valid allocation of rows*increment unit values contains enough members of
+// every compatible session series for the current request.  This bound is a
+// last-resort guard for corrupt/legacy step metadata or a broken allocator;
+// it prevents an impossible residue from spinning forever while leaving
+// normal allocation behavior unchanged.
+const maxAutoIncrementAllocationsPerRow = 8
+
 type columnCache struct {
 	sync.RWMutex
 	logger        *log.MOLogger
@@ -112,6 +119,7 @@ func (col *columnCache) insertAutoValues(
 	vec *vector.Vector,
 	rows int,
 	txnOp client.TxnOperator) (uint64, error) {
+	options := AutoIncrementOptionsFromContext(ctx)
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		return insertAutoValues[int8](
@@ -131,7 +139,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_int16:
 		return insertAutoValues[int16](
 			ctx,
@@ -150,7 +159,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_int32:
 		return insertAutoValues[int32](
 			ctx,
@@ -168,7 +178,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_int64:
 		return insertAutoValues[int64](
 			ctx,
@@ -187,7 +198,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_uint8:
 		return insertAutoValues[uint8](
 			ctx,
@@ -206,7 +218,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_uint16:
 		return insertAutoValues[uint16](
 			ctx,
@@ -225,7 +238,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_uint32:
 		return insertAutoValues[uint32](
 			ctx,
@@ -244,7 +258,8 @@ func (col *columnCache) insertAutoValues(
 					"value %v",
 					v)
 			},
-			txnOp)
+			txnOp,
+			options)
 	case types.T_uint64:
 		return insertAutoValues[uint64](
 			ctx,
@@ -260,7 +275,8 @@ func (col *columnCache) insertAutoValues(
 					"auto_incrment column constant value overflows bigint unsigned",
 				)
 			},
-			txnOp)
+			txnOp,
+			options)
 	default:
 		return 0, moerr.NewInvalidInputf(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
@@ -315,7 +331,9 @@ func (col *columnCache) applyAutoValues(
 	skipped *ranges,
 	filter func(i int) bool,
 	apply func(int, uint64) error,
-	txnOp client.TxnOperator) error {
+	txnOp client.TxnOperator,
+	options AutoIncrementOptions) error {
+	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
 	cul := col.concurrencyApply.Load()
 	col.concurrencyApply.Add(1)
 	col.Lock()
@@ -325,46 +343,68 @@ func (col *columnCache) applyAutoValues(
 		return err
 	}
 
-	wait := func() (bool, error) {
-		if col.overflow {
-			return true, nil
-		}
-
-		if col.ranges.empty() && !col.terminal {
-			if err := col.allocateLocked(ctx, tableID, rows, cul, txnOp); err != nil {
-				return false, err
-			}
-		}
-		return false, nil
-	}
 	for i := 0; i < rows; i++ {
 		if filter(i) {
 			continue
 		}
-		if skipped != nil &&
-			skipped.left() > 0 {
-			if err := apply(i, skipped.next()); err != nil {
+
+		// Values displaced by explicit manual inserts remain usable only when
+		// they belong to this statement's session series.  A non-unit
+		// increment must not accidentally consume a value from the skipped
+		// portion which has a different residue.
+		if skipped != nil {
+			if value := skipped.nextFor(options); value != 0 {
+				if err := apply(i, value); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
+		for allocations := 0; ; allocations++ {
+			if allocations >= maxAutoIncrementAllocationsPerRow {
+				return moerr.NewInternalErrorf(
+					ctx,
+					"AUTO_INCREMENT could not find a value in the requested session series after %d allocations",
+					maxAutoIncrementAllocationsPerRow,
+				)
+			}
+			if col.overflow {
+				return apply(i, 0)
+			}
+
+			value := col.ranges.nextFor(options)
+			if value != 0 {
+				if err := apply(i, value); err != nil {
+					return err
+				}
+				break
+			}
+
+			if col.terminal {
+				if isAutoIncrementValue(col.terminalValue, options) {
+					value = col.terminalValue
+					col.terminal = false
+					col.terminalValue = 0
+					col.terminalTS = timestamp.Timestamp{}
+					col.overflow = true
+					if err := apply(i, value); err != nil {
+						return err
+					}
+				} else {
+					return apply(i, 0)
+				}
+				break
+			}
+
+			allocationCount, err := autoIncrementAllocationCount(ctx, rows, options)
+			if err != nil {
 				return err
 			}
-			continue
-		}
-		overflow, err := wait()
-		if err != nil {
-			return err
-		}
-		if overflow {
-			return apply(i, 0)
-		}
-		value := col.ranges.next()
-		if value == 0 && col.terminal {
-			value = col.terminalValue
-			col.terminal = false
-			col.terminalValue = 0
-			col.terminalTS = timestamp.Timestamp{}
-			col.overflow = true
-		}
-		if err := apply(i, value); err != nil {
-			return err
+			if err = col.allocateLockedWithOptions(
+				ctx, tableID, allocationCount, cul, txnOp, options); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -375,6 +415,12 @@ func (col *columnCache) preAllocate(
 	tableID uint64,
 	count int,
 	txnOp client.TxnOperator) {
+	// Statement-scoped non-default series reserve on demand in applyAutoValues;
+	// prefetching a default block here would consume values from the shared
+	// allocator which may not belong to that series.
+	if !AutoIncrementOptionsFromContext(ctx).isDefault() {
+		return
+	}
 	col.Lock()
 	defer col.Unlock()
 	if col.retired {
@@ -418,6 +464,18 @@ func (col *columnCache) allocateLocked(
 	count int,
 	beforeApplyCount uint64,
 	txnOp client.TxnOperator) error {
+	return col.allocateLockedWithOptions(
+		ctx, tableID, count, beforeApplyCount, txnOp,
+		NormalizeAutoIncrementOptions(1, 1))
+}
+
+func (col *columnCache) allocateLockedWithOptions(
+	ctx context.Context,
+	tableID uint64,
+	count int,
+	beforeApplyCount uint64,
+	txnOp client.TxnOperator,
+	options AutoIncrementOptions) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -425,15 +483,31 @@ func (col *columnCache) allocateLocked(
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 
-	col.allocating = true
-	col.allocatingC = make(chan error, 1)
-	if col.cfg.CountPerAllocate > count {
+	if options.isDefault() && col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
-	n := int(col.concurrencyApply.Load() - beforeApplyCount)
-	if n == 0 {
-		n = 1
+	concurrent := col.concurrencyApply.Load()
+	if concurrent < beforeApplyCount {
+		return moerr.NewInternalError(ctx, "AUTO_INCREMENT concurrency accounting moved backwards")
 	}
+	concurrent -= beforeApplyCount
+	if concurrent == 0 {
+		concurrent = 1
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if count <= 0 || uint64(count) > maxInt/concurrent {
+		return moerr.NewOutOfRangef(
+			ctx,
+			"AUTO_INCREMENT",
+			"allocation request overflows the supported range: count=%d concurrency=%d",
+			count,
+			concurrent,
+		)
+	}
+	n := int(concurrent)
+
+	col.allocating = true
+	col.allocatingC = make(chan error, 1)
 
 	var from, to uint64
 	var allocateAt timestamp.Timestamp
@@ -460,6 +534,14 @@ func (col *columnCache) allocateLocked(
 }
 
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
+	options := AutoIncrementOptionsFromContext(ctx)
+	// A non-default statement reserves the exact underlying span it needs in
+	// applyAutoValues.  Background prefetch here would reserve a default-sized
+	// block which may contain no values for this session's residue and would
+	// create avoidable high-water jumps.
+	if !options.isDefault() {
+		return nil
+	}
 	col.Lock()
 	committed := col.committed
 	low := col.ranges.left() <= col.cfg.LowCapacity && !col.terminal
@@ -559,6 +641,32 @@ func (col *columnCache) close() error {
 	return nil
 }
 
+func autoIncrementAllocationCount(
+	ctx context.Context,
+	rows int,
+	options AutoIncrementOptions) (int, error) {
+	if rows <= 0 || options.isDefault() {
+		return rows, nil
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if options.Increment > maxInt/uint64(rows) {
+		return 0, moerr.NewOutOfRangef(
+			ctx,
+			"AUTO_INCREMENT",
+			"statement reservation overflows the supported range: rows=%d increment=%d",
+			rows,
+			options.Increment,
+		)
+	}
+	return rows * int(options.Increment), nil
+}
+
+func isAutoIncrementValue(value uint64, options AutoIncrementOptions) bool {
+	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
+	return value >= options.Offset &&
+		(value-options.Offset)%options.Increment == 0
+}
+
 func insertAutoValues[T constraints.Integer](
 	ctx context.Context,
 	tableID uint64,
@@ -567,7 +675,9 @@ func insertAutoValues[T constraints.Integer](
 	max T,
 	col *columnCache,
 	outOfRangeError func(v uint64) error,
-	txnOp client.TxnOperator) (uint64, error) {
+	txnOp client.TxnOperator,
+	options AutoIncrementOptions) (uint64, error) {
+	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
@@ -614,7 +724,9 @@ func insertAutoValues[T constraints.Integer](
 			}
 		}
 	}
-	col.preAllocate(ctx, tableID, rows, txnOp)
+	if options.isDefault() {
+		col.preAllocate(ctx, tableID, rows, txnOp)
+	}
 	err := col.applyAutoValues(
 		ctx,
 		tableID,
@@ -642,7 +754,8 @@ func insertAutoValues[T constraints.Integer](
 			}
 			return nil
 		},
-		txnOp)
+		txnOp,
+		options)
 	if err != nil {
 		return 0, err
 	}

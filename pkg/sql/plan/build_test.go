@@ -3664,6 +3664,103 @@ func TestInsertIgnoreWithMultipleUniqueConstraintsUsesCoordinatedDedup(t *testin
 		"independent per-key IGNORE joins would discard fallback rows before all constraints are known")
 }
 
+func TestInsertIgnoreAutoIncrementReorderSkipsConstrainedTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// The final generated primary key is assigned after the row-level filters.
+	// A CHECK on that value must therefore keep the established path until the
+	// assignment is moved before constraint evaluation.
+	addPositiveCheck(t, mock, "dept", "deptno")
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (dname, loc) VALUES ('Sales', 'NY')")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PRE_INSERT_UK ||
+			!node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			continue
+		}
+		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"ordered auto-increment reassignment must not run after CHECK evaluation")
+	}
+}
+
+func TestInsertIgnoreAutoIncrementReorderIsEnabledForPlainTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	tableDef.Cols[0].Typ.AutoIncr = true
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc) VALUES (NULL, 'Sales', 'NY'), (2, 'HR', 'London'), (NULL, 'Eng', 'SF')")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			found = true
+			require.True(t, node.PreInsertUkCtx.GetAutoIncrementReorder())
+		}
+	}
+	require.True(t, found)
+}
+
+func TestInsertIgnoreAutoIncrementProvenanceNameDoesNotCollideWithUserColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	require.NotNil(t, tableDef)
+
+	// This table intentionally has no AUTO_INCREMENT column, but the user column
+	// uses the historical internal marker spelling.  Planner metadata must not be
+	// inferred from colName2Idx, otherwise this legal schema is treated as an
+	// ordered AUTO_INCREMENT plan and the non-boolean user column fails at runtime.
+	tableDef.Cols[0].Typ.AutoIncr = false
+	markerName := "__mo_auto_increment_generated"
+	markerPos := int32(len(tableDef.Cols) - 1)
+	tableDef.Cols = append(tableDef.Cols, nil)
+	copy(tableDef.Cols[markerPos+1:], tableDef.Cols[markerPos:])
+	tableDef.Cols[markerPos] = &plan.ColDef{
+		ColId: 999,
+		Name:  markerName,
+		Typ:   plan.Type{Id: int32(types.T_varchar), Width: 32},
+	}
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc, __mo_auto_increment_generated) "+
+			"VALUES (1, 'Sales', 'NY', 'user data')")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder())
+		}
+	}
+}
+
+func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	tableDef.Cols[0].Typ.AutoIncr = true
+	tableDef.Indexes[0].Parts = []string{"deptno", "dname"}
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc) VALUES (NULL, 'Sales', 'NY')")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PRE_INSERT_UK ||
+			!node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			continue
+		}
+		found = true
+		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"a unique index containing the reassigned primary key must keep the established path")
+	}
+	require.True(t, found)
+}
+
 func TestInsertIgnoreSingleUniqueConstraintKeepsExistingDedupPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t,

@@ -3444,6 +3444,20 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
+		if node.PreInsertCtx.TrackAutoIncrementGenerated {
+			markerRef := [2]int32{
+				node.BindingTags[0],
+				node.PreInsertCtx.AutoIncrementGeneratedColumn,
+			}
+			remapping.addColRef(markerRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: node.PreInsertCtx.AutoIncrementGeneratedColumn,
+				}},
+			})
+		}
 
 	case plan.Node_PRE_INSERT_UK:
 		if node.PreInsertUkCtx == nil {
@@ -3474,6 +3488,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for i, pos := range auxColumns {
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
+		}
+		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
+			autoIncrementGeneratedRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementGeneratedColumn}
+			colRefCnt[autoIncrementRef]++
+			colRefCnt[autoIncrementGeneratedRef]++
 		}
 		var pkRef [2]int32
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
@@ -3526,6 +3547,20 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				return nil, moerr.NewInternalError(builder.GetContext(), "missing ODKU incoming primary key column")
 			}
 			node.PreInsertUkCtx.PkColumn = pos[1]
+		}
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			colRefCnt[autoIncrementRef]--
+			pos, ok := childRemapping.globalToLocal[autoIncrementRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment column")
+			}
+			node.PreInsertUkCtx.AutoIncrementColumn = pos[1]
+			colRefCnt[autoIncrementGeneratedRef]--
+			pos, ok = childRemapping.globalToLocal[autoIncrementGeneratedRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment provenance column")
+			}
+			node.PreInsertUkCtx.AutoIncrementGeneratedColumn = pos[1]
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList

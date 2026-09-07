@@ -95,6 +95,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
+		AutoIncrementIncrement:              7,
+		AutoIncrementOffset:                 4,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -150,6 +152,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
 			SqlMode:                             "STRICT_ALL_TABLES",
+			AutoIncrementIncrement:              7,
+			AutoIncrementOffset:                 4,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -158,6 +162,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
+		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
+		require.Equal(t, uint64(4), info.AutoIncrementOffset)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -595,6 +601,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
+	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
@@ -742,6 +750,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
+	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))

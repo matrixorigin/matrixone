@@ -64,6 +64,87 @@ func TestRangeNext(t *testing.T) {
 	assert.Equal(t, 0, len(r.values))
 }
 
+func TestRangeNextForStatementSeries(t *testing.T) {
+	tests := []struct {
+		name      string
+		step      uint64
+		values    []uint64
+		increment uint64
+		offset    uint64
+		want      []uint64
+	}{
+		{
+			name:      "unit range selects offset residue",
+			step:      1,
+			values:    []uint64{1, 10},
+			increment: 3,
+			offset:    2,
+			want:      []uint64{2, 5, 8},
+		},
+		{
+			name:      "unit range selects first residue",
+			step:      1,
+			values:    []uint64{1, 10},
+			increment: 3,
+			offset:    1,
+			want:      []uint64{1, 4, 7},
+		},
+		{
+			name:      "non unit range uses congruence",
+			step:      2,
+			values:    []uint64{1, 15},
+			increment: 4,
+			offset:    3,
+			want:      []uint64{3, 7, 11},
+		},
+		{
+			name:      "incompatible residues are discarded",
+			step:      2,
+			values:    []uint64{1, 15},
+			increment: 4,
+			offset:    2,
+			want:      []uint64{},
+		},
+		{
+			name:      "later range remains usable",
+			step:      2,
+			values:    []uint64{1, 4, 11, 18},
+			increment: 3,
+			offset:    2,
+			want:      []uint64{11, 17},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &ranges{step: tt.step, values: append([]uint64(nil), tt.values...)}
+			options := NormalizeAutoIncrementOptions(tt.increment, tt.offset)
+			got := make([]uint64, 0, len(tt.want))
+			for {
+				value := r.nextFor(options)
+				if value == 0 {
+					break
+				}
+				got = append(got, value)
+			}
+			require.Equal(t, tt.want, got)
+			require.True(t, r.empty())
+			require.Equal(t, tt.step, r.step)
+		})
+	}
+}
+
+func TestRangeNextForZeroAndInvalidOptionsNormalizeSafely(t *testing.T) {
+	r := &ranges{step: 1, values: []uint64{1, 4}}
+	// A zero increment and an offset outside the series are normalized to the
+	// ordinary MySQL default instead of turning the range into an infinite or
+	// invalid arithmetic path.
+	options := NormalizeAutoIncrementOptions(0, 99)
+	require.Equal(t, AutoIncrementOptions{Increment: 1, Offset: 1}, options)
+	require.Equal(t, uint64(1), r.nextFor(options))
+	require.Equal(t, uint64(2), r.nextFor(options))
+}
+
 func TestRangeLeft(t *testing.T) {
 	r := &ranges{}
 	assert.Equal(t, 0, r.left())
