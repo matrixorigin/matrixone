@@ -522,7 +522,7 @@ func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 			types.New(types.T_decimal128, 38, 6),
 			false,
 			[]types.Decimal128{{}, {}},
-			[]bool{true, true},
+			[]bool{false, true},
 		),
 		builtInUnixTimestamp,
 	)
