@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	goruntime "runtime"
 	"sync"
@@ -171,8 +170,8 @@ func serviceFailureC() <-chan error {
 
 func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sigchan)
+	launchSignalNotify(sigchan, syscall.SIGTERM, syscall.SIGINT)
+	defer launchSignalStop(sigchan)
 
 	if *profileInterval != 0 {
 		go saveProfilesLoop(sigchan)
@@ -202,7 +201,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
-		time.Sleep(time.Second * 5)
+		launchSleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
 	case <-serviceFailureC():
 		detail += "service task failed"

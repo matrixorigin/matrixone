@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -295,6 +297,70 @@ func TestServiceSupervisorFatalCleanupReapsDynamicCN(t *testing.T) {
 	require.Equal(t, 1, cleanupCalls)
 	require.Error(t, s.shutdownAfterFatal(context.Background()))
 	require.Equal(t, 1, cleanupCalls)
+}
+
+func TestNormalShutdownReapsDynamicCNAfterProxyFailure(t *testing.T) {
+	setLaunchTestHooks(t)
+	oldProfileInterval := *profileInterval
+	t.Cleanup(func() { *profileInterval = oldProfileInterval })
+	*profileInterval = 0
+	launchSleep = func(time.Duration) {}
+
+	for _, test := range []struct {
+		name         string
+		shutdownC    func() chan struct{}
+		notifySignal bool
+	}{
+		{name: "signal", shutdownC: func() chan struct{} { return make(chan struct{}) }, notifySignal: true},
+		{name: "hakeeper", shutdownC: func() chan struct{} {
+			shutdownC := make(chan struct{})
+			close(shutdownC)
+			return shutdownC
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			launchSignalNotify = func(ch chan<- os.Signal, _ ...os.Signal) {
+				if test.notifySignal {
+					ch <- syscall.SIGTERM
+				}
+			}
+			launchSignalStop = func(chan<- os.Signal) {}
+
+			proxyErr := errors.New("builtin proxy close failed")
+			cnProxy = &testProxy{stopErr: proxyErr}
+			s := newServiceSupervisor()
+			serviceLifecycle = s
+			child := newRealDynamicChild(t, "/bin/sleep", []string{"sleep", "60"})
+			dynamicCNMu.Lock()
+			dynamicCNStopping = false
+			dynamicCNServicePIDs = []int{child.pid}
+			dynamicCNServiceProcesses = []*dynamicCNChild{child}
+			dynamicCNMu.Unlock()
+			s.setDynamicCNStop(stopAllDynamicCNServicesGracefully)
+
+			mainStopper := stopper.NewStopper("test-main")
+			defer mainStopper.Stop()
+			done := make(chan error, 1)
+			go func() { done <- waitSignalToStop(mainStopper, test.shutdownC()) }()
+
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, proxyErr)
+			case <-time.After(time.Second):
+				t.Fatal("normal shutdown did not finish")
+			}
+			require.Error(t, child.process.signal(syscall.Signal(0)))
+			dynamicCNMu.RLock()
+			require.Zero(t, dynamicCNServicePIDs[0])
+			require.Nil(t, dynamicCNServiceProcesses[0])
+			dynamicCNMu.RUnlock()
+			select {
+			case <-s.roles[serviceRoleCN].stopC:
+				t.Fatal("CN phase opened after builtin proxy close failure")
+			default:
+			}
+		})
+	}
 }
 
 func TestServiceSupervisorDynamicCNFailureStopsBeforeTN(t *testing.T) {

@@ -70,7 +70,7 @@ func (p *testDynamicProcess) signal(signal syscall.Signal) error {
 	return nil
 }
 
-func (p *testDynamicProcess) wait() error {
+func (p *testDynamicProcess) wait() dynamicWaitResult {
 	var err error
 	if p.waitFn != nil {
 		err = p.waitFn()
@@ -81,7 +81,7 @@ func (p *testDynamicProcess) wait() error {
 	if p.waitedC != nil {
 		close(p.waitedC)
 	}
-	return err
+	return dynamicWaitResult{reaped: true, err: err}
 }
 
 func newTestDynamicChild(pid int) *dynamicCNChild {
@@ -155,6 +155,8 @@ func setLaunchTestHooks(t *testing.T) {
 	oldNewProxy := launchNewProxy
 	oldNewClient := launchNewHAKeeperClient
 	oldSleep := launchSleep
+	oldSignalNotify := launchSignalNotify
+	oldSignalStop := launchSignalStop
 	oldStartDynamicCNServices := launchStartDynamicCNServices
 	oldDynamicStartProcess := dynamicStartProcess
 	oldDynamicKill := dynamicKill
@@ -177,6 +179,8 @@ func setLaunchTestHooks(t *testing.T) {
 		launchNewProxy = oldNewProxy
 		launchNewHAKeeperClient = oldNewClient
 		launchSleep = oldSleep
+		launchSignalNotify = oldSignalNotify
+		launchSignalStop = oldSignalStop
 		launchStartDynamicCNServices = oldStartDynamicCNServices
 		dynamicStartProcess = oldDynamicStartProcess
 		dynamicKill = oldDynamicKill
@@ -259,7 +263,7 @@ func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
 				killed = append(killed, killedProcess{pid: child.pid, signal: signal})
 				return nil
 			}
-			dynamicWaitProcess = func(*dynamicCNChild) error { return nil }
+			dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult { return dynamicWaitResult{reaped: true} }
 			serviceLifecycle = newServiceSupervisor()
 
 			err := startDynamicCluster(context.Background(), cfg, nil, nil)
@@ -307,7 +311,7 @@ func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
 		signal = got
 		return nil
 	}
-	dynamicWaitProcess = func(*dynamicCNChild) error { return nil }
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult { return dynamicWaitResult{reaped: true} }
 	serviceLifecycle = newServiceSupervisor()
 
 	err := startDynamicCluster(context.Background(), cfg, nil, nil)
@@ -343,7 +347,7 @@ func TestDynamicCNServicesStartsConfiguredChaosTester(t *testing.T) {
 
 func TestDynamicWaitProcessRejectsInvalidPID(t *testing.T) {
 	setLaunchTestHooks(t)
-	require.Error(t, dynamicWaitProcess(nil))
+	require.Error(t, dynamicWaitProcess(nil).err)
 }
 
 func TestDynamicCNStartStopLifecycleErrors(t *testing.T) {
@@ -450,11 +454,11 @@ func TestStopAllDynamicCNServicesGracefullyWaitsAndHonorsContext(t *testing.T) {
 	setLaunchTestHooks(t)
 	setDynamicTestSlots(0, 41, 42)
 	dynamicKill = func(*dynamicCNChild, syscall.Signal) error { return nil }
-	dynamicWaitProcess = func(child *dynamicCNChild) error {
+	dynamicWaitProcess = func(child *dynamicCNChild) dynamicWaitResult {
 		if child.pid == 42 {
-			return errors.New("wait failed")
+			return dynamicWaitResult{err: errors.New("wait failed")}
 		}
-		return nil
+		return dynamicWaitResult{reaped: true}
 	}
 	err := stopAllDynamicCNServicesGracefully(context.Background())
 	require.ErrorContains(t, err, "wait failed")
@@ -474,11 +478,11 @@ func TestStopAllDynamicCNServicesGracefullyWaitsAndHonorsContext(t *testing.T) {
 		}
 		return nil
 	}
-	dynamicWaitProcess = func(*dynamicCNChild) error {
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
 		close(waitStarted)
 		<-release
 		close(waitDone)
-		return nil
+		return dynamicWaitResult{reaped: true}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	shutdownDone := make(chan error, 1)
@@ -508,10 +512,10 @@ func TestStopAllDynamicCNServicesForceStopsAfterDeadline(t *testing.T) {
 		}
 		return nil
 	}
-	dynamicWaitProcess = func(*dynamicCNChild) error {
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
 		close(waitStarted)
 		<-forceKill
-		return nil
+		return dynamicWaitResult{reaped: true}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -542,9 +546,9 @@ func TestStopAllDynamicCNServicesEscalatesAfterSIGTERMFailure(t *testing.T) {
 		close(forceKill)
 		return nil
 	}
-	dynamicWaitProcess = func(*dynamicCNChild) error {
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
 		<-forceKill
-		return nil
+		return dynamicWaitResult{reaped: true}
 	}
 
 	err := stopAllDynamicCNServicesGracefully(context.Background())

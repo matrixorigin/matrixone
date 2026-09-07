@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -42,6 +43,8 @@ var (
 	launchNewProxy          = goetty.NewProxy
 	launchNewHAKeeperClient = logservice.NewCNHAKeeperClient
 	launchSleep             = time.Sleep
+	launchSignalNotify      = signal.Notify
+	launchSignalStop        = signal.Stop
 )
 
 func startCluster(

@@ -65,10 +65,11 @@ type serviceRoleState struct {
 type serviceSupervisor struct {
 	roles [serviceRoleCount]serviceRoleState
 
-	shutdownOnce sync.Once
-	shutdownErr  error
-	fatalOnce    sync.Once
-	fatalC       chan error
+	shutdownOnce       sync.Once
+	shutdownErr        error
+	dynamicCleanupOnce sync.Once
+	dynamicCleanupErr  error
+	fatalC             chan error
 
 	dynamicCNStop func(context.Context) error
 }
@@ -149,6 +150,18 @@ func (s *serviceSupervisor) setDynamicCNStop(stop func(context.Context) error) {
 	}
 }
 
+func (s *serviceSupervisor) cleanupDynamicCN(ctx context.Context) error {
+	if s == nil || s.dynamicCNStop == nil {
+		return nil
+	}
+	s.dynamicCleanupOnce.Do(func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		s.dynamicCleanupErr = s.dynamicCNStop(cleanupCtx)
+	})
+	return s.dynamicCleanupErr
+}
+
 func (s *serviceSupervisor) stopRole(
 	ctx context.Context,
 	role serviceRole,
@@ -196,6 +209,12 @@ func (s *serviceSupervisor) shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.shutdownOnce.Do(func() {
+		defer func() {
+			if s.shutdownErr != nil {
+				s.shutdownErr = errors.Join(s.shutdownErr, s.cleanupDynamicCN(context.Background()))
+			}
+		}()
+
 		// The built-in proxy is not a stopper task and must stop accepting
 		// external SQL before CN ingress is withdrawn.
 		if cnProxy != nil {
@@ -225,7 +244,7 @@ func (s *serviceSupervisor) shutdown(ctx context.Context) error {
 			var err error
 			if phase.role == serviceRoleCN && s.dynamicCNStop != nil {
 				dynamicDone := make(chan error, 1)
-				go func() { dynamicDone <- s.dynamicCNStop(phaseCtx) }()
+				go func() { dynamicDone <- s.cleanupDynamicCN(phaseCtx) }()
 				err = errors.Join(err, s.stopRole(phaseCtx, phase.role))
 				err = errors.Join(err, <-dynamicDone)
 			} else {
@@ -253,14 +272,5 @@ func (s *serviceSupervisor) shutdownAfterFatal(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	shutdownErr := s.shutdown(ctx)
-	if shutdownErr == nil || s.dynamicCNStop == nil {
-		return shutdownErr
-	}
-	s.fatalOnce.Do(func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		s.shutdownErr = errors.Join(s.shutdownErr, s.dynamicCNStop(cleanupCtx))
-	})
-	return s.shutdownErr
+	return s.shutdown(ctx)
 }

@@ -60,9 +60,9 @@ var (
 		return child.process.signal(signal)
 	}
 	dynamicListenAndServe = http.ListenAndServe
-	dynamicWaitProcess    = func(child *dynamicCNChild) error {
+	dynamicWaitProcess    = func(child *dynamicCNChild) dynamicWaitResult {
 		if child == nil || child.process == nil {
-			return errors.New("dynamic cn child process is nil")
+			return dynamicWaitResult{err: errors.New("dynamic cn child process is nil")}
 		}
 		return child.process.wait()
 	}
@@ -71,7 +71,12 @@ var (
 type dynamicProcess interface {
 	pid() int
 	signal(syscall.Signal) error
-	wait() error
+	wait() dynamicWaitResult
+}
+
+type dynamicWaitResult struct {
+	reaped bool
+	err    error
 }
 
 type osDynamicProcess struct {
@@ -86,9 +91,16 @@ func (p *osDynamicProcess) signal(signal syscall.Signal) error {
 	return p.process.Signal(signal)
 }
 
-func (p *osDynamicProcess) wait() error {
-	_, err := p.process.Wait()
-	return err
+func (p *osDynamicProcess) wait() dynamicWaitResult {
+	state, err := p.process.Wait()
+	if err != nil {
+		return dynamicWaitResult{err: err}
+	}
+	result := dynamicWaitResult{reaped: true}
+	if !state.Success() {
+		result.err = fmt.Errorf("dynamic cn child exited unsuccessfully: %s", state.String())
+	}
+	return result
 }
 
 type dynamicCNChild struct {
@@ -462,8 +474,8 @@ func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 	results := make(chan result)
 	startWait := func(child childSnapshot) {
 		go func() {
-			err := dynamicWaitProcess(child.child)
-			if err == nil {
+			waitResult := dynamicWaitProcess(child.child)
+			if waitResult.reaped {
 				dynamicCNMu.Lock()
 				if child.index < len(dynamicCNServicePIDs) &&
 					dynamicCNServicePIDs[child.index] == child.pid &&
@@ -474,7 +486,7 @@ func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 				}
 				dynamicCNMu.Unlock()
 			}
-			results <- result{childSnapshot: child, err: err}
+			results <- result{childSnapshot: child, err: waitResult.err}
 		}()
 	}
 	for _, child := range children {

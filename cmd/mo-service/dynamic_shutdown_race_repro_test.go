@@ -62,6 +62,23 @@ func (s *blockingDynamicChaosStopper) releaseStop() {
 	s.releaseOnce.Do(func() { close(s.release) })
 }
 
+func newRealDynamicChild(t *testing.T, argv0 string, argv []string) *dynamicCNChild {
+	t.Helper()
+	process, err := os.StartProcess(argv0, argv, &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	require.NoError(t, err)
+	child := &dynamicCNChild{
+		process: &osDynamicProcess{process: process},
+		pid:     process.Pid,
+	}
+	t.Cleanup(func() {
+		_ = process.Kill()
+		_, _ = process.Wait()
+	})
+	return child
+}
+
 func TestDynamicShutdownUsesFinalPIDSnapshotAfterChaosQuiesces(t *testing.T) {
 	setLaunchTestHooks(t)
 	dynamicCNMu.Lock()
@@ -82,10 +99,10 @@ func TestDynamicShutdownUsesFinalPIDSnapshotAfterChaosQuiesces(t *testing.T) {
 		killed = append(killed, killedProcess{pid: child.pid, signal: signal})
 		return nil
 	}
-	dynamicWaitProcess = func(child *dynamicCNChild) error {
+	dynamicWaitProcess = func(child *dynamicCNChild) dynamicWaitResult {
 		waitedChild = child
 		require.Equal(t, 101, child.pid)
-		return nil
+		return dynamicWaitResult{reaped: true}
 	}
 
 	require.NoError(t, stopAllDynamicCNServicesGracefully(context.Background()))
@@ -139,6 +156,95 @@ func TestDynamicShutdownDoesNotEscalateAfterWaitReapsChild(t *testing.T) {
 	signals := append([]syscall.Signal(nil), process.signals...)
 	process.mu.Unlock()
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, signals)
+}
+
+func TestDynamicShutdownReportsChildExitOutcomeAndReleasesSlot(t *testing.T) {
+	setLaunchTestHooks(t)
+	tests := []struct {
+		name        string
+		argv0       string
+		argv        []string
+		kill        func(*dynamicCNChild, syscall.Signal) error
+		wantErr     bool
+		wantErrText string
+	}{
+		{
+			name:    "clean exit",
+			argv0:   "/usr/bin/true",
+			argv:    []string{"true"},
+			kill:    func(*dynamicCNChild, syscall.Signal) error { return nil },
+			wantErr: false,
+		},
+		{
+			name:        "nonzero exit",
+			argv0:       "/bin/sh",
+			argv:        []string{"sh", "-c", "exit 23"},
+			kill:        func(*dynamicCNChild, syscall.Signal) error { return nil },
+			wantErr:     true,
+			wantErrText: "exit status 23",
+		},
+		{
+			name:        "signal exit",
+			argv0:       "/bin/sleep",
+			argv:        []string{"sleep", "60"},
+			kill:        dynamicKill,
+			wantErr:     true,
+			wantErrText: "signal",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			child := newRealDynamicChild(t, tt.argv0, tt.argv)
+			dynamicKill = tt.kill
+			dynamicCNMu.Lock()
+			dynamicCNStopping = false
+			dynamicCNServicePIDs = []int{child.pid}
+			dynamicCNServiceProcesses = []*dynamicCNChild{child}
+			dynamicCNMu.Unlock()
+
+			err := stopAllDynamicCNServicesGracefully(context.Background())
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.wantErrText)
+			} else {
+				require.NoError(t, err)
+			}
+			dynamicCNMu.RLock()
+			require.Zero(t, dynamicCNServicePIDs[0])
+			require.Nil(t, dynamicCNServiceProcesses[0])
+			dynamicCNMu.RUnlock()
+		})
+	}
+}
+
+func TestDynamicShutdownEscalatesAndReapsRealChildAfterTimeout(t *testing.T) {
+	setLaunchTestHooks(t)
+	child := newRealDynamicChild(t, "/bin/sleep", []string{"sleep", "60"})
+	var signals []syscall.Signal
+	dynamicKill = func(child *dynamicCNChild, signal syscall.Signal) error {
+		signals = append(signals, signal)
+		if signal == syscall.SIGTERM {
+			return nil
+		}
+		return child.process.signal(signal)
+	}
+	dynamicCNMu.Lock()
+	dynamicCNStopping = false
+	dynamicCNServicePIDs = []int{child.pid}
+	dynamicCNServiceProcesses = []*dynamicCNChild{child}
+	dynamicCNMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := stopAllDynamicCNServicesGracefully(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, signals)
+	require.Error(t, child.process.signal(syscall.Signal(0)))
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[0])
+	require.Nil(t, dynamicCNServiceProcesses[0])
+	dynamicCNMu.RUnlock()
 }
 
 func TestDynamicShutdownRejectsHTTPStartAfterStopping(t *testing.T) {
