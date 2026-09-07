@@ -109,64 +109,66 @@ partition by range (year(sale_date)) (
     partition p2024 values less than (2025)
 );  -- 失败
 
--- ============================================================================
--- 测试分类 5: alter table 限制 (仅支持索引操作)
--- ============================================================================
+-- Column and name ALTER preserve session ownership, rows, defaults and indexes.
+-- Regression for #28303. Permanent source and destination tables are controls.
+create table temp_alter_column (id int primary key, v int);
+insert into temp_alter_column values (90, 900);
+create table temp_alter_renamed (id int primary key, v int);
+insert into temp_alter_renamed values (91, 910);
+create temporary table temp_alter_column (id int primary key auto_increment, v int, key idx_v(v));
+insert into temp_alter_column values (1, 10), (2, null);
+alter table temp_alter_column add column extra int default 7;
+select * from temp_alter_column order by id;
+alter table temp_alter_column drop column extra;
+alter table temp_alter_column modify column v bigint;
+insert into temp_alter_column(v) values (2147483648);
+select v from temp_alter_column order by id;
+select id > 2 as allocator_preserved from temp_alter_column where v = 2147483648;
+alter table temp_alter_column rename column v to value_col;
+select id, value_col from temp_alter_column where value_col = 10;
+alter table temp_alter_column rename to temp_alter_renamed;
+select * from temp_alter_column;
+select value_col from temp_alter_renamed order by id;
+show create table temp_alter_renamed;
 
--- 测试用例 5.1: alter table add column
--- 预期结果: 失败
-create temporary table temp_alter_column (
-    id int,
-    name varchar(50)
-);
+-- A failed COPY must preserve the original schema, rows and alias.
+alter table temp_alter_renamed modify column value_col tinyint;
+select value_col from temp_alter_renamed order by id;
+create temporary table temp_alter_occupied (id int);
+alter table temp_alter_renamed rename to temp_alter_occupied;
+select value_col from temp_alter_renamed order by id;
+drop temporary table temp_alter_occupied;
 
-alter table temp_alter_column add column age int;  -- 失败
+-- Widening VARCHAR exercises the in-place MODIFY path without an explicit PK.
+create temporary table temp_alter_width (s varchar(50));
+insert into temp_alter_width values ('a');
+alter table temp_alter_width modify column s varchar(100);
+insert into temp_alter_width values (repeat('b', 100));
+select length(s) from temp_alter_width order by s;
+drop temporary table temp_alter_width;
 
+-- Both COPY replacement and name changes roll back with the owning transaction.
+begin;
+alter table temp_alter_renamed add column rolled_back int default 9;
+alter table temp_alter_renamed rename to temp_alter_rollback;
+select rolled_back from temp_alter_rollback order by id;
+rollback;
+select value_col from temp_alter_renamed order by id;
+select * from temp_alter_rollback;
+select count(*) as leaked_copy_tables from mo_catalog.mo_tables
+where reldatabase = 'unnormal_db' and relname like '%\_\_mo\_alter\_copy\_%';
+
+-- Another connection sees only the permanent tables.
+-- @session:id=2{
+use unnormal_db;
+select * from temp_alter_column;
+select * from temp_alter_renamed;
+-- @session}
+
+drop temporary table temp_alter_renamed;
+select * from temp_alter_renamed;
 drop table temp_alter_column;
-
--- 测试用例 5.2: alter table drop column
--- 预期结果: 可能不支持
-create temporary table temp_drop_column (
-    id int,
-    name varchar(50),
-    age int
-);
-
-alter table temp_drop_column drop column age;  -- 失败
-
-drop table temp_drop_column;
-
--- 测试用例 5.3: alter table modify column
--- 预期结果: 不支持
-create temporary table temp_modify_column (
-    id int,
-    name varchar(50)
-);
-
-alter table temp_modify_column modify column name varchar(100);  -- 失败
-
-drop table temp_modify_column;
-
--- 测试用例 5.4: alter table rename column
--- 预期结果: 不支持
-create temporary table temp_rename_column (
-    id int,
-    old_name varchar(50)
-);
-
-alter table temp_rename_column rename column old_name to new_name;  -- 失败
-
-drop table temp_rename_column;
-
--- 测试用例 5.5: alter table rename table
--- 预期结果: 不支持
-create temporary table temp_old_name (
-    id int
-);
-
-alter table temp_old_name rename to temp_new_name;  -- 失败
-
-drop table temp_old_name;
+drop table temp_alter_renamed;
 
 -- ============================================================================
 -- 测试分类 6: 重复创建

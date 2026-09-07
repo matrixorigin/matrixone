@@ -113,6 +113,59 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+func TestTopPrepareSpillBoundary(t *testing.T) {
+	tests := []struct {
+		name          string
+		limit         int64
+		orderedOutput bool
+		wantSpill     bool
+	}{
+		{
+			name:  "resident threshold remains resident",
+			limit: int64(topSpillThreshold),
+		},
+		{
+			name:          "ordered threshold remains resident",
+			limit:         int64(topSpillThreshold),
+			orderedOutput: true,
+		},
+		{
+			name:      "above threshold spills",
+			limit:     int64(topSpillThreshold + 1),
+			wantSpill: true,
+		},
+		{
+			name:          "ordered above threshold spills",
+			limit:         int64(topSpillThreshold + 1),
+			orderedOutput: true,
+			wantSpill:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(
+				t,
+				mpool.MustNewZero(),
+				[]types.Type{types.T_int64.ToType()},
+				test.limit,
+				[]*plan.OrderBySpec{{Expr: newExpression(0)}},
+			)
+			if test.orderedOutput {
+				tc.arg.WithOrderedOutput()
+			}
+			t.Cleanup(func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.Equal(t, test.wantSpill, tc.arg.ctr.spilling)
+		})
+	}
+}
+
 func TestTop(t *testing.T) {
 	for _, tc := range genTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
@@ -303,6 +356,101 @@ func TestTopSpill(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestTopSpillOutputUsesRowAndByteBounds(t *testing.T) {
+	testTopSpillOutputUsesRowAndByteBounds(t, int(topSpillThreshold+1), false)
+}
+
+func TestTopOrderedOutputUsesSpillRowAndByteBounds(t *testing.T) {
+	testTopSpillOutputUsesRowAndByteBounds(t, 37, true)
+}
+
+func TestTopCompatibleVarlenOutputUsesSpillRowAndByteBounds(t *testing.T) {
+	testTopSpillOutputUsesRowAndByteBounds(t, 37, false)
+}
+
+func TestTopSmallLimitPayloadExceedsAllocationCeiling(t *testing.T) {
+	previous := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = previous })
+	// Each input and output batch fits, but the 8192 winning payloads do not
+	// fit in one vector. This must succeed without an OrderedOutput plan hint.
+	testTopSpillOutputUsesRowAndByteBounds(t, 8192, false)
+}
+
+func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutput bool) {
+	t.Helper()
+	const (
+		payloadBytes = 200
+		batchRows    = 128
+		outputBytes  = 8 * 1024
+	)
+	inputRows := limit + 257
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		int64(limit),
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}},
+	)
+	if orderedOutput {
+		tc.arg.WithOrderedOutput()
+	}
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.Equal(t, uint64(limit) > topSpillThreshold, tc.arg.ctr.spilling)
+	tc.arg.ctr.evalSpillOutputBytes = outputBytes
+	// Force actual resident pressure independently of output reconstruction.
+	tc.arg.ctr.residentByteLimit = outputBytes / 2
+
+	input := make([]*batch.Batch, 0, (inputRows+batchRows-1)/batchRows+1)
+	for highest := inputRows; highest > 0; {
+		rows := min(batchRows, highest)
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		for i := range rows {
+			key := int64(highest - i)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, tc.proc.Mp()))
+			payload := bytes.Repeat([]byte{byte('a' + key%26)}, payloadBytes+int(key%7))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], payload, false, tc.proc.Mp()))
+		}
+		bat.SetRowCount(rows)
+		input = append(input, bat)
+		highest -= rows
+	}
+	input = append(input, batch.EmptyBatch)
+	resetChildren(tc.arg, input)
+
+	got := make([]int64, 0, limit)
+	outputBatches := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		outputBatches++
+		require.LessOrEqual(t, uint64(result.Batch.Size()), uint64(outputBytes))
+		for _, vec := range result.Batch.Vecs {
+			require.Less(t, int64(vec.Allocated()), mpool.MaxAllocationSize())
+		}
+		keys := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+		got = append(got, keys...)
+		for row := range result.Batch.RowCount() {
+			require.GreaterOrEqual(t, len(result.Batch.Vecs[1].GetBytesAt(row)), payloadBytes)
+		}
+	}
+	require.Greater(t, outputBatches, 1)
+	require.Len(t, got, limit)
+	for i, key := range got {
+		require.Equal(t, int64(i+1), key)
+	}
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
@@ -523,9 +671,10 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 			require.NoError(t, err)
 			arg.ctr.sels = []int64{0}
 			arg.ctr.rowRefs = []rowRef{{
-				offset: record.offset,
-				size:   record.size,
-				rowIdx: 0,
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      0,
+				outputBytes: uint64(types.T_int64.ToType().TypeSize()),
 			}}
 			arg.ctr.spillOrdered = true
 			src.Clean(proc.Mp())

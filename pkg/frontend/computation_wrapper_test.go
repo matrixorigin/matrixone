@@ -482,6 +482,65 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	prepareStmt.params = nil
 }
 
+func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
+	const query = "select json_unquote(?)"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 122, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+
+	cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		wantBinary bool
+		wantErr    bool
+	}{
+		{name: "text rebind", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+		{name: "binary rebind", mysqlType: defines.MYSQL_TYPE_LONG_BLOB, wantBinary: true, wantErr: true},
+		{name: "text rebind after binary", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx, cw.proc, prepareStmt,
+				buildStringExecutePacket(proto, tc.mysqlType, "plain"), 0))
+
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+
+			queryPlan := runtimePlan.GetQuery()
+			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
+			require.Len(t, projects, 1)
+			executor, err := colexec.NewExpressionExecutor(cw.proc, projects[0])
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.EmptyForConstFoldBatch
+			result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Length())
+			require.Equal(t, "plain", result.GetStringAt(0))
+			require.False(t, result.GetIsBinaryStringAt(0))
+
+			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, cachedPlan, after, "execute-time rebinding must not mutate the cached plan")
+		})
+	}
+}
+
 func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 	const query = "select regexp_instr(?, ?, 2), regexp_replace(?, ?, ?, 1, 0), " +
 		"regexp_instr(regexp_substr(?, ?), ?, 1)"
@@ -3277,6 +3336,46 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(sysAccountID), prepareSchemaAccountID(7, &plan.ObjectRef{
 		SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT,
 	}))
+}
+
+func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.T) {
+	schemas := []*plan.ObjectRef{{
+		Server:           4,
+		Db:               2,
+		Obj:              3,
+		SchemaName:       "publisher_db",
+		ObjName:          "src",
+		SubscriptionName: "sub",
+		PubInfo:          &plan.PubInfo{TenantId: 11},
+	}}
+	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		OriginViews: []string{"information_schema#statistics"},
+	}}}}}
+	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
+	require.True(t, rebuildEveryExecute)
+
+	resolveCalls := 0
+	resolve := func(
+		_, _ string,
+		_ *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		resolveCalls++
+		return nil, nil, assert.AnError
+	}
+	changed, validated, err := validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, rebuildEveryExecute)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, validated)
+	require.Zero(t, resolveCalls,
+		"a guaranteed rebuild must not resolve stale subscription ObjectRefs")
+
+	changed, validated, err = validateCapturedPrepareSchemas(
+		7, schemas, resolve, nil, timestamp.Timestamp{}, true, false)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, changed)
+	require.True(t, validated)
+	require.Equal(t, 1, resolveCalls)
 }
 
 func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
