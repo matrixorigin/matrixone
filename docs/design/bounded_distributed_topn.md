@@ -1,10 +1,10 @@
 # Bounded distributed ORDER BY / LIMIT
 
-Status: local correctness fixes validated on 2026-09-07; design approval and
-rollout performance/compatibility acceptance remain pending. Historical measurements below are not
-acceptance evidence for the revised worktree.
+Status: review 5127191041 corrections validated locally; new-head CI pending (2026-09-07). Historical
+measurements below are not acceptance evidence for the revised worktree.
 Owner: issue #28285; regression constraint: #27968 must remain executable.
-Source baseline: `6e5f82f568b1ec3e013e8d4ab9031b2360300b84`.
+Current base: `e60b3eb3bdfd8ad5f1b5ae3eb8745037371f44d8`.
+Reviewed head: `7764c28ecdf038b4c7ea0edf26870c52de52103c`.
 Implementation branch: `xp/fix-28285-bounded-merge-top`.
 
 ## Problem and review decision
@@ -51,6 +51,37 @@ inner query. It is not a matched INSERT timing. Finding no directory entries
 does not prove zero spill: open temporary files can already be unlinked.
 
 ## Algebra and contracts
+
+### Review 5127191041: correction contract
+
+The two reproduced regressions are ordinary corrections to admission policy,
+not a new distributed protocol. Retain the ordered gather for #28285 (no
+OFFSET, K=5M), but restore the existing 16,384 candidate-prefix rewrite bound
+for OFFSET. An external payload file does not externalize Top's O(K) keys,
+references, or their growth overlap, including across parallel workers.
+
+For small local Top, a varlen type alone is not grounds for disk I/O. Admit
+winning rows into a byte-limited resident batch; compare losers before copying.
+Before a winner can exceed the resident logical window, compact dead replacement
+history if live rows plus that candidate fit in half the window. Otherwise
+write only the current survivors, construct their key/reference state, and
+publish the resident-to-spill transition before consuming the pending row.
+Failed copy/write/allocation aborts the attempt: no partial-row retry and no
+output publication. All temporary/old/new capacity remains allocation-accounted.
+The window is at most 16 MiB and one eighth of the single-allocation ceiling;
+it is an admission policy, not a second physical-memory ledger or RSS claim.
+The existing account remains authoritative and may reject a minimal work set.
+
+Spill-mode Top delays serializing an input batch until its first winner. A
+fully rejected batch has zero payload writes; it still must be scanned for
+ordering keys. Ordered distributed producers retain their bounded-output
+contract. A genuinely single-worker scope needs no ordered-edge hint.
+
+Validation: exact OFFSET result and cleanup under the review's 160 MiB budget;
+small-varlen zero-spill control; replacement compaction and mid-batch migration;
+wide rows, disk/allocation rejection, cancel/reset; matched small-Top benchmark
+and final-head issue-shaped 100M/K=5M execution. Historical timings are not reused
+as final performance acceptance.
 
 Let S be input rows, P actual producers (not merely CNs), and K the demanded
 ordered prefix. For LIMIT L OFFSET O, K = O + L only when checked addition and
@@ -131,8 +162,10 @@ Implementation v1 uses the following deliberately narrow activation contract:
   unbounded/unknown payload types choose the hierarchy independently of estimates.
   When the protocol/order-expression gate forbids hierarchy, these unsafe resident
   plans use Top plus MergeOrder. Every updated local Top also checks its actual
-  first input schema before retaining any payload. Varlen payload uses external
-  storage because replacement history is not bounded by the number of survivors;
+  first input schema before retaining payload. Non-ordered small Top uses actual
+  winner-byte admission with compaction/migration as specified above; a varlen
+  type alone does not require disk. Single-worker scopes do not request an
+  ordered-edge contract they do not consume;
 - once the hierarchy is selected, every local Top uses external payload storage
   and byte-bounded ordered output even when K is at or below 16,384. This keeps
   wide rows from being reconstructed into one resident result vector;
@@ -227,7 +260,8 @@ disk is available. A future fully external key-selection implementation must:
   disk, FDs, depth, or the minimal working set returns the appropriate error.
 - Output an ordered stream in chunks without a single K-row payload vector.
 
-The current source-payload spill can still write substantial input data and
+The current source-payload spill writes a batch only after its first candidate
+is admitted; fully rejected batches are not written. It can still write substantial input data and
 requires a full scan of an unordered source. A future external key selector can
 require multiple merge passes; neither O(K) total spill nor payload read-locality
 improvements are claimed here.
@@ -293,11 +327,11 @@ external key merge passes nor producer early-stop is implemented. Do not infer
 these metrics from `Batch.Size()`, or add a second estimated memory ledger.
 All resources remain charged to the owning tenant.
 
-The type-based guard intentionally retains the small fixed-width fast path.
-Small varlen Top-N now incurs local payload spill even when the actual values are
-short. A runtime resident-to-external migration can recover that optimization in
-a follow-up only after publication, comparator reuse, and partial-failure
-ownership are proved. Updating a cluster cannot retrofit this runtime guard onto
+The type-based guard retains the small fixed-width fast path. The runtime
+resident path additionally retains fitting small varlen results, compacting dead
+payload or migrating survivors on actual pressure. Ordered distributed producers
+still use spill output; lazy writing bounds their rejected-input I/O, not all
+candidate I/O. Updating a cluster cannot retrofit this runtime guard onto
 old CN binaries: mixed-version fallback preserves protocol compatibility, while
 the full payload safety guarantee requires all executors to carry this fix.
 
@@ -399,10 +433,9 @@ historical run above, the current complete compile package passes.
   a clean test-owned data directory reached SQL and ISCP readiness. This is not
   evidence of restart acceptance or a Top-N execution failure.
 
-The revised small-varlen spill cost and original large-scale performance matrix
-have not been remeasured. Final design approval, mixed-version execution and
-restart acceptance remain separate rollout requirements; no approval is implied
-by this local validation record.
+The following historical worktree record predates review 5127191041. Consult
+the correction evidence below for current measurements. Mixed-version execution
+and restart acceptance are not implied by unit tests or historical measurements.
 
 1. Prove typed topology and a deterministic minimal gather, including shared
    receiver and runtime-DOP counterexamples, before large benchmarks.
@@ -455,6 +488,113 @@ time before extending the design.
 A finite suite cannot prove that no counterexample exists. Acceptance means
 the stated invariants, reachable transitions, and mapped failure dimensions
 have evidence; untested dimensions and known limits remain explicit.
+
+## Review correction evidence (2026-09-07)
+
+These checks apply to the corrections on reviewed head `7764c28e`, not the
+historical implementation measurements below/elsewhere in this document.
+
+Complete change-map closure against `e60b3eb3`:
+
+| Owner / consumer group | Contract and evidence |
+| --- | --- |
+| Top state, accounting and tests | Actual winner admission; old/new migration ownership; bounded output; OFFSET and small-varlen reproducers; normal/race/failure/reuse tests |
+| MergeTop stream, legacy path and tests | One head per ordered producer; exact bag prefix; byte/row output windows; terminal errors and cleanup; full package/race tests |
+| Compile routing, scope placement/expansion, duplication, lifecycle tests | Compatible external fallback; preserve worker/CN ordering and allocation owner attachments; scope tests and final SQL topology/result checks |
+| Remote encode/decode, write-back and client cleanup | Preserve ordered flags through the entire decoded execution envelope, including the newly added local edge; decoded DOP regression repeated 100 times under race; multi-CN SQL |
+| Protocol constants/generated codec and process edges | Explicit version 53 capability; legacy zero values remain unordered; receiver end counts/reuse/backpressure; protocol and edge tests |
+| DML and LIMIT BVT | Exact ordered values and payloads, prepared reuse, delete/cast behavior, external large OFFSET; isolated SQL fixtures |
+
+Q1: resident, compacted and spilled batches have explicit owners. Migration
+publishes only after successful copying; failure cleanup retains the old owner
+and releases temporary keys, references and spill resources. Q2: ordered edges
+have one real producer after DOP gathering; concurrent stage startup, existing
+cancellation and terminal draining remain necessary, with no new wait primitive.
+Q3: resident replacement history is bounded by admission/compaction, rejected
+spill batches do not write payload, and large OFFSET avoids O(K) Top metadata.
+Physical capacity is still charged; v1's accounted large-K key/reference state
+is not claimed to be fully external. Human approval of the distributed design
+and mixed-version deployment acceptance are not inferred from these tests.
+
+- Review OFFSET reproducer: 4,194,304 bigint rows, LIMIT 1 OFFSET 4,194,303,
+  160 MiB shared account; correct final value 4,194,303 and peak accounted
+  bytes 103,374,880. Memory, spill-disk and spill-FD charges return to zero.
+  The normal UT uses the minimum 16,385-row routing boundary; the 4M fixture
+  is an explicit benchmark, not a permanently expensive unit test.
+- Matched small-varlen Top benchmark: 128 batches of 8,192 ascending bigint
+  keys with 64-byte varchar payload, LIMIT 1. Five samples per build, median
+  main 7.682 ms versus fixed 7.738 ms; both write zero spill bytes. This
+  replaces the review head's full-input payload writes without unaccounted
+  retention or raising memory limits.
+- Top, MergeTop and compile package tests pass. Resident compaction,
+  partial/full-heap migration, cancellation/short-write cleanup and reuse
+  have focused tests; full Top/MergeTop race checks pass.
+- CI run 34069583657 on `7764c28e`: SCA found two `rowserrcheck` failures in
+  the DML fixture. Explicit per-query `rows.Err()` checks fix them without
+  suppressions. Matching golangci-lint 2.6.2 checks pass locally.
+- That run's coverage failure is an actual `TestExecuteIteration1` timeout,
+  not insufficient coverage. Its internal snapshot lookup uses LIMIT 1 with
+  varlen payload and failed with `service LOCAL not found`; the snapshot
+  polling helper hid that error and kept retrying. Byte-bounded local
+  admission removes the unnecessary spill dependency. The unchanged test
+  passes in 3.862 seconds, five repetitions in 19.031 seconds, and with
+  `-short -tags matrixone_test -covermode=set -coverpkg=./pkg/...` in 3.942
+  seconds. The full engine/test package also passes with that cross-package
+  instrumentation in 130.732 seconds. The downstream Coverage merge job failed only because its UT
+  producer failed. Remote CI for the eventual new commit remains required.
+
+### Remote write-back correction found during large-scale acceptance
+
+The three-CN 100M-row/5M-limit acceptance run exposed wrong result identity,
+despite completing in about 150 seconds. The decoded remote Top was wrapped
+by `appendWriteBackOperator` in an ordinary merge edge. That edge discarded
+the ordered producer contract before runtime DOP expansion, allowing worker
+batches to interleave on the wire. The coordinator cannot repair this while
+performing a streaming merge.
+
+The correction must preserve the ordered, single-producer edge when wrapping
+an ordered Top. Runtime DOP expansion then creates the existing local ordered
+gather before the write-back merge forwards its single stream. No new protocol
+or ordering algorithm is needed. Acceptance requires a decoded-scope regression
+including write-back and DOP expansion, and a fresh exact-result SQL rerun;
+the timings of the incorrect runs are not performance acceptance evidence.
+
+After preserving the write-back edge, final production binary SHA-256
+`c593f182705aef2aa3d0609c600870584068bae4f0d6f5b5a02a5e069185cfe8`
+passes the issue-shaped 100M/K=5M INSERT twice: **156.078 s and 145.954 s**.
+Both outputs have count/distinct count 5,000,000, min/max 0/4,999,999,
+sum 12,499,997,500,000 and payload byte count 640,000,000. Main at `e60b3eb3`
+(binary `8fde3aa5c4c57b568b10926140f80d3f78fac5658069d6e4e633a756542c5386`)
+did not complete in the 300-second observation window; its specific query
+was canceled at about 324 seconds and returned after 328.25 seconds. The
+target remained empty after cancellation. This is a censored baseline, not
+a measured completion time or a reproduction of the historical 900s timeout.
+
+Both builds used the same retained data, configuration and host 55 NVMe:
+three CN services plus TN/logservice in one launch process, GOMAXPROCS=8,
+8-worker scan scopes, bigint key and 128-byte varchar payload. This is not
+the original three-host TKE deployment or a historical-good build comparison.
+Run order was main then fixed then fixed; no cache-drop operation was used.
+The source fingerprint is 100,000,000 rows, keys 0..99,999,999, sum
+4,999,999,950,000,000. Final service process RSS high-water was 9,473,892 KiB;
+this includes all co-located services and is not query-accounted memory.
+Whole-query CPU/I/O counters and a full 1/2/3-CN scale matrix were not collected.
+
+On the same final instance, fixed-width LIMIT 10 returns exact 0..9 twice
+(0.504/0.420 s). The extended forced multi-CN DML test also passes twice in
+one process, including a 100K-row/1K-limit exact key/payload regression.
+Test-harness startup encountered an existing shared `/tmp` lock and was
+rerun with a task-owned TMPDIR; that failed launch is not a test pass.
+
+The final LIMIT BVT passes twice (35/35 statements each) against the same
+final three-CN instance. Both teardown checks find zero `t1` tables and retain
+the 100M performance source. Tester startup initially deleted the generated
+performance fixture: its configuration loader ignores the supplied Java
+property and reads `run.yml` from the working directory. The fixture was
+recreated, the actual working-directory configuration now protects it, and
+both final protected runs verify it survives. Generated expected results were
+not used. The measured INSERT logs predate this reconstruction and are retained
+separately; reconstructing test data is not counted as another performance run.
 
 ## References
 

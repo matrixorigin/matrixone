@@ -74,12 +74,37 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table forced_src (v int)")
 		execSQLDB(t, ctx, db, "insert into forced_src values (31),(31),(31),(31)")
 		execSQLDB(t, ctx, db, "create table forced_dst (b bit(4))")
+		execSQLDB(t, ctx, db, "create table forced_top_src (id bigint, k bigint, payload varchar(64))")
+		execSQLDB(t, ctx, db, "insert into forced_top_src select result, 99999-result, repeat('x',64) from generate_series(0,99999) g")
 
 		// Force only the operations under test. Applying this process-wide test
 		// hook to fixture DDL would exercise an unrelated execution path and can
 		// make setup contend with the test's frontend session.
 		defer plan.SetForceScanOnMultiCN(false)
 		plan.SetForceScanOnMultiCN(true)
+
+		t.Run("remote top gathers workers before write back", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+castDB+"`")
+			// Varlen payload selects the ordered hierarchy; enough source rows
+			// exercise DOP expansion, unlike the five-row control below.
+			rows, queryErr := db.QueryContext(ctx,
+				"select id,k,payload from forced_top_src order by k limit 1000")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			count := 0
+			for rows.Next() {
+				var id, key int64
+				var payload string
+				require.NoError(t, rows.Scan(&id, &key, &payload))
+				require.Equal(t, int64(count), key)
+				require.Equal(t, int64(99999-count), id)
+				require.Equal(t, strings.Repeat("x", 64), payload)
+				count++
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.Equal(t, 1000, count)
+		})
 
 		t.Run("bounded top preserves remote order and prepared reuse", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
@@ -89,28 +114,33 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
 			require.Contains(t, physical.Text, "Magic: Remote")
 			require.Contains(t, strings.ToLower(physical.Text), "merge top")
-			readRows := func(rows *sql.Rows, queryErr error, want [][2]string) {
+			readRows := func(rows *sql.Rows) [][2]string {
 				t.Helper()
-				require.NoError(t, queryErr)
-				defer rows.Close()
 				var got [][2]string
 				for rows.Next() {
 					var row [2]string
 					require.NoError(t, rows.Scan(&row[0], &row[1]))
 					got = append(got, row)
 				}
-				require.NoError(t, rows.Err())
-				require.Equal(t, want, got)
+				return got
 			}
 			rows, queryErr := db.QueryContext(ctx, query+" offset 1")
-			readRows(rows, queryErr, [][2]string{{"7", "7"}, {"3", "3"}})
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			require.Equal(t, [][2]string{{"7", "7"}, {"3", "3"}}, readRows(rows))
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
 			stmt, prepareErr := db.PrepareContext(ctx,
 				"select a,b from "+deleteTable+" order by a desc limit ?")
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			for range 2 {
 				rows, queryErr = stmt.QueryContext(ctx, 2)
-				readRows(rows, queryErr, [][2]string{{"8", "8"}, {"7", "7"}})
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				require.Equal(t, [][2]string{{"8", "8"}, {"7", "7"}}, readRows(rows))
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
 			}
 		})
 

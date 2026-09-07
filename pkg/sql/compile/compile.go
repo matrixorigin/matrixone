@@ -6365,10 +6365,9 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 			if topN < limit || topN < offset {
 				overflow = true
 			}
-			if !overflow {
-				// Convert `ORDER BY ... LIMIT m OFFSET n` to `Top(m+n)` plus
-				// the final offset. compileTop owns the resident-versus-bounded
-				// physical decision for the checked candidate prefix.
+			if !overflow && topN <= mergeTopResidentPlanThreshold {
+				// Spilling Top still retains K keys/references per worker. Keep
+				// external Order for large prefixes, even with a tiny final LIMIT.
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
@@ -6523,9 +6522,8 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructTop(node, topN)
-		if useOrderedStreams {
-			op.WithOrderedOutput()
-		}
+		// No ordered receiver consumes this single-worker result. Top owns
+		// actual payload admission and can retain fitting small results.
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false

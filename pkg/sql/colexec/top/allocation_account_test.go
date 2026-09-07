@@ -339,8 +339,8 @@ func TestAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(3)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
-	// Exhaust the explicit spill budget before the first actual-schema guard
-	// enables spilling. Prepare itself remains on the small-limit path.
+	// Exhaust disk before actual winner pressure triggers resident migration.
+	op.ctr.residentByteLimit = 512 << 10
 	blocker, err := state.generation.ReserveSpillDisk(state.generation.SpillDiskCap())
 	require.NoError(t, err)
 	t.Cleanup(func() { blocker.Release() })

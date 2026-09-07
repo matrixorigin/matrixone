@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -199,6 +200,58 @@ func Test_refactorScope(t *testing.T) {
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, vm.GetLeafOpParent(nil, rs.RootOp).GetOperatorBase().Idx, -1)
+}
+
+func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
+	for _, ordered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordered=%t", ordered), func(t *testing.T) {
+			c := newMergeTopFallbackTestCompile(t)
+			defer c.proc.Free()
+			limitExpr := plan.MakePlan2Uint64ConstExprWithType(20_000)
+			orderBy := []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+			}}}
+			localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy)
+			localTop.OrderedOutput = ordered
+			localTop.AppendChild(table_scan.NewArgument())
+			source := &Scope{
+				Magic: Remote, NodeInfo: engine.Node{Mcpu: 4},
+				Proc: c.proc.NewNoContextChildProc(0), RootOp: localTop,
+			}
+			defer source.release()
+			data, err := encodeRemoteScope(source, c.proc)
+			require.NoError(t, err)
+			decoded, err := decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
+			writeBack := appendWriteBackOperator(c, decoded)
+			defer writeBack.release()
+			decoded.Proc.BuildPipelineContext(c.proc.Ctx)
+			defer decoded.Proc.Cancel(nil)
+			reg := writeBack.Proc.Reg.MergeReceivers[0]
+			require.Equal(t, ordered, reg.OrderedStream)
+			gather, workers := newParallelScope(decoded)
+			require.Len(t, workers, 4)
+			if ordered {
+				require.Equal(t, 1, reg.NilBatchCnt)
+				require.Equal(t, Merge, gather.Magic)
+				out, ok := gather.RootOp.(*connector.Connector)
+				require.True(t, ok)
+				require.Same(t, reg, out.Reg)
+				merged, ok := out.GetChildren(0).(*mergetop.MergeTop)
+				require.True(t, ok)
+				require.True(t, merged.OrderedStreams)
+				for i, worker := range workers {
+					workerOut := worker.RootOp.(*connector.Connector)
+					require.NotSame(t, reg, workerOut.Reg)
+					require.Same(t, gather.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+					require.True(t, workerOut.Reg.OrderedStream)
+				}
+			} else {
+				require.Equal(t, Normal, gather.Magic)
+			}
+		})
+	}
 }
 
 func Test_convertPipelineUuid(t *testing.T) {

@@ -18,8 +18,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -29,10 +32,81 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompileLargeOffsetUsesExternalOrder(t *testing.T) {
+	runLargeOffsetMemory(t, int(mergeTopResidentPlanThreshold)+1)
+}
+
+// Scale-sensitive memory acceptance from review 5127191041 belongs outside
+// the ordinary UT fixture. The UT above pins the minimum routing boundary.
+func BenchmarkReviewLargeOffsetMemory(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		runLargeOffsetMemory(b, 4*1024*1024)
+	}
+}
+
+func runLargeOffsetMemory(t testing.TB, n int) {
+	c := newMergeTopFallbackTestCompile(t)
+	c.proc.Base.Lim.Size = 160 << 20
+	generation, err := c.proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(160<<20, generation)
+	require.NoError(t, err)
+	var bats []*batch.Batch
+	for start := 0; start < n; start += 8192 {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		values := make([]int64, min(8192, n-start))
+		for j := range values {
+			values[j] = int64(start + j)
+		}
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, c.proc.Mp()))
+		bat.SetRowCount(len(values))
+		bats = append(bats, bat)
+	}
+	s := newMergeTopFallbackTestScope(c)
+	s.Proc = c.proc
+	s.RootOp = colexec.NewMockOperator().WithBatchs(bats)
+	node := newMergeTopFallbackTestNode(plan2.MakePlan2Uint64ConstExprWithType(1))
+	node.Offset = plan2.MakePlan2Uint64ConstExprWithType(uint64(n - 1))
+	node.NodeType = plan.Node_SORT
+	scopes := c.compileSort(node, []*Scope{s})
+	require.Len(t, scopes, 1)
+	op := scopes[0].RootOp
+	var owners []executionAllocationAccountOwner
+	defer func() {
+		require.NoError(t, vm.HandleAllOp(op, func(_ vm.Operator, o vm.Operator) error { o.Free(c.proc, false, nil); return nil }))
+		for _, owner := range owners {
+			require.NoError(t, owner.ClearAllocationAccount(account))
+		}
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.SpillDiskUsed())
+		require.Zero(t, generation.SpillFDUsed())
+		c.proc.Free()
+		require.Zero(t, c.proc.Mp().CurrNB())
+	}()
+	require.NoError(t, vm.HandleAllOp(op, func(_ vm.Operator, o vm.Operator) error {
+		require.NotEqual(t, vm.Top, o.OpType())
+		if owner, ok := o.(executionAllocationAccountOwner); ok {
+			require.NoError(t, owner.SetAllocationAccount(account))
+			owners = append(owners, owner)
+		}
+		return o.Prepare(c.proc)
+	}))
+	result, err := vm.Exec(op, c.proc)
+	t.Logf("rows=%d peak accounted bytes=%d", n, account.Snapshot().Peak)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int64(n-1), vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[0], 0))
+}
 
 func TestCanUseResidentMergeTop(t *testing.T) {
 	dynamicLimit := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
@@ -202,7 +276,7 @@ func TestCompileTopKeepsSingleScopeLargeLimitLocal(t *testing.T) {
 	require.Same(t, scope, result[0])
 	localTop, ok := result[0].RootOp.(*top.Top)
 	require.True(t, ok)
-	require.True(t, localTop.OrderedOutput)
+	require.False(t, localTop.OrderedOutput, "single-worker results have no ordered receiver edge")
 	require.Same(t, limitExpr, localTop.Limit)
 
 	result[0].FreeOperator(c)
@@ -320,7 +394,7 @@ func TestCompileTopFallsBackWhenOrderKeyIsNotMaterialized(t *testing.T) {
 	c.proc.Free()
 }
 
-func newMergeTopFallbackTestCompile(t *testing.T) *Compile {
+func newMergeTopFallbackTestCompile(t testing.TB) *Compile {
 	c := NewMockCompile(t)
 	enableDistributedOrderedTopForTest(t, c.proc)
 	c.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
@@ -329,7 +403,7 @@ func newMergeTopFallbackTestCompile(t *testing.T) *Compile {
 	return c
 }
 
-func enableDistributedOrderedTopForTest(t *testing.T, proc *process.Process) {
+func enableDistributedOrderedTopForTest(t testing.TB, proc *process.Process) {
 	t.Helper()
 	rt := runtime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)

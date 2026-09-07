@@ -447,6 +447,13 @@ func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 			}
 			visitScope(scope)
 
+			if !test.expectResidentGather {
+				require.Empty(t, topLimits)
+				require.Contains(t, opTypes, vm.Order)
+				require.Contains(t, opTypes, vm.MergeOrder)
+				require.Contains(t, offsets, test.offset)
+				return
+			}
 			require.NotEmpty(t, topLimits)
 			for _, candidateLimit := range topLimits {
 				require.Equal(t, test.candidateLimit, candidateLimit)

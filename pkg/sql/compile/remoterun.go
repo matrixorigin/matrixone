@@ -263,7 +263,16 @@ func encodeProcessInfo(
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
+	orderedTop, isTop := s.RootOp.(*top.Top)
 	rs := c.newMergeScope([]*Scope{s})
+	if isTop && orderedTop.OrderedOutput {
+		// The wire promises one ordered stream, not interleaved DOP batches.
+		// Preserve that promise on the new local edge so runtime expansion
+		// inserts the ordered worker gather before this write-back merge.
+		reg := rs.Proc.Reg.MergeReceivers[0]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+	}
 	op := output.NewArgument().
 		WithFunc(c.fill)
 	op.SetIdx(-1)

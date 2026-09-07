@@ -395,6 +395,8 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 	require.Equal(t, orderedOutput || uint64(limit) > topSpillThreshold, tc.arg.ctr.spilling)
 	tc.arg.ctr.evalSpillOutputBytes = outputBytes
+	// Force actual resident pressure independently of output reconstruction.
+	tc.arg.ctr.residentByteLimit = outputBytes / 2
 
 	input := make([]*batch.Batch, 0, (inputRows+batchRows-1)/batchRows+1)
 	for highest := inputRows; highest > 0; {
