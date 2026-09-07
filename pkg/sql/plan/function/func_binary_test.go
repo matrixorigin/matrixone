@@ -5421,25 +5421,39 @@ func TestPower(t *testing.T) {
 }
 
 func TestPowerOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name      string
-		bases     []float64
-		exponents []float64
+		bases     FunctionTestInput
+		exponents FunctionTestInput
 	}{
-		{name: "negative base with fractional exponent", bases: []float64{-2}, exponents: []float64{0.5}},
-		{name: "zero base with negative exponent", bases: []float64{0}, exponents: []float64{-1}},
-		{name: "invalid value after valid value", bases: []float64{2, -2}, exponents: []float64{3, 0.5}},
+		{
+			name:      "vector input errors after valid row",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
+		},
+		{
+			name:      "constant base with vector exponent errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
+		},
+		{
+			name:      "vector base with constant exponent errors",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-1, -1}, nil),
+		},
+		{
+			name:      "constant invalid result errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
 	}
 
-	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_float64.ToType(), tc.bases, nil),
-					NewFunctionTestInput(types.T_float64.ToType(), tc.exponents, nil),
-				},
+				[]FunctionTestInput{tc.bases, tc.exponents},
 				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
 				Power,
 			)
@@ -5480,6 +5494,19 @@ func TestPowerRespectsSelectList(t *testing.T) {
 	value, isNull := resultParam.GetValue(1)
 	require.False(t, isNull)
 	require.Equal(t, float64(8), value)
+
+	tcc = NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+		Power,
+	)
+	tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 // TRUNCATE
