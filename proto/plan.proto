@@ -269,6 +269,11 @@ message PreparedNumericMetadata {
   int32 provisional_result_peer_type_id = 8;
   int32 provisional_result_peer_width = 9;
   int32 provisional_result_peer_scale = 10;
+  // This field shares the already sparse prepared-expression allocation but
+  // is semantically independent of numeric fallback. It preserves the source
+  // expression needed to recompute a runtime string domain after scalar-
+  // subquery flattening without adding another pointer to every Expr.
+  Expr string_domain_source = 11;
 }
 
 message Expr {
