@@ -282,6 +282,9 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		types.T_varchar.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
 
 	outName := tree.NewTableName(
 		tree.Identifier("diff_out"),
@@ -326,7 +329,7 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.NotContains(t, sql, "{mo_ts=")
 	})
 
-	t.Run("projected columns retain request order", func(t *testing.T) {
+	t.Run("projected primary key precedes requested columns", func(t *testing.T) {
 		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
 			OutputOpt: &tree.DiffOutputOpt{As: *outName},
 			Columns: tree.IdentifierList{
@@ -334,8 +337,8 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 			},
 		}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1, 0}, output.projectedIdxes)
-		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+		require.Equal(t, []int{0, 1}, output.projectedIdxes)
+		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "id", "name"}, output.columnNames)
 	})
 
 	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
@@ -593,6 +596,9 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 	tblStuff.def.colNames = []string{"id", "name"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
 
 	target := tree.NewTableName(tree.Identifier("t2"), tree.ObjectNamePrefix{}, nil)
 	base := tree.NewTableName(tree.Identifier("t1"), tree.ObjectNamePrefix{}, nil)
@@ -805,11 +811,14 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
 
 		mrs := ses.GetMysqlResultSet()
-		// 2 meta columns (diff header + flag) + 1 projected column
-		require.Equal(t, uint64(3), mrs.GetColumnCount())
+		// 2 meta columns (diff header + flag) + the PK and requested column
+		require.Equal(t, uint64(4), mrs.GetColumnCount())
 		col2, err := mrs.GetColumn(ctx, 2)
 		require.NoError(t, err)
-		require.Equal(t, "name", col2.Name())
+		require.Equal(t, "id", col2.Name())
+		col3, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "name", col3.Name())
 	})
 
 	t.Run("columns projection with limit", func(t *testing.T) {
@@ -961,6 +970,66 @@ func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
 	}
 }
 
+func TestDataBranchOutputColumnsIncludeCompositePrimaryKey(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"org_id", "event_id", "val", "note"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+	tblStuff.def.pkKind = compositeKind
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0, 1}
+	t.Cleanup(func() {
+		tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	})
+
+	stmt := &tree.DataBranchDiff{
+		Columns: tree.IdentifierList{tree.Identifier("val")},
+	}
+	require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+	require.Equal(t, uint64(5), ses.GetMysqlResultSet().GetColumnCount())
+	for idx, name := range []string{"diff target against base", "flag", "org_id", "event_id", "val"} {
+		col, err := ses.GetMysqlResultSet().GetColumn(ctx, uint64(idx))
+		require.NoError(t, err)
+		require.Equal(t, name, col.Name())
+	}
+
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(19), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("upd"), false, ses.proc.Mp()))
+	bat.SetRowCount(1)
+
+	retCh := make(chan batchWithKind, 1)
+	retCh <- batchWithKind{name: "target", kind: diffUpdate, batch: bat}
+	close(retCh)
+	require.NoError(t, satisfyDiffOutputOpt(
+		ctx,
+		cancel,
+		func() {},
+		ses,
+		nil,
+		stmt,
+		branchMetaInfo{},
+		tblStuff,
+		retCh,
+	))
+
+	row, err := ses.GetMysqlResultSet().GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, []any{"target", diffUpdate, int64(1), int64(1), int64(19)}, row)
+}
+
 func BenchmarkDataBranchOutputLimitWideRows(b *testing.B) {
 	const (
 		rowCount    = 64
@@ -1032,6 +1101,8 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.pkColIdxes = []int{0}
 
 	t.Run("nil columns returns nil", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(nil, tblStuff)
@@ -1042,7 +1113,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	t.Run("single column", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("name")}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1}, got)
+		require.Equal(t, []int{0, 1}, got)
 	})
 
 	t.Run("multiple columns preserve order", func(t *testing.T) {
@@ -1050,7 +1121,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 			tree.Identifier("age"), tree.Identifier("id"),
 		}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{2, 0}, got)
+		require.Equal(t, []int{0, 2}, got)
 	})
 
 	t.Run("duplicate columns deduplicated", func(t *testing.T) {
@@ -1064,7 +1135,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	t.Run("case insensitive", func(t *testing.T) {
 		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("NAME")}, tblStuff)
 		require.NoError(t, err)
-		require.Equal(t, []int{1}, got)
+		require.Equal(t, []int{0, 1}, got)
 	})
 
 	t.Run("unknown column returns error", func(t *testing.T) {
@@ -1072,6 +1143,54 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Contains(t, err.Error(), "xxx")
+	})
+
+	t.Run("composite primary key columns precede requested columns", func(t *testing.T) {
+		compositeTblStuff := tableStuff{}
+		compositeTblStuff.def.colNames = []string{"region", "dept", "emp_id", "salary"}
+		compositeTblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+		compositeTblStuff.def.pkKind = compositeKind
+		compositeTblStuff.def.pkColIdxes = []int{0, 1, 2}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("salary")}, compositeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{0, 1, 2, 3}, got)
+
+		got, err = resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("salary"), tree.Identifier("dept")}, compositeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{0, 1, 2, 3}, got)
+	})
+
+	t.Run("composite primary key follows definition order", func(t *testing.T) {
+		orderedTblStuff := tableStuff{}
+		orderedTblStuff.def.colNames = []string{"value", "event_id", "org_id"}
+		orderedTblStuff.def.visibleIdxes = []int{0, 1, 2}
+		orderedTblStuff.def.pkKind = compositeKind
+		orderedTblStuff.def.pkColIdxes = []int{2, 1}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("value")}, orderedTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{2, 1, 0}, got)
+	})
+
+	t.Run("fake primary key is not added to projection", func(t *testing.T) {
+		fakeTblStuff := tableStuff{}
+		fakeTblStuff.def.colNames = []string{"a", "b", "c"}
+		fakeTblStuff.def.visibleIdxes = []int{0, 1, 2}
+		fakeTblStuff.def.pkKind = fakeKind
+		fakeTblStuff.def.pkColIdxes = []int{0, 1, 2}
+
+		got, err := resolveProjectedIdxes(
+			tree.IdentifierList{tree.Identifier("c")}, fakeTblStuff,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int{2}, got)
 	})
 }
 
@@ -2385,7 +2504,7 @@ func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
 		tree.IdentifierList{tree.Identifier("generated_value")}, tblStuff,
 	)
 	require.NoError(t, err)
-	require.Equal(t, []int{2}, projected)
+	require.Equal(t, []int{0, 2}, projected)
 
 	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
 	require.NotNil(t, info)

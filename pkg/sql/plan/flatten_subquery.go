@@ -297,8 +297,8 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	}
 	var err error
 	// Flattening a scalar subquery can replace the Expr_Sub node with a
-	// projected ColRef.  Preserve the explicit prepared-numeric provenance on
-	// the replacement so execute-time ABS rebinding can still recover the
+	// projected ColRef. Preserve its sparse prepared-expression provenance so
+	// execute-time numeric and string-domain rebinding can still recover the
 	// parameter's exact protocol domain.
 	preparedNumeric := copyPreparedNumericMetadata(expr.GetPreparedNumeric())
 

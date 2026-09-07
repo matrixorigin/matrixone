@@ -246,6 +246,19 @@ func TestCanonicalJSONBinaryContract(t *testing.T) {
 		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, bit)),
 		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, raw)),
 	)
+
+	malformed := stringByteJSON(bytejson.TpCodeBlob, "base64:type16:not-base64")
+	valid, err := bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, 252, []byte(malformed.GetString()))
+	require.NoError(t, err)
+	malformedNested, err := bytejson.CreateByteJSON([]any{malformed})
+	require.NoError(t, err)
+	validNested, err := bytejson.CreateByteJSON([]any{valid})
+	require.NoError(t, err)
+	require.Zero(t, bytejson.CompareByteJson(malformedNested, validNested))
+	require.Equal(t,
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, malformedNested)),
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, validNested)),
+	)
 }
 
 func TestCanonicalJSONMatchesScalarEquality(t *testing.T) {
@@ -410,6 +423,34 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	ComputeXXHash([]*vector.Vector{jsonFlat}, longHashes, 17)
 	require.Equal(t, jsonHashes, longHashes[:3])
 	require.Equal(t, uint64(17), longHashes[3])
+}
+
+func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	floatType := types.T_float32.ToType()
+	floatType.Scale = 2
+	floats := vector.NewVec(floatType)
+	doubles := vector.NewVec(types.T_float64.ToType())
+	jsonValues := vector.NewVec(types.T_json.ToType())
+	defer func() {
+		floats.Free(mp)
+		doubles.Free(mp)
+		jsonValues.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, vector.AppendFixed(floats, float32(1.234), false, mp))
+	require.NoError(t, vector.AppendFixed(floats, float32(1.23), false, mp))
+	require.NoError(t, vector.AppendFixed(doubles, float64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(doubles, math.Copysign(0, -1), false, mp))
+	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1"), false, mp))
+	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1.0"), false, mp))
+
+	for _, vec := range []*vector.Vector{floats, doubles, jsonValues} {
+		left, _ := CanonicalBytesAt(vec, 0, nil)
+		right, _ := CanonicalBytesAt(vec, 1, nil)
+		require.Equal(t, left, right)
+	}
 }
 
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {

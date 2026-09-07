@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,13 +54,29 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
-	if !preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup() {
+	if preInsertUnique.PreInsertCtx == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "missing pre-insert unique context")
+	}
+	insertIgnore := preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup()
+	odkuArbitration := preInsertUnique.PreInsertCtx.GetOdkuTargetArbitration()
+	if !insertIgnore && !odkuArbitration {
 		return nil
 	}
+	if insertIgnore && odkuArbitration {
+		return moerr.NewInvalidInput(proc.Ctx, "conflicting ordered unique-key arbitration modes")
+	}
 	if len(preInsertUnique.PreInsertCtx.KeyColumns) == 0 ||
-		len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.ConflictColumns) ||
 		preInsertUnique.PreInsertCtx.OutputColumns <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ordered unique-key arbitration context")
+	}
+	if insertIgnore && len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.ConflictColumns) {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup context")
+	}
+	if odkuArbitration && len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.TargetColumns) {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU target arbitration context")
+	}
+	if odkuArbitration && preInsertUnique.allocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
 	}
 	if len(preInsertUnique.ctr.acceptedMaps) == 0 {
 		keyCount := len(preInsertUnique.PreInsertCtx.KeyColumns)
@@ -67,14 +84,27 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.ctr.acceptedIters = make([]hashmap.Iterator, keyCount)
 		preInsertUnique.ctr.acceptedKeyVecs = make([][]*vector.Vector, keyCount)
 		for i := range keyCount {
-			accepted, err := hashmap.NewStrHashMap(false, proc.Mp())
+			accepted, err := hashmap.NewStrHashMapWithAllocation(
+				false, proc.Mp(), preInsertUnique.hashAllocation)
 			if err != nil {
-				preInsertUnique.freeAcceptedMaps()
+				preInsertUnique.freeAcceptedState(proc)
 				return err
 			}
 			preInsertUnique.ctr.acceptedMaps[i] = accepted
 			preInsertUnique.ctr.acceptedIters[i] = accepted.NewIterator()
 			preInsertUnique.ctr.acceptedKeyVecs[i] = make([]*vector.Vector, 1)
+		}
+		if odkuArbitration {
+			preInsertUnique.ctr.acceptedRows = make([]*vector.Vector, keyCount)
+			for i := range keyCount {
+				acceptedRows, err := vector.NewOffHeapVecWithTypeAndAllocation(
+					types.T_int64.ToType(), preInsertUnique.retainedAllocation)
+				if err != nil {
+					preInsertUnique.freeAcceptedState(proc)
+					return err
+				}
+				preInsertUnique.ctr.acceptedRows[i] = acceptedRows
+			}
 		}
 	}
 	return nil
@@ -121,6 +151,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	if preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup() {
 		return preInsertUnique.callInsertIgnoreMultiDedup(proc, result)
 	}
+	if preInsertUnique.PreInsertCtx.GetOdkuTargetArbitration() {
+		return preInsertUnique.callODKUTargetArbitration(proc, result)
+	}
 	inputBat := result.Batch
 	var bitMap *nulls.Nulls
 
@@ -166,6 +199,149 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 			return result, err
 		}
 	}
+	result.Batch = preInsertUnique.ctr.buf
+	return result, nil
+}
+
+// callODKUTargetArbitration assigns one stable target primary key to each
+// logical ODKU action. Constraint order is significant: for each input row the
+// first pre-statement or statement-local conflict wins. Only a row with no
+// conflict is an INSERT and atomically publishes all of its non-NULL keys.
+// UPDATE actions deliberately publish none of their candidate input keys,
+// because ODKU rejects assignments to UNIQUE columns and therefore those keys
+// never become part of the stored row.
+func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
+	proc *process.Process,
+	result vm.CallResult,
+) (vm.CallResult, error) {
+	inputBat := result.Batch
+	ctx := preInsertUnique.PreInsertCtx
+	outputColumns := int(ctx.OutputColumns)
+	pkColumn := int(ctx.PkColumn)
+	if outputColumns > len(inputBat.Vecs) || pkColumn < 0 || pkColumn >= len(inputBat.Vecs) {
+		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid ODKU target arbitration output")
+	}
+	for i := range ctx.KeyColumns {
+		keyPos, targetPos := ctx.KeyColumns[i], ctx.TargetColumns[i]
+		if keyPos < 0 || int(keyPos) >= len(inputBat.Vecs) ||
+			targetPos < 0 || int(targetPos) >= len(inputBat.Vecs) {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid ODKU target arbitration column")
+		}
+		if !inputBat.Vecs[targetPos].GetType().Eq(*inputBat.Vecs[pkColumn].GetType()) {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "ODKU target primary-key type mismatch")
+		}
+		preInsertUnique.ctr.acceptedKeyVecs[i][0] = inputBat.Vecs[keyPos]
+	}
+	if preInsertUnique.ctr.acceptedTarget == nil {
+		var err error
+		preInsertUnique.ctr.acceptedTarget, err = vector.NewOffHeapVecWithTypeAndAllocation(
+			*inputBat.Vecs[pkColumn].GetType(), preInsertUnique.retainedAllocation)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+	} else if !preInsertUnique.ctr.acceptedTarget.GetType().Eq(*inputBat.Vecs[pkColumn].GetType()) {
+		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx,
+			"ODKU target primary-key type changed between input batches")
+	}
+
+	if preInsertUnique.ctr.buf == nil {
+		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns + 1)
+		if len(inputBat.Attrs) >= outputColumns {
+			attrs := append([]string(nil), inputBat.Attrs[:outputColumns]...)
+			preInsertUnique.ctr.buf.SetAttributes(append(attrs, "__mo_odku_target_pk"))
+		}
+		for i, vec := range inputBat.Vecs[:outputColumns] {
+			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType())
+		}
+		preInsertUnique.ctr.buf.Vecs[outputColumns] = vector.NewVec(*inputBat.Vecs[pkColumn].GetType())
+	} else {
+		preInsertUnique.ctr.buf.CleanOnlyData()
+	}
+	for i := 0; i < outputColumns; i++ {
+		if err := preInsertUnique.ctr.buf.Vecs[i].UnionBatch(
+			inputBat.Vecs[i], 0, inputBat.RowCount(), nil, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
+	}
+	targetOutput := preInsertUnique.ctr.buf.Vecs[outputColumns]
+
+	for row := 0; row < inputBat.RowCount(); row++ {
+		conflictKey := -1
+		conflictGroup := uint64(0)
+		conflictTargetColumn := int32(-1)
+		for keyIdx, targetPos := range ctx.TargetColumns {
+			targetVec := inputBat.Vecs[targetPos]
+			if !targetVec.IsNull(uint64(row)) {
+				conflictTargetColumn = targetPos
+				break
+			}
+			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
+			if keyVec.IsNull(uint64(row)) {
+				continue
+			}
+			vals, zvals, err := preInsertUnique.ctr.acceptedIters[keyIdx].Find(
+				row, 1, preInsertUnique.ctr.acceptedKeyVecs[keyIdx])
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if zvals[0] != 0 && vals[0] != 0 {
+				conflictKey, conflictGroup = keyIdx, vals[0]
+				break
+			}
+		}
+
+		switch {
+		case conflictTargetColumn >= 0:
+			if err := targetOutput.UnionOne(
+				inputBat.Vecs[conflictTargetColumn], int64(row), proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+		case conflictKey >= 0:
+			groupIdx := int(conflictGroup - 1)
+			if groupIdx >= preInsertUnique.ctr.acceptedRows[conflictKey].Length() {
+				return vm.CancelResult, moerr.NewInternalError(proc.Ctx,
+					"ODKU accepted-key target ordinal is missing")
+			}
+			if err := targetOutput.UnionOne(
+				preInsertUnique.ctr.acceptedTarget,
+				vector.GetFixedAtNoTypeCheck[int64](
+					preInsertUnique.ctr.acceptedRows[conflictKey], groupIdx), proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+		default:
+			if inputBat.Vecs[pkColumn].IsNull(uint64(row)) {
+				return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "NULL ODKU insertion target primary key")
+			}
+			if err := targetOutput.UnionOne(inputBat.Vecs[pkColumn], int64(row), proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+			targetRow := int64(preInsertUnique.ctr.acceptedTarget.Length())
+			if err := preInsertUnique.ctr.acceptedTarget.UnionOne(
+				inputBat.Vecs[pkColumn], int64(row), proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+			for keyIdx := range ctx.KeyColumns {
+				keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
+				if keyVec.IsNull(uint64(row)) {
+					continue
+				}
+				isNew, err := preInsertUnique.ctr.acceptedIters[keyIdx].DetectDup(
+					preInsertUnique.ctr.acceptedKeyVecs[keyIdx], row)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				if !isNew {
+					return vm.CancelResult, moerr.NewInternalError(proc.Ctx,
+						"ODKU accepted-key state changed during row commit")
+				}
+				if err := vector.AppendFixed(
+					preInsertUnique.ctr.acceptedRows[keyIdx], targetRow, false, proc.Mp()); err != nil {
+					return vm.CancelResult, err
+				}
+			}
+		}
+	}
+	preInsertUnique.ctr.buf.SetRowCount(inputBat.RowCount())
 	result.Batch = preInsertUnique.ctr.buf
 	return result, nil
 }

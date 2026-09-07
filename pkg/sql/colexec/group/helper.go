@@ -106,6 +106,50 @@ func (w *spillRecordWriter) Write(value []byte) (int, error) {
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedFixedRows(
+	data []byte,
+	width int,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	fastWriter, ok := w.target.(interface {
+		WriteSelectedFixedRows([]byte, int, []int32) (int, error)
+	})
+	if !ok {
+		if width < 0 || (width != 0 && len(data)%width != 0) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"invalid fixed-width group spill selection")
+		}
+		if width == 0 {
+			return 0, nil
+		}
+		written := 0
+		rowCount := len(data) / width
+		for _, selected := range rows {
+			row := int(selected)
+			if row < 0 || row >= rowCount {
+				return written, moerr.NewInvalidInputNoCtx(
+					"invalid fixed-width group spill row")
+			}
+			n, err := w.Write(data[row*width : (row+1)*width])
+			written += n
+			if err != nil {
+				return written, err
+			}
+		}
+		return written, nil
+	}
+	n, err := fastWriter.WriteSelectedFixedRows(data, width, rows)
+	w.written += int64(n)
+	if err == nil && width >= 0 && width <= math.MaxInt/max(1, len(rows)) &&
+		n != width*len(rows) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,
@@ -654,8 +698,16 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	// 32-bit hash values). Different levels use different multipliers so groups
 	// landing in the same bucket at level N get split at level N+1.
 	mult := uint64(0x9e3779b97f4a7c15) + myLv*2
+	bucketCount := len(ctr.currentSpillBkt)
+	if bucketCount == 0 {
+		bucketCount = ctr.spillPartitionCount()
+	}
+	maskBits := uint(spillMaskBits)
+	if bucketCount == spillDistinctNumBuckets {
+		maskBits = spillDistinctMaskBits
+	}
 	for i := range hashCodes {
-		hashCodes[i] = (hashCodes[i] * mult) >> (64 - spillMaskBits)
+		hashCodes[i] = (hashCodes[i] * mult) >> (64 - maskBits)
 	}
 }
 
@@ -843,6 +895,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
+	// Once exact-key spill owns any COUNT(DISTINCT) state, no generic group
+	// record may reintroduce a complete hot-group argument set. Drain the current
+	// resident work set before every root or recursive group-spill write.
+	if ctr.distinctSpill != nil && !ctr.distinctContributionsPrepared {
+		if _, err := ctr.drainExactCountDistinct(proc, opAnalyzer); err != nil {
+			return 0, 0, err
+		}
+	}
 	if ctr.recoveryCapacity != nil && opAnalyzer != nil {
 		reserved, _ := ctr.recoveryCapacity.Snapshot()
 		opAnalyzer.GetOpStats().SetMaxExtraStat(
@@ -877,12 +937,23 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		logutil.Infof("spilling data to disk, level %d, parent file %s", myLv, parentName)
 		// Create bucket objects; files are created lazily on first write.
-		ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
+		ctr.currentSpillBkt = make([]*spillBucket, ctr.spillPartitionCount())
 		for i := range ctr.currentSpillBkt {
-			ctr.currentSpillBkt[i] = &spillBucket{
+			child := &spillBucket{
 				lv:   myLv,
 				name: fmt.Sprintf("%s_%d", parentName, i),
 			}
+			if parentBkt != nil {
+				child.path = parentBkt.path
+				child.pathLen = parentBkt.pathLen
+			}
+			if child.pathLen >= len(child.path) {
+				return 0, 0, moerr.NewInternalErrorNoCtx(
+					"group spill path exceeds maximum depth")
+			}
+			child.path[child.pathLen] = uint8(i)
+			child.pathLen++
+			ctr.currentSpillBkt[i] = child
 		}
 	}
 
@@ -969,6 +1040,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	hcOffset := 0
+	bucketCount := len(ctr.currentSpillBkt)
 	for nthBatch, gb := range ctr.groupByBatches {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return 0, 0, err
@@ -989,18 +1061,18 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		// Partition the batch in two linear passes. Only the counts/cursors are
 		// fixed-size; row ids occupy exactly O(rc) accounted recovery scratch.
-		var bucketCounts [spillNumBuckets]int
-		var bucketOffsets [spillNumBuckets + 1]int
-		var bucketCursors [spillNumBuckets]int
+		var bucketCounts [spillMaxNumBuckets]int
+		var bucketOffsets [spillMaxNumBuckets + 1]int
+		var bucketCursors [spillMaxNumBuckets]int
 		for _, hash := range batchHC {
-			bucketCounts[int(hash&(spillNumBuckets-1))]++
+			bucketCounts[int(hash&uint64(bucketCount-1))]++
 		}
-		for bucket, count := range bucketCounts {
+		for bucket, count := range bucketCounts[:bucketCount] {
 			bucketOffsets[bucket+1] = bucketOffsets[bucket] + count
 			bucketCursors[bucket] = bucketOffsets[bucket]
 		}
 		for row, hash := range batchHC {
-			bucket := int(hash & (spillNumBuckets - 1))
+			bucket := int(hash & uint64(bucketCount-1))
 			ctr.spillBucketRows[bucketCursors[bucket]] = int32(row)
 			bucketCursors[bucket]++
 		}
@@ -1023,7 +1095,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			}
 			return nil
 		}
-		for bucket, selected := range bucketCounts {
+		for bucket, selected := range bucketCounts[:bucketCount] {
 			if selected > 0 {
 				end := bucketOffsets[bucket+1]
 				for start := bucketOffsets[bucket]; start < end; start += hashmap.UnitLimit {
@@ -1538,6 +1610,11 @@ reloadLoop:
 		}
 		return ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
 	}
+	if ctr.distinctContributionsPrepared {
+		if err := ctr.applyDistinctContributions(proc, bkt); err != nil {
+			return false, err
+		}
+	}
 
 	return true, nil
 }
@@ -1614,10 +1691,56 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if loaded {
 		return ctr.outputOneBatchFinal(proc, opAnalyzer, aggExprs)
 	}
+	ctr.finishDistinctContributions()
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
 	return res, nil
+}
+
+// newRuntimeEmptyGroupingSetBatch builds the key rows required by SQL when an
+// all-rolled grouping set receives no input. A nil setIDs slice describes one
+// legacy/static grouping set whose every key is rolled up. A non-nil slice
+// describes dynamic grouping sets, whose final key column carries the set id.
+func (ctr *container) newRuntimeEmptyGroupingSetBatch(
+	groupTypes []types.Type,
+	setIDs []int64,
+) (*batch.Batch, error) {
+	rows := 1
+	rollupColumns := len(groupTypes)
+	if setIDs != nil {
+		rows = len(setIDs)
+		rollupColumns--
+	}
+	output := batch.NewOffHeapWithSize(len(groupTypes))
+	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
+		output.Clean(ctr.mp)
+		return nil, err
+	}
+	for i := 0; i < rollupColumns; i++ {
+		vec, err := vector.NewRollupConstWithAllocation(
+			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[i] = vec
+	}
+	if setIDs != nil {
+		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[len(output.Vecs)-1] = setIDVector
+		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+	}
+	output.SetRowCount(rows)
+	return output, nil
 }
 
 func (ctr *container) memUsed() int64 {

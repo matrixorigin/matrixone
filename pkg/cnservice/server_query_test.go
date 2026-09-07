@@ -67,6 +67,22 @@ import (
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
 
+type remoteStatsTestEngine struct {
+	engine.Engine
+	info  *statsinfo.StatsInfo
+	key   statsinfo.StatsInfoKey
+	calls int
+}
+
+func (e *remoteStatsTestEngine) StatsForRemote(
+	_ context.Context,
+	key statsinfo.StatsInfoKey,
+) *statsinfo.StatsInfo {
+	e.calls++
+	e.key = key
+	return e.info
+}
+
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	exec := &iscp.ISCPTaskExecutor{}
 	iscp.RegisterExecutorRuntime("runner-cn", exec)
@@ -619,6 +635,13 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 			want:    nil,
 		},
 		{
+			name:    "nil stats key",
+			fields:  fields{},
+			args:    args{req: &query.Request{GetStatsInfoRequest: &query.GetStatsInfoRequest{}}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
@@ -874,6 +897,21 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 				"handleGetStatsInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func TestServiceHandleGetStatsInfoUsesRemoteExportBoundary(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 7, DatabaseID: 8, TableID: 9}
+	want := &statsinfo.StatsInfo{TableCnt: 42}
+	exporter := &remoteStatsTestEngine{info: want}
+	s := &service{storeEngine: exporter}
+	resp := &query.Response{}
+
+	require.NoError(t, s.handleGetStatsInfo(context.Background(), &query.Request{
+		GetStatsInfoRequest: &query.GetStatsInfoRequest{StatsInfoKey: &key},
+	}, resp, nil))
+	require.Same(t, want, resp.GetStatsInfoResponse.StatsInfo)
+	require.Equal(t, 1, exporter.calls)
+	require.Equal(t, key, exporter.key)
 }
 
 func Test_service_handleTraceSpan(t *testing.T) {

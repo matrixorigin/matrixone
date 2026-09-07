@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -121,10 +122,16 @@ func (*admissionStartLockService) Close() error {
 
 type admissionStartQueryService struct {
 	queryservice.QueryService
+	started     chan struct{}
+	startedOnce sync.Once
+	startErr    error
 }
 
-func (*admissionStartQueryService) Start() error {
-	return nil
+func (s *admissionStartQueryService) Start() error {
+	if s.started != nil {
+		s.startedOnce.Do(func() { close(s.started) })
+	}
+	return s.startErr
 }
 
 func (*admissionStartQueryService) Close() error {
@@ -138,7 +145,7 @@ func newViewMetadataAdmissionStartService(
 	discoveryTimeout time.Duration,
 ) *service {
 	t.Helper()
-	serviceID := t.Name()
+	serviceID := strings.ReplaceAll(t.Name(), "/", "-")
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
@@ -167,6 +174,45 @@ func newViewMetadataAdmissionStartService(
 		Admitted:             true,
 	})
 	return s
+}
+
+func TestCNStartsQueryServiceBeforeViewMetadataAdmission(t *testing.T) {
+	started := make(chan struct{})
+	var fenceBeforeQuery atomic.Bool
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		select {
+		case <-started:
+		default:
+			fenceBeforeQuery.Store(true)
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+	s.queryService = &admissionStartQueryService{started: started}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.NoError(t, s.Start())
+	require.False(t, fenceBeforeQuery.Load(),
+		"catalog admission must not run before the internal QueryService is reachable")
+}
+
+func TestCNStartPropagatesQueryServiceStartFailure(t *testing.T) {
+	startErr := errors.New("query service start failed")
+	s := newViewMetadataAdmissionStartService(
+		t,
+		&testBootService{},
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+		time.Second,
+	)
+	s.queryService = &admissionStartQueryService{startErr: startErr}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.ErrorIs(t, s.Start(), startErr)
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
@@ -271,6 +317,7 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 		{name: "wrapped rollback join", err: fmt.Errorf("transaction failed: %w", errors.Join(missingDatabase, nil)), want: true},
 		{name: "deadline without owner", err: context.DeadlineExceeded, want: false},
 		{name: "deadline with owner", err: context.DeadlineExceeded, upgradeOwnerActive: true, want: true},
+		{name: "backend unavailable without owner", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner"), want: true},
 		{name: "txn retry without owner", err: txnRetry, want: false},
 		{name: "txn retry with owner", err: txnRetry, upgradeOwnerActive: true, want: true},
 		{
@@ -292,6 +339,14 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 			err:                errors.Join(txnRetry, rollbackErr),
 			upgradeOwnerActive: true,
 			want:               false,
+		},
+		{
+			name: "backend unavailable plus rollback failure",
+			err: errors.Join(
+				moerr.NewBackendCannotConnectNoCtx("departed lock owner"),
+				rollbackErr,
+			),
+			want: false,
 		},
 	}
 	for _, test := range tests {
@@ -693,6 +748,7 @@ func TestServiceStartRetriesTransientCatalogFenceErrors(t *testing.T) {
 		err  error
 	}{
 		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "backend unavailable", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner")},
 		{name: "txn retry", err: moerr.NewTxnNeedRetryNoCtx()},
 		{name: "txn retry with definition change", err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
 	}

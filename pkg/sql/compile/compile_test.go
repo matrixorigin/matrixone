@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -880,7 +881,7 @@ func (w *Ws) PPString() string {
 	return ""
 }
 
-func NewMockCompile(t *testing.T) *Compile {
+func NewMockCompile(t testing.TB) *Compile {
 	return &Compile{
 		proc: testutil.NewProcess(t),
 		ncpu: system.GoMaxProcs(),
@@ -2075,6 +2076,57 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	})
 }
 
+func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	node := &plan.Node{
+		NodeType:           plan.Node_PARTITION,
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		}},
+	}
+	left := newShuffleGroupInputScope(t, 1)
+	right := newShuffleGroupInputScope(t, 1)
+
+	result := c.compilePartition(node, []*Scope{left, right})
+
+	require.Len(t, result, 1)
+	physical, ok := result[0].RootOp.(*partitionop.Partition)
+	require.True(t, ok)
+	require.Equal(t, plan.Node_PARTITION_ALGORITHM_HASH, physical.Algorithm)
+	require.Equal(t, int64(4096), physical.SpillMem)
+	require.Len(t, result[0].PreScopes, 2)
+	for _, input := range result[0].PreScopes {
+		// newMergeScope adds a Connector over the previous input root. HASH must
+		// leave that previous root untouched instead of adding local Order.
+		require.IsType(t, &colexec.MockOperator{}, input.RootOp.GetOperatorBase().GetChildren(0))
+	}
+}
+
+func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
+	require.False(t, c.supportsRemoteHashPartition())
+	node := &plan.Node{
+		NodeType:           plan.Node_PARTITION,
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		}},
+	}
+	legacy := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+	require.Len(t, legacy, 1)
+	require.Equal(t, plan.Node_PARTITION_ALGORITHM_SORT, legacy[0].RootOp.(*partitionop.Partition).Algorithm)
+	require.IsType(t, &orderop.Order{}, legacy[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
+	require.True(t, c.supportsRemoteHashPartition())
+}
+
 func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
@@ -2644,21 +2696,30 @@ func newShuffleGroupInputScope(t *testing.T, mcpu int) *Scope {
 	return scope
 }
 
-func TestCompilePreInsertUkMergesParallelMultiKeyIgnoreInput(t *testing.T) {
-	c := NewMockCompile(t)
-	c.anal = &AnalyzeModule{}
-	input := newScope(Merge)
-	input.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: 4}
-	input.Proc = c.proc.NewNoContextChildProc(0)
-	input.setRootOperator(colexec.NewMockOperator())
+func TestCompilePreInsertUkMergesParallelOrderedArbitrationInput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  *plan.PreInsertUkCtx
+	}{
+		{name: "multi-key INSERT IGNORE", ctx: &plan.PreInsertUkCtx{InsertIgnoreMultiDedup: true}},
+		{name: "ODKU target arbitration", ctx: &plan.PreInsertUkCtx{OdkuTargetArbitration: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.anal = &AnalyzeModule{}
+			input := newScope(Merge)
+			input.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: 4}
+			input.Proc = c.proc.NewNoContextChildProc(0)
+			input.setRootOperator(colexec.NewMockOperator())
 
-	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{InsertIgnoreMultiDedup: true}}
-	result := c.compilePreInsertUk(node, []*Scope{input})
+			result := c.compilePreInsertUk(&plan.Node{PreInsertUkCtx: tc.ctx}, []*Scope{input})
 
-	require.Len(t, result, 1)
-	require.NotSame(t, input, result[0])
-	require.Equal(t, 1, result[0].NodeInfo.Mcpu)
-	require.Contains(t, result[0].PreScopes, input)
+			require.Len(t, result, 1)
+			require.NotSame(t, input, result[0])
+			require.Equal(t, 1, result[0].NodeInfo.Mcpu)
+			require.Contains(t, result[0].PreScopes, input)
+		})
+	}
 }
 
 func newShuffleGroupTestNodes(dop int32) (*plan.Node, []*plan.Node) {

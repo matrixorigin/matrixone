@@ -1135,6 +1135,15 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
+func TestGetFunctionIgnoresWindowFrameByName(t *testing.T) {
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lag"))
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lead"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("first_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("last_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("nth_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("not_a_function"))
+}
+
 func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
@@ -1186,6 +1195,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
+		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},
 		{name: "invalid interval string", fid: TO_INTERVAL, argCount: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

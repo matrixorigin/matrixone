@@ -77,6 +77,8 @@ const (
 	GroupAllocationSiteSpillMetadata
 	GroupAllocationSiteSpillRead
 	GroupAllocationSiteSpillRows
+	GroupAllocationSiteDistinctRecord
+	GroupAllocationSiteDistinctCopy
 )
 
 var _ vm.Operator = &Group{}
@@ -92,9 +94,14 @@ type Group struct {
 	SpillMem int64
 
 	// group-by column.
-	GroupBy        []*plan.Expr
-	GroupingFlag   []bool
-	GroupByHashKey []int32
+	GroupBy      []*plan.Expr
+	GroupingFlag []bool
+	// DynamicGrouping means grouping metadata is carried by the input vectors
+	// instead of being described by one static GroupingFlag. This is used by a
+	// shared grouping-set aggregate whose input switches grouping sets between
+	// batches.
+	DynamicGrouping bool
+	GroupByHashKey  []int32
 
 	Aggs []aggexec.AggFuncExecExpression
 
@@ -109,6 +116,8 @@ type spillBucket struct {
 	writer    io.Writer // file writer; tests may inject a failing writer
 	fdToken   *process.ExecutionSpillFDReservation
 	diskToken *process.ExecutionSpillDiskReservation
+	path      [spillMaxPass]uint8
+	pathLen   int
 }
 
 type reusableSpillBuffer interface {
@@ -264,6 +273,15 @@ type container struct {
 	// A spill reload may preallocate up to this proven in-memory high-water mark,
 	// but never up to an unbounded bucket row count.
 	spillHashPreAllocSize uint64
+
+	// distinctSpill survives ordinary group spill generations. It owns exact
+	// COUNT(DISTINCT ...) keys after a successful prepared drain and is closed
+	// only by the outer Group execution generation.
+	distinctSpill                 *distinctSpillController
+	distinctFinalized             bool
+	distinctGroupReset            bool
+	distinctDrainKeysForUT        uint64
+	distinctContributionsPrepared bool
 }
 
 func (ctr *container) setAllocationAccount(
@@ -623,6 +641,14 @@ func (ctr *container) free() {
 	ctr.prepareParamKindWireV1 = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
+	if ctr.distinctSpill != nil {
+		ctr.distinctSpill.close()
+		ctr.distinctSpill = nil
+	}
+	ctr.distinctFinalized = false
+	ctr.distinctGroupReset = false
+	ctr.distinctDrainKeysForUT = 0
+	ctr.distinctContributionsPrepared = false
 	if ctr.spillReader != nil {
 		ctr.spillReader.Free()
 		ctr.spillReader = nil
@@ -648,6 +674,9 @@ func (ctr *container) reset() {
 }
 
 func (ctr *container) resetForSpill() {
+	if ctr.distinctSpill != nil {
+		ctr.distinctGroupReset = true
+	}
 	// Reset also frees the hash related stuff.
 	ctr.hr.Free0()
 
@@ -884,6 +913,18 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
+	// GroupingAware is fixed by the producer plan, not inferred from one
+	// partial's data. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rollup sentinel.
+	GroupingAware bool
+	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
+	// produce one row even when no partial reaches this final merge boundary.
+	EmptyGroupingSet bool
+	// EmptyGroupingSetIDs declares the corresponding dynamic grouping-set rows.
+	EmptyGroupingSetIDs []int64
+	// GroupByTypes makes those rows constructible when no partial supplies
+	// runtime vector types.
+	GroupByTypes []types.Type
 
 	PartialResults     []any
 	PartialResultTypes []types.T
