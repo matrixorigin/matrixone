@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -96,6 +97,39 @@ func sequenceDatabase(sessionDatabase string, databases vector.FunctionParameter
 	return string(database), null
 }
 
+// requireSequence verifies the catalog-owned relation kind before a sequence
+// function reads or writes the relation's sequence-shaped row.  The property
+// list is metadata, not an API with a fixed order, so inspect the relkind key
+// explicitly and fail closed on missing or conflicting markers.
+func requireSequence(ctx context.Context, rel engine.Relation) error {
+	td, err := rel.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
+
+	var foundSequence, foundOther bool
+	for _, def := range td {
+		properties, ok := def.(*engine.PropertiesDef)
+		if !ok || properties == nil {
+			continue
+		}
+		for _, property := range properties.Properties {
+			if property.Key != catalog.SystemRelAttr_Kind {
+				continue
+			}
+			if property.Value == catalog.SystemSequenceRel {
+				foundSequence = true
+			} else {
+				foundOther = true
+			}
+		}
+	}
+	if !foundSequence || foundOther {
+		return moerr.NewInternalError(ctx, "Table input is not a sequence")
+	}
+	return nil
+}
+
 func nextval(tblname, db string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
@@ -106,13 +140,9 @@ func nextval(tblname, db string, proc *process.Process, e engine.Engine, txn cli
 		return "", err
 	}
 
-	// Check is sequence table.
-	td, err := rel.TableDefs(proc.Ctx)
-	if err != nil {
+	// Check the relation kind before reading the sequence-shaped row.
+	if err = requireSequence(proc.Ctx, rel); err != nil {
 		return "", err
-	}
-	if td[len(td)-1].(*engine.PropertiesDef).Properties[0].Value != catalog.SystemSequenceRel {
-		return "", moerr.NewInternalError(proc.Ctx, "Table input is not a sequence")
 	}
 
 	_values, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", db, tblname))
@@ -338,6 +368,10 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 	}
 	rel, err := dbHandler.Relation(proc.Ctx, tblname, nil)
 	if err != nil {
+		return "", err
+	}
+	// Check the relation kind before reading or updating the sequence-shaped row.
+	if err = requireSequence(proc.Ctx, rel); err != nil {
 		return "", err
 	}
 

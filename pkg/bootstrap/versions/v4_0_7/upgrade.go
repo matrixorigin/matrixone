@@ -55,7 +55,7 @@ func init() {
 			// new CN still meets not-yet-widened tables. That direction is handled on the
 			// write side, which names its columns and omits the provenance ones until the
 			// table has them (sqlexec.HasProvenanceColumns).
-			RequiredProtocolVersion: defines.MORPCVersion55,
+			RequiredProtocolVersion: defines.MORPCVersion56,
 		},
 	}
 }

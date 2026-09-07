@@ -34,12 +34,18 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
-func TestRefreshSessionAuthRequiresCurrentProtocolVersion(t *testing.T) {
+// The name says 54 because that is the contract: the protocol RefreshSessionAuth shipped with.
+func TestRefreshSessionAuthRequiresProtocolVersion54(t *testing.T) {
 	// A method's entry in methodVersions records the protocol it SHIPPED with, not whatever is
 	// newest -- nearly every other entry is MORPCVersion1 for that reason. Gating a method on
 	// the latest version would make it unusable until every peer in the cluster had upgraded,
 	// which is the opposite of what the gate is for. So this stays at 54 however far the
 	// protocol moves on.
+	//
+	// The assertion that pinned the latest version literally lived here too. Both this branch
+	// and main had to edit it this cycle, for unrelated features, which is the argument
+	// against it: TestMethodVersionsNeverExceedTheLatestProtocol checks the property it was
+	// reaching for and needs no edit when the version moves.
 	assert.Equal(t, defines.MORPCVersion54, methodVersions[query.CmdMethod_RefreshSessionAuth])
 }
 
