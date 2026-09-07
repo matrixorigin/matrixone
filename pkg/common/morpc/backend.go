@@ -625,7 +625,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 			var writeDeadline time.Time
 			written := messages[:0]
-			for _, f := range messages {
+			for idx, f := range messages {
 				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 
 				id := f.getSendMessageID()
@@ -634,7 +634,22 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					continue
 				}
 
-				if deadline := rb.doWrite(id, f); !deadline.IsZero() {
+				deadline, err := rb.doWrite(id, f)
+				if err != nil {
+					// Encoding may have written a partial frame (including directly
+					// to the socket). Never flush or reuse this connection after it.
+					rb.changeToStopping()
+					rb.cancelActiveStreams()
+					for _, pending := range written {
+						pending.messageSent(err)
+					}
+					for _, pending := range messages[idx+1:] {
+						pending.messageSent(err)
+					}
+					rb.makeAllWaitingFutureFailed(err)
+					return
+				}
+				if !deadline.IsZero() {
 					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					written = append(written, f)
 				}
@@ -651,6 +666,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
+					rb.changeToStopping()
+					rb.cancelActiveStreams()
+					rb.makeAllWaitingFutureFailed(err)
+					return
 				} else {
 					// Record only transport-complete writes. A request that merely
 					// reached the userspace buffer must not extend the read window
@@ -681,27 +700,27 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) (time.Time, error) {
 	if !rb.options.filter(f.send.Message, rb.remote) {
 		f.messageSent(messageSkipped)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
 		f.messageSent(f.send.Ctx.Err())
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	deadline := time.Now().Add(v)
 	if f.streamOwner != nil &&
 		!f.streamOwner.assignSendSequence(&f.send) {
 		f.messageSent(backendClosed)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
@@ -731,9 +750,9 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, err
 	}
-	return deadline
+	return deadline, nil
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -1940,6 +1959,9 @@ func (s *stream) done(
 // unregister ownership with Stream.Close, as required by the Stream contract.
 func (s *stream) terminate() {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.closed || s.mu.terminal {

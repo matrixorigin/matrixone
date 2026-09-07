@@ -1873,6 +1873,106 @@ func TestAssignStreamSequenceRejectsClosedStream(t *testing.T) {
 	require.Zero(t, stream.sequence)
 }
 
+func TestTerminatedStreamRejectsQueuedWrite(t *testing.T) {
+	conn := newTestIOSession(assert.AnError, nil)
+	defer conn.Close()
+	rb := &remoteBackend{conn: conn}
+	rb.options.filter = func(Message, string) bool { return true }
+	s := newStream(rb, make(chan Message, 1), nil, nil, func(*stream) {}, nil)
+	s.init(1, false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	f := newFuture(nil)
+	f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(1), stream: true})
+	f.streamOwner = s
+	f.ref()
+	defer f.Close()
+	// Connection reset seals old streams before publishing the new transport.
+	s.terminate()
+	deadline, err := rb.doWrite(1, f)
+	require.NoError(t, err)
+	require.True(t, deadline.IsZero())
+	require.ErrorIs(t, f.waitSendCompleted(), backendClosed)
+	require.Zero(t, conn.writeCount.Load(), "old request reached replacement transport")
+	require.Zero(t, s.sequence)
+}
+
+type deadlineEncodingSession struct {
+	*testIOSession
+	codec  Codec
+	cancel context.CancelFunc
+}
+
+func (s *deadlineEncodingSession) Write(value any, _ goetty.WriteOptions) error {
+	if s.writeCount.Add(1) == 2 {
+		s.cancel()
+	}
+	return s.codec.Encode(value, s.out, io.Discard)
+}
+
+func TestBackendWriteFailureRetiresBatch(t *testing.T) {
+	for _, failure := range []string{"write", "flush", "encode deadline"} {
+		t.Run(failure, func(t *testing.T) {
+			conn := newTestIOSessionWithWriteErrorAt(2, assert.AnError, nil)
+			if failure == "flush" {
+				conn.writeErr = nil
+				conn.flushErr = assert.AnError
+			}
+			rb := &remoteBackend{
+				conn: conn, metrics: newMetrics(t.Name()),
+				readStopper: stopper.NewStopper(t.Name()),
+				writeC:      make(chan *Future, 4), waitWriteC: make(chan struct{}, 1),
+				stopWriteC: make(chan struct{}),
+			}
+			rb.adjust()
+			rb.stateMu.state = stateRunning
+			rb.options.batchSendSize = 3
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			encodeCtx := newManuallyExpiringContext(time.Now().Add(time.Minute))
+			if failure == "encode deadline" {
+				rb.conn = &deadlineEncodingSession{testIOSession: conn, codec: newTestCodec(), cancel: func() {
+					encodeCtx.deadline = time.Now().Add(-time.Minute)
+					encodeCtx.expire()
+				}}
+			}
+			var futures []*Future
+			for i := range 4 {
+				f := newFuture(nil)
+				requestCtx := ctx
+				if i == 1 && failure == "encode deadline" {
+					requestCtx = encodeCtx
+				}
+				f.init(RPCMessage{Ctx: requestCtx, Message: newTestMessage(uint64(i + 1)), stream: true})
+				s := newStream(rb, make(chan Message, 1), nil, nil, func(*stream) {}, nil)
+				s.init(uint64(i+1), false)
+				f.streamOwner = s
+				f.ref()
+				defer f.Close()
+				futures = append(futures, f)
+				rb.writeC <- f
+				rb.changeQueueDepth(1)
+			}
+			done := make(chan struct{})
+			go func() { rb.writeLoop(ctx); close(done) }()
+			defer func() { close(rb.stopWriteC); <-done }()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("write failure did not retire backend")
+			}
+			for _, f := range futures {
+				require.Error(t, f.waitSendCompleted())
+			}
+			require.Equal(t, stateStopping, rb.stateMu.state)
+			if failure != "flush" {
+				require.Equal(t, int32(2), conn.writeCount.Load())
+				require.Empty(t, conn.flushC, "partial batch was flushed after write failure")
+			}
+		})
+	}
+}
+
 func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
 	sendEntered := make(chan struct{})
 	releaseSend := make(chan struct{})
