@@ -2764,6 +2764,9 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 			cols, area := vector.MustVarlenaRawData(retV)
 			for i := range cols {
 				str := string(cols[i].GetByteSlice(area))
+				if ty == types.T_json {
+					str = types.DecodeJson(cols[i].GetByteSlice(area)).String()
+				}
 				val, err := strconv.Atoi(str)
 				require.NoError(t, err)
 				_, ok := mm[float64(val)]
@@ -2937,21 +2940,35 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 				rstrs = make([]string, 0, len(rvals))
 				for i := range rvals {
 					str := strconv.Itoa(int(rvals[i]))
+					if ty == types.T_json {
+						value, err := types.ParseStringToByteJson(str)
+						require.NoError(t, err)
+						encoded, err := types.EncodeJson(value)
+						require.NoError(t, err)
+						str = string(encoded)
+					}
 					rstrs = append(rstrs, str)
 				}
 				slices.Sort(rstrs)
 				for i := range rstrs {
-					vector.AppendBytes(rvec, []byte(rstrs[i]), false, mp)
+					require.NoError(t, vector.AppendBytes(rvec, []byte(rstrs[i]), false, mp))
 				}
 
 				lstrs = make([]string, 0, len(lvals))
 				for i := range lvals {
 					str := strconv.Itoa(int(lvals[i]))
+					if ty == types.T_json {
+						value, err := types.ParseStringToByteJson(str)
+						require.NoError(t, err)
+						encoded, err := types.EncodeJson(value)
+						require.NoError(t, err)
+						str = string(encoded)
+					}
 					lstrs = append(lstrs, str)
 				}
 				slices.Sort(lstrs)
 				for i := range lstrs {
-					vector.AppendBytes(lvec, []byte(lstrs[i]), false, mp)
+					require.NoError(t, vector.AppendBytes(lvec, []byte(lstrs[i]), false, mp))
 				}
 			}
 

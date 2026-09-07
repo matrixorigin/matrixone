@@ -1,17 +1,18 @@
 # JSON SQL order and persisted physical order
 
-Version: 1 (proposed, independent design approval pending)
+Version: 2 (admission implemented for review; independent design approval pending)
 
 Owner: issue [#28039](https://github.com/matrixorigin/matrixone/issues/28039).
 Implementation: [PR #28086](https://github.com/matrixorigin/matrixone/pull/28086).
-Implementation snapshot inspected: `715dc8dfa531c0558355fe83bfa79da0ac9a798a`.
+Admission baseline: `19d8c39598f4db81c69d005be2c9718866ff7c2c`.
+The version-2 admission implementation is in the same change as this document.
 Pre-change reference: `6e5f82f568b1ec3e013e8d4ab9031b2360300b84`.
 
 This is a distinct design-review phase. It does not approve the existing
 implementation or authorize release. A reviewer must record the exact document
 commit and an independent decision before implementation approval resumes.
-The admission correction in section 4 is proposed work, not a description of
-validation already performed by the inspected implementation.
+Section 4 describes the admission correction submitted for review. Its
+implementation and local tests do not constitute independent design approval.
 
 ## 1. Problem and scope
 
@@ -105,17 +106,13 @@ particular, physical run metadata cannot bypass SQL ordering or enable JSON
 value-range pruning. Existing writer/merger disagreement is preserved as an
 existing limitation, not claimed to be fixed by this design.
 
-## 4. Admission and ownership: required correction
+## 4. Admission and ownership
 
-The inspected head's claim that T_json is automatically validated by the type
-layer is not established. `types.DecodeJson` delegates to `ByteJson.Unmarshal`,
-which has a TODO for validation. `vector.NewConstBytes` and `AppendBytes` can
-carry arbitrary JSON bytes. Vector framing and varlena offset checks do not
-prove the validity of descendants. A type OID is not a validation certificate.
-
-The proposed correction is to establish a payload invariant at actual JSON
-admission boundaries, without adding a row-sized comparison cache or relying on
-a boolean flag that becomes stale when bytes mutate:
+At the admission baseline, T_json plus vector framing did not certify payload
+validity. In particular, checked decode accepted a corrupt second array child
+before the trusted SQL comparison returned on the first child. The correction
+establishes validity at the following boundaries without adding a per-row flag
+or a full-column comparison cache:
 
 1. Text parsers and typed JSON constructors own production of valid documents.
    Their tests must prove conformance to the same structural/numeric validity
@@ -138,7 +135,7 @@ a boolean flag that becomes stale when bytes mutate:
    must re-establish validity before publishing the changed value. No new
    synchronization, long-lived state or cache ownership is introduced.
 
-The initial implementation audit must include `NewConstBytes`, `SetBytesAt`,
+The implementation audit includes `NewConstBytes`, `SetBytesAt`,
 `SetConstByteJsonEncoded`, `AppendBytes`, `AppendMultiBytes`, `AppendBytesList`,
 `AppendBytesWithWriter`, their low-level varlena builders, vector unmarshal
 variants, and source-to-destination union/copy paths. Validation must happen
@@ -148,9 +145,38 @@ approved. Error-returning boundaries must reject corrupt retained/wire input;
 the public comparator and canonical hash APIs still support raw fallback for
 diagnostic/internal callers that deliberately supply arbitrary ByteJSON.
 
-This tightens handling of corrupted input without changing valid encodings.
-It is additional production work and requires approval of this design first.
-It must not be silently declared implemented by a PR-body edit.
+Implementation map:
+
+- `vector.validateJSONPayload` and `validateJSONValue` call the same complete
+  `bytejson.IsValidByteJson` predicate used by public comparison. Raw byte and
+  typed/encoder varlena builders validate before descriptor publication. Encoder
+  validation checks emitted bytes, not only an optional source validator.
+- `validateVectorBinary` checks each non-NULL payload after descriptor bounds;
+  checked binary/copy/reader decoders and `NewVecWithDataCopy` use this boundary.
+  Selected-row decoding checks each emitted row and discards scratch data on
+  failure. JSON V1 decoding validates framing and bitmap bounds before decoding
+  into a temporary vector, then validates payloads before assignment.
+- Same-type `UnionOne`, `UnionBatch`, `UnionAll`, selected unions and `Copy` borrow
+  admitted vector descriptors/area. Their `BuildVarlenaFromVarlena` path copies
+  immutable admitted data without another descendant walk. These are internal
+  copy operations, not casts from arbitrary byte-vector types.
+- The only production `UnmarshalBinaryTrusted` consumers are objectio V2 cache
+  decode/bind. `validateVectorCacheData` calls checked `UnmarshalBinary` before
+  granting its private cache marker; sealed bytes or an independent snapshot
+  preserve that proof. Unmarked V2 and every V1 cache read use checked decode.
+- `NewVecWithData` is an internal unchecked ownership-transfer API with no
+  production call sites in this snapshot. The off-heap raw-data constructor
+  likewise has no production callers. `SetType`, `GetData`, `GetArea` and
+  mutable payload aliases remain low-level representation operations; changing
+  an OID is not a supported JSON cast. Callers must not mutate published JSON
+  through an alias while operators consume it.
+
+The admission matrix covers raw and typed constant/append/replace/encoder paths,
+all six checked decode variants, failed publication, valid copy/union paths and
+SQL NULL. The SQL boundary regression serializes admitted data after deliberate
+corruption to model damaged storage, then verifies rejection by checked decode
+before `lessThanFn`; its valid control reaches that actual SQL comparator.
+This changes corrupted-input error handling without changing valid encodings.
 
 ## 5. Alternatives and decisions
 
@@ -161,7 +187,7 @@ It must not be silently declared implemented by a PR-body edit.
 | Fully validate on every comparison | Correct public fallback; O(document size) per row/comparison even for different types, rejected for the SQL hot path |
 | Validate only visited children | Fast on some valid inputs, but comparison cycles and compare/hash disagreement; rejected |
 | Cache complete decoded columns per expression | Repeated allocation and lifetime/alias invalidation costs; explicitly rejected by CR |
-| Preserve physical consumers and validate at admission | Proposed choice: bounded one-time input work, stateless hot comparator, explicit owner proofs required |
+| Preserve physical consumers and validate at admission | Implemented for review: one-time input work, stateless hot comparator, explicit owner proofs required |
 
 Accepted tradeoffs proposed for independent review: JSON value predicates may
 scan more blocks; decoding raw JSON inputs incurs linear admission work; valid
@@ -171,12 +197,16 @@ is preferable to executing a comparator with violated preconditions.
 
 ## 6. Cost and failure behavior
 
-Let B be total admitted JSON bytes, N the selected row count, D nesting depth,
-and P the compared prefix. Admission is O(B) with no payload copy beyond the
-destination's existing ownership requirement. Validation adds stack work
-proportional to D. Existing nesting limits must be applied at untrusted
-admission so adversarial encodings cannot exhaust the stack; the permitted
-limit must remain compatible with existing supported JSON producers.
+Let B be the expanded document bytes visited, N the selected row count, D
+nesting depth, and P the compared prefix. Admission walks every descendant once
+per input write/decode and adds no payload copy beyond the destination's
+ownership requirement. It shares the existing recursive structural validator,
+whose stack usage follows D. This change does not introduce a new universal
+depth limit: the general ByteJSON parser permits deeper values than the bounded
+JSON merge/document APIs. Depth/resource policy is not strengthened by this
+admission correction, and overlapping encoded child ranges may increase work
+relative to serialized size. These limits apply to public validation already;
+the benchmark reports actual input-admission cost rather than claiming it free.
 
 After admission, cross-rank literal/array comparisons are O(1) per selected row;
 same-rank comparison is proportional to P. Exact decimal and legacy binary
@@ -227,30 +257,24 @@ unify physical relations in future.
 | Global invalid domain | Invalid later child versus same/cross rank; NaN payloads; short scalar/container; all order laws and equal-value/equal-key |
 | Canonical key robustness | Size/append agreement and no panic for malformed scalar/nested encodings, nonminimal prefixes and legacy binary values |
 | Trusted admission | Invalid second child and short numbers through checked constant/append/replace and all decode variants; reject before publication, or prove the public fallback path; valid inputs still reach the trusted path |
-| Legacy merge compatibility | Actual multi-row base-generated raw run, then both current merger entrypoints; assert raw retained order; writer relation tested separately |
+| Legacy merge compatibility | Multi-row raw merger output through MergeAObj and mergeObjs, including object writer and checked readback over two generations; writer relation tested separately |
 | Pruning correctness | Object/block/seek/membership fail open, including prefix blocks; null-count pruning retained |
 | CPU/allocation bound | Same harness at base/final, both array/boolean directions, same-rank early exit, column/constant, column/column, SQL NULL; report admission separately |
 | SQL integration | Normal mo-tester comparison for the canonical BVT, exact head and clean instance; scalar MySQL oracle, MatrixOne-specific nonscalar expectations |
 
-The 715dc8d repair restores both merger dispatches and complete public
-classification and adds focused regressions. Its direct-comparison trusted
-admission claim remains an implementation gap. A source-matched CGo probe at
-715dc8d confirms it: corrupt the second child of `[0,0]`, construct and serialize
-a T_json vector, then call checked `UnmarshalBinary` and `lessThanFn` against
-`[1,0]`. Admission succeeds and SQL returns true although public comparison
-orders the invalid document after the valid one. Ten existing named CR
-regressions passed in the same run; that does not refute this boundary failure.
-The fixture deliberately supplies corrupt internal/wire bytes; it is not a
-claim that public SQL constructs this encoding. The retained-run regression
-currently exercises MergeAObj; source dispatch inspection of mergeObjs is
-supporting evidence, not a substitute for the requested terminal test.
+The 715dc8d repair restored both raw merger dispatches and complete public
+classification. Version 2 closes the missing vector payload admission identified
+at 19d8c39. New regression tests fail at that baseline and reject malformed input
+after the correction. The fixture supplies corrupt internal/wire bytes; public
+SQL is not claimed to construct that encoding. Retained-run tests cover MergeAObj and ordinary mergeObjs. The latter produces
+a two-row raw run from singleton inputs, persists and reads it with the real
+object writer/reader, then consumes those returned bytes in a second merge and
+checks the complete persisted row sequence.
 
-Before approval, independently review sections 2-7 and explicitly accept or
-reject admission-time corruption errors, the no-migration physical policy and
-the homogeneous-query rollout requirement. After approval, implement the
-admission closure and remaining terminal probes, rerun affected validation and
-regenerate the exact-content semantic preflight. An old preflight PASS or green
-CI cannot close an uncovered input boundary.
+Independent review must still explicitly accept or reject admission-time
+corruption errors, the no-migration physical policy and homogeneous query rollout.
+The implementation, complete source review, regression tests and measured costs
+are evidence for that decision; they do not supply the independent approval.
 
 ## 9. Design review record
 
@@ -258,11 +282,11 @@ CI cannot close an uncovered input boundary.
 Change scope: complete PR #28086, SQL/physical JSON comparison separation
 Trigger: >500 production lines; expression/hash/order/storage boundaries;
          persistent compatibility and hot-path CPU cost
-Design: json_sql_physical_order.md, version 1, proposed
+Design: json_sql_physical_order.md, version 2, submitted for review
 Reviewed revision: pending independent review of the document commit
-Blocking findings: independent approval; implementation admission invariant;
-                   second physical merger terminal regression
+Blocking findings: independent design approval pending
 Decision log: alternatives and proposed tradeoffs in sections 5-7
 Decision: REQUEST_CHANGES (not an independent approval)
-Implementation deviations: section 4 is not implemented at 715dc8d
+Implementation status: section 4 implemented with regression coverage;
+                       independent approval and release validation remain separate
 ```

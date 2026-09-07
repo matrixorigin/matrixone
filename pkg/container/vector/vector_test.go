@@ -6646,13 +6646,13 @@ func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 	t.Run("json sort", func(t *testing.T) {
 		json := NewVec(types.T_json.ToType())
 		for _, value := range []string{`{"b":1}`, `{"a":1}`} {
-			require.NoError(t, AppendBytes(json, []byte(value), false, mp))
+			require.NoError(t, AppendBytes(json, jsonAdmissionValue(t, value), false, mp))
 		}
 		require.NoError(t, json.SetStringSourcesWithMP([]types.StringSource{
 			types.StringSourceSQLPrepare, types.StringSourceLiteral,
 		}, mp))
 		json.InplaceSort()
-		require.Equal(t, `{"a":1}`, string(json.GetBytesAt(0)))
+		require.Equal(t, jsonAdmissionValue(t, `{"a":1}`), json.GetBytesAt(0))
 		require.Equal(t, types.StringSourceLiteral, json.GetStringSourceAt(0))
 		json.Free(mp)
 	})

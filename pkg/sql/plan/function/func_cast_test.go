@@ -4340,14 +4340,10 @@ func TestCastJsonToBool(t *testing.T) {
 		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
-				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
-			}
-			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
-			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-			succeed, info := fcTC.Run()
-			require.True(t, succeed, "%s: %s", tc.name, info)
+			// Arbitrary malformed ByteJSON is rejected by vector admission. Keep
+			// the scalar cast's defensive error contract as a direct internal probe.
+			_, _, err := jsonScalarToBool(proc.Ctx, tc.value)
+			require.Error(t, err)
 		})
 	}
 }

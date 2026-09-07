@@ -464,14 +464,14 @@ func TestCompileFilterExprJSONZoneMapsFailOpen(t *testing.T) {
 func TestCompileFilterExprJSONIsNullUsesNullCount(t *testing.T) {
 	jsonType := plan.Type{Id: int32(types.T_json)}
 	tableDef := decimalTableDef(jsonType, false)
-	expr := sortedUnknownFilter(t, jsonType, "isnull", []string{"unused"}, 0)
+	expr := sortedUnknownFilter(t, jsonType, "isnull", []string{`"unused"`}, 0)
 	_, _, _, blockFilter, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
 	require.True(t, canCompile)
 	require.NotNil(t, blockFilter)
 
 	dataMeta := objectio.BuildMetaData(1, 1)
 	block := dataMeta.GetBlockMeta(0)
-	block.MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, jsonType, "value"))
+	block.MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, jsonType, `"value"`))
 	block.MustGetColumn(0).SetNullCnt(0)
 	quickBreak, selected, err := blockFilter(0, block, nil)
 	require.NoError(t, err)
@@ -1306,7 +1306,13 @@ func encodeSortedUnknownValue(t *testing.T, typ plan.Type, value string) []byte 
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		require.NoError(t, err)
 		return types.EncodeInt64(&parsed)
-	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_json:
+	case types.T_json:
+		parsed, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		encoded, err := types.EncodeJson(parsed)
+		require.NoError(t, err)
+		return encoded
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
 		return []byte("000000" + value)
 	default:
 		t.Fatalf("unsupported sorted zonemap test type %v", types.T(typ.Id))

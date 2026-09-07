@@ -269,8 +269,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("mixed JSON boolean comparison skips an all-masked batch", func(t *testing.T) {
-		malformedJSON := vector.NewVec(types.T_json.ToType())
-		require.NoError(t, vector.AppendBytes(malformedJSON, []byte("invalid"), false, proc.Mp()))
+		malformedJSON := makeJSON([]any{map[string]any{"unsupported": true}})
 		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 		require.NoError(t, err)
 		result := makeResult(1)
@@ -289,8 +288,12 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			{byte(bytejson.TpCodeLiteral)},
 			{byte(bytejson.TpCodeInt64), 0, 0, 0, 0, 0, 0, 0},
 		} {
-			malformedJSON := vector.NewVec(types.T_json.ToType())
+			// Deliberately bypass admission to retain this internal defensive
+			// decoder probe; public raw JSON construction now rejects these bytes.
+			malformedJSON := vector.NewVec(types.T_blob.ToType())
 			require.NoError(t, vector.AppendBytes(malformedJSON, encoded, false, proc.Mp()))
+			malformedJSON.SetType(types.T_json.ToType())
+			defer malformedJSON.Free(proc.Mp())
 			require.Error(t, equalFn(
 				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(1), proc, 1, nil))
 		}
@@ -393,8 +396,11 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("invalid encoded JSON is rejected", func(t *testing.T) {
-		left := vector.NewVec(types.T_json.ToType())
+		// Internal corruption fixture, intentionally outside admitted T_json.
+		left := vector.NewVec(types.T_blob.ToType())
 		require.NoError(t, vector.AppendBytes(left, []byte("invalid"), false, proc.Mp()))
+		left.SetType(types.T_json.ToType())
+		defer left.Free(proc.Mp())
 		right := makePreparedJSON([]any{true})
 		right.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
 		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
@@ -1622,8 +1628,8 @@ func TestNullSafeEqualFn(t *testing.T) {
 	tcJson := tcTemp{
 		info: "<=> json test",
 		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}),
-			NewFunctionTestInput(types.T_json.ToType(), []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}),
+			NewFunctionTestInput(types.T_json.ToType(), makeJSONEncodedFromText(t, []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}), []bool{false, true}),
+			NewFunctionTestInput(types.T_json.ToType(), makeJSONEncodedFromText(t, []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}), []bool{false, true}),
 		},
 		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
 			[]bool{true, true}, []bool{false, false}),
