@@ -87,7 +87,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 	if viewName == "TABLES" {
 		requiredProtocol = defines.MORPCVersion46
 	} else if viewName == "COLUMNS" {
-		requiredProtocol = defines.MORPCVersion53
+		requiredProtocol = defines.MORPCVersion54
 	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
@@ -157,7 +157,7 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion53,
+		RequiredProtocolVersion: defines.MORPCVersion54,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
@@ -397,7 +397,7 @@ func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
 		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
-		RequiredProtocolVersion: defines.MORPCVersion53,
+		RequiredProtocolVersion: defines.MORPCVersion54,
 	}
 }
 
@@ -411,7 +411,7 @@ func refreshInformationSchemaCharacterSetsUTF8Maxlen() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
 		},
-		RequiredProtocolVersion: defines.MORPCVersion53,
+		RequiredProtocolVersion: defines.MORPCVersion54,
 	}
 }
 

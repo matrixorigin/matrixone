@@ -331,6 +331,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
+		op.OrderedOutput = t.OrderedOutput
 		if t.TopValueTag > 0 {
 			op.TopValueTag = t.TopValueTag + int32(index)<<16
 		}
@@ -362,6 +363,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := mergetop.NewArgument()
 		op.Limit = t.Limit
 		op.Fs = t.Fs
+		op.OrderedStreams = t.OrderedStreams
 		op.SetInfo(&info)
 		return op
 	case vm.MergeOrder:

@@ -109,7 +109,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion53), columns.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion54), columns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 	checkConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
@@ -130,7 +130,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion53), hideInternalColumns.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion54), hideInternalColumns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 	userDefinedFunctions := tenantUpgEntries[14]
 	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
@@ -221,7 +221,7 @@ func TestUpgradeEntries(t *testing.T) {
 		if view.name == "TABLES" {
 			expectedProtocol = defines.MORPCVersion46
 		} else if view.name == "COLUMNS" {
-			expectedProtocol = defines.MORPCVersion53
+			expectedProtocol = defines.MORPCVersion54
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
@@ -243,12 +243,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion53), columnsBinaryStrings.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion54), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSetsUTF8Maxlen.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSetsUTF8Maxlen.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion53), characterSetsUTF8Maxlen.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion54), characterSetsUTF8Maxlen.RequiredProtocolVersion)
 }
 
 func TestAddCdcWatermarkSourceTableIDWaitsForCompatibleWriters(t *testing.T) {

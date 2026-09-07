@@ -4748,6 +4748,9 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 type ParamValue struct {
 	Value any
 	IsBin bool
+	// IsBinaryString is the legacy binary-domain metadata retained for
+	// compatibility with callers that have not adopted RuntimeStringDomain.
+	IsBinaryString bool
 	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
 	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
 	// binary-protocol value without being a binary string literal.
@@ -4788,6 +4791,108 @@ type ParamValue struct {
 	// capability on each value so execute-time plan specialization does not need
 	// to guess a service identity from context.Context.
 	EnableNumericPrefix bool
+}
+
+// PreparedParamValueHasNumericRuntime reports whether the prepared value owns
+// an explicit numeric runtime domain without inferring one from text.
+func PreparedParamValueHasNumericRuntime(value any) bool {
+	_, ok := PreparedParamValueNumericReprepareType(value)
+	return ok
+}
+
+// PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
+// textual value when it is used as an argument to a numeric overload.  A
+// direct SELECT ? remains TEXT unless the protocol supplied an explicit
+// numeric type; this helper is only used while rebinding a function argument.
+func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			return types.Type{}, false
+		}
+		if param.HasRuntimeType && preparedRuntimeTypeIsNumeric(param.RuntimeType) {
+			return preparedNumericReprepareType(param.RuntimeType)
+		}
+		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
+			return preparedNumericReprepareType(param.SourceType)
+		}
+		switch param.PrepareParamKind {
+		case vector.PrepareParamInteger:
+			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
+				return preparedNumericReprepareType(typ)
+			}
+			// Preserve the protocol domain even for an internally malformed value;
+			// materialization remains responsible for returning the existing error.
+			return types.T_int64.ToType(), true
+		case vector.PrepareParamFloat:
+			return types.T_float64.ToType(), true
+		case vector.PrepareParamDecimal:
+			return mysqlPreparedDecimalReprepareType(), true
+		case vector.PrepareParamBoolean:
+			return types.T_int64.ToType(), true
+		}
+		return PreparedParamValueNumericReprepareType(param.Value)
+	}
+	var source types.Type
+	switch value.(type) {
+	case bool:
+		source = types.T_bool.ToType()
+	case int, int64:
+		source = types.T_int64.ToType()
+	case int8:
+		source = types.T_int8.ToType()
+	case int16:
+		source = types.T_int16.ToType()
+	case int32:
+		source = types.T_int32.ToType()
+	case uint, uint64:
+		source = types.T_uint64.ToType()
+	case uint8:
+		source = types.T_uint8.ToType()
+	case uint16:
+		source = types.T_uint16.ToType()
+	case uint32:
+		source = types.T_uint32.ToType()
+	case float32:
+		source = types.T_float32.ToType()
+	case float64:
+		source = types.T_float64.ToType()
+	case types.MoYear:
+		source = types.T_year.ToType()
+	case types.Decimal64:
+		source = types.T_decimal64.ToType()
+	case types.Decimal128:
+		source = types.T_decimal128.ToType()
+	case types.Decimal256:
+		source = types.T_decimal256.ToType()
+	default:
+		return types.Type{}, false
+	}
+	return preparedNumericReprepareType(source)
+}
+
+func preparedNumericReprepareType(source types.Type) (types.Type, bool) {
+	switch {
+	case source.Oid.IsUnsignedInt(), source.Oid == types.T_bit:
+		return types.T_uint64.ToType(), true
+	case source.Oid.IsSignedInt(), source.Oid == types.T_bool, source.Oid == types.T_year:
+		return types.T_int64.ToType(), true
+	case source.Oid == types.T_float32, source.Oid == types.T_float64:
+		return types.T_float64.ToType(), true
+	case source.IsDecimal():
+		return mysqlPreparedDecimalReprepareType(), true
+	default:
+		return types.Type{}, false
+	}
+}
+
+func mysqlPreparedDecimalReprepareType() types.Type {
+	// MySQL's DECIMAL_MAX_PRECISION and DECIMAL_MAX_SCALE. DECIMAL256 is
+	// MatrixOne's physical carrier for that logical parameter envelope.
+	return types.New(types.T_decimal256, 65, 30)
+}
+
+func preparedRuntimeTypeIsNumeric(typ types.Type) bool {
+	return typ.IsNumeric() || typ.Oid == types.T_bool || typ.Oid == types.T_bit || typ.Oid == types.T_year
 }
 
 // PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a

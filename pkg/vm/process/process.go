@@ -533,10 +533,10 @@ func RuntimeStringDomainPrepareParamMetadataForRemote(
 				"invalid runtime string domain %d at parameter %d", encoded, i)
 		}
 	}
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion53 {
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion54 {
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"runtime string domains in prepared parameters require MORPC protocol version %d",
-			defines.MORPCVersion53)
+			defines.MORPCVersion54)
 	}
 	return append([]uint32(nil), metadata...), nil
 }

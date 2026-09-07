@@ -14659,6 +14659,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return Nextval
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Nextval
+				},
+			},
 		},
 	},
 	// function `setval`
@@ -14700,6 +14712,23 @@ var supportedOthersBuiltIns = []FuncNew{
 					return Setval
 				},
 			},
+			{
+				overloadId: 2,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_bool,
+					types.T_varchar,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Setval
+				},
+			},
 		},
 	},
 	// function `currval`
@@ -14713,6 +14742,18 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Currval
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {

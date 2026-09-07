@@ -41,7 +41,7 @@ func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntr
 	if viewName == "TABLES" {
 		requiredProtocol = defines.MORPCVersion46
 	} else if viewName == "COLUMNS" {
-		requiredProtocol = defines.MORPCVersion53
+		requiredProtocol = defines.MORPCVersion54
 	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,

@@ -881,7 +881,7 @@ func (w *Ws) PPString() string {
 	return ""
 }
 
-func NewMockCompile(t *testing.T) *Compile {
+func NewMockCompile(t testing.TB) *Compile {
 	return &Compile{
 		proc: testutil.NewProcess(t),
 		ncpu: system.GoMaxProcs(),

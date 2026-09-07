@@ -127,6 +127,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -227,6 +230,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
 		return nil, err
 	}
@@ -267,7 +273,16 @@ func encodeProcessInfo(
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
+	orderedTop, isTop := s.RootOp.(*top.Top)
 	rs := c.newMergeScope([]*Scope{s})
+	if isTop && orderedTop.OrderedOutput {
+		// The wire promises one ordered stream, not interleaved DOP batches.
+		// Preserve that promise on the new local edge so runtime expansion
+		// inserts the ordered worker gather before this write-back merge.
+		reg := rs.Proc.Reg.MergeReceivers[0]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+	}
 	op := output.NewArgument().
 		WithFunc(c.fill)
 	op.SetIdx(-1)
@@ -347,7 +362,16 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		for i := range s.Proc.Reg.MergeReceivers {
 			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch2)))
 			p.NilBatchCnt = append(p.NilBatchCnt, int32(s.Proc.Reg.MergeReceivers[i].NilBatchCnt))
+			if s.Proc.Reg.MergeReceivers[i].OrderedStream {
+				if p.OrderedStream == nil {
+					p.OrderedStream = make([]bool, len(s.Proc.Reg.MergeReceivers))
+				}
+				p.OrderedStream[i] = true
+			}
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
+		}
+		for len(p.OrderedStream) > 0 && !p.OrderedStream[len(p.OrderedStream)-1] {
+			p.OrderedStream = p.OrderedStream[:len(p.OrderedStream)-1]
 		}
 	}
 	// DataSource
@@ -516,6 +540,11 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	for i := range s.Proc.Reg.MergeReceivers {
+		if i < len(p.OrderedStream) {
+			s.Proc.Reg.MergeReceivers[i].OrderedStream = p.OrderedStream[i]
+		}
+	}
 	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -810,6 +839,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
@@ -842,6 +872,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergetop.MergeTop:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.MergeTopOrderedStreams = t.OrderedStreams
 	case *mergeorder.MergeOrder:
 		in.OrderBy = t.OrderBySpecs
 		in.SpillMem = t.SpillThreshold
@@ -1428,9 +1459,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
-		op = top.NewArgument().
+		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.TopOrderedOutput {
+			topArg.WithOrderedOutput()
+		}
+		op = topArg
 	// should change next day?
 	case vm.Intersect:
 		arg := intersect.NewArgument()
@@ -1480,9 +1515,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
 	case vm.MergeTop:
-		op = mergetop.NewArgument().
+		arg := mergetop.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.MergeTopOrderedStreams {
+			arg.WithOrderedStreams()
+		}
+		op = arg
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
@@ -1995,6 +2034,40 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 	return nil
 }
 
+func validateRemoteDistributedOrderedTopPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	usesOrderedTop := false
+	for _, ordered := range p.OrderedStream {
+		if ordered {
+			usesOrderedTop = true
+			break
+		}
+	}
+	if !usesOrderedTop {
+		for _, instruction := range p.InstructionList {
+			if instruction.TopOrderedOutput || instruction.MergeTopOrderedStreams {
+				usesOrderedTop = true
+				break
+			}
+		}
+	}
+	if usesOrderedTop && (proc == nil || !supportsDistributedOrderedTop(proc.GetService())) {
+		return moerr.NewNotSupportedNoCtx(
+			"distributed ordered Top-N requires MORPC protocol version 53")
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteDistributedOrderedTopPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2203,7 +2276,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 		value, ok := moruntime.ServiceRuntime(proc.GetService()).
 			GetGlobalVariables(moruntime.MOProtocolVersion)
 		version, versionOK := value.(int64)
-		if ok && versionOK && version >= defines.MORPCVersion53 {
+		if ok && versionOK && version >= defines.MORPCVersion54 {
 			return nil
 		}
 	}
@@ -2214,7 +2287,7 @@ func validateRemoteBinaryStringPipelineProtocol(
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"binary string function semantics require MORPC protocol version %d",
-		defines.MORPCVersion53)
+		defines.MORPCVersion54)
 }
 
 func validateRemotePadSpacePipelineProtocol(

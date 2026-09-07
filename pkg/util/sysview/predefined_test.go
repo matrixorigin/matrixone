@@ -285,7 +285,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion53)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion54)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
