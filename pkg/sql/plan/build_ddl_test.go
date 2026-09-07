@@ -1673,6 +1673,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 		{name: "avg distinct", query: "select service, avg(distinct bytes) bytes_avg from events group by service", outputs: []string{"service", "bytes_avg"}, eligible: true},
 		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
 		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "inner join", query: "select events.service, count(*) requests from events join services on events.service = services.name group by events.service", outputs: []string{"service", "requests"}},
 		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
 	} {
@@ -1687,6 +1688,9 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols, "__state")
 			require.Equal(t, tc.eligible, spec != "")
 			if !tc.eligible {
+				if tc.name == "inner join" {
+					require.Equal(t, "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES", materializedViewIncrementalUnsupportedReason(stmt.(*tree.Select)))
+				}
 				require.Empty(t, stateCols)
 				require.Empty(t, refreshSQL)
 				return

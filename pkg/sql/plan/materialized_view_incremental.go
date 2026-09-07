@@ -361,6 +361,14 @@ func materializedViewIncrementalUnsupportedReason(stmt *tree.Select) string {
 	if !ok {
 		return "MV_FAST_UNSUPPORTED_QUERY_SHAPE"
 	}
+	if clause.From == nil {
+		return "MV_FAST_UNSUPPORTED_QUERY_SHAPE"
+	}
+	for _, table := range clause.From.Tables {
+		if materializedViewTableExprHasJoin(table) {
+			return "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES"
+		}
+	}
 	if len(clause.From.Tables) != 1 {
 		return "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES"
 	}
@@ -384,6 +392,19 @@ func materializedViewIncrementalUnsupportedReason(stmt *tree.Select) string {
 		}
 	}
 	return "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"
+}
+
+func materializedViewTableExprHasJoin(expr tree.TableExpr) bool {
+	switch table := expr.(type) {
+	case *tree.JoinTableExpr:
+		return table.Right != nil || table.Cond != nil || materializedViewTableExprHasJoin(table.Left)
+	case *tree.AliasedTableExpr:
+		return materializedViewTableExprHasJoin(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewTableExprHasJoin(table.Expr)
+	default:
+		return false
+	}
 }
 
 func materializedViewStateColumnsCompatible(left, right []*ColDef) bool {
