@@ -591,6 +591,12 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
+	if vecCtx != nil && vecCtx.hasMembership {
+		// The current vector-index API cannot consume an external SEMI JOIN
+		// before its candidate limit. Keep the exact plan until such a
+		// membership pre-filter is available.
+		return nodeID, nil
+	}
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}

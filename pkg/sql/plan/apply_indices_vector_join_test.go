@@ -394,7 +394,7 @@ func TestBuildVectorSortContextThroughJoin_SemiMembership(t *testing.T) {
 	require.Nil(t, vecCtx.vecArgExpr)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_SemiMembershipFallsBack(t *testing.T) {
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
@@ -403,17 +403,27 @@ func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
 	pluginCtx, pluginIndex := toPlanplugin(vecCtx, newVectorJoinIvfIndex())
 	newNodeID, applied, err := tc.builder.ApplyIndicesForSortUsingIvfflat(pluginCtx, pluginIndex, tc.projNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
-	require.True(t, applied)
+	require.False(t, applied)
 	require.Equal(t, tc.projNodeID, newNodeID)
+	require.Nil(t, findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN))
 
 	reachable := reachableNodeIDsFrom(tc.builder.qry, tc.projNodeID)
-	require.True(t, reachable[membershipNodeID], "membership SEMI JOIN must remain reachable from the final root")
-	join := tc.builder.qry.Nodes[membershipNodeID]
-	require.Equal(t, plan.Node_SEMI, join.JoinType)
+	require.True(t, reachable[membershipNodeID], "the exact SEMI JOIN must remain reachable from the final root")
 	require.True(t, reachable[tc.mainScanNodeID])
-	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
-	require.NotNil(t, vectorScan)
-	require.True(t, reachable[vectorScan.NodeId])
+}
+
+func TestApplyVectorIndexForSortContext_SemiMembershipFallsBackWithMixedIndexes(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+
+	newNodeID, applied, err := tc.builder.applyVectorIndexForSortContext(
+		tc.projNodeID, vecCtx, map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.False(t, applied, "central dispatch must not select HNSW or IVF-FLAT for an unsafe membership shape")
+	require.Equal(t, tc.projNodeID, newNodeID)
+	require.Nil(t, findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN))
+	require.True(t, reachableNodeIDsFrom(tc.builder.qry, tc.projNodeID)[vecCtx.membershipNodeID])
 }
 
 func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsNonIvfIndex(t *testing.T) {

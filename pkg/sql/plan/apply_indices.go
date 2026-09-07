@@ -694,7 +694,11 @@ func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, bool, error) {
-	if vecCtx == nil || vecCtx.scanNode == nil {
+	if vecCtx == nil || vecCtx.scanNode == nil || vecCtx.hasMembership {
+		// A vector candidate LIMIT cannot preserve the semantics of an
+		// external SEMI JOIN: eligible rows may rank after the candidate
+		// boundary. Until membership can be represented as a vector-search
+		// pre-filter, retain the exact relational plan.
 		return nodeID, false, nil
 	}
 	indexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
@@ -948,6 +952,11 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, bool, error) {
+	if vecCtx == nil || vecCtx.hasMembership {
+		// Do not apply an ANN candidate limit before an unrepresented
+		// membership predicate. The exact SEMI JOIN plan is the safe fallback.
+		return nodeID, false, nil
+	}
 	if vecCtx.projNode == nil && idxColMap == nil {
 		// A sort-anchored rewrite publishes its column remap through idxColMap — that is
 		// the only way ancestors learn the CTE's distance column became the index score.
