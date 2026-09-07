@@ -20,6 +20,8 @@ select (cast(0 as unsigned) + 0) - 1 as result;
 select (cast(0 as unsigned) * 1) - 1 as result;
 select (cast(0 as unsigned) div 1) - 1 as result;
 select (cast(0 as unsigned) % 1) - 1 as result;
+select (cast(0 as unsigned) + abs(0)) - 1 as result;
+select (cast('18446744073709551615' as unsigned) + 1) - cast('18446744073709551615' as unsigned) as result;
 
 create table t_widths (
     u8 tinyint unsigned,
@@ -49,6 +51,8 @@ select (cast(0 as unsigned) + 0) - 1 as result;
 select (cast(0 as unsigned) * 1) - 1 as result;
 select (cast(0 as unsigned) div 1) - 1 as result;
 select (cast(0 as unsigned) % 1) - 1 as result;
+select (cast(0 as unsigned) + abs(0)) - 1 as result;
+select (cast('18446744073709551615' as unsigned) + 1) - cast('18446744073709551615' as unsigned) as result;
 select u8 - 1, u16 - 1, u32 - 1, u64 - 1, b - 1 from t_widths;
 
 set session sql_mode = 'STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION';

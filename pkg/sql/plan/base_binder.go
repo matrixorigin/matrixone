@@ -3553,7 +3553,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
-	unsignedSubtractionResultType := b.unsignedIntegerSubtractionResultType(name, astArgs, args)
+	unsignedArithmeticResultType := b.unsignedIntegerArithmeticResultType(name, astArgs, args)
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
@@ -3617,12 +3617,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
-	if unsignedSubtractionResultType != nil {
+	if unsignedArithmeticResultType != nil {
 		var err error
-		args, err = b.castUnsignedIntegerSubtractionArgs(args)
+		args, err = b.castUnsignedIntegerArithmeticArgs(args)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if b.builder != nil && b.builder.isPrepareStatement {
+		b.markPreparedStringDomainSubquerySources(name, args)
 	}
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
@@ -3741,8 +3744,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
-			if unsignedSubtractionResultType != nil {
-				return appendCastBeforeExpr(b.GetContext(), e, *unsignedSubtractionResultType)
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), e, *unsignedArithmeticResultType)
 			}
 			return e, nil
 		}
@@ -3765,8 +3768,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
-			if unsignedSubtractionResultType != nil {
-				return appendCastBeforeExpr(b.GetContext(), builtinExpr, *unsignedSubtractionResultType)
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), builtinExpr, *unsignedArithmeticResultType)
 			}
 			return builtinExpr, nil
 		}
@@ -6011,36 +6014,44 @@ func bindFuncExprImplByPlanExpr(
 	}, nil
 }
 
-// unsignedIntegerSubtractionResultType returns MySQL's result domain for
-// integer subtraction. This is intentionally decided before prepared numeric
-// argument reconciliation: that reconciliation may temporarily widen an
-// explicit unsigned cast containing a parameter to DECIMAL128.
-func (b *baseBinder) unsignedIntegerSubtractionResultType(name string, astArgs []tree.Expr, args []*Expr) *Type {
-	if name != "-" || len(astArgs) != 2 || len(args) != 2 {
+// unsignedIntegerArithmeticResultType returns MySQL's result domain for an
+// integer arithmetic node involving an unsigned operand. This is intentionally
+// decided before prepared numeric argument reconciliation: that reconciliation
+// may temporarily widen an explicit unsigned cast containing a parameter to
+// DECIMAL128. Applying the cast at every node is important: a final cast on
+// only the outer subtraction lets a DECIMAL128 intermediate overflow and then
+// be cancelled by its parent.
+func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []tree.Expr, args []*Expr) *Type {
+	if len(astArgs) != 2 || len(args) != 2 {
+		return nil
+	}
+	switch name {
+	case "-", "+", "*", "%", "div":
+	default:
 		return nil
 	}
 
-	leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(astArgs[0], args[0])
-	rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(astArgs[1], args[1])
+	leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(astArgs[0], args[0])
+	rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(astArgs[1], args[1])
 	if !leftInteger || !rightInteger || (!leftUnsigned && !rightUnsigned) {
 		return nil
 	}
 
 	resultType := types.T_uint64.ToType()
-	if b.noUnsignedSubtractionEnabled() {
+	if name == "-" && b.noUnsignedSubtractionEnabled() {
 		resultType = types.T_int64.ToType()
 	}
 	planType := makePlan2Type(&resultType)
 	return &planType
 }
 
-// integerSubtractionOperandDomain combines the parsed expression with its
+// integerArithmeticOperandDomain combines the parsed expression with its
 // bound expression. The bound arithmetic node may already contain implicit
 // DECIMAL casts, whereas the AST distinguishes that implementation detail from
 // a user-written DECIMAL cast, which remains a non-integer boundary. If an
 // entirely constant nested expression has already folded, the AST is also the
 // only surviving record of its logical integer/unsigned domain.
-func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
+func (b *baseBinder) integerArithmeticOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
 	astExpr = unwrapParenExpr(astExpr)
 	if literal, ok := astExpr.(*tree.NumVal); ok {
 		return literal.ValType == tree.P_int64 || literal.ValType == tree.P_uint64, literal.ValType == tree.P_uint64
@@ -6053,6 +6064,17 @@ func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Ex
 		oid := types.T(typ.Id)
 		return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
 	}
+	// An already-bound implicit result cast is semantic, rather than a
+	// user-written DECIMAL boundary. Prefer it before interpreting the binary
+	// AST: a protected nested unsigned operation reaches its parent as CAST(...
+	// AS UNSIGNED), whose function arguments no longer correspond one-to-one
+	// with the original binary expression.
+	if expr != nil {
+		oid := types.T(expr.Typ.Id)
+		if integerSubtractionOperand(oid) {
+			return true, unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+		}
+	}
 
 	if binary, ok := astExpr.(*tree.BinaryExpr); ok && integerArithmeticBinaryOperator(binary.Op) {
 		if expr == nil || expr.GetF() == nil || len(expr.GetF().Args) != 2 {
@@ -6060,13 +6082,13 @@ func (b *baseBinder) integerSubtractionOperandDomain(astExpr tree.Expr, expr *Ex
 			// its parent subtraction is bound. The AST still carries the logical
 			// integer domain, so preserve it rather than relying on the folded
 			// physical DECIMAL result.
-			leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(binary.Left, nil)
-			rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(binary.Right, nil)
+			leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, nil)
+			rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, nil)
 			return leftInteger && rightInteger, leftUnsigned || rightUnsigned
 		}
 		fn := expr.GetF()
-		leftInteger, leftUnsigned := b.integerSubtractionOperandDomain(binary.Left, fn.Args[0])
-		rightInteger, rightUnsigned := b.integerSubtractionOperandDomain(binary.Right, fn.Args[1])
+		leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, fn.Args[0])
+		rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, fn.Args[1])
 		return leftInteger && rightInteger, leftUnsigned || rightUnsigned
 	}
 
@@ -6089,11 +6111,11 @@ func integerArithmeticBinaryOperator(op tree.BinaryOp) bool {
 	}
 }
 
-// castUnsignedIntegerSubtractionArgs performs the arithmetic in DECIMAL128 so
+// castUnsignedIntegerArithmeticArgs performs the arithmetic in DECIMAL128 so
 // signed operands and the complete UINT64 range can be combined without an
-// operand cast failing before subtraction. The caller applies the final
-// implicit BIGINT cast to enforce the selected signed or unsigned bound.
-func (b *baseBinder) castUnsignedIntegerSubtractionArgs(args []*Expr) ([]*Expr, error) {
+// operand cast failing first. The caller applies the final implicit BIGINT
+// cast to enforce this node's selected signed or unsigned bound.
+func (b *baseBinder) castUnsignedIntegerArithmeticArgs(args []*Expr) ([]*Expr, error) {
 	decimalType := types.New(types.T_decimal128, 38, 0)
 	for i := range args {
 		if makeTypeByPlan2Expr(args[i]).Eq(decimalType) {

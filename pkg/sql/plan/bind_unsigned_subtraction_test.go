@@ -145,6 +145,52 @@ func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
 	}
 }
 
+// TestUnsignedIntegerArithmeticChecksNestedUnsignedResults verifies that every
+// integer-producing unsigned arithmetic node, rather than only the final
+// subtraction, gets its own UINT64 boundary cast. Without that cast an inner
+// DECIMAL128 result can exceed UINT64 and later be cancelled by its parent.
+func TestUnsignedIntegerArithmeticChecksNestedUnsignedResults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		op   string
+	}{
+		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation", op: "+"},
+		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation", op: "*"},
+		{name: "integer division", sql: "select (cast(n_nationkey as unsigned) div 1) - 1 from nation", op: "div"},
+		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation", op: "%"},
+	} {
+		for _, mode := range []string{"", mysql.SQLModeNoUnsignedSubtraction} {
+			for _, bindMode := range bindModes {
+				t.Run(tc.name+"/"+mode+"/"+bindMode.name, func(t *testing.T) {
+					expr := unsignedSubtractionProjection(t, mode, tc.sql, bindMode.prepare)
+					require.True(t, hasArithmeticResultCast(expr, tc.op, types.T_uint64))
+				})
+			}
+		}
+	}
+}
+
+func hasArithmeticResultCast(expr *Expr, operator string, resultType types.T) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 &&
+			types.T(expr.Typ.Id) == resultType {
+			if inner := fn.Args[0].GetF(); inner != nil && inner.Func != nil && inner.Func.ObjName == operator {
+				return true
+			}
+		}
+		for _, arg := range fn.Args {
+			if hasArithmeticResultCast(arg, operator, resultType) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestUnsignedIntegerSubtractionRetainsNestedSubtractionResultDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -363,15 +409,21 @@ func TestUnsignedIntegerSubtractionExecution(t *testing.T) {
 		{name: "constant-folded nested multiplication underflow", sql: "select (cast(0 as unsigned) * 1) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "constant-folded nested integer division underflow", sql: "select (cast(0 as unsigned) div 1) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "constant-folded nested modulo underflow", sql: "select (cast(0 as unsigned) % 1) - 1", wantType: types.T_uint64, wantError: true},
+		{name: "function folded nested addition underflow", sql: "select (cast(0 as unsigned) + abs(0)) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "strict underflow", mode: "STRICT_TRANS_TABLES", sql: "select cast(0 as unsigned) - 1", wantType: types.T_uint64, wantError: true},
 		{name: "mode permits negative", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select cast(0 as unsigned) - 1", wantType: types.T_int64, wantInt: -1},
 		{name: "mode permits constant-folded nested integer division negative", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select (cast(0 as unsigned) div 1) - 1", wantType: types.T_int64, wantInt: -1},
+		{name: "mode permits function folded nested addition negative", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select (cast(0 as unsigned) + abs(0)) - 1", wantType: types.T_int64, wantInt: -1},
 		{name: "positive result", sql: "select cast(2 as unsigned) - 1", wantType: types.T_uint64, wantUint: 1},
 		{name: "negative signed operand", sql: "select cast(2 as unsigned) - (-1)", wantType: types.T_uint64, wantUint: 3},
 		{name: "maximum unsigned result", sql: "select cast('18446744073709551615' as unsigned) - 0", wantType: types.T_uint64, wantUint: ^uint64(0)},
 		{name: "default unsigned overflow", sql: "select cast('18446744073709551615' as unsigned) - (-1)", wantType: types.T_uint64, wantError: true},
+		{name: "nested addition overflow cannot be cancelled", sql: "select (cast('18446744073709551615' as unsigned) + 1) - cast('18446744073709551615' as unsigned)", wantType: types.T_uint64, wantError: true},
+		{name: "nested multiplication overflow cannot be cancelled", sql: "select (cast('18446744073709551615' as unsigned) * 2) - cast('18446744073709551615' as unsigned)", wantType: types.T_uint64, wantError: true},
 		{name: "signed mode cancellation at unsigned maximum", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select cast('18446744073709551615' as unsigned) - cast('18446744073709551615' as unsigned)", wantType: types.T_int64, wantInt: 0},
 		{name: "signed mode positive overflow", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select cast('18446744073709551615' as unsigned) - 0", wantType: types.T_int64, wantError: true},
+		{name: "signed mode nested addition overflow cannot be cancelled", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select (cast('18446744073709551615' as unsigned) + 1) - cast('18446744073709551615' as unsigned)", wantType: types.T_int64, wantError: true},
+		{name: "signed mode nested multiplication overflow cannot be cancelled", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select (cast('18446744073709551615' as unsigned) * 2) - cast('18446744073709551615' as unsigned)", wantType: types.T_int64, wantError: true},
 		{name: "unsigned right underflow", sql: "select 1 - cast(2 as unsigned)", wantType: types.T_uint64, wantError: true},
 		{name: "both unsigned underflow in signed mode", mode: mysql.SQLModeNoUnsignedSubtraction, sql: "select cast(0 as unsigned) - cast(1 as unsigned)", wantType: types.T_int64, wantInt: -1},
 		{name: "bit underflow", sql: "select cast(0 as bit(8)) - 1", wantType: types.T_uint64, wantError: true},
