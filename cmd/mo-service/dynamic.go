@@ -383,14 +383,28 @@ func stopDynamicCNByIndex(index int) error {
 	if index < len(dynamicCNServiceProcesses) {
 		child = dynamicCNServiceProcesses[index]
 	}
-	if err := dynamicKill(child, syscall.SIGKILL); err != nil {
-		return err
+	killErr := dynamicKill(child, syscall.SIGKILL)
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		return killErr
+	}
+	// The force-stop path owns the child until Wait completes.  Clearing the
+	// slot immediately after SIGKILL would lose the only reap owner and leave
+	// a zombie between chaos generations.
+	waitResult := dynamicWaitProcess(child)
+	if !waitResult.reaped {
+		if waitResult.err != nil {
+			return errors.Join(killErr, waitResult.err)
+		}
+		return errors.Join(killErr, errors.New("dynamic cn child was not reaped"))
 	}
 	if dynamicCNServicePIDs[index] == pid &&
 		index < len(dynamicCNServiceProcesses) && dynamicCNServiceProcesses[index] == child {
 		dynamicCNServicePIDs[index] = 0
 		dynamicCNServiceProcesses[index] = nil
 	}
+	// A non-zero exit status is expected after an intentional SIGKILL.  The
+	// ownership contract is satisfied by a successful reap; graceful shutdown
+	// separately reports child exit status to its supervisor.
 	return nil
 }
 
@@ -491,9 +505,11 @@ func stopAllDynamicCNServicesGracefully(ctx context.Context) error {
 	}
 	for _, child := range children {
 		if err := dynamicKill(child.child, syscall.SIGTERM); err != nil {
-			errs = errors.Join(errs, err)
-			if err := dynamicKill(child.child, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			if !errors.Is(err, os.ErrProcessDone) {
 				errs = errors.Join(errs, err)
+				if err := dynamicKill(child.child, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					errs = errors.Join(errs, err)
+				}
 			}
 		}
 		startWait(child)

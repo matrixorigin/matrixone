@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,7 +152,9 @@ func TestDynamicShutdownDoesNotEscalateAfterWaitReapsChild(t *testing.T) {
 	}
 	cancel()
 
-	require.NoError(t, <-done)
+	shutdownErr := <-done
+	require.True(t, shutdownErr == nil || errors.Is(shutdownErr, context.Canceled),
+		"unexpected shutdown error after the child was reaped: %v", shutdownErr)
 	process.mu.Lock()
 	signals := append([]syscall.Signal(nil), process.signals...)
 	process.mu.Unlock()
@@ -216,6 +219,41 @@ func TestDynamicShutdownReportsChildExitOutcomeAndReleasesSlot(t *testing.T) {
 			dynamicCNMu.RUnlock()
 		})
 	}
+}
+
+func TestDynamicCNStopReapsKilledChildBeforeRestart(t *testing.T) {
+	setLaunchTestHooks(t)
+	child := newRealDynamicChild(t, "/bin/sleep", []string{"sleep", "60"})
+	dynamicCNMu.Lock()
+	dynamicCNServicePIDs = []int{child.pid}
+	dynamicCNServiceProcesses = []*dynamicCNChild{child}
+	dynamicCNMu.Unlock()
+
+	require.NoError(t, stopDynamicCNByIndex(0))
+	dynamicCNMu.RLock()
+	require.Zero(t, dynamicCNServicePIDs[0])
+	require.Nil(t, dynamicCNServiceProcesses[0])
+	dynamicCNMu.RUnlock()
+
+	// A second Wait must observe that the force-stop path already consumed the
+	// child status; otherwise the previous generation had no reap owner.
+	waitResult := child.process.wait()
+	require.False(t, waitResult.reaped)
+	require.Error(t, waitResult.err)
+}
+
+func TestDynamicShutdownIgnoresAlreadyDoneSignalWhenWaitReaps(t *testing.T) {
+	setLaunchTestHooks(t)
+	setDynamicTestSlots(100)
+	dynamicKill = func(_ *dynamicCNChild, signal syscall.Signal) error {
+		require.Equal(t, syscall.SIGTERM, signal)
+		return os.ErrProcessDone
+	}
+	dynamicWaitProcess = func(*dynamicCNChild) dynamicWaitResult {
+		return dynamicWaitResult{reaped: true}
+	}
+
+	require.NoError(t, stopAllDynamicCNServicesGracefully(context.Background()))
 }
 
 func TestDynamicShutdownEscalatesAndReapsRealChildAfterTimeout(t *testing.T) {
