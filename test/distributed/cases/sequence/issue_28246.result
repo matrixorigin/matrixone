@@ -39,6 +39,18 @@ select nextval('s') as n from input_rows order by n;
 select last_seq_num, is_called from s;
 ➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
 13  ¦  1
+create table union_left (id int);
+create table union_right (id int);
+insert into union_left values (1);
+insert into union_right values (1);
+select nextval('s') as n from union_left
+union all select nextval('s') as n from union_right order by n;
+➤ n[12,65535,0]  𝄀
+14  𝄀
+15
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+15  ¦  1
 create table ordinary (last_seq_num bigint);
 insert into ordinary values (7);
 select setval('ordinary', 8) as n;

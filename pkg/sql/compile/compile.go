@@ -1380,7 +1380,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	c.execType = sequenceExecType(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -1428,11 +1429,65 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		steps = append(steps, scopes...)
 	}
+	if err = validateSequenceScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
+		return nil, err
+	}
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
 	}
 
 	return steps, err
+}
+
+// sequenceExecType applies the placement part of the sequence state
+// contract after ordinary execution-type overrides have been resolved. A
+// sequence-bearing AP statement remains parallel within its initiating CN,
+// but cannot dispatch sequence evaluation to remote CNs whose process/session
+// state is not shared with the owner.
+func sequenceExecType(execType plan2.ExecType, qry *plan.Query) plan2.ExecType {
+	if execType == plan2.ExecTypeAP_MULTICN && plan2.QueryContainsSequenceFunction(qry) {
+		return plan2.ExecTypeAP_ONECN
+	}
+	return execType
+}
+
+// validateSequenceScopePlacement is a fail-closed defense for future compile
+// paths that might bypass the common query-worker scheduler. Sequence state is
+// owned by the initiating coordinator, so every compiled scope (including
+// nested/pre-scopes) must target that same execution node. The primary
+// placement decision remains sequenceExecType + scheduleQueryWorkers.
+func validateSequenceScopePlacement(qry *plan.Query, current engine.Node, scopes []*Scope) error {
+	if !plan2.QueryContainsSequenceFunction(qry) {
+		return nil
+	}
+	seen := make(map[*Scope]struct{})
+	var visit func(*Scope) error
+	visit = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if _, ok := seen[scope]; ok {
+			return nil
+		}
+		seen[scope] = struct{}{}
+		if !sameExecutionNode(scope.NodeInfo, current) {
+			return moerr.NewInternalErrorNoCtxf(
+				"sequence-bearing query produced non-coordinator scope (id=%s addr=%s, coordinator id=%s addr=%s)",
+				scope.NodeInfo.Id, scope.NodeInfo.Addr, current.Id, current.Addr)
+		}
+		for _, child := range scope.PreScopes {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, scope := range scopes {
+		if err := visit(scope); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {

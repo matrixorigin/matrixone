@@ -219,16 +219,25 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 		} else {
 			var res string
-			res, err = nextval(string(v), db, proc, e, txn)
+			release, gateErr := proc.AcquireSequence(proc.Ctx)
+			if gateErr != nil {
+				return gateErr
+			}
+			func() {
+				defer release()
+				// The gate covers the complete read/compute/write interval and
+				// publication of LASTVAL. A same-transaction sibling must not
+				// observe the row before this operation's UPDATE is complete.
+				res, err = nextval(string(v), db, proc, e, txn)
+				if err == nil && res != "" {
+					proc.GetSessionInfo().SeqLastValue[0] = res
+				}
+			}()
 			if err == nil {
 				err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false)
 			}
 			if err != nil {
 				return
-			}
-			// set last val
-			if res != "" {
-				proc.GetSessionInfo().SeqLastValue[0] = res
 			}
 		}
 	}
@@ -243,6 +252,9 @@ func sequenceDatabase(sessionDatabase string, databases vector.FunctionParameter
 	return string(database), null
 }
 
+// nextval performs one complete sequence allocation. Callers must hold the
+// process sequence gate for the whole call; the public Nextval wrapper owns
+// that admission so nested metadata SQL does not recursively acquire it.
 func nextval(tblname, db string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
@@ -462,7 +474,17 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 		} else {
 			var res string
-			res, err = setval(string(tn), string(sn), isc, db, proc, txn, e)
+			release, gateErr := proc.AcquireSequence(proc.Ctx)
+			if gateErr != nil {
+				return gateErr
+			}
+			func() {
+				defer release()
+				// SETVAL has the same caller-transaction read/compute/write
+				// interval as NEXTVAL and updates session sequence state inside
+				// that interval.
+				res, err = setval(string(tn), string(sn), isc, db, proc, txn, e)
+			}()
 			if err == nil {
 				err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false)
 			}
@@ -474,6 +496,8 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return
 }
 
+// setval performs one complete sequence assignment. Callers must hold the
+// process sequence gate for the whole call, just like nextval.
 func setval(tblname, setnum string, iscalled bool, db string, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
@@ -603,6 +627,11 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
+	release, err := proc.AcquireSequence(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	// A vector may contain repeated sequence names. Resolve each effective
 	// database once per batch; hidden view arguments can vary by row, so cache
@@ -654,6 +683,12 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	release, err := proc.AcquireSequence(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	// Get last value
 	lastv := proc.GetSessionInfo().SeqLastValue[0]
 	if lastv == "" {

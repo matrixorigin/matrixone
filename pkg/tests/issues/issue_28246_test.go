@@ -110,6 +110,88 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 			})
 		}
 
+		t.Run("same transaction parallel union branches", func(t *testing.T) {
+			sequence := "same_txn_union_seq"
+			left := "same_txn_union_left"
+			right := "same_txn_union_right"
+			defaultTable := "same_txn_union_default"
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			_, err = conn.ExecContext(ctx, "use `"+name+"`")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create sequence `"+name+"`.`"+sequence+"` increment 1 start with 1 no cycle")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create table `"+name+"`.`"+left+"` (n int)")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create table `"+name+"`.`"+right+"` (n int)")
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(ctx, "drop table `"+name+"`.`"+left+"`, `"+name+"`.`"+right+"`")
+				_, _ = conn.ExecContext(ctx, "drop table `"+name+"`.`"+defaultTable+"`")
+				_, _ = conn.ExecContext(ctx, "drop sequence `"+name+"`.`"+sequence+"`")
+			}()
+			_, err = conn.ExecContext(ctx, "insert into `"+name+"`.`"+left+"` values (1)")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "insert into `"+name+"`.`"+right+"` values (1)")
+			require.NoError(t, err)
+
+			rows, err := conn.QueryContext(ctx,
+				"select nextval('"+sequence+"') from `"+name+"`.`"+left+"` "+
+					"union all select nextval('"+sequence+"') from `"+name+"`.`"+right+"`")
+			require.NoError(t, err)
+			values := make([]int, 0, 2)
+			for rows.Next() {
+				var value int
+				require.NoError(t, rows.Scan(&value))
+				values = append(values, value)
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.Len(t, values, 2)
+			sort.Ints(values)
+			require.Equal(t, []int{1, 2}, values)
+
+			var persisted int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&persisted))
+			require.Equal(t, 2, persisted)
+			var curr int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('"+sequence+"')").Scan(&curr))
+			require.Equal(t, 2, curr)
+			var last int
+			require.NoError(t, conn.QueryRowContext(ctx, "select lastval()").Scan(&last))
+			require.Equal(t, 2, last)
+
+			// Defaults are evaluated in the insert projection, which can retain
+			// the source UNION's sibling workers. Keep this path under the same
+			// coordinator placement and sequence gate contract.
+			_, err = conn.ExecContext(ctx, "set @@max_dop = 4")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create table `"+name+"`.`"+defaultTable+"` (id bigint default nextval('"+sequence+"'), n int)")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx,
+				"insert into `"+name+"`.`"+defaultTable+"` (n) "+
+					"select n from `"+name+"`.`"+left+"` union all "+
+					"select n from `"+name+"`.`"+right+"`")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, "select id from `"+name+"`.`"+defaultTable+"` order by id")
+			require.NoError(t, err)
+			defaultValues := make([]int, 0, 2)
+			for rows.Next() {
+				var value int
+				require.NoError(t, rows.Scan(&value))
+				defaultValues = append(defaultValues, value)
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.Equal(t, []int{3, 4}, defaultValues)
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select last_seq_num from `"+name+"`.`"+sequence+"`").Scan(&persisted))
+			require.Equal(t, 4, persisted)
+		})
+
 		lockService := lockservice.GetLockServiceByServiceID(cn.ServiceID())
 		require.NotNil(t, lockService)
 		cnImpl, ok := cn.RawService().(cnservice.Service)
@@ -233,5 +315,87 @@ func TestIssue28246ConcurrentNextval(t *testing.T) {
 
 		t.Run("controlled lock handoff", func(t *testing.T) { runContention(t, false) })
 		t.Run("lock wait timeout", func(t *testing.T) { runContention(t, true) })
+	})
+}
+
+func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn0, err := c.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := c.GetCNService(1)
+		require.NoError(t, err)
+		ports := []int64{
+			cn0.GetServiceConfig().CN.Frontend.Port,
+			cn1.GetServiceConfig().CN.Frontend.Port,
+		}
+		dbName := strings.ToLower(testutils.GetDatabaseName(t))
+		setupConn := openIssue26568Conn(t, ctx, ports[0])
+		issue26568Exec(t, ctx, setupConn, "set role moadmin")
+		issue26568Exec(t, ctx, setupConn, "create database `"+dbName+"`")
+		issue26568Exec(t, ctx, setupConn, "use `"+dbName+"`")
+		sequence := "placement_seq"
+		source := "placement_source"
+		issue26568Exec(t, ctx, setupConn, "create sequence `"+sequence+"` increment 1 start with 1 no cycle")
+		issue26568Exec(t, ctx, setupConn, "create table `"+source+"` (n int)")
+		rows := make([]string, 0, 64)
+		for i := 1; i <= 64; i++ {
+			rows = append(rows, fmt.Sprintf("(%d)", i))
+		}
+		issue26568Exec(t, ctx, setupConn,
+			"insert into `"+source+"` values "+strings.Join(rows, ","))
+		require.NoError(t, setupConn.Close())
+		t.Cleanup(func() { cleanupIssue26568Database(t, ports[0], dbName) })
+
+		const rowsPerStatement = 128 // two 64-row UNION branches
+		for index, port := range ports {
+			t.Run(fmt.Sprintf("coordinator-cn-%d", index), func(t *testing.T) {
+				conn := openIssue26568Conn(t, ctx, port)
+				t.Cleanup(func() { _ = conn.Close() })
+				issue26568Exec(t, ctx, conn, "set role moadmin")
+				issue26568Exec(t, ctx, conn, "use `"+dbName+"`")
+				issue26568Exec(t, ctx, conn, `set session optimizer_hints = "execType=2"`)
+				defer resetOptimizerHintsOnCN(t, port)
+
+				// This is an actual SQL control on the two-CN fixture. The
+				// explicit AP hint makes the ordinary plan use the distributed
+				// scheduler; sequence-bearing execution below must still be
+				// pinned to this coordinator after the compile cap.
+				control, err := testutils.QueryTextResult(ctx, conn,
+					"explain select count(*) from `"+source+"`")
+				require.NoError(t, err)
+				require.Truef(t,
+					strings.HasPrefix(strings.ToUpper(control.ColumnName), "AP QUERY PLAN ON MULTICN("),
+					"sequence-free control did not select the distributed plan: %s", control.ColumnName)
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select count(*) from `"+source+"`").Scan(&count))
+				require.Equal(t, 64, count)
+
+				query := "select nextval('" + sequence + "') from `" + source + "` " +
+					"union all select nextval('" + sequence + "') from `" + source + "`"
+				resultRows, err := conn.QueryContext(ctx, query)
+				require.NoError(t, err)
+				values := make([]int, 0, rowsPerStatement)
+				for resultRows.Next() {
+					var value int
+					require.NoError(t, resultRows.Scan(&value))
+					values = append(values, value)
+				}
+				require.NoError(t, resultRows.Err())
+				require.NoError(t, resultRows.Close())
+				require.Len(t, values, rowsPerStatement)
+				sort.Ints(values)
+				start := index*rowsPerStatement + 1
+				for i, value := range values {
+					require.Equal(t, start+i, value)
+				}
+				var persisted int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select last_seq_num from `"+sequence+"`").Scan(&persisted))
+				require.Equal(t, start+rowsPerStatement-1, persisted)
+			})
+		}
 	})
 }
