@@ -559,7 +559,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 	t.Run("Success_MultipleSQLStatements", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		// Use small maxSQLSize to force multiple SQL statements
-		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 100) // Very small limit
+		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 160) // Small limit that still fits one upsert row
 		defer db.Close()
 
 		// Create batch with multiple rows
@@ -575,7 +575,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
 
 		// Expect multiple SQL executions (due to size limit)
-		// With 5 rows and small maxSQLSize (200 bytes), should generate multiple SQLs
+		// With 5 rows and small maxSQLSize (160 bytes), should generate multiple SQLs
 		// Each row generates ~30-40 bytes, so 5 rows might fit in 1-2 SQLs depending on overhead
 		// Use flexible expectations - allow up to 5 SQLs (sqlmock will match as many as needed)
 		for i := 0; i < 5; i++ {
