@@ -564,7 +564,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		lastNodeID                   int32
 		colName2Idx                  map[string]int32
 		skipUniqueIdx                []bool
-		autoIncrementGeneratedColumn int32 = -1
+		autoIncrementGeneratedColumn int32
 		err                          error
 	)
 	if len(group.branches) == 1 {
