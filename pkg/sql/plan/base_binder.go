@@ -6031,13 +6031,15 @@ func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []
 		return nil
 	}
 	if name != "-" && b.builder != nil && b.builder.isPrepareStatement &&
-		(preparedExprContainsParam(args[0]) || preparedExprContainsParam(args[1])) {
-		// A marker's signedness is an execute-time property. Freezing the
-		// unsigned peer's physical type into the prepared marker makes a later
-		// signed value (for example, u16 + -2) fail before arithmetic runs.
-		// Preserve the existing deferred prepared-numeric contract here; literal
-		// and explicitly typed operands still receive the per-node boundary cast
-		// below.
+		(preparedArithmeticOperandHasUnresolvedMarker(args[0]) ||
+			preparedArithmeticOperandHasUnresolvedMarker(args[1])) {
+		// A bare marker's signedness is an execute-time property. Freezing the
+		// unsigned peer's physical type into that marker makes a later signed
+		// value (for example, u16 + -2) fail before arithmetic runs. An explicit
+		// CAST is different: it fixes the operand's semantic domain, so its
+		// enclosing node must retain the result-boundary cast. In particular this
+		// keeps an overflowing CAST(? AS UNSIGNED) + CAST(1 AS SIGNED) from being
+		// cancelled by an outer expression.
 		return nil
 	}
 
@@ -6053,6 +6055,50 @@ func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []
 	}
 	planType := makePlan2Type(&resultType)
 	return &planType
+}
+
+// preparedArithmeticOperandHasUnresolvedMarker reports whether an arithmetic
+// operand still derives its numeric domain from a bare runtime marker. An
+// explicit CAST is a user-selected type boundary, not an unresolved marker:
+// callers must be able to protect the result of arithmetic on that fixed
+// domain even though the cast's child is a parameter.
+func preparedArithmeticOperandHasUnresolvedMarker(expr *Expr) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedArithmeticOperandHasUnresolvedMarker(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedArithmeticOperandHasUnresolvedMarker(window.WindowFunc) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedArithmeticOperandHasUnresolvedMarker(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // integerArithmeticOperandDomain combines the parsed expression with its

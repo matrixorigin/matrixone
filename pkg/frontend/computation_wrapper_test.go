@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1002,6 +1003,69 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, marshalErr)
 			require.Equal(t, cachedPlan, after, "failed rebinding must leave the cached plan reusable")
 		})
+	}
+}
+
+// TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound exercises both
+// COM_STMT_EXECUTE's unsigned packet decoding and the prepared arithmetic
+// boundary. The outer subtraction could cancel the overflow if the inner
+// CAST(? AS UNSIGNED) arithmetic node lost its own UINT64 result cast.
+func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
+	const maxUint64 = ^uint64(0)
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "addition",
+			query: "select (cast(? as unsigned) + cast(1 as signed)) - cast(? as unsigned)",
+		},
+		{
+			name:  "multiplication",
+			query: "select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned)",
+		},
+	} {
+		for _, sqlMode := range []string{"", mysql.SQLModeNoUnsignedSubtraction} {
+			t.Run(tc.name+"/"+sqlMode, func(t *testing.T) {
+				compilerContext := plan2.NewMockCompilerContext(false)
+				compilerContext.SetSqlModeOverride(sqlMode)
+				ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+					t, 28134, tc.query, compilerContext)
+				proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, tc.query)
+				defer func() {
+					cw.proc.SetPrepareParams(nil)
+					prepareStmt.Close()
+					scratchPrepare.Close()
+				}()
+
+				// COM_STMT_EXECUTE: two non-NULL MYSQL_TYPE_LONGLONG unsigned values.
+				packet := make([]byte, 27)
+				packet[6] = 1 // new-params-bound flag
+				packet[7] = byte(defines.MYSQL_TYPE_LONGLONG)
+				packet[8] = 0x80
+				packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+				packet[10] = 0x80
+				binary.LittleEndian.PutUint64(packet[11:], maxUint64)
+				binary.LittleEndian.PutUint64(packet[19:], maxUint64)
+				require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0))
+
+				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				if owned {
+					defer executionStmt.Free()
+				}
+				projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+				require.Len(t, projectNode.ProjectList, 1)
+				executor, err := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+				require.NoError(t, err)
+				defer executor.Free()
+				input := batch.New(nil)
+				input.SetRowCount(1)
+				_, err = executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+				require.Error(t, err, "inner unsigned overflow must fail before outer cancellation")
+			})
+		}
 	}
 }
 

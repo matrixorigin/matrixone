@@ -102,6 +102,62 @@ set session sql_mode = '';
 execute unsigned_sub using @operand;
 deallocate prepare unsigned_sub;
 
+-- Explicit CASTs fix each marker's domain, so the inner unsigned arithmetic
+-- result must be range-checked before an outer subtraction can cancel it.
+set @max_uint64 = cast('18446744073709551615' as unsigned);
+set session sql_mode = '';
+prepare unsigned_typed_add from 'select (cast(? as unsigned) + cast(1 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_add using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_add;
+prepare unsigned_typed_mul from 'select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_mul using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_mul;
+prepare unsigned_typed_add_ok from 'select (cast(? as unsigned) + cast(0 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_add_ok using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_add_ok;
+prepare unsigned_typed_mul_ok from 'select (cast(? as unsigned) * cast(1 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_mul_ok using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_mul_ok;
+
+set session sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+prepare unsigned_typed_add from 'select (cast(? as unsigned) + cast(1 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_add using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_add;
+prepare unsigned_typed_mul from 'select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_mul using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_mul;
+prepare unsigned_typed_add_ok from 'select (cast(? as unsigned) + cast(0 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_add_ok using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_add_ok;
+prepare unsigned_typed_mul_ok from 'select (cast(? as unsigned) * cast(1 as signed)) - cast(? as unsigned) as result';
+execute unsigned_typed_mul_ok using @max_uint64, @max_uint64;
+deallocate prepare unsigned_typed_mul_ok;
+
+-- Nearby prepared controls: bare marker remains runtime-typed, while explicit
+-- DECIMAL/FLOAT and NULL boundaries must not be treated as integer overflow.
+set session sql_mode = '';
+set @negative_peer = -2;
+prepare unsigned_bare_peer from 'select (cast(? as unsigned) + ?) is not null as result';
+execute unsigned_bare_peer using @max_uint64, @negative_peer;
+deallocate prepare unsigned_bare_peer;
+set @zero_decimal = cast(0 as decimal(20,1));
+prepare unsigned_decimal_peer from 'select (cast(? as unsigned) + cast(? as decimal(20,1))) is not null as result';
+execute unsigned_decimal_peer using @max_uint64, @zero_decimal;
+deallocate prepare unsigned_decimal_peer;
+set @zero_float = cast(0 as double);
+prepare unsigned_float_peer from 'select (cast(? as unsigned) + cast(? as double)) is not null as result';
+execute unsigned_float_peer using @max_uint64, @zero_float;
+deallocate prepare unsigned_float_peer;
+set @null_operand = null;
+prepare unsigned_null_peer from 'select (cast(? as unsigned) + cast(? as signed)) is null as result';
+execute unsigned_null_peer using @null_operand, @negative_peer;
+deallocate prepare unsigned_null_peer;
+set @max_uint64 = null;
+set @negative_peer = null;
+set @zero_decimal = null;
+set @zero_float = null;
+set @null_operand = null;
+
 drop database test_unsigned_subtraction_mode;
 set session sql_mode = @old_sql_mode;
 set @old_sql_mode = null;

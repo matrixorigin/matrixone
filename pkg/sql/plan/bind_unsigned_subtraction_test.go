@@ -497,17 +497,43 @@ func TestSQLPrepareUnsignedSubtractionHonorsSQLMode(t *testing.T) {
 }
 
 func TestSQLPrepareUnsignedArithmeticDefersSignedMarkerDomain(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	logicPlan, err := runOneStmt(mock, t,
-		"prepare unsigned_add from 'select cast(1 as unsigned) + ?'")
-	require.NoError(t, err)
-	prepared := logicPlan.GetDcl().GetPrepare().Plan
-	require.NotNil(t, prepared)
-	// The marker has no fixed signedness at prepare time. In particular, the
-	// affine-sum BVT later supplies -2 beside an unsigned SMALLINT column, so
-	// this prepared expression must retain the existing deferred domain instead
-	// of materializing the new UINT64 boundary cast.
-	require.False(t, hasArithmeticResultCast(firstProjectionExpr(t, prepared), "+", types.T_uint64))
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		op        string
+		wantCheck bool
+	}{
+		{
+			name: "bare signed marker remains deferred",
+			sql:  "prepare unsigned_add from 'select cast(1 as unsigned) + ?'",
+			op:   "+",
+		},
+		{
+			name:      "explicit unsigned and signed casts retain addition boundary",
+			sql:       "prepare unsigned_add from 'select cast(? as unsigned) + cast(1 as signed)'",
+			op:        "+",
+			wantCheck: true,
+		},
+		{
+			name:      "explicit unsigned and signed casts retain multiplication boundary",
+			sql:       "prepare unsigned_mul from 'select cast(? as unsigned) * cast(2 as signed)'",
+			op:        "*",
+			wantCheck: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			prepared := logicPlan.GetDcl().GetPrepare().Plan
+			require.NotNil(t, prepared)
+			// A bare marker has no fixed signedness at PREPARE time and remains
+			// deferred. In contrast, CAST(? AS UNSIGNED) fixes the operand domain,
+			// so its arithmetic node retains a per-node UINT64 boundary.
+			require.Equal(t, tc.wantCheck,
+				hasArithmeticResultCast(firstProjectionExpr(t, prepared), tc.op, types.T_uint64))
+		})
+	}
 }
 
 func firstProjectionExpr(t *testing.T, built *Plan) *Expr {
