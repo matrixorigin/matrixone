@@ -8328,7 +8328,11 @@ func strToStr(
 			}
 			payload := encodeGeometryPayload(wkt, 0, false)
 			if toFloat32 {
-				payload = encodeGeometryPayloadFloat32(wkt)
+				var encodeErr error
+				payload, encodeErr = encodeGeometryPayloadFloat32(wkt)
+				if encodeErr != nil {
+					return encodeErr
+				}
 			}
 			if err := to.AppendBytes(payload, false); err != nil {
 				return err

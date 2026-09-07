@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -1489,7 +1490,35 @@ func geom32WKB(t *testing.T, wkt string) string {
 	t.Helper()
 	g, err := geo.ParseWKT(wkt)
 	require.NoError(t, err)
-	return string(geo.WriteWKBFloat32(g))
+	out, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestReencodeGeom32RejectsMalformedPayload(t *testing.T) {
+	for _, malformed := range [][]byte{nil, {1, 1, 0, 0, 0}} {
+		out, err := reencodeGeom32(malformed, true)
+		require.Nil(t, out)
+		require.Error(t, err)
+	}
+
+	malformed := []byte{1, 1, 0, 0, 0}
+	out, err := reencodeGeom32(malformed, false)
+	require.NoError(t, err)
+	require.Equal(t, malformed, out)
+
+	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+		standard := make([]byte, 21)
+		if order == binary.LittleEndian {
+			standard[0] = 1
+		}
+		order.PutUint32(standard[1:5], 1)
+		order.PutUint64(standard[5:13], math.Float64bits(3.5e38))
+		order.PutUint64(standard[13:21], math.Float64bits(0))
+		out, err = reencodeGeom32(standard, true)
+		require.Nil(t, out)
+		require.ErrorContains(t, err, "not finite in GEOMETRY32")
+	}
 }
 
 func TestStXY32(t *testing.T) {
