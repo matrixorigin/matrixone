@@ -4565,18 +4565,14 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 	}
 	size := dl.Size
 	if size < 0 {
-		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+		fileSize, err := dl.StatSize(proc)
 		if err != nil {
 			return nil, err
 		}
-		entry, err := etlFS.StatFile(proc.Ctx, readPath)
-		if err != nil {
-			return nil, err
-		}
-		if dl.Offset > entry.Size {
+		if dl.Offset > fileSize {
 			return nil, moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
 		}
-		size = entry.Size - dl.Offset
+		size = fileSize - dl.Offset
 	}
 	if size > int64(types.MaxBlobLen) {
 		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
