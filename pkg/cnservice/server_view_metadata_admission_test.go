@@ -122,9 +122,14 @@ func (*admissionStartLockService) Close() error {
 
 type admissionStartQueryService struct {
 	queryservice.QueryService
+	started     chan struct{}
+	startedOnce sync.Once
 }
 
-func (*admissionStartQueryService) Start() error {
+func (s *admissionStartQueryService) Start() error {
+	if s.started != nil {
+		s.startedOnce.Do(func() { close(s.started) })
+	}
 	return nil
 }
 
@@ -168,6 +173,29 @@ func newViewMetadataAdmissionStartService(
 		Admitted:             true,
 	})
 	return s
+}
+
+func TestCNStartsQueryServiceBeforeViewMetadataAdmission(t *testing.T) {
+	started := make(chan struct{})
+	var fenceBeforeQuery atomic.Bool
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		select {
+		case <-started:
+		default:
+			fenceBeforeQuery.Store(true)
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+	s.queryService = &admissionStartQueryService{started: started}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.NoError(t, s.Start())
+	require.False(t, fenceBeforeQuery.Load(),
+		"catalog admission must not run before the internal QueryService is reachable")
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
