@@ -5123,7 +5123,15 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		// that projection pruning could reduce to an invalid empty rowset.
 		dummyID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, rowCtx)
 
-		projectList := make([]*plan.Expr, len(colNames))
+		// Keep the original VALUES position in an internal column. The column is
+		// removed after sorting the UNION ALL, before the normal INSERT/REPLACE
+		// source-cast path consumes the rows.
+		ordinalPos := len(colNames)
+		projectListLen := ordinalPos
+		if rowCount > 1 {
+			projectListLen++
+		}
+		projectList := make([]*plan.Expr, projectListLen)
 		for colIdx := range colNames {
 			if rowIdx >= len(valueExprs[colIdx]) {
 				return 0, moerr.NewInternalError(builder.GetContext(), "value expression rows are inconsistent")
@@ -5134,12 +5142,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				return 0, err
 			}
 		}
+		if rowCount > 1 {
+			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
+		}
 
-		rowCtx.headings = make([]string, len(colNames))
+		rowCtx.headings = make([]string, projectListLen)
 		rowCtx.projects = projectList
 		rowCtx.results = projectList
 		for colIdx := range colNames {
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		}
+		if rowCount > 1 {
+			rowCtx.headings[ordinalPos] = "_values_ordinal"
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
@@ -5159,9 +5173,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	lastTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 	for _, rightID := range branches[1:] {
 		rightNode := builder.qry.Nodes[rightID]
-		projectList := make([]*plan.Expr, len(colNames))
+		projectList := make([]*plan.Expr, len(colNames)+1)
 		unionTag := builder.genNewBindTag()
-		for colIdx := range colNames {
+		for colIdx := range projectList {
 			projectList[colIdx] = &plan.Expr{
 				Typ: setOperationOutputType(plan.Node_UNION_ALL,
 					builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
@@ -5179,15 +5193,57 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	}
 
 	unionCtx.projectTag = lastTag
-	unionCtx.headings = make([]string, len(colNames))
-	unionCtx.projects = make([]*plan.Expr, len(colNames))
+	unionCtx.headings = make([]string, len(colNames)+1)
+	unionCtx.projects = make([]*plan.Expr, len(colNames)+1)
 	unionCtx.results = unionCtx.projects
-	for colIdx := range colNames {
-		unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+	for colIdx := range unionCtx.projects {
+		if colIdx < len(colNames) {
+			unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		} else {
+			unionCtx.headings[colIdx] = "_values_ordinal"
+		}
 		unionCtx.projects[colIdx] = &plan.Expr{
 			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
 		}
 	}
-	return lastNodeID, nil
+
+	// UNION ALL may execute branches concurrently. Sort by the carried ordinal
+	// before REPLACE conflict arbitration so the syntactically last VALUES row
+	// remains the winner for duplicate keys.
+	orderedID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{lastNodeID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Typ:  builder.qry.Nodes[lastNodeID].ProjectList[len(colNames)].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(len(colNames))}},
+			},
+			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
+		}},
+		SpillMem: builder.sortSpillMem,
+	}, unionCtx)
+
+	outputTag := builder.genNewBindTag()
+	outputList := make([]*plan.Expr, len(colNames))
+	for colIdx := range outputList {
+		outputList[colIdx] = &plan.Expr{
+			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+		}
+	}
+	outputCtx := NewBindContext(builder, bindCtx)
+	outputCtx.projectTag = outputTag
+	outputCtx.headings = make([]string, len(colNames))
+	outputCtx.projects = outputList
+	outputCtx.results = outputList
+	for colIdx := range outputList {
+		outputCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: outputList,
+		Children:    []int32{orderedID},
+		BindingTags: []int32{outputTag},
+	}, outputCtx), nil
 }

@@ -5124,6 +5124,10 @@ func TestReplaceScalarSubqueriesInValuesAndSet(t *testing.T) {
 
 	_, err := runOneStmt(mock, t, `PREPARE ps_replace_subquery FROM 'REPLACE INTO dept SET deptno = (SELECT MAX(n_nationkey) FROM nation WHERE n_nationkey <= ?), dname = "prepared", loc = "x"'`)
 	require.NoError(t, err)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept (deptno, dname, loc) VALUES ((SELECT MAX(n_nationkey) FROM nation), 'first', 'x'), ((SELECT MIN(n_nationkey) FROM nation), 'last', 'y')")
+	require.NoError(t, err)
+	require.True(t, queryHasNodeType(logicPlan.GetQuery(), plan.Node_SORT), "multi-row subquery values must restore source order")
 }
 
 func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
