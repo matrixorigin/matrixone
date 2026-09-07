@@ -17,7 +17,14 @@ package embed
 import "time"
 
 const (
-	testHAKeeperStoreTimeout = 60 * time.Second
+	// Test clusters run under the race detector and may lose several seconds to
+	// scheduler instrumentation while a catalog-heavy transaction is active.
+	// Keep the heartbeat request alive through a transient scheduler stall, and
+	// keep the shared transport alive longer than that request. Both remain
+	// bounded well inside the store-liveness window so real failures are retried.
+	testHAKeeperHeartbeatTimeout   = 15 * time.Second
+	testHAKeeperBackendReadTimeout = 20 * time.Second
+	testHAKeeperStoreTimeout       = 60 * time.Second
 )
 
 func WithConfigs(
@@ -47,6 +54,9 @@ func WithCNCount(
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true
+		if c.options.heartbeatTimeout == 0 {
+			c.options.heartbeatTimeout = testHAKeeperHeartbeatTimeout
+		}
 		if c.options.storeTimeout == 0 {
 			c.options.storeTimeout = testHAKeeperStoreTimeout
 		}

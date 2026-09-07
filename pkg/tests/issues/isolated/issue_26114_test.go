@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package issues
+package isolated
 
 import (
 	"context"
@@ -24,13 +24,46 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
+func runIssue26114ClusterTest(t *testing.T, fn func(embed.Cluster)) {
+	t.Helper()
+	cluster, err := embed.StartTestCluster(
+		embed.WithCNCount(1),
+		embed.WithPreStart(func(service embed.ServiceOperator) {
+			if service.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			service.Adjust(func(config *embed.ServiceConfig) {
+				config.CN.LockService.MaxFixedSliceSize = 10001
+				config.CN.LockService.MaxLockRowCount = 10000
+				config.CN.Frontend.SkipCheckUser = false
+			})
+		}),
+	)
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	fn(cluster)
+}
+
+func execIssue26114SQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, statement)
+	require.NoErrorf(t, err, "exec failed: %s", statement)
+}
+
+func execIssue26114SQLMaybe(ctx context.Context, db *sql.DB, statement string) {
+	_, _ = db.ExecContext(ctx, statement)
+}
+
 func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
-	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+	runIssue26114ClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -41,7 +74,7 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 		require.NoError(t, err)
 		defer sysDB.Close()
 		sysDB.SetMaxOpenConns(4)
-		execSQLRequire(t, ctx, sysDB, "set role moadmin")
+		execIssue26114SQLRequire(t, ctx, sysDB, "set role moadmin")
 
 		const (
 			accountName   = "issue_26114_target"
@@ -55,36 +88,36 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+tableSnapshot)
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+dbSnapshot)
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop database if exists `"+dbSource+"`")
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists "+accountName)
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+tableSnapshot)
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+dbSnapshot)
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+dbSource+"`")
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop account if exists "+accountName)
 		}()
 
-		execSQLMaybe(t, ctx, sysDB, "drop account if exists "+accountName)
+		execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
 		accountID := testutils.CreateAccount(t, c, accountName, "111")
-		execSQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
-		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
+		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', 0)", accountID))
 
 		tenantDB, err := sql.Open("mysql", fmt.Sprintf(
 			"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 		require.NoError(t, err)
 		defer tenantDB.Close()
-		execSQLRequire(t, ctx, tenantDB, "create database `"+targetDB+"`")
+		execIssue26114SQLRequire(t, ctx, tenantDB, "create database `"+targetDB+"`")
 
-		execSQLRequire(t, ctx, sysDB, "create database `"+sourceDB+"`")
-		execSQLRequire(t, ctx, sysDB, "create table `"+sourceDB+"`.`base` (id int primary key)")
-		execSQLRequire(t, ctx, sysDB, "insert into `"+sourceDB+"`.`base` values (1)")
-		execSQLRequire(t, ctx, sysDB, "create snapshot "+tableSnapshot+" for table `"+sourceDB+"` `base`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create database `"+sourceDB+"`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create table `"+sourceDB+"`.`base` (id int primary key)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "insert into `"+sourceDB+"`.`base` values (1)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create snapshot "+tableSnapshot+" for table `"+sourceDB+"` `base`")
 
-		execSQLRequire(t, ctx, sysDB, "create database `"+dbSource+"`")
-		execSQLRequire(t, ctx, sysDB, "create table `"+dbSource+"`.`t1` (id int primary key)")
-		execSQLRequire(t, ctx, sysDB, "create table `"+dbSource+"`.`t2` (id int primary key)")
-		execSQLRequire(t, ctx, sysDB, "insert into `"+dbSource+"`.`t1` values (1)")
-		execSQLRequire(t, ctx, sysDB, "insert into `"+dbSource+"`.`t2` values (2)")
-		execSQLRequire(t, ctx, sysDB, "create snapshot "+dbSnapshot+" for database `"+dbSource+"`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create database `"+dbSource+"`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create table `"+dbSource+"`.`t1` (id int primary key)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create table `"+dbSource+"`.`t2` (id int primary key)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "insert into `"+dbSource+"`.`t1` values (1)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "insert into `"+dbSource+"`.`t2` values (2)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create snapshot "+dbSnapshot+" for database `"+dbSource+"`")
 
 		_, err = sysDB.ExecContext(ctx, "data branch create table `"+targetDB+"`.`blocked` from `"+
 			sourceDB+"`.`base`{snapshot='"+tableSnapshot+"'} to account "+accountName)
@@ -104,7 +137,7 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 			"select count(*) from mo_catalog.mo_database where datname = '"+dbDestination+"'").Scan(&count))
 		require.Zero(t, count)
 
-		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
 		start := make(chan struct{})
 		results := make(chan error, 2)
@@ -134,11 +167,11 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+targetDB+"' and relname in ('race_one', 'race_two')").Scan(&count))
 		require.Equal(t, 1, count)
 
-		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', 4)", accountID))
-		execSQLRequire(t, ctx, sysDB, "data branch create table `"+targetDB+"`.`allowed` from `"+
+		execIssue26114SQLRequire(t, ctx, sysDB, "data branch create table `"+targetDB+"`.`allowed` from `"+
 			sourceDB+"`.`base`{snapshot='"+tableSnapshot+"'} to account "+accountName)
-		execSQLRequire(t, ctx, sysDB, "data branch create database `"+dbDestination+"` from `"+
+		execIssue26114SQLRequire(t, ctx, sysDB, "data branch create database `"+dbDestination+"` from `"+
 			dbSource+"`{snapshot='"+dbSnapshot+"'} to account "+accountName)
 
 		require.NoError(t, sysDB.QueryRowContext(ctx, fmt.Sprintf(
@@ -149,7 +182,7 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 }
 
 func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.T) {
-	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+	runIssue26114ClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -159,7 +192,7 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer sysDB.Close()
-		execSQLRequire(t, ctx, sysDB, "set role moadmin")
+		execIssue26114SQLRequire(t, ctx, sysDB, "set role moadmin")
 
 		const (
 			accountName = "issue_26114_legacy_target"
@@ -170,29 +203,29 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+snapshot)
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
-			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists "+accountName)
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+snapshot)
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
+			execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop account if exists "+accountName)
 		}()
 
-		execSQLMaybe(t, ctx, sysDB, "drop account if exists "+accountName)
+		execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
 		accountID := testutils.CreateAccount(t, c, accountName, "111")
-		execSQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
-		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
+		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', -1)", accountID))
 
 		tenantDB, err := sql.Open("mysql", fmt.Sprintf(
 			"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 		require.NoError(t, err)
 		defer tenantDB.Close()
-		execSQLRequire(t, ctx, tenantDB, "create database `"+targetDB+"`")
+		execIssue26114SQLRequire(t, ctx, tenantDB, "create database `"+targetDB+"`")
 
-		execSQLRequire(t, ctx, sysDB, "create database `"+sourceDB+"`")
-		execSQLRequire(t, ctx, sysDB, "create table `"+sourceDB+"`.`base` (id int primary key)")
-		execSQLRequire(t, ctx, sysDB, "insert into `"+sourceDB+"`.`base` values (1)")
-		execSQLRequire(t, ctx, sysDB, "create snapshot "+snapshot+" for table `"+sourceDB+"` `base`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create database `"+sourceDB+"`")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create table `"+sourceDB+"`.`base` (id int primary key)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "insert into `"+sourceDB+"`.`base` values (1)")
+		execIssue26114SQLRequire(t, ctx, sysDB, "create snapshot "+snapshot+" for table `"+sourceDB+"` `base`")
 
-		execSQLRequire(t, ctx, sysDB, "data branch create table `"+targetDB+"`.`legacy` from `"+
+		execIssue26114SQLRequire(t, ctx, sysDB, "data branch create table `"+targetDB+"`.`legacy` from `"+
 			sourceDB+"`.`base`{snapshot='"+snapshot+"'} to account "+accountName)
 
 		var legacyTableID uint64
@@ -206,7 +239,7 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 			executor.Options{}.WithDatabase("mo_catalog").WithAccountID(0))
 		require.NoError(t, err)
 		result.Close()
-		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
 
 		_, err = sysDB.ExecContext(ctx, "data branch create table `"+targetDB+"`.`should_reject` from `"+
