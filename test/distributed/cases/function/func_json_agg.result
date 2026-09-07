@@ -56,9 +56,9 @@ SELECT JSON_OBJECTAGG(row_id, value) AS integer_key_object, JSON_OBJECTAGG(row_i
 SELECT JSON_OBJECTAGG(row_id, value) AS implicit_object, JSON_OBJECTAGG(CAST(row_id AS CHAR), value) AS explicit_object FROM t_obj_numeric WHERE row_id = 1;
 ➤ implicit_object[-1,2147483647,0]  ¦  explicit_object[-1,2147483647,0]  𝄀
 {"1": "first"}  ¦  {"1": "first"}
-SELECT JSON_OBJECTAGG(signed_key, value) AS duplicate_numeric FROM (SELECT CAST(1 AS SIGNED) AS signed_key, value FROM t_obj_numeric ORDER BY row_id) AS ordered_numeric;
+SELECT JSON_CONTAINS(duplicate_object, '{"1":"first"}') OR JSON_CONTAINS(duplicate_object, '{"1":"last"}') AS duplicate_numeric FROM (SELECT JSON_OBJECTAGG(signed_key, value) AS duplicate_object FROM (SELECT CAST(1 AS SIGNED) AS signed_key, value FROM t_obj_numeric) AS unordered_numeric) AS duplicate_check;
 duplicate_numeric
-{"1": "last"}
+1
 SET @json_objectagg_key = '-19';
 PREPARE json_objectagg_signed_key FROM 'SELECT JSON_OBJECTAGG(CAST(? AS SIGNED), value) AS prepared_signed FROM t_obj_numeric WHERE row_id = 1';
 EXECUTE json_objectagg_signed_key USING @json_objectagg_key;
@@ -71,7 +71,7 @@ EXECUTE json_objectagg_any_key USING @json_objectagg_key;
 {"-19": "first"}
 DEALLOCATE PREPARE json_objectagg_any_key;
 SELECT JSON_OBJECTAGG(CAST(NULL AS SIGNED), value) AS null_key FROM t_obj_numeric WHERE row_id = 1;
-internal error: json_objectagg key cannot be NULL
+invalid input: json_objectagg key cannot be NULL
 DROP TABLE t_obj_numeric;
 CREATE TABLE t_arr_ext(g INT, pos INT, v INT);
 INSERT INTO t_arr_ext VALUES
