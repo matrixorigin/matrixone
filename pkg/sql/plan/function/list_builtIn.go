@@ -550,7 +550,7 @@ func statementDigestTextFunction() FuncNew {
 			overloadId: i,
 			args:       []types.T{typ},
 			retType: func(parameters []types.Type) types.Type {
-				return derivedStringReturnType(parameters, 0, types.T_text)
+				return statementDigestTextReturnType(parameters)
 			},
 			newOp: func() executeLogicOfOverload {
 				return StatementDigestText
@@ -569,6 +569,17 @@ func statementDigestTextFunction() FuncNew {
 		checkFn:    fixedTypeMatch,
 		Overloads:  overloads,
 	}
+}
+
+// statementDigestTextReturnType always returns text. The normalized digest is
+// not a byte-preserving transform, so it must not inherit a binary input's
+// OID; preserve only the source charset for collation propagation.
+func statementDigestTextReturnType(parameters []types.Type) types.Type {
+	result := types.T_text.ToType()
+	if len(parameters) > 0 {
+		result.Charset = parameters[0].Charset
+	}
+	return result
 }
 
 var supportedStringBuiltIns = []FuncNew{

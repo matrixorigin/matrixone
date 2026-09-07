@@ -296,6 +296,7 @@ func TestStatementDigestTextOverloadsAndCharset(t *testing.T) {
 	require.True(t, shouldCast)
 	require.Len(t, targets, 1)
 	require.Equal(t, types.T_varchar, targets[0].Oid)
+	require.Equal(t, types.T_text, fn.GetReturnType().Oid)
 }
 
 func TestStatementDigestSettings(t *testing.T) {
