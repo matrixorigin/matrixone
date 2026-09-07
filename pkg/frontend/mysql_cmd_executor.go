@@ -2789,6 +2789,8 @@ func createPrepareStmtInSession(
 		protocolVersion:              protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
+		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
@@ -6014,6 +6016,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed

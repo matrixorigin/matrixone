@@ -1648,6 +1648,58 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		}
 	})
 
+	t.Run("ODKU metadata rejects mixed-version remote execution", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:          [][]*plan.Expr{nil, nil},
+			HasODKUAffectedRows: true,
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		data, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{instruction}}).Marshal()
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+		_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 50")
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 50")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+		actionOp := &dedupjoin.DedupJoin{
+			Conditions: [][]*plan.Expr{nil, nil}, EmitActionRows: true,
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, actionInstruction, err := convertToPipelineInstruction(actionOp, proc, ctx, 1)
+		require.NoError(t, err)
+		actionData, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{actionInstruction}}).Marshal()
+		require.NoError(t, err)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion50)
+		_, _, err = convertToPipelineInstruction(actionOp, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		_, err = decodeScope(actionData, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+
+		targetOp := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{
+			OdkuTargetArbitration: true,
+			PkColumn:              0,
+			KeyColumns:            []int32{0, 1},
+			TargetColumns:         []int32{2, 3},
+			OutputColumns:         2,
+		}}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		_, targetInstruction, err := convertToPipelineInstruction(targetOp, proc, ctx, 1)
+		require.NoError(t, err)
+		targetData, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{targetInstruction}}).Marshal()
+		require.NoError(t, err)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion50)
+		_, _, err = convertToPipelineInstruction(targetOp, proc, ctx, 1)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		_, err = decodeScope(targetData, proc, true, nil)
+		require.ErrorContains(t, err, "MORPC protocol version 51")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	})
+
 	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
 		probeType := &planpb.Type{
 			Id:    int32(types.T_decimal64),
@@ -1960,19 +2012,23 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		changedRowsCol := 7
+		affectedRowsWeightCol := 11
+		physicalChangedRowsCol := 12
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
-					TableDef:           &plan.TableDef{Name: "t1"},
-					InsertCols:         []int{0, 1, 2},
-					DeleteCols:         []int{3, 4, 8},
-					PartitionCols:      []int{5, 6},
-					InsertPkColIdx:     1,
-					DedupByTargetRowID: true,
-					TargetUpdateCtxIdx: 0,
-					ChangedRowsCol:     &changedRowsCol,
-					AffectedRowsCols:   []int{9, 10},
+					ObjRef:                 &plan.ObjectRef{ObjName: "t1"},
+					TableDef:               &plan.TableDef{Name: "t1"},
+					InsertCols:             []int{0, 1, 2},
+					DeleteCols:             []int{3, 4, 8},
+					PartitionCols:          []int{5, 6},
+					InsertPkColIdx:         1,
+					DedupByTargetRowID:     true,
+					TargetUpdateCtxIdx:     0,
+					ChangedRowsCol:         &changedRowsCol,
+					AffectedRowsCols:       []int{9, 10},
+					AffectedRowsWeightCol:  &affectedRowsWeightCol,
+					PhysicalChangedRowsCol: &physicalChangedRowsCol,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -1993,6 +2049,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NotNil(t, restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, 7, *restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
 		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
+		require.Equal(t, 11, *restoredOp.MultiUpdateCtx[0].AffectedRowsWeightCol)
+		require.Equal(t, 12, *restoredOp.MultiUpdateCtx[0].PhysicalChangedRowsCol)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
@@ -2084,18 +2142,86 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)
 	})
 
-	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+	t.Run("DedupJoin_DedupBuildKeepLastAndODKUMetadata", func(t *testing.T) {
 		op := &dedupjoin.DedupJoin{
-			Conditions:         [][]*plan.Expr{nil, nil},
-			DedupBuildKeepLast: true,
+			Conditions:               [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast:       true,
+			HasODKUAffectedRows:      true,
+			AffectedRowsResultPos:    4,
+			PhysicalChangedResultPos: 5,
+			UpdateCheckColIdxList:    []int32{1, 3},
+			CountFoundRows:           true,
+			EmitActionRows:           true,
+			ActionFinalResultPos:     6,
+			ForeignKeyChecks: []dedupjoin.ODKUForeignKeyCheck{{
+				ColIdxList: []int32{1, 2}, EligibilityResultPos: 7,
+			}},
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+		require.True(t, pipeInstr.DedupJoin.HasOdkuAffectedRows)
+		require.Equal(t, int32(4), pipeInstr.DedupJoin.AffectedRowsResultPos)
+		require.Equal(t, int32(5), pipeInstr.DedupJoin.PhysicalChangedRowsResultPos)
+		require.Equal(t, []int32{1, 3}, pipeInstr.DedupJoin.UpdateCheckColIdxList)
+		require.True(t, pipeInstr.DedupJoin.CountFoundRows)
+		require.True(t, pipeInstr.DedupJoin.EmitActionRows)
+		require.Equal(t, int32(6), pipeInstr.DedupJoin.ActionFinalResultPos)
+		require.Equal(t, []int32{1, 2}, pipeInstr.DedupJoin.ForeignKeyChecks[0].ColIdxList)
+		require.Equal(t, int32(7), pipeInstr.DedupJoin.ForeignKeyChecks[0].EligibilityResultPos)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wire, err := pipeInstr.Marshal()
 		require.NoError(t, err)
-		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+		decoded := new(pipeline.Instruction)
+		require.NoError(t, decoded.Unmarshal(wire))
+
+		restored, err := convertToVmOperator(decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredDedup := restored.(*dedupjoin.DedupJoin)
+		require.True(t, restoredDedup.DedupBuildKeepLast)
+		require.True(t, restoredDedup.HasODKUAffectedRows)
+		require.Equal(t, int32(4), restoredDedup.AffectedRowsResultPos)
+		require.Equal(t, int32(5), restoredDedup.PhysicalChangedResultPos)
+		require.Equal(t, []int32{1, 3}, restoredDedup.UpdateCheckColIdxList)
+		require.True(t, restoredDedup.CountFoundRows)
+		require.True(t, restoredDedup.EmitActionRows)
+		require.Equal(t, int32(6), restoredDedup.ActionFinalResultPos)
+		require.Equal(t, []int32{1, 2}, restoredDedup.ForeignKeyChecks[0].ColIdxList)
+		require.Equal(t, int32(7), restoredDedup.ForeignKeyChecks[0].EligibilityResultPos)
+
+		// Constraint eligibility is also required by the compact final-row path:
+		// inserts remain eligible while unrelated updates bypass historical rows.
+		op.EmitActionRows = false
+		_, compactInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.False(t, compactInstr.DedupJoin.EmitActionRows)
+		require.Len(t, compactInstr.DedupJoin.ForeignKeyChecks, 1)
+		compactRestored, err := convertToVmOperator(compactInstr, ctx, nil)
+		require.NoError(t, err)
+		require.False(t, compactRestored.(*dedupjoin.DedupJoin).EmitActionRows)
+		require.Len(t, compactRestored.(*dedupjoin.DedupJoin).ForeignKeyChecks, 1)
+	})
+
+	t.Run("PreInsertUnique_ODKUTargetArbitration", func(t *testing.T) {
+		op := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{
+			OdkuTargetArbitration: true,
+			PkColumn:              0,
+			KeyColumns:            []int32{0, 1},
+			TargetColumns:         []int32{2, 3},
+			OutputColumns:         2,
+		}}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		wire, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		decoded := new(pipeline.Instruction)
+		require.NoError(t, decoded.Unmarshal(wire))
+		restored, err := convertToVmOperator(decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredPreInsert := restored.(*preinsertunique.PreInsertUnique)
+		require.True(t, restoredPreInsert.PreInsertCtx.OdkuTargetArbitration)
+		require.Equal(t, []int32{0, 1}, restoredPreInsert.PreInsertCtx.KeyColumns)
+		require.Equal(t, []int32{2, 3}, restoredPreInsert.PreInsertCtx.TargetColumns)
 	})
 
 	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {

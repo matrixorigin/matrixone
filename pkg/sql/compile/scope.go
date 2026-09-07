@@ -737,18 +737,36 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
+	queryCtx := scopeRunQueryContext(s.Proc)
+	var terminalErr error
+	if sender != nil && isScopeCancellationError(err) {
+		// An internal cancellation can win the receive select just before the
+		// remote execution publishes its terminal response. Stop the producer
+		// through the existing cleanup handshake and retain its terminal for
+		// arbitration after resolving the cancellation's primary cause.
+		terminalErr = sender.waitingTheStopResponse()
+	}
 
 	runErr, _ := normalizeScopeRunError(
 		err,
 		s.Proc.Ctx,
-		scopeRunQueryContext(s.Proc),
+		queryCtx,
 	)
+	if runErr == nil && terminalErr != nil {
+		// A query-owned terminal or substantive pipeline cancellation cause is
+		// primary. StopSending supplies the result only when the original
+		// cancellation was secondary; this still makes a terminal-less handshake
+		// fail closed without allowing teardown fallout to hide execution failure.
+		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
+	}
+	// The retained local root is the hand-off boundary from RemoteRun to its
+	// consumer. Publish its durable Error terminal before canceling this scope;
+	// otherwise the consumer can observe cancellation first and finish without
+	// the remote execution error that caused it.
+	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
-	// Normalize before cleanup mutates the pipeline context so a substantive
-	// cancellation cause remains available to the caller.
-	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
