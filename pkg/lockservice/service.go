@@ -561,7 +561,11 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, err
+	}
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	if _, local := l.(*localLockTable); !local {
@@ -1444,39 +1448,80 @@ func (s *service) acquireTxnBindRef(
 	txn *activeTxn,
 	bind pb.LockTable,
 	admission *lockAdmission,
-) {
-	if !txn.lockTableBindTouched(bind) {
-		return
-	}
+) error {
 	if bind.ServiceID != s.serviceID {
-		s.acquireRemoteBindRef(bind)
-		return
+		if !s.acquireRemoteTxnBindRef(txn, bind) {
+			return ErrLockTableBindChanged
+		}
+		return nil
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return nil
 	}
 	if !admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
 	}
+	return nil
 }
 
-func (s *service) acquireRemoteBindRef(bind pb.LockTable) {
+// acquireRemoteTxnBindRef atomically couples transaction admission to the
+// heartbeat eligibility of an exact remote bind. The caller holds txn's mutex
+// and bindChangeMu for reading, so an invalidation cannot fence existing users
+// between this check and publication of the new intent/ref pair.
+func (s *service) acquireRemoteTxnBindRef(txn *activeTxn, bind pb.LockTable) bool {
+	key := makeRemoteBindKey(bind)
+	if holder := txn.lockHolders[bind.Group]; holder != nil {
+		if recorded, ok := holder.tableBindIntents[bind.Table]; ok {
+			if makeRemoteBindKey(recorded) != key {
+				return false
+			}
+			s.mu.RLock()
+			ref, exists := s.mu.remoteBindRefs[key]
+			s.mu.RUnlock()
+			return exists && !ref.invalidated
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if ref, ok := s.mu.remoteBindRefs[key]; ok && ref.invalidated {
+		return false
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return false
+	}
+	if s.mu.remoteBindRefs == nil {
+		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
+	}
+	return s.acquireRemoteBindRefLocked(key, bind)
+}
+
+func (s *service) acquireRemoteBindRef(bind pb.LockTable) bool {
 	if bind.ServiceID == s.serviceID {
-		return
+		return true
 	}
 	key := makeRemoteBindKey(bind)
 	s.mu.Lock()
 	if s.mu.remoteBindRefs == nil {
 		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
 	}
-	s.acquireRemoteBindRefLocked(key, bind)
+	acquired := s.acquireRemoteBindRefLocked(key, bind)
 	s.mu.Unlock()
+	return acquired
 }
 
-func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) {
+func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) bool {
 	ref := s.mu.remoteBindRefs[key]
+	if ref.invalidated {
+		return false
+	}
 	if ref.refs == 0 {
 		ref.bind = bind
 	}
 	ref.refs++
 	s.mu.remoteBindRefs[key] = ref
+	return true
 }
 
 func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {

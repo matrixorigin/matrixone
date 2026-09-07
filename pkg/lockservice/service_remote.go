@@ -460,7 +460,12 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -621,7 +626,12 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
