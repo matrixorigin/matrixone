@@ -53,13 +53,13 @@ func TestRequireFunctionalIndexProtocol(t *testing.T) {
 		if hadOriginal {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, original)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
 		}
 	}()
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 48")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion48)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion55)
+	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 56")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
 	require.NoError(t, requireFunctionalIndexProtocol(context.Background(), proc))
 }
 
