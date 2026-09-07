@@ -120,6 +120,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -199,6 +205,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -209,6 +218,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -251,7 +263,16 @@ func encodeProcessInfo(
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
+	orderedTop, isTop := s.RootOp.(*top.Top)
 	rs := c.newMergeScope([]*Scope{s})
+	if isTop && orderedTop.OrderedOutput {
+		// The wire promises one ordered stream, not interleaved DOP batches.
+		// Preserve that promise on the new local edge so runtime expansion
+		// inserts the ordered worker gather before this write-back merge.
+		reg := rs.Proc.Reg.MergeReceivers[0]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+	}
 	op := output.NewArgument().
 		WithFunc(c.fill)
 	op.SetIdx(-1)
@@ -331,7 +352,16 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		for i := range s.Proc.Reg.MergeReceivers {
 			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch2)))
 			p.NilBatchCnt = append(p.NilBatchCnt, int32(s.Proc.Reg.MergeReceivers[i].NilBatchCnt))
+			if s.Proc.Reg.MergeReceivers[i].OrderedStream {
+				if p.OrderedStream == nil {
+					p.OrderedStream = make([]bool, len(s.Proc.Reg.MergeReceivers))
+				}
+				p.OrderedStream[i] = true
+			}
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
+		}
+		for len(p.OrderedStream) > 0 && !p.OrderedStream[len(p.OrderedStream)-1] {
+			p.OrderedStream = p.OrderedStream[:len(p.OrderedStream)-1]
 		}
 	}
 	// DataSource
@@ -500,6 +530,11 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	for i := range s.Proc.Reg.MergeReceivers {
+		if i < len(p.OrderedStream) {
+			s.Proc.Reg.MergeReceivers[i].OrderedStream = p.OrderedStream[i]
+		}
+	}
 	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -633,6 +668,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := validateRemoteODKUActionRowsProtocol(
+			proc, t.PreInsertCtx.GetOdkuTargetArbitration()); err != nil {
+			return ctxId, nil, err
+		}
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
@@ -790,6 +829,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
@@ -822,6 +862,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergetop.MergeTop:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.MergeTopOrderedStreams = t.OrderedStreams
 	case *mergeorder.MergeOrder:
 		in.OrderBy = t.OrderBySpecs
 		in.SpillMem = t.SpillThreshold
@@ -928,6 +969,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
 	case *dedupjoin.DedupJoin:
+		if err := validateRemoteODKUAffectedRowsProtocol(proc, t.HasODKUAffectedRows); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -951,6 +998,20 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			UpdateColExprList:               t.UpdateColExprList,
 			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
 			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
+			HasOdkuAffectedRows:             t.HasODKUAffectedRows,
+			AffectedRowsResultPos:           t.AffectedRowsResultPos,
+			PhysicalChangedRowsResultPos:    t.PhysicalChangedResultPos,
+			UpdateCheckColIdxList:           t.UpdateCheckColIdxList,
+			CountFoundRows:                  t.CountFoundRows,
+			EmitActionRows:                  t.EmitActionRows,
+			ActionFinalResultPos:            t.ActionFinalResultPos,
+		}
+		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			in.DedupJoin.ForeignKeyChecks[i] = pipeline.ODKUForeignKeyCheck{
+				ColIdxList:           append([]int32(nil), check.ColIdxList...),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
 		}
 		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
@@ -1027,6 +1088,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
+			if err := validateRemoteODKUAffectedRowsProtocol(proc,
+				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
+				return ctxId, nil, err
+			}
 			updateCtxList[i] = &plan.UpdateCtx{
 				ObjRef:                muCtx.ObjRef,
 				TableDef:              muCtx.TableDef,
@@ -1043,6 +1108,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 			if muCtx.ChangedRowsCol != nil {
 				updateCtxList[i].ChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.ChangedRowsCol)}
+			}
+			if muCtx.AffectedRowsWeightCol != nil {
+				updateCtxList[i].AffectedRowsWeightCol = &plan.ColRef{ColPos: int32(*muCtx.AffectedRowsWeightCol)}
+			}
+			if muCtx.PhysicalChangedRowsCol != nil {
+				updateCtxList[i].PhysicalChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.PhysicalChangedRowsCol)}
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1378,9 +1449,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
-		op = top.NewArgument().
+		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.TopOrderedOutput {
+			topArg.WithOrderedOutput()
+		}
+		op = topArg
 	// should change next day?
 	case vm.Intersect:
 		arg := intersect.NewArgument()
@@ -1430,9 +1505,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
 	case vm.MergeTop:
-		op = mergetop.NewArgument().
+		arg := mergetop.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.MergeTopOrderedStreams {
+			arg.WithOrderedStreams()
+		}
+		op = arg
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
@@ -1560,6 +1639,20 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.HasODKUAffectedRows = t.HasOdkuAffectedRows
+		arg.AffectedRowsResultPos = t.AffectedRowsResultPos
+		arg.PhysicalChangedResultPos = t.PhysicalChangedRowsResultPos
+		arg.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		arg.CountFoundRows = t.CountFoundRows
+		arg.EmitActionRows = t.EmitActionRows
+		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           append([]int32(nil), check.ColIdxList...),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		arg.SpillThreshold = opr.SpillMem
@@ -1639,6 +1732,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			if muCtx.ChangedRowsCol != nil {
 				changedRowsCol := int(muCtx.ChangedRowsCol.ColPos)
 				arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+			}
+			if muCtx.AffectedRowsWeightCol != nil {
+				col := int(muCtx.AffectedRowsWeightCol.ColPos)
+				arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+			}
+			if muCtx.PhysicalChangedRowsCol != nil {
+				col := int(muCtx.PhysicalChangedRowsCol.ColPos)
+				arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1923,6 +2024,40 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 	return nil
 }
 
+func validateRemoteDistributedOrderedTopPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	usesOrderedTop := false
+	for _, ordered := range p.OrderedStream {
+		if ordered {
+			usesOrderedTop = true
+			break
+		}
+	}
+	if !usesOrderedTop {
+		for _, instruction := range p.InstructionList {
+			if instruction.TopOrderedOutput || instruction.MergeTopOrderedStreams {
+				usesOrderedTop = true
+				break
+			}
+		}
+	}
+	if usesOrderedTop && (proc == nil || !supportsDistributedOrderedTop(proc.GetService())) {
+		return moerr.NewNotSupportedNoCtx(
+			"distributed ordered Top-N requires MORPC protocol version 53")
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteDistributedOrderedTopPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -1977,6 +2112,72 @@ func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required
 		return moerr.NewNotSupportedNoCtx(
 			"per-target affected-row selector metadata requires MORPC protocol version 24",
 		)
+	}
+	return nil
+}
+
+func validateRemoteODKUAffectedRowsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteODKUAffectedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"ODKU logical affected-row metadata requires MORPC protocol version 50",
+		)
+	}
+	return nil
+}
+
+func validateRemoteODKUActionRowsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteODKUActionRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"ODKU per-action constraint metadata requires MORPC protocol version 51",
+		)
+	}
+	return nil
+}
+
+func validateRemoteODKUAffectedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsertUnique(); preInsert != nil &&
+			preInsert.GetPreInsertUkCtx().GetOdkuTargetArbitration() {
+			if err := validateRemoteODKUActionRowsProtocol(proc, true); err != nil {
+				return err
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil &&
+			(dedup.HasOdkuAffectedRows || dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0) {
+			if err := validateRemoteODKUAffectedRowsProtocol(proc, dedup.HasOdkuAffectedRows); err != nil {
+				return err
+			}
+			if err := validateRemoteODKUActionRowsProtocol(
+				proc, dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0); err != nil {
+				return err
+			}
+		}
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
+					if err := validateRemoteODKUAffectedRowsProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteODKUAffectedRowsPipelineProtocol(proc, child); err != nil {
+			return err
+		}
 	}
 	return nil
 }

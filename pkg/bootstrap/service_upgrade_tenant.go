@@ -336,6 +336,13 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				zap.Error(err))
 			return false, err
 		}
+		if !hasUpgradeTenants && s.upgrade.finalVersionCompleted.Load() {
+			if err := s.maintainOrphanObjectPrivileges(ctx); err != nil {
+				err = moerr.AttachCause(ctx, err)
+				s.logger.Error("orphan object privilege maintenance failed", zap.Error(err))
+				return false, err
+			}
+		}
 		return hasUpgradeTenants, nil
 	}
 }
@@ -347,15 +354,28 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	timer := time.NewTimer(s.upgrade.checkUpgradeTenantDuration)
 	defer timer.Stop()
 
+	maintenanceOwner := false
+	defer func() {
+		if maintenanceOwner {
+			s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.Store(false)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if s.upgrade.finalVersionCompleted.Load() {
-				return
+			if s.upgrade.finalVersionCompleted.Load() && !maintenanceOwner {
+				// Tenant upgrade workers used to exit at this point. Keep only one
+				// of them as the process-local periodic maintenance owner; this also
+				// prevents manual upgrade pre-checks from accumulating permanent
+				// maintenance workers.
+				if !s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.CompareAndSwap(false, true) {
+					return
+				}
+				maintenanceOwner = true
 			}
-
 			drainUpgradeTenants(ctx, fn)
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}

@@ -22,9 +22,12 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,6 +142,49 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+
+	storage.EXPECT().Database(gomock.Any(), "publisher_db", txnOp).DoAndReturn(
+		func(gotCtx context.Context, _ string, _ client.TxnOperator) (engine.Database, error) {
+			accountID, err := defines.GetAccountId(gotCtx)
+			require.NoError(t, err)
+			require.Equal(t, uint32(42), accountID)
+			return database, nil
+		},
+	).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "__mo_index_secondary_events", gomock.Nil()).
+		Return(relation, nil)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "__mo_index_secondary_events"})
+
+	ses, _ := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, ctx, txnOp)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+	ref := &plan2.ObjectRef{
+		SchemaName:       "publisher_db",
+		ObjName:          "events",
+		SubscriptionName: "subscriber_alias",
+		PubInfo:          &pbplan.PubInfo{TenantId: 42},
+	}
+
+	gotRef, gotDef, err := tcc.ResolveIndexTableByRef(ref, "__mo_index_secondary_events", nil)
+	require.NoError(t, err)
+	require.Equal(t, &plan2.ObjectRef{
+		SchemaName:       "publisher_db",
+		ObjName:          "__mo_index_secondary_events",
+		Obj:              99,
+		SubscriptionName: "subscriber_alias",
+		PubInfo:          ref.PubInfo,
+	}, gotRef)
+	require.Equal(t, "__mo_index_secondary_events", gotDef.Name)
 }
 
 func TestGetConfig(t *testing.T) {

@@ -116,6 +116,14 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			changedRowsCol := *ctx.ChangedRowsCol
 			result[i].ChangedRowsCol = &changedRowsCol
 		}
+		if ctx.AffectedRowsWeightCol != nil {
+			col := *ctx.AffectedRowsWeightCol
+			result[i].AffectedRowsWeightCol = &col
+		}
+		if ctx.PhysicalChangedRowsCol != nil {
+			col := *ctx.PhysicalChangedRowsCol
+			result[i].PhysicalChangedRowsCol = &col
+		}
 	}
 
 	return result
@@ -187,6 +195,8 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		KeyColumns:             slices.Clone(ctx.KeyColumns),
 		ConflictColumns:        slices.Clone(ctx.ConflictColumns),
 		OutputColumns:          ctx.OutputColumns,
+		OdkuTargetArbitration:  ctx.OdkuTargetArbitration,
+		TargetColumns:          slices.Clone(ctx.TargetColumns),
 	}
 
 	return newCtx
@@ -227,11 +237,34 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		return nil
 	}
 	newCtx := &plan.DedupJoinCtx{
-		OldColList:         slices.Clone(ctx.OldColList),
-		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
-		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
-		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
+		OldColList:            slices.Clone(ctx.OldColList),
+		UpdateColIdxList:      slices.Clone(ctx.UpdateColIdxList),
+		UpdateColExprList:     DeepCopyExprList(ctx.UpdateColExprList),
+		OldColCaptureList:     slices.Clone(ctx.OldColCaptureList),
+		DedupBuildKeepLast:    ctx.DedupBuildKeepLast,
+		UpdateCheckColIdxList: slices.Clone(ctx.UpdateCheckColIdxList),
+		CountFoundRows:        ctx.CountFoundRows,
+		EmitActionRows:        ctx.EmitActionRows,
+	}
+	if ctx.AffectedRowsCol != nil {
+		col := *ctx.AffectedRowsCol
+		newCtx.AffectedRowsCol = &col
+	}
+	if ctx.PhysicalChangedRowsCol != nil {
+		col := *ctx.PhysicalChangedRowsCol
+		newCtx.PhysicalChangedRowsCol = &col
+	}
+	if ctx.ActionFinalCol != nil {
+		col := *ctx.ActionFinalCol
+		newCtx.ActionFinalCol = &col
+	}
+	newCtx.ForeignKeyChecks = make([]plan.ODKUForeignKeyCheck, len(ctx.ForeignKeyChecks))
+	for i, check := range ctx.ForeignKeyChecks {
+		newCtx.ForeignKeyChecks[i].ColIdxList = slices.Clone(check.ColIdxList)
+		if check.EligibilityCol != nil {
+			col := *check.EligibilityCol
+			newCtx.ForeignKeyChecks[i].EligibilityCol = &col
+		}
 	}
 
 	return newCtx
