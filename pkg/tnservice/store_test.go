@@ -365,9 +365,10 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 
 func TestStoreCloseClosesQueryService(t *testing.T) {
 	var tracked *storeQueryService
-	runTNStoreTest(t, func(s *store) {
+	runTNStoreTestBeforeStart(t, func(s *store) {
 		tracked = &storeQueryService{QueryService: s.queryService}
 		s.queryService = tracked
+	}, func(s *store) {
 		t.Cleanup(func() {
 			require.Equal(t, 1, tracked.closeCalls)
 		})
@@ -550,7 +551,15 @@ func runTNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
-	runTNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
+	runTNStoreTestBeforeStart(t, nil, testFn, opts...)
+}
+
+func runTNStoreTestBeforeStart(
+	t *testing.T,
+	beforeStart func(*store),
+	testFn func(*store),
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, beforeStart, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
 			defines.LocalFileServiceName,
 			fileservice.DisabledCacheConfig, nil,
@@ -578,6 +587,15 @@ func runTNStoreTest(
 
 func runTNStoreTestWithFileServiceFactory(
 	t *testing.T,
+	testFn func(*store),
+	fsFactory fileservice.NewFileServicesFunc,
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, nil, testFn, fsFactory, opts...)
+}
+
+func runTNStoreTestWithSetup(
+	t *testing.T,
+	beforeStart func(*store),
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
@@ -609,6 +627,11 @@ func runTNStoreTestWithFileServiceFactory(
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+	// Test instrumentation must be installed before heartbeat goroutines read
+	// service fields; replacing them after Start races with production readers.
+	if beforeStart != nil {
+		beforeStart(s)
+	}
 	assert.NoError(t, s.Start())
 	testFn(s)
 }
