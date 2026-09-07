@@ -4,14 +4,14 @@ use json_storage_28034_db;
 drop table if exists json_storage_28034;
 create table json_storage_28034 (id int primary key, j json, s varchar(128));
 insert into json_storage_28034 values
-    (1, 'null', 'null'),
-    (2, 'true', 'true'),
-    (3, '"x"', '"x"'),
-    (4, '[]', '[]'),
-    (5, '{}', '{}'),
-    (6, '[1,2,3]', '[1,2,3]'),
-    (7, '{"a":1}', '{"a":1}'),
-    (8, null, null);
+(1, 'null', 'null'),
+(2, 'true', 'true'),
+(3, '"x"', '"x"'),
+(4, '[]', '[]'),
+(5, '{}', '{}'),
+(6, '[1,2,3]', '[1,2,3]'),
+(7, '{"a":1}', '{"a":1}'),
+(8, null, null);
 select id, json_storage_size(j), json_storage_size(s), json_storage_free(j), json_storage_free(s)
 from json_storage_28034 order by id;
 id	json_storage_size(j)	json_storage_size(s)	json_storage_free(j)	json_storage_free(s)
@@ -29,7 +29,7 @@ json_storage_size(json_object(a, 1))	json_storage_size(json_array(1, 2, 3))
 select json_storage_size(json_arrayagg(j)) from json_storage_28034 where id <= 3;
 json_storage_size(json_arrayagg(j))
 26
-select json_storage_size(null), json_storage_free(null), json_storage_size(cast(null as json));
+select json_storage_size(null), json_storage_free(null), json_storage_size(cast('null' as json));
 json_storage_size(null)	json_storage_free(null)	json_storage_size(cast(null as json))
 NULL	NULL	2
 update json_storage_28034 set j = json_set(j, '$.longer', true) where id = 7;
@@ -40,6 +40,24 @@ update json_storage_28034 set j = json_remove(j, '$.longer') where id = 7;
 select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
 id	json_storage_size(j)	json_storage_free(j)
 7	29	0
+update json_storage_28034 set j = json_replace(j, '$.a', true) where id = 7;
+select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
+id	json_storage_size(j)	json_storage_free(j)
+7	21	0
+update json_storage_28034 set j = '{"a":1}' where id = 7;
+update json_storage_28034 set j = '{"direct":true}' where id = 7;
+select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
+id	json_storage_size(j)	json_storage_free(j)
+7	26	0
+update json_storage_28034 set j = '{"a":1}' where id = 7;
+select json_storage_size();
+invalid argument function json_storage_size, bad value []
+select json_storage_size(1);
+invalid argument function json_storage_size, bad value [BIGINT]
+select json_storage_free();
+invalid argument function json_storage_free, bad value []
+select json_storage_free(1);
+invalid argument function json_storage_free, bad value [BIGINT]
 select json_storage_size('{invalid');
 invalid argument json_storage_size, bad value invalid JSON document
 select json_storage_free('{invalid');
