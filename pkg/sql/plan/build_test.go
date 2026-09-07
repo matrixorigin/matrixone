@@ -3684,6 +3684,46 @@ func TestInsertIgnoreAutoIncrementReorderSkipsConstrainedTable(t *testing.T) {
 	}
 }
 
+func TestInsertIgnoreAutoIncrementReorderKeepsAuxiliaryColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parts  []string
+		params string
+		check  bool
+	}{
+		{"composite", []string{"dname", "loc"}, "", false},
+		{"prefix", []string{"dname"}, `{"prefix_lengths":"dname:2"}`, false},
+		{"composite_with_check", []string{"dname", "loc"}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["dept"]
+			tableDef.Cols[0].Typ.AutoIncr = true
+			tableDef.Indexes[0].Parts = tc.parts
+			tableDef.Indexes[0].IndexAlgoParams = tc.params
+			if tc.check {
+				addPositiveCheck(t, mock, "dept", "loc")
+			}
+			p, err := runOneStmt(mock, t,
+				"INSERT IGNORE INTO dept (dname, loc) VALUES ('Sales', 'NY'), ('Sales', 'NY'), ('Eng', 'SF')")
+			require.NoError(t, err)
+			found := false
+			for _, node := range p.GetQuery().Nodes {
+				ctx := node.GetPreInsertUkCtx()
+				if !ctx.GetAutoIncrementReorder() {
+					continue
+				}
+				found = true
+				child := p.GetQuery().Nodes[node.Children[0]]
+				require.Equal(t, int32(types.T_bool), child.ProjectList[ctx.AutoIncrementGeneratedColumn].Typ.Id)
+				require.Less(t, ctx.AutoIncrementOutputColumn, ctx.OutputColumns)
+				require.Equal(t, tableDef.Cols[0].Typ.Id, node.ProjectList[ctx.AutoIncrementOutputColumn].Typ.Id)
+			}
+			require.True(t, found)
+		})
+	}
+}
+
 func TestInsertIgnoreAutoIncrementReorderIsEnabledForPlainTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	tableDef := mock.ctxt.tables["dept"]

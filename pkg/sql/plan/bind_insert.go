@@ -2204,7 +2204,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	markerSelectPos := autoIncrementGeneratedColumn
 	autoIncrementReorder := markerSelectPos >= 0
 	if autoIncrementReorder {
-		if markerSelectPos != int32(baseWidth-1) ||
+		if markerSelectPos >= int32(baseWidth) ||
 			selectNode.ProjectList[markerSelectPos].Typ.Id != int32(types.T_bool) {
 			return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
 				"invalid INSERT IGNORE auto-increment provenance projection")
@@ -2308,10 +2308,30 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}
 	projectTag := builder.genNewBindTag()
 	projectList := make([]*plan.Expr, 0, baseWidth+2*len(keyExprs))
+	// Lock-key materialization can append columns after provenance. Build the
+	// arbiter's output prefix explicitly, retaining every non-marker column in
+	// order; move only provenance behind it. Reuse this PROJECT so there is no
+	// additional execution stage or row copy.
+	var outputRemapping map[[2]int32][2]int32
+	if autoIncrementReorder {
+		outputRemapping = make(map[[2]int32][2]int32, outputWidth)
+	}
 	for i, expr := range selectNode.ProjectList {
+		if autoIncrementReorder && int32(i) == markerSelectPos {
+			continue
+		}
+		if autoIncrementReorder {
+			outputRemapping[[2]int32{selectTag, int32(i)}] = [2]int32{selectTag, int32(len(projectList))}
+		}
 		projectList = append(projectList, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: selectTag, ColPos: int32(i),
 		}}})
+	}
+	if autoIncrementReorder {
+		projectList = append(projectList, &plan.Expr{
+			Typ:  selectNode.ProjectList[markerSelectPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: markerSelectPos}},
+		})
 	}
 	keyColumns := make([]int32, len(keyExprs))
 	conflictColumns := make([]int32, len(conflictExprs))
@@ -2331,7 +2351,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	outputTag := builder.genNewBindTag()
 	outputProject := make([]*plan.Expr, outputWidth)
 	for i := 0; i < outputWidth; i++ {
-		expr := selectNode.ProjectList[i]
+		expr := projectList[i]
 		outputProject[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: projectTag, ColPos: int32(i),
 		}}}
@@ -2349,6 +2369,22 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		},
 	}
 	if autoIncrementReorder {
+		// These expressions are consumed after arbitration. Their binding tag is
+		// updated by the caller; their positions must follow the same permutation
+		// as the retained row, including computed index-lock columns.
+		for name, pos := range colName2Idx {
+			mapped, ok := outputRemapping[[2]int32{selectTag, pos}]
+			if !ok {
+				return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+					"missing INSERT IGNORE retained output column")
+			}
+			colName2Idx[name] = mapped[1]
+		}
+		for _, expr := range appendedUniqueProjs {
+			if err := builder.remapColRefForExpr(expr, outputRemapping, &RemapInfo{tip: "INSERT IGNORE output"}); err != nil {
+				return 0, 0, nil, err
+			}
+		}
 		pkName := catalog.ResolveAlias(tableDef.Pkey.PkeyColName)
 		autoColumn, ok := colName2Idx[tableDef.Name+"."+pkName]
 		if !ok {
@@ -2357,7 +2393,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		}
 		arbiterNode.PreInsertUkCtx.AutoIncrementReorder = true
 		arbiterNode.PreInsertUkCtx.AutoIncrementColumn = autoColumn
-		arbiterNode.PreInsertUkCtx.AutoIncrementGeneratedColumn = markerSelectPos
+		arbiterNode.PreInsertUkCtx.AutoIncrementGeneratedColumn = int32(outputWidth)
 		arbiterNode.PreInsertUkCtx.AutoIncrementKeyIndex = 0
 		arbiterNode.PreInsertUkCtx.AutoIncrementOutputColumn = autoColumn
 	}

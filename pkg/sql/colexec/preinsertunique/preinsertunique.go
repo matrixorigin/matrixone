@@ -856,7 +856,11 @@ func (preInsertUnique *PreInsertUnique) compactAutoIncrementCandidates(proc *pro
 		return nil
 	}
 	if queue.runIndex >= len(queue.runs) {
-		queue.reset()
+		// Buffer exhaustion is not a new statement. Keep the accepted explicit
+		// key fence and type contract across subsequent batches until Reset/Free.
+		queue.runs = nil
+		queue.runIndex = 0
+		queue.runOffset = 0
 		return nil
 	}
 	if queue.runIndex < 1024 || queue.runIndex < len(queue.runs)/2 {

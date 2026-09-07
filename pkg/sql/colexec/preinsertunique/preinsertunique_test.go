@@ -686,6 +686,28 @@ func TestAutoIncrementCandidateStreamCompressesArithmeticRuns(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestAutoIncrementCandidateCompactionRetainsStatementState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := newInsertIgnoreAutoIncrementArgument()
+	stream := &arg.ctr.autoIncrementCandidates
+	require.NoError(t, stream.discardThrough(10))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 11))
+	_, ok, err := arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, arg.compactAutoIncrementCandidates(proc))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 9))
+	_, ok, err = arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.False(t, ok, "compaction must not reintroduce a fenced candidate")
+	require.Error(t, stream.append(types.T_int64.ToType(), 12))
+	stream.reset()
+	require.NoError(t, stream.append(types.T_int64.ToType(), 9))
+	_, ok, err = arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.True(t, ok, "only statement reset clears the fence and type")
+}
+
 func TestODKUTargetArbitrationUsesOrderedStatementLocalState(t *testing.T) {
 	testCases := []struct {
 		name              string

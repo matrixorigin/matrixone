@@ -521,15 +521,26 @@ create table auto_increment_session_ddl_alter(v int);
 alter table auto_increment_session_ddl_alter add column id bigint auto_increment, algorithm = copy;
 create table auto_increment_session_ddl_create(id bigint auto_increment, v int);
 create table auto_increment_session_ddl_explicit(id bigint auto_increment, v int) auto_increment = 100;
+-- Same-CN exact oracle for independence from the creator's session offset.
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_ddl_alter(v) values (0);
+insert into auto_increment_session_ddl_create(v) values (0);
+insert into auto_increment_session_ddl_explicit(v) values (0);
+select id from auto_increment_session_ddl_alter;
+select id from auto_increment_session_ddl_create;
+select id from auto_increment_session_ddl_explicit;
 -- @session:id=1{
 set auto_increment_increment = 1;
 set auto_increment_offset = 1;
-insert into auto_increment.auto_increment_session_ddl_alter(v) values (1);
-insert into auto_increment.auto_increment_session_ddl_create(v) values (1);
-insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1);
-select id from auto_increment.auto_increment_session_ddl_alter;
-select id from auto_increment.auto_increment_session_ddl_create;
-select id from auto_increment.auto_increment_session_ddl_explicit;
+insert into auto_increment.auto_increment_session_ddl_alter(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_create(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1), (2), (3);
+-- A different CN may reserve the next block. Verify writer step and table
+-- start, not a gapless first ID. Creator-session metadata is checked separately.
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_alter where v > 0;
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_create where v > 0;
+select count(*), min(id) > 100, max(id)-min(id) from auto_increment.auto_increment_session_ddl_explicit where v > 0;
 -- @session}
 drop table auto_increment_session_ddl_alter;
 drop table auto_increment_session_ddl_create;
@@ -614,6 +625,17 @@ select result from generate_series(1, 20000) g;
 select last_insert_id();
 select min(id), max(id), count(*) from auto_increment_multi_batch;
 drop table auto_increment_multi_batch;
+
+-- Provenance must survive multiple computed lock keys and a CHECK filter.
+-- A row rejected by either UK must not reserve its other key for later rows.
+drop table if exists auto_increment_ignore_aux;
+create table auto_increment_ignore_aux(id bigint auto_increment primary key, a varchar(10), b int check(b>0), c varchar(10), unique key uk_ab(a,b), unique key uk_c(c(2)));
+insert ignore into auto_increment_ignore_aux(a,b,c) values ('aa',1,'xy1'),('aa',1,'zz1'),('bb',2,'xy2'),('bb',2,'zz2');
+select id,a,b,c from auto_increment_ignore_aux order by id;
+select last_insert_id();
+select id from auto_increment_ignore_aux force index(uk_ab) where a='bb' and b=2;
+select id from auto_increment_ignore_aux force index(uk_c) where c='zz2';
+drop table auto_increment_ignore_aux;
 
 -- An all-manual INSERT reports zero in its OK packet but must not change the
 -- session value observed by LAST_INSERT_ID().

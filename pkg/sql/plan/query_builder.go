@@ -3566,7 +3566,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
 		remapInfo.tip = "PreInsertUkCtx"
+		autoOutput := node.PreInsertUkCtx.AutoIncrementOutputColumn
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			node.PreInsertUkCtx.AutoIncrementOutputColumn = -1
+		}
 		for i, output := range neededOutputs {
+			if node.PreInsertUkCtx.AutoIncrementReorder && output == autoOutput {
+				node.PreInsertUkCtx.AutoIncrementOutputColumn = int32(i)
+			}
 			expr := node.ProjectList[output]
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
@@ -3578,6 +3585,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			newProjectList = append(newProjectList, expr)
 		}
 		node.ProjectList = newProjectList
+		if node.PreInsertUkCtx.AutoIncrementReorder && node.PreInsertUkCtx.AutoIncrementOutputColumn < 0 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "INSERT IGNORE auto-increment output was pruned")
+		}
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
 			if len(neededOutputs) == 0 || neededOutputs[len(neededOutputs)-1] != targetOutputPos {

@@ -401,8 +401,8 @@ func (col *columnCache) applyAutoValues(
 			if err != nil {
 				return err
 			}
-			if err = col.allocateLockedWithOptions(
-				ctx, tableID, allocationCount, cul, txnOp, options); err != nil {
+			if err = col.allocateLocked(
+				ctx, tableID, allocationCount, cul, txnOp); err != nil {
 				return err
 			}
 		}
@@ -464,18 +464,6 @@ func (col *columnCache) allocateLocked(
 	count int,
 	beforeApplyCount uint64,
 	txnOp client.TxnOperator) error {
-	return col.allocateLockedWithOptions(
-		ctx, tableID, count, beforeApplyCount, txnOp,
-		NormalizeAutoIncrementOptions(1, 1))
-}
-
-func (col *columnCache) allocateLockedWithOptions(
-	ctx context.Context,
-	tableID uint64,
-	count int,
-	beforeApplyCount uint64,
-	txnOp client.TxnOperator,
-	options AutoIncrementOptions) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -483,7 +471,10 @@ func (col *columnCache) allocateLockedWithOptions(
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 
-	if options.isDefault() && col.cfg.CountPerAllocate > count {
+	// Session options select values inside a table-owned range, not the range
+	// reservation policy. Keep the configured unit-span minimum for all writers
+	// so non-default one-row statements do not each require an allocator txn.
+	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
 	concurrent := col.concurrencyApply.Load()
@@ -535,10 +526,9 @@ func (col *columnCache) allocateLockedWithOptions(
 
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	options := AutoIncrementOptionsFromContext(ctx)
-	// A non-default statement reserves the exact underlying span it needs in
-	// applyAutoValues.  Background prefetch here would reserve a default-sized
-	// block which may contain no values for this session's residue and would
-	// create avoidable high-water jumps.
+	// Non-default series allocate on demand in applyAutoValues, using at least
+	// the configured span. Keep background prefetch disabled: unlike demand
+	// allocation it has no row requirement to size for a large increment.
 	if !options.isDefault() {
 		return nil
 	}

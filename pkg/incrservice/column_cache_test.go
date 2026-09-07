@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -110,6 +111,120 @@ func TestColumnCacheInsertHonorsStatementSeries(t *testing.T) {
 				vector.MustFixedColWithTypeCheck[uint64](input))
 		},
 	)
+}
+
+func TestColumnCacheSessionSeriesAmortizesAllocation(t *testing.T) {
+	runColumnCacheTests(t, 30, 1, func(ctx context.Context, c *columnCache) {
+		ctx = WithAutoIncrementOptions(ctx, 3, 2)
+		mp := mpool.MustNew("series-test")
+		for i := 0; i < 100; i++ {
+			v := vector.NewVec(types.T_uint64.ToType())
+			require.NoError(t, vector.AppendFixed(v, uint64(0), true, mp))
+			id, err := c.insertAutoValues(ctx, 0, v, 1, nil)
+			v.Free(mp)
+			require.NoError(t, err)
+			require.Equal(t, uint64(2+3*i), id)
+		}
+		// Ten owned spans suffice for 100 one-row statements. The counter also
+		// includes initial allocation, and guards against per-statement I/O.
+		require.LessOrEqual(t, c.allocateCount.Load(), uint64(10))
+		require.Zero(t, mp.CurrNB())
+	})
+}
+
+func BenchmarkColumnCacheStatementSeries(b *testing.B) {
+	for _, increment := range []uint64{1, 3, 64} {
+		b.Run(fmt.Sprintf("increment_%d", increment), func(b *testing.B) {
+			runtime.RunTest("", func(rt runtime.Runtime) {
+				ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+				ctx = WithAutoIncrementOptions(ctx, increment, 1)
+				store := NewMemStore()
+				col := AutoColumn{ColName: "id", Step: 1}
+				require.NoError(b, store.Create(ctx, 0, []AutoColumn{col}, nil))
+				a := newValueAllocator("", store)
+				defer a.close()
+				c, err := newColumnCache(ctx, "", 0, col, Config{CountPerAllocate: 10000}, true, a, nil)
+				require.NoError(b, err)
+				var previous uint64
+				apply := func(_ int, value uint64) error {
+					if value <= previous || (value-1)%increment != 0 {
+						b.Fatalf("invalid generated value %d after %d", value, previous)
+					}
+					previous = value
+					return nil
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					err := c.applyAutoValues(ctx, 0, 1, nil, func(int) bool { return false }, apply, nil,
+						NormalizeAutoIncrementOptions(increment, 1))
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(c.allocateCount.Load())/float64(b.N), "allocations/op")
+			})
+		})
+	}
+}
+
+func TestColumnCacheConcurrentSessionSeries(t *testing.T) {
+	runColumnCacheTests(t, 1000, 1, func(ctx context.Context, c *columnCache) {
+		start := make(chan struct{})
+		values := make(chan uint64, 60)
+		errors := make(chan error, 3)
+		var ready, done sync.WaitGroup
+		for _, increment := range []uint64{1, 3, 64} {
+			ready.Add(1)
+			done.Add(1)
+			go func(increment uint64) {
+				defer done.Done()
+				mp := mpool.MustNew("concurrent-series")
+				statementCtx := WithAutoIncrementOptions(ctx, increment, 1)
+				ready.Done()
+				<-start
+				var previous uint64
+				for i := 0; i < 20; i++ {
+					v := vector.NewVec(types.T_uint64.ToType())
+					if err := vector.AppendFixed(v, uint64(0), true, mp); err != nil {
+						v.Free(mp)
+						errors <- err
+						return
+					}
+					id, err := c.insertAutoValues(statementCtx, 0, v, 1, nil)
+					v.Free(mp)
+					if err != nil {
+						errors <- err
+						return
+					}
+					if id <= previous || (id-1)%increment != 0 {
+						errors <- fmt.Errorf("series %d: value %d after %d", increment, id, previous)
+						return
+					}
+					values <- id
+					previous = id
+				}
+				if mp.CurrNB() != 0 {
+					errors <- fmt.Errorf("unreleased vector memory: %d", mp.CurrNB())
+				}
+			}(increment)
+		}
+		ready.Wait()
+		close(start)
+		done.Wait()
+		close(errors)
+		close(values)
+		for err := range errors {
+			require.NoError(t, err)
+		}
+		seen := make(map[uint64]bool)
+		for id := range values {
+			require.False(t, seen[id], "sessions must not reuse the same owned value")
+			seen[id] = true
+		}
+		require.Len(t, seen, 60)
+	})
 }
 
 func TestInsertInt8(t *testing.T) {
