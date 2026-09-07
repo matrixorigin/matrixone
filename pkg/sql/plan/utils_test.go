@@ -475,6 +475,39 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedParamValueNumericReprepareType(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 5, 1)
+	wideDecimalType := types.New(types.T_decimal256, 65, 30)
+	for _, test := range []struct {
+		name  string
+		value any
+		want  types.Type
+		ok    bool
+	}{
+		{name: "runtime integer widens", value: ParamValue{Value: "64", RuntimeType: types.T_int32.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
+		{name: "unsigned integer preserves sign domain", value: ParamValue{Value: "64", RuntimeType: types.T_uint8.ToType(), HasRuntimeType: true}, want: types.T_uint64.ToType(), ok: true},
+		{name: "source decimal gets parameter envelope", value: ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true}, want: wideDecimalType, ok: true},
+		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamFloat}, want: types.T_float64.ToType(), ok: true},
+		{name: "float32 widens", value: ParamValue{Value: "1.5", RuntimeType: types.T_float32.ToType(), HasRuntimeType: true}, want: types.T_float64.ToType(), ok: true},
+		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: vector.PrepareParamBoolean}, want: types.T_int64.ToType(), ok: true},
+		{name: "null has no type", value: ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}},
+		{name: "untyped text stays text", value: ParamValue{Value: "64"}},
+		{name: "primitive unsigned widens", value: uint16(64), want: types.T_uint64.ToType(), ok: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedParamValueNumericReprepareType(test.value)
+			require.Equal(t, test.ok, ok)
+			if test.ok {
+				require.Equal(t, test.want, got)
+			}
+		})
+	}
+}
+
 func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {

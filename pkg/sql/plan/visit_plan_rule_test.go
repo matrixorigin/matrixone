@@ -1305,6 +1305,70 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
 }
 
+func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {
+	ctx := context.Background()
+	makeQuery := func(t *testing.T) *planpb.Plan {
+		t.Helper()
+		param := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+		ord, err := BindFuncExprImplByPlanExpr(ctx, "ord", []*planpb.Expr{param})
+		require.NoError(t, err)
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_VALUE_SCAN,
+				ProjectList: []*planpb.Expr{ord},
+			}},
+		}}}
+	}
+
+	for _, test := range []struct {
+		name  string
+		value ParamValue
+		want  types.T
+	}{
+		{
+			name: "sql execute varbinary source",
+			value: ParamValue{
+				Value: "\xc3\xa9", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+			},
+			want: types.T_varbinary,
+		},
+		{
+			name: "com stmt binary string metadata",
+			value: ParamValue{
+				Value: "\xc3\xa9", IsBinaryString: true, IsBinaryProtocol: true,
+			},
+			want: types.T_varbinary,
+		},
+		{
+			name: "sql execute text source control",
+			value: ParamValue{
+				Value: "\xc3\xa9", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+			want: types.T_text,
+		},
+		{
+			name: "null keeps prepared domain",
+			value: ParamValue{
+				SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+			},
+			want: types.T_text,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, makeQuery(t), []any{test.value})
+			require.NoError(t, err)
+			ord := filled.GetQuery().Nodes[0].ProjectList[0]
+			require.Equal(t, test.want, types.T(ord.GetF().Args[0].Typ.Id), ord.String())
+		})
+	}
+}
+
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(t *testing.T) {
 	ctx := context.Background()
 	makeParam := func() *planpb.Expr {

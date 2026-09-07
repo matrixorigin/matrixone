@@ -1086,13 +1086,24 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 // decoded.  In particular, this avoids scanning/deep-copying the entire plan
 // on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
+	return preparedPlanFunctionFallbackParamPositions(preparePlan, "abs")
+}
+
+// PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
+// marker positions whose prepare-time binary-string default must be rebound
+// only when execution supplies a numeric domain.
+func PreparedPlanBitCountFallbackParamPositions(preparePlan *Plan) []int32 {
+	return preparedPlanFunctionFallbackParamPositions(preparePlan, "bit_count")
+}
+
+func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), functionName) || len(fn.Args) != 1 {
 			return nil
 		}
 		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
@@ -1143,6 +1154,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
+		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
 	}
 }
 
@@ -4000,6 +4012,14 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
+			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
+			// BIT_COUNT has its own value-aware trigger: unresolved markers keep
+			// the binary-string plan for text/BLOB packets and specialize only
+			// numeric executions. Do not put every execution on the generic
+			// deep-copy path.
+			return
+		}
 		if name == "cast" && isExplicitPreparedCast(expr) {
 			// The user-selected cast owns the parameter domain. Its direct marker
 			// does not require runtime specialization, but a nested expression can
@@ -4749,6 +4769,12 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 type ParamValue struct {
 	Value any
 	IsBin bool
+	// IsBinaryString is the execute-time text/binary domain advertised by a
+	// prepared parameter. It is separate from IsBin (literal syntax) and from
+	// RuntimeType (numeric overload selection): COM_STMT BLOB families carry a
+	// binary string domain while retaining the prepared statement's text-shaped
+	// transport type.
+	IsBinaryString bool
 	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
 	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
 	// binary-protocol value without being a binary string literal.
@@ -4756,9 +4782,9 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
 	// is deliberately separate from RuntimeType: SQL parameters are transported
-	// through a text vector, and their source type is used only after an
-	// arithmetic consumer establishes a numeric domain. Comparisons keep their
-	// existing common-type and numeric-prefix contracts.
+	// through a text vector. Numeric consumers use it only after establishing a
+	// numeric domain, while string consumers must retain its text/binary domain.
+	// Comparisons keep their existing common-type and numeric-prefix contracts.
 	SourceType    types.Type
 	HasSourceType bool
 	// RuntimeType is the type advertised by the binary-protocol parameter
@@ -4788,6 +4814,115 @@ type ParamValue struct {
 	// capability on each value so execute-time plan specialization does not need
 	// to guess a service identity from context.Context.
 	EnableNumericPrefix bool
+}
+
+// PreparedParamValueHasNumericRuntime reports whether a prepared marker's
+// current SQL/protocol value owns a numeric domain. It deliberately does not
+// infer numbers from text: consumers such as BIT_COUNT distinguish the binary
+// bytes "64" from the integer 64.
+func PreparedParamValueHasNumericRuntime(value any) bool {
+	_, ok := PreparedParamValueNumericReprepareType(value)
+	return ok
+}
+
+// PreparedParamValueNumericReprepareType returns the canonical numeric type that
+// a prepared marker owns after a MySQL-style reprepare. It deliberately does
+// not infer numbers from untyped text: consumers such as BIT_COUNT distinguish
+// the binary bytes "64" from the integer 64.
+//
+// This is a parameter category, not the source's physical width. MySQL
+// normalizes every integer to LONGLONG, every floating-point value to DOUBLE,
+// and DECIMAL to the maximum parameter precision. Retaining TINYINT or
+// DECIMAL(3,1), for example, would incorrectly constrain a later string value.
+func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			return types.Type{}, false
+		}
+		if param.HasRuntimeType && preparedRuntimeTypeIsNumeric(param.RuntimeType) {
+			return preparedNumericReprepareType(param.RuntimeType)
+		}
+		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
+			return preparedNumericReprepareType(param.SourceType)
+		}
+		switch param.PrepareParamKind {
+		case vector.PrepareParamInteger:
+			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
+				return preparedNumericReprepareType(typ)
+			}
+			// Preserve the protocol domain even for an internally malformed value;
+			// materialization remains responsible for returning the existing error.
+			return types.T_int64.ToType(), true
+		case vector.PrepareParamFloat:
+			return types.T_float64.ToType(), true
+		case vector.PrepareParamDecimal:
+			return mysqlPreparedDecimalReprepareType(), true
+		case vector.PrepareParamBoolean:
+			return types.T_int64.ToType(), true
+		}
+		return PreparedParamValueNumericReprepareType(param.Value)
+	}
+	var source types.Type
+	switch value.(type) {
+	case bool:
+		source = types.T_bool.ToType()
+	case int, int64:
+		source = types.T_int64.ToType()
+	case int8:
+		source = types.T_int8.ToType()
+	case int16:
+		source = types.T_int16.ToType()
+	case int32:
+		source = types.T_int32.ToType()
+	case uint, uint64:
+		source = types.T_uint64.ToType()
+	case uint8:
+		source = types.T_uint8.ToType()
+	case uint16:
+		source = types.T_uint16.ToType()
+	case uint32:
+		source = types.T_uint32.ToType()
+	case float32:
+		source = types.T_float32.ToType()
+	case float64:
+		source = types.T_float64.ToType()
+	case types.MoYear:
+		source = types.T_year.ToType()
+	case types.Decimal64:
+		source = types.T_decimal64.ToType()
+	case types.Decimal128:
+		source = types.T_decimal128.ToType()
+	case types.Decimal256:
+		source = types.T_decimal256.ToType()
+	default:
+		return types.Type{}, false
+	}
+	return preparedNumericReprepareType(source)
+}
+
+func preparedNumericReprepareType(source types.Type) (types.Type, bool) {
+	switch {
+	case source.Oid.IsUnsignedInt(), source.Oid == types.T_bit:
+		return types.T_uint64.ToType(), true
+	case source.Oid.IsSignedInt(), source.Oid == types.T_bool, source.Oid == types.T_year:
+		return types.T_int64.ToType(), true
+	case source.Oid == types.T_float32, source.Oid == types.T_float64:
+		return types.T_float64.ToType(), true
+	case source.IsDecimal():
+		return mysqlPreparedDecimalReprepareType(), true
+	default:
+		return types.Type{}, false
+	}
+}
+
+func mysqlPreparedDecimalReprepareType() types.Type {
+	// MySQL's DECIMAL_MAX_PRECISION and DECIMAL_MAX_SCALE. DECIMAL256 is
+	// MatrixOne's physical carrier for that logical parameter envelope.
+	return types.New(types.T_decimal256, 65, 30)
+}
+
+func preparedRuntimeTypeIsNumeric(typ types.Type) bool {
+	return typ.IsNumeric() || typ.Oid == types.T_bool || typ.Oid == types.T_bit || typ.Oid == types.T_year
 }
 
 // PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
@@ -5788,6 +5923,8 @@ func replaceParamValsWithSelection(
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
+		stringDomainType := types.Type{}
+		hasStringDomainType := false
 		numericPrefixSource := false
 		retainParamRef := false
 		if param, ok := val.(ParamValue); ok {
@@ -5800,6 +5937,23 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			// Plan specialization materializes every marker in the copied plan,
+			// including markers outside the expression that triggered it. Preserve
+			// an execute-time binary string domain here so functions such as ORD do
+			// not silently receive a TEXT literal merely because a sibling regexp or
+			// numeric expression required specialization. NULL keeps the prepared
+			// marker's domain, and numeric RuntimeType remains authoritative below.
+			if param.Value != nil {
+				switch {
+				case param.HasSourceType &&
+					types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
+					stringDomainType = param.SourceType
+					hasStringDomainType = true
+				case param.IsBinaryString:
+					stringDomainType = types.T_varbinary.ToType()
+					hasStringDomainType = true
+				}
+			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
@@ -5818,6 +5972,8 @@ func replaceParamValsWithSelection(
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
+		} else if hasStringDomainType {
+			paramType = makePlan2Type(&stringDomainType)
 		}
 		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
 		directRuntimeResult = directRuntimeResult && hasRuntimeType
