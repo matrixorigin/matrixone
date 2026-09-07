@@ -365,11 +365,10 @@ func (c *Compile) runSiriusStreamRead(
 			}
 			producerDone <- producerErr
 		}()
-		producerErr = c.prePipelineInitializer()
-		if producerErr == nil {
+		producerErr = c.runPipelineAttempt(func() error {
 			c.MessageBoard.BeforeRunonce()
-			producerErr = c.runOnce()
-		}
+			return c.runOnce()
+		})
 	}()
 
 	resultErr := owner.execution.Run(runCtx, c.proc.Mp(), c.counterSet, c.fill)

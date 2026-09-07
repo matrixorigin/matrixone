@@ -1,6 +1,6 @@
 # Sirius streamed MatrixOne input protocol
 
-Status: review iteration 7 committed locally; correctness passed, performance gate failed
+Status: review iteration 7 submitted for review; recorded correctness passed, performance gate failed
 
 Design version: 1
 
@@ -900,21 +900,25 @@ Detailed measurements and validation are recorded in
 
 ## 15. Delivery pins
 
-The local candidate dependencies are pinned to the revisions below; these
-commits have not been pushed. Final
+The candidate dependencies are submitted in the PRs below. Final
 implementation approval remains dependent on the three-repository static/build
 evidence and the acceptance evidence in section 14. Updating any production
 revision invalidates only the evidence whose semantic inputs changed.
-The MatrixOne implementation and this record share one commit, which cannot
-contain its own Git object ID. A future PR update can pin that commit after push.
+The measured MatrixOne implementation is `5a48bc3ad38a2db877d8b51f58a8caa21532fce6`.
+Before publication, current main was merged and the streamed producer was
+adapted to main's `runPipelineAttempt` initializer/cleanup owner. Package and
+focused integration checks cover this adaptation; the recorded SF10 timings
+are from before that merge, not fresh measurements of the delivery head.
+The PR body records the final MatrixOne head after this document is committed.
 
 | Component | PR | Candidate delivery commit | Evidence |
 | --- | --- | --- | --- |
-| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | local commit containing this record | bounded producer window, matching capability identity, package/race checks, and SF10 evidence recorded; performance gate remains open |
-| Sirius | successor to [#10](https://github.com/matrixorigin/sirius/pull/10) | `d36467ac71a824dba5f464a94cf2d7f4d6deb248` | pooled bounded source batches, nullable-data handling, GPU memory checks, and SF10 evidence recorded |
-| sidecar | successor to [#19](https://github.com/matrixorigin/mo-sirius-sidecar/pull/19) | `cc494aa` | Sirius pin, terminal input states, wakeup and bitmap compatibility fixes, capability and stream tests recorded |
+| MatrixOne | [#27599](https://github.com/matrixorigin/matrixone/pull/27599) | final head recorded in PR body | bounded producer window, matching capability identity, package/race checks, and historical SF10 evidence recorded; performance gate remains open |
+| Sirius | [#12](https://github.com/matrixorigin/sirius/pull/12) | `902af81f4f906a2672bb3c75b36438bb79da6ce2` | pooled bounded source batches and nullable handling; merged #11 without changing production serialization behavior; recorded GPU/SF10 evidence uses `d36467ac71a824dba5f464a94cf2d7f4d6deb248` |
+| sidecar | [#20](https://github.com/matrixorigin/mo-sirius-sidecar/pull/20) | `73889951c15f4346f7aa38b0600f07a8ef76c49b` | updated Sirius pin; terminal input states, wakeup and bitmap compatibility fixes; recorded stream tests use `cc494aa` |
 
-The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
+Merge Sirius #12 first, then update the sidecar submodule to the upstream merged
+Sirius commit before merging sidecar #20. The MatrixOne PR
 body must link this design at its approved commit and the final evidence record.
 
 ## 16. Decision log

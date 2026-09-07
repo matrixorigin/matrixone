@@ -2,10 +2,17 @@
 
 Date: 2026-09-07. This records the local continuation of review iteration 7.
 
-Committed dependencies: Sirius `d36467ac71a824dba5f464a94cf2d7f4d6deb248`
+Measured dependencies: Sirius `d36467ac71a824dba5f464a94cf2d7f4d6deb248`
 and sidecar `cc494aa`, whose Sirius submodule points to that commit. The
-MatrixOne implementation and this record are committed together. The commits
-record the validated source without changing its executable behavior.
+MatrixOne implementation and the original record were committed together as
+`5a48bc3ad38a2db877d8b51f58a8caa21532fce6` without changing executable behavior.
+
+Publication subsequently merged current MatrixOne main and adapted the stream
+producer to its existing `runPipelineAttempt` lifecycle owner. The timings below
+have not been rerun after that merge. Sirius PR [#12](https://github.com/matrixorigin/sirius/pull/12)
+publishes `902af81f4f906a2672bb3c75b36438bb79da6ce2` after merging the already-landed
+pipeline-serialization fix; sidecar PR [#20](https://github.com/matrixorigin/mo-sirius-sidecar/pull/20)
+publishes `73889951c15f4346f7aa38b0600f07a8ef76c49b` with that updated submodule pin.
 
 ## Result
 
@@ -143,10 +150,12 @@ only in the Sirius-owned copy before GPU decoding.
 - Two all-22 pooled-buffer runs pass. The final one includes the nullable-input
   fixes. The subsequently added stale-descriptor test and comment changes do
   not change that execution path.
-- No MatrixOne production Go changes were made in this continuation; existing
-  Go validation is not rerun for documentation-only changes.
-- All input bounds and two GPU workers remain enabled. The 2x performance gate,
-  repeated median campaign, and PR delivery remain outstanding.
+- No MatrixOne production Go changes were made during the measured pooling
+  continuation. Publication later required the initializer API adaptation
+  described above; its Go validation is recorded separately in the PR body.
+- All input bounds and two GPU workers remain enabled. The 2x performance gate
+  and repeated median campaign remain outstanding. PR publication and post-merge
+  validation are recorded separately in design section 15 and the PR bodies.
 
 Local raw evidence is retained under
 `.e2e-27599/readthrough-mo.39FHiT/`: runner/configs, `q1-cpu.pprof`,
