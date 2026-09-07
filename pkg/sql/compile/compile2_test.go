@@ -15,12 +15,14 @@
 package compile
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -404,11 +406,79 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.query != nil {
+				test.query.Steps = []int32{0}
+			}
 			needsLock, hasUnresolvedFullText := selectMetaLockRequirement(test.query)
 			require.Equal(t, test.wantLock, needsLock)
 			require.Equal(t, test.wantUnresolvedFull, hasUnresolvedFullText)
 		})
 	}
+}
+
+func TestSelectMetaLockRequirementOptimizedFullText(t *testing.T) {
+	for index, sql := range []string{
+		"select id from constraint_test.docs_ft where match(body) against('hello')",
+		"select count(*) from constraint_test.docs_ft where match(body) against('hello')",
+		"select match(body) against('hello') from constraint_test.docs_ft",
+		"select id from constraint_test.docs_ft where match(body) against('hello') > 0",
+		"select id from constraint_test.docs_ft order by match(body) against('hello') desc",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := plan2.NewMockOptimizer(true)
+			ctx := optimizer.CurrentContext()
+			ctx.GetProcess().SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return "BM25", nil
+			})
+			statements, err := mysql.Parse(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			built, err := plan2.BuildPlan(ctx, statements[0], false)
+			require.NoError(t, err)
+			if index < 2 {
+				// These optimizer outputs retain the abandoned original filter.
+				// The previous all-Nodes classifier would lock both queries.
+				retainedMatch := false
+				for _, node := range built.GetQuery().Nodes {
+					retainedMatch = retainedMatch || expressionsContainUnresolvedFullText(node.FilterList)
+				}
+				require.True(t, retainedMatch)
+			}
+			needsLock, unresolved := selectMetaLockRequirement(built.GetQuery())
+			require.False(t, unresolved)
+			require.False(t, needsLock)
+		})
+	}
+}
+
+func TestSelectMetaLockRequirementReachability(t *testing.T) {
+	match := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+	}}}
+	query := &plan.Query{
+		Steps: []int32{0, 2, -1, 99},
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{1, -1, 99}},
+			{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{match}},
+			{NodeType: plan.Node_PROJECT, Children: []int32{3, 3, -1, 99, 4}},
+			{NodeType: plan.Node_TABLE_SCAN, Children: []int32{0}},
+			nil,
+		},
+	}
+	lock, unresolved := selectMetaLockRequirement(query)
+	require.False(t, lock)
+	require.False(t, unresolved)
+
+	query.Nodes[3].FilterList = []*plan.Expr{match}
+	lock, unresolved = selectMetaLockRequirement(query)
+	require.True(t, lock)
+	require.True(t, unresolved)
+
+	query.Nodes[3].FilterList = nil
+	query.Nodes[3].NodeType = plan.Node_LOCK_OP
+	lock, unresolved = selectMetaLockRequirement(query)
+	require.True(t, lock)
+	require.False(t, unresolved)
 }
 
 // ============================================================================

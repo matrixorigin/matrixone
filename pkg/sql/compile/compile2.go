@@ -264,9 +264,26 @@ func selectMetaLockRequirement(query *plan.Query) (needsLock, hasUnresolvedFullT
 	if query == nil {
 		return false, false
 	}
-	for _, node := range query.Nodes {
+	// Nodes is optimizer storage: abandoned filters can still contain MATCH.
+	// Inspect only the executable graph, following source-step indirections too.
+	visited := make([]bool, len(query.Nodes))
+	pending := append([]int32(nil), query.Steps...)
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(query.Nodes) || visited[id] {
+			continue
+		}
+		visited[id] = true
+		node := query.Nodes[id]
 		if node == nil {
 			continue
+		}
+		pending = append(pending, node.Children...)
+		for _, step := range node.SourceStep {
+			if step >= 0 && int(step) < len(query.Steps) {
+				pending = append(pending, query.Steps[step])
+			}
 		}
 		if node.NodeType == plan.Node_LOCK_OP {
 			needsLock = true
