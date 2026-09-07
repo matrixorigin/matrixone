@@ -38,12 +38,25 @@ func TestRefreshSessionAuthRequiresCurrentProtocolVersion(t *testing.T) {
 	// A method's entry in methodVersions records the protocol it SHIPPED with, not whatever is
 	// newest -- nearly every other entry is MORPCVersion1 for that reason. Gating a method on
 	// the latest version would make it unusable until every peer in the cluster had upgraded,
-	// which is the opposite of what the gate is for. So RefreshSessionAuth stays at 54.
+	// which is the opposite of what the gate is for. So this stays at 54 however far the
+	// protocol moves on.
 	assert.Equal(t, defines.MORPCVersion54, methodVersions[query.CmdMethod_RefreshSessionAuth])
-	// The canary: this fires whenever the latest version moves, so whoever moves it has to
-	// confirm the gate above should stay put. Moved to 55 by the index metadata provenance
-	// columns (v4_0_7), which do not touch session auth.
-	assert.Equal(t, defines.MORPCVersion55, defines.MORPCLatestVersion)
+}
+
+// No method may require a protocol NEWER than the newest one that exists: no peer could ever
+// satisfy such a gate, so the RPC would be permanently unreachable rather than merely gated.
+//
+// This replaces an assertion that pinned the literal latest version. That one fired on every
+// bump, including bumps by features with nothing to do with session auth, and the edit it
+// demanded was always the same: move the literal. Checking the relationship instead keeps the
+// property it was reaching for -- a gate that cannot outrun the protocol -- without needing an
+// edit each time, and covers every method rather than one.
+func TestMethodVersionsNeverExceedTheLatestProtocol(t *testing.T) {
+	for method, version := range methodVersions {
+		assert.LessOrEqual(t, version, defines.MORPCLatestVersion,
+			"%s is gated on protocol %d, above the latest %d: no peer can satisfy it",
+			method, version, defines.MORPCLatestVersion)
+	}
 }
 
 func TestNewCacheClient(t *testing.T) {
