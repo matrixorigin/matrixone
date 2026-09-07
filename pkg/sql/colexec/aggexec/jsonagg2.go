@@ -1189,7 +1189,9 @@ func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJ
 	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
 		return buildValueByteJson(vec, row)
 	}
-	value, err := jsonvalue.FromVector(context.Background(), vec, int(row), nil, nil)
+	// Only TIME, DATETIME and YEAR enter this path. None needs opaque JSON
+	// admission; use the fail-closed protocol value if that set is expanded.
+	value, err := jsonvalue.FromVector(context.Background(), vec, int(row), nil, 0, nil)
 	if err != nil {
 		return bytejson.ByteJson{}, err
 	}
