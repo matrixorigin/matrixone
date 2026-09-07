@@ -236,8 +236,11 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
-	leftRank, leftKnown := byteJsonTypeRankForComparison(left)
-	rightRank, rightKnown := byteJsonTypeRankForComparison(right)
+	// Classify each complete document before comparing any descendants. A
+	// malformed container must not become valid or invalid depending on which
+	// child happens to differ from its comparison partner.
+	leftRank, leftKnown := byteJsonTypeRank(left)
+	rightRank, rightKnown := byteJsonTypeRank(right)
 	if !leftKnown || !rightKnown {
 		if leftKnown {
 			return -1
@@ -248,27 +251,10 @@ func CompareByteJson(left, right ByteJson) int {
 		return compareByteJsonFallback(left, right)
 	}
 	if leftRank != rightRank {
-		// A container only needs its full descendant validation when it is
-		// crossing a type-rank boundary. Same-rank containers can compare their
-		// first differing element without scanning the rest of the document.
-		if left.Type == TpCodeArray || left.Type == TpCodeObject ||
-			right.Type == TpCodeArray || right.Type == TpCodeObject {
-			leftRank, leftKnown = byteJsonTypeRank(left)
-			rightRank, rightKnown = byteJsonTypeRank(right)
-			if !leftKnown || !rightKnown {
-				if leftKnown {
-					return -1
-				}
-				if rightKnown {
-					return 1
-				}
-				return compareByteJsonFallback(left, right)
-			}
-		}
 		return compareInt64(int64(leftRank), int64(rightRank))
 	}
 
-	return compareByteJsonKnown(left, right, leftRank, false)
+	return compareByteJsonKnown(left, right, leftRank, true)
 }
 
 // CompareByteJsonPhysical preserves the pre-SQL-order relation used by
@@ -375,19 +361,6 @@ func compareByteJsonKnown(left, right ByteJson, rank jsonTypeRank, trusted bool)
 		return compareByteJsonFallback(left, right)
 	}
 	return cmp
-}
-
-func byteJsonTypeRankForComparison(value ByteJson) (jsonTypeRank, bool) {
-	switch value.Type {
-	case TpCodeObject:
-		_, _, ok := byteJsonContainerMetadata(value)
-		return jsonRankObject, ok
-	case TpCodeArray:
-		_, _, ok := byteJsonContainerMetadata(value)
-		return jsonRankArray, ok
-	default:
-		return byteJsonTypeRank(value)
-	}
 }
 
 func byteJsonTypeRankTrusted(value ByteJson) jsonTypeRank {

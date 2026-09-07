@@ -802,6 +802,13 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 	wideRight := encodeArray("1", false)
 	nestedLeft := encodeArray("0", true)
 	nestedRight := encodeArray("1", true)
+	boolean := func() []byte {
+		bj, err := bytejson.ParseFromString("false")
+		require.NoError(b, err)
+		data, err := types.EncodeJson(bj)
+		require.NoError(b, err)
+		return data
+	}()
 	b.Run("wide_array_column_vs_constant_first_element", func(b *testing.B) {
 		run(b, wideLeft, wideRight, false)
 	})
@@ -810,6 +817,12 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 	})
 	b.Run("nested_array_column_vs_column_first_element", func(b *testing.B) {
 		runColumns(b, nestedLeft, nestedRight)
+	})
+	b.Run("wide_array_column_vs_boolean_constant", func(b *testing.B) {
+		run(b, wideLeft, boolean, false)
+	})
+	b.Run("boolean_constant_vs_wide_array_column", func(b *testing.B) {
+		run(b, boolean, wideLeft, true)
 	})
 	b.Run("wide_array_column_vs_constant_null", func(b *testing.B) {
 		runConstantNull(b, wideLeft)
@@ -926,11 +939,14 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 		fn    fEvalFn
 		left  string
 		right string
+		want  bool
 	}{
-		{name: "less adjacent integers", fn: lessThanFn, left: "9007199254740992", right: "9007199254740993"},
-		{name: "greater adjacent integers", fn: greatThanFn, left: "9007199254740993", right: "9007199254740992"},
-		{name: "less equal precise decimals", fn: lessEqualFn, left: "0.123456789123456788", right: "0.123456789123456789"},
-		{name: "greater equal precise decimals", fn: greatEqualFn, left: "0.123456789123456789", right: "0.123456789123456788"},
+		{name: "less adjacent integers", fn: lessThanFn, left: "9007199254740992", right: "9007199254740993", want: true},
+		{name: "greater adjacent integers", fn: greatThanFn, left: "9007199254740993", right: "9007199254740992", want: true},
+		{name: "less equal precise decimals", fn: lessEqualFn, left: "0.123456789123456788", right: "0.123456789123456789", want: true},
+		{name: "greater equal precise decimals", fn: greatEqualFn, left: "0.123456789123456789", right: "0.123456789123456788", want: true},
+		{name: "array less than boolean", fn: lessThanFn, left: "[0,0]", right: "false", want: true},
+		{name: "boolean greater than array", fn: greatThanFn, left: "false", right: "[0,0]", want: true},
 	}
 
 	for _, test := range tests {
@@ -939,7 +955,7 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.left)}, []bool{false}),
 				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.right)}, []bool{false}),
 			}
-			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false})
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{test.want}, []bool{false})
 			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
 			ok, info := testCase.Run()
 			require.True(t, ok, info)

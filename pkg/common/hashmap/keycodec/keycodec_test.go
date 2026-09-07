@@ -133,6 +133,23 @@ func TestCanonicalJSONNumberContract(t *testing.T) {
 	require.Equal(t, len(nestedCanonical), CanonicalJSONSize(nestedInteger))
 }
 
+func TestCanonicalJSONMalformedContainerMatchesComparisonFallback(t *testing.T) {
+	left := mustEncodeJSON(t, `[1,false]`)
+	right := mustEncodeJSON(t, `[1.0,false]`)
+	leftValue := types.DecodeJson(left)
+	rightValue := types.DecodeJson(right)
+	leftValue.GetArrayElem(1).Data[0] = 0xff
+	rightValue.GetArrayElem(1).Data[0] = 0xff
+	require.False(t, bytejson.IsValidByteJson(leftValue))
+	require.False(t, bytejson.IsValidByteJson(rightValue))
+	require.NotZero(t, bytejson.CompareByteJson(leftValue, rightValue))
+	require.NotEqual(t, AppendCanonicalJSON(nil, left), AppendCanonicalJSON(nil, right))
+	require.Equal(t,
+		bytes.Compare(left, right) < 0,
+		bytes.Compare(AppendCanonicalJSON(nil, left), AppendCanonicalJSON(nil, right)) < 0,
+	)
+}
+
 func TestCanonicalJSONNumberDomainBoundaries(t *testing.T) {
 	tests := []struct {
 		name  string

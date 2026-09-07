@@ -398,11 +398,7 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				area []byte
 			}, size),
 		}
-		if typ.Oid == types.T_json {
-			merger = newMerger(mergeHost, sort.ByteJsonPhysicalLess, sortKeyPos, df)
-		} else {
-			merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, df)
-		}
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, df)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:

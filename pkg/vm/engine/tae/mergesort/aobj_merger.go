@@ -61,11 +61,7 @@ func MergeAObj(
 				area []byte
 			}, size),
 		}
-		if typ.Oid == types.T_json {
-			merger = newAObjMerger(vpool, batches, sort.ByteJsonPhysicalLess, sortKeyPos, df, toLayout)
-		} else {
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, df, toLayout)
-		}
+		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, df, toLayout)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:

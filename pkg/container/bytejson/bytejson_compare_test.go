@@ -202,6 +202,18 @@ func TestCompareByteJsonMalformedValuesUseGlobalFallbackDomain(t *testing.T) {
 	}
 }
 
+func TestCompareByteJsonMalformedContainerClassificationIsGlobal(t *testing.T) {
+	malformed := makeJson(t, `[0,0]`)
+	malformed.Data[headerSize+valEntrySize] = 0xfd
+	validArray := makeJson(t, `[1,0]`)
+	validBoolean := makeJson(t, `false`)
+
+	require.False(t, IsValidByteJson(malformed))
+	require.Greater(t, CompareByteJson(malformed, validArray), 0)
+	require.Less(t, CompareByteJson(validArray, validBoolean), 0)
+	require.Greater(t, CompareByteJson(malformed, validBoolean), 0)
+}
+
 func TestCompareByteJsonRejectsOversizedLiteral(t *testing.T) {
 	oversized := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}}
 	require.NotZero(t, CompareByteJson(makeJson(t, "null"), oversized))

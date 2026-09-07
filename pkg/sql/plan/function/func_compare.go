@@ -878,7 +878,11 @@ func prepareJSONComparisonAt(
 }
 
 func compareJSONComparisonValues(left, right jsonComparisonValue) int {
-	return bytejson.CompareByteJson(left.value, right.value)
+	// JSON vectors reaching SQL comparison are engine-owned values admitted by
+	// the type layer. The trusted comparator preserves the constant-time rank
+	// path; malformed or external values use CompareByteJson's validating
+	// fallback at their boundary instead of entering this row hot path.
+	return bytejson.CompareByteJsonTrusted(left.value, right.value)
 }
 
 func opBinaryJSONBytesBytesToFixedNullSafe(
