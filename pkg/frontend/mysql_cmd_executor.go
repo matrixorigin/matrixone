@@ -4997,6 +4997,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		if finishTxnOnReturn {
 			err = finishTxnFunc(ses, err, execCtx)
 		}
+		if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
+			owner.cleanupRetiredTempTables(execCtx.reqCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
