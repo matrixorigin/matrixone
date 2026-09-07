@@ -25,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -606,17 +607,19 @@ func TestValidateTimestampDataBranchSourceAfterLockFailures(t *testing.T) {
 	), wantErr)
 }
 
-func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
+func TestTimestampDataBranchDatabaseRevalidatesEveryLifecycleTableAfterAllLocks(t *testing.T) {
 	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
 	var catalogRows sync.RWMutex
 	catalogRows.Lock() // COPY ALTER holds one source row exclusively.
 
 	enteredLockPath := make(chan struct{})
 	allLocksHeld := make(chan struct{})
-	validated := make(chan string, 2)
+	validated := make(chan string, 3)
 	done := make(chan error, 1)
 	go func() {
 		// Database clone acquires all source locks before revalidating any table.
+		// The external row is part of this fence because view dependency sorting
+		// consults its catalog metadata after the timestamp advances.
 		close(enteredLockPath)
 		catalogRows.RLock()
 		close(allLocksHeld)
@@ -624,6 +627,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
 			{dbName: "db", tblName: "t1"},
 			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "external", relKind: catalog.SystemExternalRel},
 			{dbName: "db", tblName: "t2"},
 		}}
 		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
@@ -660,7 +664,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		t.Fatal("database clone did not acquire all source locks")
 	}
 	require.NoError(t, <-done)
-	require.ElementsMatch(t, []string{"t1", "t2"}, []string{<-validated, <-validated})
+	require.ElementsMatch(t, []string{"t1", "external", "t2"}, []string{<-validated, <-validated, <-validated})
 }
 
 func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
@@ -1301,19 +1305,44 @@ func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_rewriteCloneCreateSQL_RoundTripsInformationSchemaTables(t *testing.T) {
-	got, err := rewriteCloneCreateSQL(
-		sysview.InformationSchemaTablesDDL,
-		"information_schema",
-		"information_schema_new",
-		1,
-	)
-	require.NoError(t, err)
-	require.NotContains(t, got, " reg_match ")
-	require.Contains(t, got, "regexp_like(")
+func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		ddl               string
+		privateFunction   string
+		localCatalogToken string
+	}{
+		{
+			name:              "tables",
+			ddl:               sysview.InformationSchemaTablesDDL,
+			privateFunction:   "mo_subscription_tables()",
+			localCatalogToken: "from `__mo_visible_tables` as `tbl`",
+		},
+		{
+			name:              "columns",
+			ddl:               sysview.InformationSchemaColumnsDDL,
+			privateFunction:   "mo_subscription_columns()",
+			localCatalogToken: "from `mo_catalog`.`mo_columns` as `mc`",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rewriteCloneCreateSQL(
+				tc.ddl,
+				"information_schema",
+				"information_schema_new",
+				1,
+			)
+			require.NoError(t, err)
+			require.Contains(t, got, "create view `information_schema_new`")
+			require.Contains(t, got, tc.localCatalogToken)
+			require.NotContains(t, got, tc.privateFunction)
+			require.NotContains(t, got, " reg_match ")
+			require.Contains(t, got, "regexp_like(")
 
-	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
-	require.NoError(t, err)
+			_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) {

@@ -48,9 +48,73 @@ func NewEmptyTombstoneData() *tombstoneData {
 	return new(tombstoneData)
 }
 
+// NewBlockScopedTombstoneData returns tombstone data that retains only deletes
+// which may affect one of blocks. Row-id deletes are filtered exactly. Object
+// tombstones use their Rowid zone map and therefore deliberately retain
+// conservative false positives.
+func NewBlockScopedTombstoneData(blocks []objectio.Blockid) *tombstoneData {
+	return &tombstoneData{blockFilter: newBlockIDFilter(blocks)}
+}
+
 type tombstoneData struct {
-	rowids []types.Rowid
-	files  objectio.ObjectStatsSlice
+	rowids      []types.Rowid
+	files       objectio.ObjectStatsSlice
+	blockFilter *blockIDFilter
+}
+
+type blockIDFilter struct {
+	blocks []objectio.Blockid
+}
+
+func newBlockIDFilter(blocks []objectio.Blockid) *blockIDFilter {
+	filter := &blockIDFilter{blocks: slices.Clone(blocks)}
+	slices.SortFunc(filter.blocks, func(a, b objectio.Blockid) int {
+		return a.Compare(&b)
+	})
+	filter.blocks = slices.CompactFunc(filter.blocks, func(a, b objectio.Blockid) bool {
+		return a.EQ(&b)
+	})
+	return filter
+}
+
+func (filter *blockIDFilter) contains(block *objectio.Blockid) bool {
+	if filter == nil {
+		return true
+	}
+	pos := sort.Search(len(filter.blocks), func(pos int) bool {
+		return !filter.blocks[pos].LT(block)
+	})
+	return pos < len(filter.blocks) && filter.blocks[pos].EQ(block)
+}
+
+// mayContainZoneMap fails open for legacy or malformed metadata. For a valid
+// Rowid zone map it finds the first selected block at or above the lower bound
+// and checks whether that block is still below the upper bound.
+func (filter *blockIDFilter) mayContainZoneMap(zm objectio.ZoneMap) bool {
+	if filter == nil {
+		return true
+	}
+	if len(filter.blocks) == 0 {
+		return false
+	}
+	if !zm.IsInited() || zm.GetType() != types.T_Rowid {
+		return true
+	}
+	minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf()
+	if len(minBuf) != types.RowidSize || len(maxBuf) != types.RowidSize {
+		return true
+	}
+	var minRow, maxRow types.Rowid
+	copy(minRow[:], minBuf)
+	copy(maxRow[:], maxBuf)
+	minBlock, maxBlock := minRow.CloneBlockID(), maxRow.CloneBlockID()
+	if minBlock.GT(&maxBlock) {
+		return true
+	}
+	pos := sort.Search(len(filter.blocks), func(pos int) bool {
+		return !filter.blocks[pos].LT(&minBlock)
+	})
+	return pos < len(filter.blocks) && !filter.blocks[pos].GT(&maxBlock)
 }
 
 func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error) {
@@ -78,6 +142,7 @@ func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error
 }
 
 func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
+	tomb.blockFilter = nil
 	typ := engine.TombstoneType(types.DecodeUint8(buf))
 	if typ != engine.TombstoneData {
 		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary TombstoneData with %v", typ)
@@ -94,12 +159,23 @@ func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
 }
 
 func (tomb *tombstoneData) AppendInMemory(rowids ...types.Rowid) error {
-	tomb.rowids = append(tomb.rowids, rowids...)
+	if tomb.blockFilter == nil {
+		tomb.rowids = append(tomb.rowids, rowids...)
+		return nil
+	}
+	for i := range rowids {
+		if tomb.blockFilter.contains(rowids[i].BorrowBlockID()) {
+			tomb.rowids = append(tomb.rowids, rowids[i])
+		}
+	}
 	return nil
 }
 
 func (tomb *tombstoneData) AppendFiles(stats ...objectio.ObjectStats) error {
 	for _, ss := range stats {
+		if !tomb.blockFilter.mayContainZoneMap(ss.SortKeyZoneMap()) {
+			continue
+		}
 		tomb.files.Append(ss[:])
 	}
 	return nil
@@ -203,13 +279,50 @@ func (tomb *tombstoneData) HasBlockTombstone(
 
 // FIXME:
 func (tomb *tombstoneData) PrefetchTombstones(
+	ctx context.Context,
 	srvId string,
 	fs fileservice.FileService,
 	bids []objectio.Blockid,
 ) {
+	if len(bids) == 0 {
+		for i, end := 0, tomb.files.Len(); i < end; i++ {
+			if ctx.Err() != nil {
+				return
+			}
+			stats := tomb.files.Get(i)
+			for j := 0; j < int(stats.BlkCnt()); j++ {
+				loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
+				if err := ioutil.Prefetch(srvId, fs, loc); err != nil {
+					logutil.Errorf("prefetch block delta location: %s", err.Error())
+				}
+			}
+		}
+		return
+	}
+	filter := newBlockIDFilter(bids)
 	for i, end := 0, tomb.files.Len(); i < end; i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		stats := tomb.files.Get(i)
-		for j := 0; j < int(stats.BlkCnt()); j++ {
+		if !filter.mayContainZoneMap(stats.SortKeyZoneMap()) {
+			continue
+		}
+		location := stats.ObjectLocation()
+		objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
+			logutil.Errorf("load tombstone object metadata for prefetch: %s", err.Error())
+			continue
+		}
+		dataMeta := objectMeta.MustDataMeta()
+		for j := 0; j < int(dataMeta.BlockCount()); j++ {
+			if ctx.Err() != nil {
+				return
+			}
+			zoneMap := dataMeta.GetBlockMeta(uint32(j)).MustGetColumn(0).ZoneMap()
+			if !filter.mayContainZoneMap(zoneMap) {
+				continue
+			}
 			loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
 			if err := ioutil.Prefetch(
 				srvId,
@@ -300,8 +413,14 @@ func (tomb *tombstoneData) SortInMemory() {
 
 func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 	if v, ok := other.(*tombstoneData); ok {
-		tomb.rowids = append(tomb.rowids, v.rowids...)
-		tomb.files = append(tomb.files, v.files...)
+		if err := tomb.AppendInMemory(v.rowids...); err != nil {
+			return err
+		}
+		for i := 0; i < v.files.Len(); i++ {
+			if err := tomb.AppendFiles(*v.files.Get(i)); err != nil {
+				return err
+			}
+		}
 		tomb.SortInMemory()
 		return nil
 	}

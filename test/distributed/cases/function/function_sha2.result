@@ -32,3 +32,33 @@ a    sha2(a, 0)
 网络安全    d4443b35a832768cd6211c9e45dc2ccfaca10b5203fd1f02ad500982942f9897
 database    3549b0028b75d981cdda2e573e9cb49dedc200185876df299f912b79f69dabd8
 null    null
+drop table if exists sha2_longtext_repro;
+create table sha2_longtext_repro (payload longtext not null);
+insert into sha2_longtext_repro values (concat(
+repeat('x', 40000),
+repeat('x', 40000),
+repeat('x', 40000),
+repeat('x', 40000)
+));
+select octet_length(payload) as payload_bytes,
+sha2(payload, 256) as actual_full_digest,
+sha2(payload, 224) as actual_sha224_digest,
+sha2(payload, 384) as actual_sha384_digest,
+sha2(payload, 512) as actual_sha512_digest,
+sha2(left(payload, 65535), 256) as prefix_digest,
+octet_length(cast(payload as text)) as cast_text_bytes,
+sha2(cast(payload as text), 256) as cast_text_digest
+from sha2_longtext_repro;
+➤ payload_bytes[-5,64,0]  ¦  actual_full_digest[12,65535,0]  ¦  actual_sha224_digest[12,65535,0]  ¦  actual_sha384_digest[12,65535,0]  ¦  actual_sha512_digest[12,65535,0]  ¦  prefix_digest[12,65535,0]  ¦  cast_text_bytes[-5,64,0]  ¦  cast_text_digest[12,65535,0]  𝄀
+160000  ¦  e5dcc6668e15a3a785d911afb58f0d038c1412806a2c54d4c6253a6a7060f356  ¦  b40c7d530ce991ece0f4797e2c6ac63cad68038072e2d596275bca72  ¦  a727f0197bbcc4eda36bfe8b35ac8d779576c31447d634f427b6134326ad925ac5f34cfd50d5842fca9bcd6829956306  ¦  5ceb45c3c1c11ea9aa15f5f4c848efd02b25adfb6d5f538fe12c91b87a660ad9e44a0c33e22804cbf869ab9b18e96826a6f48c7936c23575df08c8810c0d634c  ¦  09ab7495d3e61a76f0deb12cb0306f0696cbb17ffc12131368c7a939f12f56d3  ¦  160000  ¦  e5dcc6668e15a3a785d911afb58f0d038c1412806a2c54d4c6253a6a7060f356
+drop table sha2_longtext_repro;
+drop table if exists sha2_mediumtext_repro;
+create table sha2_mediumtext_repro (payload mediumtext not null);
+insert into sha2_mediumtext_repro values (concat(repeat('a', 65535), 'b'));
+select octet_length(payload) as payload_bytes,
+sha2(payload, 512) as actual_full_digest,
+sha2(left(payload, 65535), 512) as prefix_digest
+from sha2_mediumtext_repro;
+➤ payload_bytes[-5,64,0]  ¦  actual_full_digest[12,65535,0]  ¦  prefix_digest[12,65535,0]  𝄀
+65536  ¦  382434b1cbe23e23bc61481fc116ec83953680fb139681d532cb528fe5ac9b275bb415e62fa02b013ffc6ea40d1e7fb4013896d3e5bc3e3237a6630fc5964c31  ¦  abf9ec04c64ea3324c998d089649cb2551e706f2e674aa2fd46b8c047b4cbb40b25aa2e532ca682af4309dbe1181e83a5b6896aa9231fa6bc33c85123ed978c7
+drop table sha2_mediumtext_repro;

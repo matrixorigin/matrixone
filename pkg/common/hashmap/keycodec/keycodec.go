@@ -513,41 +513,46 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 			hashValues[i] = HashCombine(hashValues[i], 0)
 			continue
 		}
-		row := i
-		if vec.IsConst() {
-			row = 0
-		}
-		switch vec.GetType().Oid {
-		case types.T_float32:
-			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		case types.T_float64:
-			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			value := CanonicalFloat64Bytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		case types.T_json:
-			scratch = AppendCanonicalJSON(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_float32:
-			scratch = AppendCanonicalVecF32(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_float64:
-			scratch = AppendCanonicalVecF64(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_bf16, types.T_array_float16:
-			scratch = AppendCanonicalVecF16(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		}
-		hashValues[i] = HashCombine(
-			hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(row)),
-		)
+		canonical, reusable := CanonicalBytesAt(vec, i, scratch[:0])
+		scratch = reusable
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(canonical))
+	}
+}
+
+// CanonicalBytesAt returns the byte representation used by SQL grouping
+// equality. The caller owns null handling. canonical can alias vector storage;
+// reusable preserves scratch capacity for the next call even in that case.
+// Keeping this contract in keycodec prevents statistics, hash joins, and GROUP
+// BY from silently defining different equality domains.
+func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
+	if vec.IsConst() {
+		row = 0
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		value := CanonicalFloat64Bytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_json:
+		scratch = AppendCanonicalJSON(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float32:
+		scratch = AppendCanonicalVecF32(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float64:
+		scratch = AppendCanonicalVecF64(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_bf16, types.T_array_float16:
+		scratch = AppendCanonicalVecF16(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	default:
+		return vec.GetRawBytesAt(row), scratch
 	}
 }
 

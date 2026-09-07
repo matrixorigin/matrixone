@@ -520,7 +520,7 @@ func (ctr *container) processAggregateFuncRange(
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
 	}
-	if boundedSlidingRowsFrame(frame) &&
+	if (boundedSlidingRowsFrame(frame) || boundedSlidingRangeFrame(frame, ctr.orderVecs)) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
 		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
 		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
@@ -636,6 +636,53 @@ func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
 	}
 	_, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
 	return ok
+}
+
+// boundedSlidingRangeFrame recognizes a contiguous, finite RANGE frame whose
+// boundaries move monotonically and which always contains the current peer
+// group. Floating-point order keys stay on the ordinary evaluator because NaN
+// ordering is not suitable for inverse aggregation. TIMESTAMP stays there too:
+// session-civil frames can be disjoint across a daylight-saving-time fold.
+func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
+	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
+		frame.Start == nil || frame.End == nil ||
+		len(orderVecs) != 1 || len(orderVecs[0].Vec) != 1 || orderVecs[0].Vec[0] == nil ||
+		!finiteRangeStart(frame.Start) || !finiteRangeEnd(frame.End) {
+		return false
+	}
+
+	switch orderVecs[0].Vec[0].GetType().Oid {
+	case types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_datetime, types.T_time:
+		return true
+	default:
+		return false
+	}
+}
+
+func finiteRangeStart(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_PRECEDING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
+}
+
+func finiteRangeEnd(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_FOLLOWING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
 }
 
 func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
@@ -768,9 +815,11 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	return vec, nil
 }
 
-// processSlidingAggregateFuncRange retains one aggregate for a finite
-// PRECEDING/CURRENT ROW frame. Each row adds the new right edge and removes the
-// expired left edge, reducing bounded SUM evaluation from O(N*W) to O(N).
+// processSlidingAggregateFuncRange retains one aggregate for a bounded ROWS or
+// RANGE frame. Each boundary change adds the new right edge and removes the
+// expired left edge, reducing bounded SUM/AVG evaluation from O(N*W) to O(N).
+// RANGE peers share boundaries, so their binary searches and state changes are
+// performed once per peer group rather than once per output row.
 func (ctr *container) processSlidingAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -805,6 +854,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		partitionStart = int(ctr.ps[ctr.runningPartition])
 	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	edgeWork := 0
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -820,31 +870,48 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
 			ctr.runningLeft = partitionStart
 			ctr.runningRight = partitionStart
+			ctr.runningPeerEnd = partitionStart
 		}
 
-		left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
-		if err != nil {
-			return nil, err
-		}
-		left = max(left, partitionStart)
-		right = min(right, currentPartitionEnd)
-		if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
-			return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
-		}
+		if frame.Type != plan.FrameClause_RANGE || j >= ctr.runningPeerEnd {
+			left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
+			if err != nil {
+				return nil, err
+			}
+			left = max(left, partitionStart)
+			right = min(right, currentPartitionEnd)
+			if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+				return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
+			}
 
-		for row := ctr.runningLeft; row < left; row++ {
-			if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
-				return nil, err
+			for row := ctr.runningLeft; row < left; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			for row := ctr.runningRight; row < right; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			ctr.runningLeft = left
+			ctr.runningRight = right
+			if frame.Type == plan.FrameClause_RANGE {
+				_, ctr.runningPeerEnd = buildPeerInterval(ctr.os, j, partitionStart, currentPartitionEnd)
+				if ctr.runningPeerEnd <= j {
+					return nil, moerr.NewInternalErrorNoCtx("invalid sliding window peer interval")
+				}
 			}
 		}
-		for row := ctr.runningRight; row < right; row++ {
-			if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
-				return nil, err
-			}
-		}
-		ctr.runningLeft = left
-		ctr.runningRight = right
-		if err = ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
 			return nil, err
 		}
 		ctr.runningNextRow = j + 1

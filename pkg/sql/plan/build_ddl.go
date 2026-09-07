@@ -32,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -221,7 +222,13 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 	return nil
 }
 
-func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
+func genViewTableDef(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	colNames tree.IdentifierList,
+	viewDatabase string,
+	viewName string,
+) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	ctx = dependencyCapture
@@ -258,13 +265,15 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
+			objectkey.Encode(viewDatabase, viewName))
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
+			objectkey.Encode(viewDatabase, viewName))
 		if err != nil {
 			return nil, err
 		}
@@ -1436,13 +1445,34 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 
 		cols[i] = &plan.ColDef{
-			Name:    strings.ToLower(bindCtx.headings[i]),
+			Name: normalizeCTASColumnName(
+				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
 	return cols, query, nil
+}
+
+// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
+// Literal segments are supplied by the AST formatter; an apostrophe in an
+// identifier is therefore never mistaken for a string delimiter.
+func normalizeCTASColumnName(heading string, provenance headingProvenance) string {
+	if len(provenance.parts) == 0 {
+		return strings.ToLower(heading)
+	}
+
+	var result strings.Builder
+	result.Grow(len(heading))
+	for _, part := range provenance.parts {
+		if part.literal {
+			result.WriteString(part.text)
+		} else {
+			result.WriteString(strings.ToLower(part.text))
+		}
+	}
+	return result.String()
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
@@ -1583,7 +1613,8 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
+	tableDef, err := genViewTableDef(
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName))
 	if err != nil {
 		return nil, err
 	}
@@ -5514,7 +5545,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName)
 	if err != nil {
 		return nil, err
 	}
@@ -5708,6 +5739,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+	}
+
+	if tableDef.IsTemporary {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		tableDef.Name = tableName
 	}
 
 	alterTable := &plan.AlterTable{
@@ -6210,11 +6246,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// TODO ONLY Check
-			_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
+			_, destination, err := ctx.Resolve(databaseName, newName, nil)
 			if err != nil {
 				return nil, err
 			}
-			if tableDef != nil {
+			if destination != nil && (!tableDef.IsTemporary || destination.IsTemporary) {
 				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 			}
 
@@ -6227,10 +6263,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
-			updateSqls = append(
-				updateSqls,
-				getSqlForRenameTable(databaseName, oldName, newName)...,
-			)
+			if !tableDef.IsTemporary {
+				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
 				return nil, moerr.NewInvalidInputf(

@@ -706,6 +706,7 @@ func (fraction percentileFraction) sign() int {
 // immutable percentile precision plus the fixed 128-bit value/count domain.
 type percentileArithmeticScratch struct {
 	one       big.Int
+	two       big.Int
 	ten       big.Int
 	pow2_127  big.Int
 	pow2_128  big.Int
@@ -727,6 +728,7 @@ type percentileArithmeticScratch struct {
 
 func (scratch *percentileArithmeticScratch) constants() {
 	scratch.one.SetUint64(1)
+	scratch.two.SetUint64(2)
 	scratch.ten.SetUint64(10)
 	if scratch.pow2_128.Sign() == 0 {
 		scratch.pow2_127.Lsh(&scratch.one, 127)

@@ -108,6 +108,9 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	if m.node.NodeType == plan.Node_PARTITION && m.node.Limit != nil && m.node.PartitionByCount > 0 {
 		return "Partition Top N", nil
 	}
+	if m.node.NodeType == plan.Node_PARTITION && m.node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		return "Hash Partition", nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {

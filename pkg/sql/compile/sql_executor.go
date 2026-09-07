@@ -20,6 +20,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -414,6 +416,11 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	if session, ok := proc.Session.(interface{ GetSessId() uuid.UUID }); ok {
+		// Internal temporary CREATEs belong to the original connection, including
+		// the physical-name prefix used by orphan-table cleanup.
+		proc.Base.SessionInfo.SessionId = session.GetSessId()
+	}
 	// A DisableIncrStatement execution runs on the caller's transaction
 	// without opening a statement, so its compile must not advance the
 	// workspace snapshot write offset (the statement boundary).
@@ -514,6 +521,7 @@ func (exec *txnExecutor) Exec(
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()

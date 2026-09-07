@@ -64,8 +64,34 @@ select regexp_like('CAT','cat','i') r;
 select regexp_like('\n','.','n') r;
 select regexp_like('abc\ndef','^def','m') r;
 select regexp_like('CAT','cat','iiiiiiic') r;
+
+# Binary operands default to case-sensitive matching, while explicit i/c flags
+# override the default and the rightmost flag wins. High bytes use the
+# Windows-1252 regexp facade under explicit case-insensitive matching.
+select regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'i') binary_i,
+       regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'ci') binary_ci,
+       regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'ic') binary_ic,
+       regexp_like(cast(X'C9' as varbinary(1)), cast(X'E9' as varbinary(1)), 'i') binary_cp1252_i,
+       regexp_like(cast(X'C3A9' as varbinary(2)), cast(X'C389' as varbinary(2)), 'i') binary_utf8_bytes_i,
+       regexp_like('A', 'a', 'i') text_i;
+prepare regexp_like_domain_rebind from 'select regexp_like(?, ?, ''i'')';
+set @regexp_like_subject = cast(_binary'A' as varbinary(1));
+set @regexp_like_pattern = cast(_binary'a' as varbinary(1));
+execute regexp_like_domain_rebind using @regexp_like_subject, @regexp_like_pattern;
+set @regexp_like_subject = cast(X'C9' as varbinary(1));
+set @regexp_like_pattern = cast(X'E9' as varbinary(1));
+execute regexp_like_domain_rebind using @regexp_like_subject, @regexp_like_pattern;
+set @regexp_like_subject = 'A';
+set @regexp_like_pattern = 'a';
+execute regexp_like_domain_rebind using @regexp_like_subject, @regexp_like_pattern;
+set @regexp_like_subject = cast(_binary'A' as blob);
+set @regexp_like_pattern = cast(_binary'a' as blob);
+execute regexp_like_domain_rebind using @regexp_like_subject, @regexp_like_pattern;
+deallocate prepare regexp_like_domain_rebind;
+
 select regexp_like('abc', '');
 select regexp_like('abc', '', 'i');
+select regexp_like(NULL, '', 'i');
 
 select 'abc' regexp '';
 select 'abc' rlike '';

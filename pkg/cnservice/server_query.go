@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
@@ -161,6 +163,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount)
 	s.addQueryCommandHandler(query.CmdMethod_CtlReader, s.handleCtlReader)
 	s.addQueryCommandHandler(query.CmdMethod_ResetSession, s.handleResetSession)
+	s.addQueryCommandHandler(query.CmdMethod_RefreshSessionAuth, s.handleRefreshSessionAuth)
 	s.addQueryCommandHandler(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs)
 	s.addQueryCommandHandler(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit)
 	s.addQueryCommandHandler(query.CmdMethod_GOGCPercent, s.handleGoGCPercent)
@@ -637,13 +640,20 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	if req.GetStatsInfoRequest == nil {
+	if req.GetStatsInfoRequest == nil || req.GetStatsInfoRequest.StatsInfoKey == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	// The parameter sync is false, as the read request is from remote node,
 	// and we do not need wait for the data sync.
+	key := *req.GetStatsInfoRequest.StatsInfoKey
+	var info *statsinfo.StatsInfo
+	if exporter, ok := s.storeEngine.(engine.RemoteStatsExporter); ok {
+		info = exporter.StatsForRemote(ctx, key)
+	} else {
+		info = s.storeEngine.Stats(ctx, key, false)
+	}
 	resp.GetStatsInfoResponse = &query.GetStatsInfoResponse{
-		StatsInfo: s.storeEngine.Stats(ctx, *req.GetStatsInfoRequest.StatsInfoKey, false),
+		StatsInfo: info,
 	}
 	return nil
 }
@@ -735,6 +745,28 @@ func (s *service) handleResetSession(
 		return err
 	}
 	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleRefreshSessionAuth(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil || req.RefreshSessionAuthRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if rm == nil {
+		return moerr.NewInternalError(ctx, "routine manager not initialized")
+	}
+	resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{}
+	if err := rm.RefreshSessionAuthWithContext(
+		ctx,
+		req.RefreshSessionAuthRequest,
+		resp.RefreshSessionAuthResponse,
+	); err != nil {
+		logutil.Errorf("failed to refresh session authentication: %v", err)
+		return err
+	}
 	return nil
 }
 
