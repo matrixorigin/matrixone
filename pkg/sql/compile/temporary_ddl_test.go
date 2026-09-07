@@ -38,7 +38,8 @@ import (
 
 type sessionTemporaryDDLTestOwner struct {
 	trackingTempTableSession
-	retired []string
+	published []string
+	retired   []string
 }
 
 func (s *sessionTemporaryDDLTestOwner) OwnsTemporaryTable(db, physical string) bool {
@@ -51,6 +52,7 @@ func (s *sessionTemporaryDDLTestOwner) OwnsTemporaryTable(db, physical string) b
 }
 func (*sessionTemporaryDDLTestOwner) CheckTemporaryTableCapacity(context.Context) error { return nil }
 func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name string) {
+	s.published = append(s.published, name)
 	s.AddTempTable(db, alias, name)
 }
 func (s *sessionTemporaryDDLTestOwner) RetireTemporaryTable(db, alias, name string, _ []string) {
@@ -74,9 +76,11 @@ type temporaryDDLTestExecutor struct {
 	commitErr, dataErr error
 	inserts            int
 	dataPanic          bool
+	execTxnCalls       int
 }
 
 func (e *temporaryDDLTestExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	e.execTxnCalls++
 	require.False(e.t, opts.HasExistsTxn())
 	require.True(e.t, opts.WaitCommittedLogApplied())
 	err := fn(temporaryDDLTestTxn{op: e.schema})
@@ -149,6 +153,7 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 			eng := newStubEngine()
 			eng.dbs["test"] = newStubDatabase("test")
 			c := NewCompile("test", "test", "create temporary table t (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
 			c.pn = pn
 			var err error
 			if scenario == "ctas panic" {
@@ -162,6 +167,7 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 				require.True(t, ok)
 				require.True(t, defines.IsTempTableName(name))
 				require.Contains(t, eng.dbs["test"].rels, name)
+				require.Equal(t, []string{name}, owner.published)
 				require.Empty(t, owner.retired)
 			} else {
 				if scenario == "schema panic" {
@@ -170,8 +176,14 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 					require.ErrorIs(t, err, assert.AnError)
 				}
 				require.Empty(t, owner.tables)
+				if qry.CreateAsSelectSql != "" {
+					require.Len(t, owner.published, 1)
+				} else {
+					require.Empty(t, owner.published)
+				}
 				require.Len(t, owner.retired, 1)
 			}
+			require.Equal(t, 1, exec.execTxnCalls)
 			require.Equal(t, "t", qry.TableDef.Name)
 			require.Same(t, pn, c.pn)
 			require.Same(t, parent, proc.GetTxnOperator())
@@ -181,6 +193,224 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 				require.Equal(t, 1, exec.inserts)
 			} else {
 				require.Zero(t, exec.inserts)
+			}
+		})
+	}
+}
+
+func TestSessionTemporaryDDLOwnerAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	proc.Session = owner
+	proc.Base.IsFrontend = true
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion) })
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+
+	for _, tc := range []struct {
+		name      string
+		configure func(*Compile)
+		wantOwner bool
+	}{
+		{name: "direct client", wantOwner: true},
+		{name: "executor transaction", configure: func(c *Compile) { c.temporaryDDLInExecutorTxn = true }},
+		{name: "legacy internal compile", configure: func(c *Compile) { c.isInternal = true }},
+		{name: "background", configure: func(c *Compile) { c.proc.Base.IsFrontend = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCompile("cn", "test", "", "", "", nil, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			proc.Base.IsFrontend = true
+			if tc.configure != nil {
+				tc.configure(c)
+			}
+			got, ok := sessionTemporaryDDLOwner(c)
+			require.Equal(t, tc.wantOwner, ok)
+			if tc.wantOwner {
+				require.Same(t, owner, got)
+			} else {
+				require.Nil(t, got)
+			}
+		})
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	c := NewCompile("cn", "test", "", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	_, ok := sessionTemporaryDDLOwner(c)
+	require.False(t, ok)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	proc.Session = &trackingTempTableSession{tables: make(map[string]string)}
+	_, ok = sessionTemporaryDDLOwner(c)
+	require.False(t, ok)
+}
+
+func TestTxnExecutorCompileKeepsTemporaryDDLInSuppliedTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	parent := mock_frontend.NewMockTxnOperator(ctrl)
+	parent.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = parent
+	proc.Base.IsFrontend = true
+	proc.Session = owner
+	exec := &txnExecutor{
+		s:        &sqlExecutor{addr: "cn"},
+		opts:     executor.Options{}.WithTxn(parent),
+		database: "test",
+	}
+
+	for _, privilegeCheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "privilege bypass", true: "privilege checked"}[privilegeCheck], func(t *testing.T) {
+			ctx := context.Background()
+			if privilegeCheck {
+				ctx = attachInternalExecutorPrivilegeCheck(ctx)
+			}
+			proc.Ctx = ctx
+			c := exec.newCompile(proc, nil, "create temporary table t (id int)", time.Now())
+			defer c.Release()
+			require.True(t, c.temporaryDDLInExecutorTxn)
+			require.False(t, c.isInternal)
+			require.Same(t, parent, c.proc.GetTxnOperator())
+			require.Same(t, owner, c.proc.GetSession())
+			require.True(t, c.proc.Base.IsFrontend)
+			_, admitted := sessionTemporaryDDLOwner(c)
+			require.False(t, admitted)
+		})
+	}
+}
+
+func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.IsFrontend = true
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	proc.Session = owner
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion) })
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+
+	from := NewCompile("cn", "test", "", "", "", nil, proc, nil, false, nil, time.Now())
+	defer from.Release()
+	from.temporaryDDLInExecutorTxn = true
+	from.pn = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType: plan.DataDefinition_CREATE_TABLE,
+	}}}
+	retry, err := from.buildRetryCompile(false)
+	require.NoError(t, err)
+	defer retry.Release()
+	require.True(t, retry.temporaryDDLInExecutorTxn)
+	_, admitted := sessionTemporaryDDLOwner(retry)
+	require.False(t, admitted)
+
+	// Release synchronously clears the object before returning it to the pool.
+	// Inspect that exact reset seam; correctness must not depend on sync.Pool
+	// choosing to return this object from a later allocation.
+	released := NewCompile("cn", "test", "", "", "", nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+	released.temporaryDDLInExecutorTxn = true
+	released.Release()
+	require.False(t, released.temporaryDDLInExecutorTxn)
+
+	// A separately initialized top-level compile must still take the client
+	// session-schema path after an executor generation has been cleared.
+	clientProc := testutil.NewProcess(t)
+	clientProc.Base.IsFrontend = true
+	clientProc.Session = owner
+	client := NewCompile("cn", "test", "", "", "", nil, clientProc, nil, false, nil, time.Now())
+	defer client.Release()
+	gotOwner, admitted := sessionTemporaryDDLOwner(client)
+	require.True(t, admitted)
+	require.Same(t, owner, gotOwner)
+}
+
+func TestExecutorTemporaryCreateUsesParentTransaction(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(*plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) { return nil, &api.SchemaExtra{}, nil })
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	stubs.Stub(&checkIndexInitializable, func(string, string) bool { return false })
+
+	ctrl := gomock.NewController(t)
+	parent := mock_frontend.NewMockTxnOperator(ctrl)
+	parent.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	stubs.Stub(&maybeCreateAutoIncrement, func(_ context.Context, _ string, _ engine.Database, _ *plan.TableDef, txn client.TxnOperator, _ func() string) error {
+		require.Same(t, parent, txn)
+		return nil
+	})
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+	proc.Base.TxnOperator = parent
+	proc.Base.IsFrontend = true
+	proc.Session = owner
+	q := &plan.CreateTable{Database: catalog.MO_CATALOG, Temporary: true, TableDef: &plan.TableDef{Name: "t"}}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}
+	db := newStubDatabase(catalog.MO_CATALOG)
+	eng := newStubEngine()
+	eng.dbs[catalog.MO_CATALOG] = db
+	c := NewCompile("cn", catalog.MO_CATALOG, "", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	c.temporaryDDLInExecutorTxn = true
+	c.pn = pn
+
+	require.NoError(t, (&Scope{Plan: pn}).CreateTable(c))
+	require.Len(t, owner.tables, 1)
+	require.Empty(t, owner.published)
+	require.Empty(t, owner.retired)
+}
+
+func TestTemporaryDropTransactionOwnershipAndFailure(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+
+	for _, tc := range []struct {
+		name        string
+		executorTxn bool
+		deleteErr   error
+	}{
+		{name: "direct client retires independently"},
+		{name: "executor transaction removes alias transactionally", executorTxn: true},
+		{name: "executor delete failure preserves alias", executorTxn: true, deleteErr: assert.AnError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".t": "physical"}}}
+			proc := testutil.NewProcess(t)
+			proc.Base.IsFrontend = true
+			proc.Session = owner
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion) })
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+			db := newStubDatabase(catalog.MO_CATALOG)
+			db.rels["physical"] = &stubRelation{name: "physical", tableDef: &plan.TableDef{IsTemporary: true}}
+			db.deleteErr = tc.deleteErr
+			eng := newStubEngine()
+			eng.dbs[catalog.MO_CATALOG] = db
+			q := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "t", TableDef: &plan.TableDef{IsTemporary: true}}
+			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_DropTable{DropTable: q}}}}
+			c := NewCompile("cn", catalog.MO_CATALOG, "", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			c.temporaryDDLInExecutorTxn = tc.executorTxn
+			c.ignorePublish = true
+
+			err := (&Scope{Plan: pn}).DropTable(c)
+			require.ErrorIs(t, err, tc.deleteErr)
+			_, aliasExists := owner.GetTempTable(catalog.MO_CATALOG, "t")
+			if tc.deleteErr != nil {
+				require.True(t, aliasExists)
+			} else {
+				require.False(t, aliasExists)
+			}
+			_, relationExists := db.rels["physical"]
+			require.Equal(t, !tc.executorTxn || tc.deleteErr != nil, relationExists)
+			if tc.executorTxn {
+				require.Empty(t, owner.retired)
+			} else {
+				require.Equal(t, []string{"physical"}, owner.retired)
 			}
 		})
 	}
@@ -218,6 +448,7 @@ func TestSessionTemporaryDDLRejectsInvalidExecutor(t *testing.T) {
 	eng := newStubEngine()
 	eng.dbs["test"] = newStubDatabase("test")
 	c := NewCompile("test", "test", "create temporary table t (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
 	c.pn = pn
 
 	err := (&Scope{Plan: pn}).CreateTable(c)
