@@ -381,7 +381,9 @@ func (u *raceTestWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Context, ke
 	return nil
 }
 
-func (u *raceTestWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (u *raceTestWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	return nil
 }
 
@@ -702,7 +704,9 @@ func (u *integrationTestWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Cont
 	return nil
 }
 
-func (u *integrationTestWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (u *integrationTestWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	delete(u.watermarks, key.String())
@@ -1004,7 +1008,9 @@ func (u *lifecycleTestWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Contex
 	return nil
 }
 
-func (u *lifecycleTestWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (u *lifecycleTestWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	return nil
 }
 

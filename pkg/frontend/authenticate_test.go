@@ -6468,6 +6468,17 @@ func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
 	}
 }
 
+func TestCDCSystemTablesAreNotClassifiedAsClusterTables(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_CDC_TASK,
+		catalog.MO_CDC_WATERMARK,
+		catalog.MO_CDC_SNAPSHOT,
+	} {
+		require.Contains(t, predefinedTables, tableName)
+		require.False(t, isClusterTable(moCatalog, tableName))
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -10469,6 +10480,38 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	}
 	require.NotEmpty(t, createSQL)
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
+}
+
+func TestInitProcedurePersistsDefaultBoolSumAvgSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_default_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 1; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, mysqlparser.SQLModeEnableBoolSumAvg)
 }
 
 func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {

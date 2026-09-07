@@ -27,7 +27,9 @@ url=$1
 expected_sha256=$2
 destination=$3
 
-attempts=${MO_DOWNLOAD_ATTEMPTS:-4}
+# CI runners reach immutable third-party artifacts through a shared proxy. Give
+# short TLS outages enough time to recover without making retries unbounded.
+attempts=${MO_DOWNLOAD_ATTEMPTS:-6}
 connect_timeout=${MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}
 max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}

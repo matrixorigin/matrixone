@@ -1,6 +1,7 @@
 select json_quote('a');
 select json_quote('a"');
 select json_quote('a"b');
+-- JDBC reports character precision (2), not the utf8mb4 wire byte bound (8).
 select json_quote(null);
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
@@ -18,6 +19,7 @@ select json_unquote(json_quote('a"b\\c'));
 
 prepare json_quote_stmt from 'select json_quote(?)';
 set @json_quote_value = 'a"b';
+-- EXECUTE rebinds the runtime TEXT value; its unknown bound is not PREPARE metadata.
 execute json_quote_stmt using @json_quote_value;
 deallocate prepare json_quote_stmt;
 

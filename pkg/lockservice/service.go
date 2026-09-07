@@ -2236,6 +2236,13 @@ func (s *service) fenceByBindChanged(bind pb.LockTable) {
 	s.activeTxnHolder.fenceByBindChanged(bind)
 }
 
+func (s *service) fenceByExactBind(bind pb.LockTable) {
+	if s.activeTxnHolder == nil {
+		return
+	}
+	s.activeTxnHolder.fenceByExactBind(bind)
+}
+
 func (s *service) checkBindChangedBeforeLockSuccess(
 	txn *activeTxn,
 	txnID []byte,
@@ -2642,6 +2649,7 @@ type activeTxnHolder interface {
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
+	fenceByExactBind(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
@@ -2894,6 +2902,14 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	return h.fenceByBind(bind, false)
+}
+
+func (h *mapBasedTxnHolder) fenceByExactBind(bind pb.LockTable) int {
+	return h.fenceByBind(bind, true)
+}
+
+func (h *mapBasedTxnHolder) fenceByBind(bind pb.LockTable, exact bool) int {
 	n := 0
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
@@ -2935,7 +2951,13 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 					time.Sleep(time.Millisecond)
 					continue
 				}
-				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+				var fenced bool
+				if exact {
+					fenced = entry.txn.fenceByExactBindLocked(bind, h.logger)
+				} else {
+					fenced = entry.txn.fenceByBindChangedLocked(bind, h.logger)
+				}
+				if fenced {
 					n++
 				}
 				entry.txn.Unlock()

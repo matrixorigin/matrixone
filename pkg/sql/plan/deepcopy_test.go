@@ -227,6 +227,7 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 		FuzzyBuildSide:          planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		IfInsertFromUnique:      true,
 		SpillMem:                64 << 10,
+		PartitionAlgorithm:      planpb.Node_PARTITION_ALGORITHM_HASH,
 		PhysicalEqualityKeyList: []*planpb.Expr{physicalKey},
 		RuntimeFilterProbeList:  []*planpb.RuntimeFilterSpec{probeSpec},
 		RuntimeFilterBuildList:  []*planpb.RuntimeFilterSpec{buildSpec},
@@ -241,6 +242,7 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.FuzzyBuildSide, cloned.FuzzyBuildSide)
 	require.Equal(t, source.IfInsertFromUnique, cloned.IfInsertFromUnique)
 	require.Equal(t, source.SpillMem, cloned.SpillMem)
+	require.Equal(t, source.PartitionAlgorithm, cloned.PartitionAlgorithm)
 	require.Equal(t, source.PhysicalEqualityKeyList, cloned.PhysicalEqualityKeyList)
 	require.Equal(t, source.RuntimeFilterProbeList,
 		cloned.RuntimeFilterProbeList)
@@ -259,12 +261,14 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 
 	cloned.FuzzyBuildSide = planpb.Node_FUZZY_BUILD_SIDE_TABLE
 	cloned.SpillMem = 1
+	cloned.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
 	cloned.PhysicalEqualityKeyList[0].Typ.Scale = 9
 	cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale = 9
 	cloned.Fuzzymessage.ParentUniqueCols[0].Name = "changed"
 	require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		source.FuzzyBuildSide)
 	require.Equal(t, int64(64<<10), source.SpillMem)
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, source.PartitionAlgorithm)
 	require.NotEqual(t,
 		cloned.PhysicalEqualityKeyList[0].Typ.Scale,
 		source.PhysicalEqualityKeyList[0].Typ.Scale)
@@ -322,9 +326,11 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 			Columns:                []int32{1, 3},
 			KeyColumns:             []int32{4, 5},
 			ConflictColumns:        []int32{6},
+			TargetColumns:          []int32{7, 8},
 			OutputColumns:          2,
 			PkColumn:               1,
 			InsertIgnoreMultiDedup: true,
+			OdkuTargetArbitration:  true,
 		},
 		PostDmlCtx: &planpb.PostDmlCtx{
 			Ref:            &planpb.ObjectRef{Obj: 42, ObjName: "t"},
@@ -349,10 +355,12 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 	cloned.OnDuplicateAction = planpb.Node_IGNORE
 	cloned.ScanSnapshot.TS.PhysicalTime = 99
 	cloned.PreInsertSkCtx.Columns[0] = 9
+	cloned.PreInsertSkCtx.TargetColumns[0] = 99
 	cloned.PostDmlCtx.Ref.ObjName = "changed"
 	require.Equal(t, planpb.Node_UPDATE, source.OnDuplicateAction)
 	require.Equal(t, int64(11), source.ScanSnapshot.TS.PhysicalTime)
 	require.Equal(t, int32(1), source.PreInsertSkCtx.Columns[0])
+	require.Equal(t, int32(7), source.PreInsertSkCtx.TargetColumns[0])
 	require.Equal(t, "t", source.PostDmlCtx.Ref.ObjName)
 }
 

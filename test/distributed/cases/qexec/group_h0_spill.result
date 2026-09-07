@@ -7,9 +7,91 @@ set @@agg_spill_mem = 256;
 select count(*) from tiny_scalar;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*), count(distinct result)
+from generate_series(1, 300) g;
+➤ count(*)[-5,64,0]  ¦  count(distinct result)[-5,64,0]  𝄀
+300  ¦  300
+set @@agg_spill_mem = 2;
+select result % 4 as g, count(distinct result) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  75  𝄀
+1  ¦  75  𝄀
+2  ¦  75  𝄀
+3  ¦  75
+select result % 2 as g, count(distinct concat('v', result % 17)) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  17  𝄀
+1  ¦  17
+select g, count(*) as d
+from (
+select distinct result % 2 as g, concat('v', result % 17) as v
+from generate_series(1, 300) g
+) oracle
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  17  𝄀
+1  ¦  17
+select result % 3 as g,
+count(distinct result % 10,
+case when result % 7 = 0 then null else result % 5 end) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  10  𝄀
+1  ¦  10  𝄀
+2  ¦  10
+select result % 4 as g, count(*) as rows, sum(result) as total,
+count(distinct result % 11) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  rows[-5,64,0]  ¦  total[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  75  ¦  11400  ¦  11  𝄀
+1  ¦  75  ¦  11175  ¦  11  𝄀
+2  ¦  75  ¦  11250  ¦  11  𝄀
+3  ¦  75  ¦  11325  ¦  11
 set @@agg_spill_mem = 536870912;
 select count(*) from tiny_scalar;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*), count(distinct result)
+from generate_series(1, 300) g;
+➤ count(*)[-5,64,0]  ¦  count(distinct result)[-5,64,0]  𝄀
+300  ¦  300
+select result % 4 as g, count(distinct result) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  75  𝄀
+1  ¦  75  𝄀
+2  ¦  75  𝄀
+3  ¦  75
+select result % 2 as g, count(distinct concat('v', result % 17)) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  17  𝄀
+1  ¦  17
+select result % 3 as g,
+count(distinct result % 10,
+case when result % 7 = 0 then null else result % 5 end) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  10  𝄀
+1  ¦  10  𝄀
+2  ¦  10
+select result % 4 as g, count(*) as rows, sum(result) as total,
+count(distinct result % 11) as d
+from generate_series(1, 300) g
+group by g order by g;
+➤ g[-5,64,0]  ¦  rows[-5,64,0]  ¦  total[-5,64,0]  ¦  d[-5,64,0]  𝄀
+0  ¦  75  ¦  11400  ¦  11  𝄀
+1  ¦  75  ¦  11175  ¦  11  𝄀
+2  ¦  75  ¦  11250  ¦  11  𝄀
+3  ¦  75  ¦  11325  ¦  11
 set @@agg_spill_mem = 0;
 drop database group_h0_spill;

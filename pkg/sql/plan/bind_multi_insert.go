@@ -490,6 +490,9 @@ func validateMultiInsertTarget(ctx context.Context, tableDef *plan.TableDef) err
 			"multi-table INSERT into external table '%s'", tableDef.Name)
 	case catalog.SystemSourceRel:
 		return moerr.NewNYIf(ctx, "insert stream %s", tableDef.Name)
+	case catalog.SystemClusterRel:
+		return moerr.NewNotSupportedf(ctx,
+			"multi-table INSERT into cluster table '%s'", tableDef.Name)
 	}
 	return nil
 }
@@ -627,18 +630,20 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	// maintenance is emitted by finishIrregularIndexMaintenance.
 	if len(builder.irregularMaintIndexes) > 0 || len(builder.irregularMaintInsertOnlyIndexes) > 0 {
 		builder.irregularUpdateMaints = append(builder.irregularUpdateMaints, irregularUpdateMaintenance{
-			sourceStep:           builder.irregularMaintSourceStep,
-			deleteStep:           builder.irregularMaintDeleteStep,
-			deletePkPos:          builder.irregularMaintDeletePkPos,
-			deletePkTyp:          builder.irregularMaintDeletePkTyp,
-			indexes:              builder.irregularMaintIndexes,
-			insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
-			insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
-			tableDef:             builder.irregularMaintTableDef,
-			objRef:               builder.irregularMaintObjRef,
+			sourceStep:              builder.irregularMaintSourceStep,
+			deleteStep:              builder.irregularMaintDeleteStep,
+			deletePkPos:             builder.irregularMaintDeletePkPos,
+			deletePkTyp:             builder.irregularMaintDeletePkTyp,
+			indexes:                 builder.irregularMaintIndexes,
+			insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+			insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+			valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+			tableDef:                builder.irregularMaintTableDef,
+			objRef:                  builder.irregularMaintObjRef,
 		})
 		builder.irregularMaintIndexes = nil
 		builder.irregularMaintInsertOnlyIndexes = nil
+		builder.irregularMaintValueChangedSourceSteps = nil
 		builder.irregularMaintTableDef = nil
 		builder.irregularMaintObjRef = nil
 		builder.irregularMaintDeleteStep = -1

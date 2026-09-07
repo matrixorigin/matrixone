@@ -675,9 +675,14 @@ func determineNonReusableShuffleType(
 			return
 		}
 	}
+	minVal, hasMin := s.MinValMap[colName]
+	maxVal, hasMax := s.MaxValMap[colName]
+	if !hasMin || !hasMax {
+		return
+	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+	node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
 	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
@@ -1510,6 +1515,11 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
+	minVal, hasMin := s.MinValMap[firstSortColName]
+	maxVal, hasMax := s.MaxValMap[firstSortColName]
+	if !hasMin || !hasMax {
+		return
+	}
 	firstSortColID, ok := node.TableDef.Name2ColIndex[firstSortColName]
 	if !ok {
 		return
@@ -1519,8 +1529,8 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		node.Stats.HashmapStats.ShuffleColIdx = node.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
+		node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+		node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
 		node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}

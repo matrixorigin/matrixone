@@ -58,7 +58,10 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+var _ engine.TableVersionedStats = new(Engine)
+var _ engine.RemoteStatsExporter = new(Engine)
 var _ engine.StatsRefresher = new(Engine)
+var _ engine.StatsRefresherWithOptions = new(Engine)
 var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
@@ -430,7 +433,11 @@ func (e *Engine) Database(
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if txn.databaseOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
+		// Keep all authoritative "database does not exist" results on the same
+		// typed contract.  In particular, DROP DATABASE followed by CREATE
+		// DATABASE in the same transaction (used by PITR and snapshot restore)
+		// reaches this transaction-local tombstone before consulting the catalog.
+		return nil, moerr.GetOkExpectedEOB()
 	}
 
 	if v := txn.databaseOps.existAndActive(key); v != nil {
@@ -1280,18 +1287,61 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 	return e.globalStats.Get(ctx, key, sync)
 }
 
+func (e *Engine) StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return e.globalStats.GetForRemote(ctx, key)
+}
+
+func (e *Engine) StatsAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	return e.globalStats.GetAtTableVersion(ctx, key, sync, tableDefVersion)
+}
+
 // RefreshTableStats synchronously replaces the local optimizer statistics for
 // key. The cache swap is the publication boundary observed by later plans.
 func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
-	return refreshTableStats(ctx, key, e.globalStats)
+	return e.RefreshTableStatsWithOptions(ctx, key, engine.StatsRefreshOptions{})
+}
+
+func (e *Engine) RefreshTableStatsWithOptions(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, options, e.globalStats)
+}
+
+// PublishAnalyzedStats installs one successfully collected manual generation.
+// Collection and publication are separate so failed scans never expose a
+// partially populated statistics object.
+func (e *Engine) PublishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	tableDefVersion uint32,
+	stats *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	return e.globalStats.publishAnalyzedStats(ctx, key, tableDefVersion, stats)
 }
 
 type optimizerStatsStore interface {
-	refreshStatsWithMode(context.Context, pb.StatsInfoKey, string) (*pb.StatsInfo, error)
+	refreshStatsWithMode(
+		context.Context,
+		pb.StatsInfoKey,
+		string,
+		engine.StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
 }
 
-func refreshTableStats(ctx context.Context, key pb.StatsInfoKey, store optimizerStatsStore) (*pb.StatsInfo, error) {
-	return store.refreshStatsWithMode(ctx, key, "auto")
+func refreshTableStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+	store optimizerStatsStore,
+) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto", options)
 }
 
 // GetGlobalStats returns the GlobalStats instance

@@ -211,6 +211,108 @@ func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string
 		"OR (db.account_id = 0 AND db.datname = 'mo_catalog')) "
 }
 
+func informationSchemaSubscriptionTableAuthorizationPredicate() string {
+	return "(" +
+		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
+		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
+		"WHERE db.dat_id = tbl.reldatabase_id) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
+		"WHERE (rp.obj_type IN ('table','view') AND (" +
+		"(rp.privilege_level = '*.*' AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = tbl.reldatabase_id) " +
+		"OR (rp.privilege_level IN ('d.t','t') AND rp.obj_id = tbl.rel_logical_id))) " +
+		"OR (rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
+		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))"
+}
+
+func informationSchemaSubscriptionTablesDDL() string {
+	prefix := "CREATE VIEW information_schema.TABLES AS " + informationSchemaMetadataVisibilityCTE()
+	localSelect := strings.TrimPrefix(InformationSchemaTablesV41DDL, prefix)
+	subscriptionSelect := strings.Replace(
+		localSelect,
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,",
+		"if(relkind = 'v', NULL, cast(0 as bigint unsigned)) AS `AUTO_INCREMENT`,",
+		1,
+	)
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		"FROM __mo_visible_tables tbl ",
+		"FROM mo_subscription_tables() tbl ",
+		1,
+	)
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		"WHERE tbl.account_id = current_account_id() and",
+		"WHERE tbl.account_id = current_account_id() AND "+
+			informationSchemaSubscriptionTableAuthorizationPredicate()+" and",
+		1,
+	)
+	return prefix + localSelect + " UNION ALL " + subscriptionSelect
+}
+
+func informationSchemaColumnsLocalFromSQL() string {
+	return "from mo_catalog.mo_columns mc join __mo_visible_tables mt " +
+		"ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname " +
+		"left join (select ki.table_id, ki.column_name, " +
+		"max(case when ki.type = 'PRIMARY' then 3 when ki.type = 'UNIQUE' and kp.part_count = 1 then 2 else 1 end) as key_priority " +
+		"from mo_catalog.mo_indexes ki " +
+		"join (select id, count(*) as part_count from mo_catalog.mo_indexes group by id) kp on ki.id = kp.id " +
+		"where (ki.type = 'PRIMARY' or ki.ordinal_position = 1) and ki.type in ('PRIMARY', 'UNIQUE', 'MULTIPLE', 'FULLTEXT', 'SPATIAL') " +
+		"group by ki.table_id, ki.column_name) mk ON mk.table_id = mt.rel_id AND mk.column_name = mc.attname "
+}
+
+func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
+	return "(" +
+		"mc.att_database IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
+		"OR mc.table_owner IN (SELECT role_id FROM __mo_active_roles) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
+		"WHERE db.dat_id = mc.att_database_id) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
+		"WHERE (rp.obj_type IN ('table','view') AND (" +
+		"(rp.privilege_level = '*.*' AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = mc.att_database_id) " +
+		"OR (rp.privilege_level IN ('d.t','t') AND rp.obj_id = mc.rel_logical_id))) " +
+		"OR (rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
+		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
+}
+
+func informationSchemaSubscriptionColumnsDDL() string {
+	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
+	localSelect := strings.TrimPrefix(InformationSchemaColumnsV41DDL, prefix)
+	subscriptionSelect := strings.Replace(
+		localSelect,
+		"case when mc.att_constraint_type = 'p' or mk.key_priority = 3 then 'PRI' when mk.key_priority = 2 then 'UNI' when mk.key_priority = 1 then 'MUL' else '' end as COLUMN_KEY,",
+		"case when mc.att_constraint_type = 'p' or mc.key_priority = 3 then 'PRI' "+
+			"when mc.key_priority = 2 then 'UNI' when mc.key_priority = 1 then 'MUL' else '' end as COLUMN_KEY,",
+		1,
+	)
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		informationSchemaColumnsLocalFromSQL(),
+		"from mo_subscription_columns() mc ",
+		1,
+	)
+	subscriptionSelect = strings.Replace(
+		subscriptionSelect,
+		"where mc.account_id = current_account_id() and",
+		"where mc.account_id = current_account_id() and "+
+			informationSchemaSubscriptionColumnAuthorizationPredicate()+" and",
+		1,
+	)
+	subscriptionSelect = strings.NewReplacer(
+		"mt.relkind", "mc.relkind",
+		"mt.relname", "mc.att_relname",
+		"mt.reldatabase", "mc.att_database",
+		"mt.rel_createsql", "mc.rel_createsql",
+		"mt.extra_info", "mc.extra_info",
+	).Replace(subscriptionSelect)
+	return "CREATE VIEW information_schema.COLUMNS AS " +
+		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+}
+
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
@@ -252,7 +354,7 @@ var (
 		"ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname",
 		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
-	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS "+informationSchemaMetadataVisibilityCTE()+"select "+
+	InformationSchemaColumnsV41DDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS "+informationSchemaMetadataVisibilityCTE()+"select "+
 		"'def' as TABLE_CATALOG,"+
 		"mc.att_database as TABLE_SCHEMA,"+
 		"mc.att_relname AS TABLE_NAME,"+
@@ -291,6 +393,8 @@ var (
 		"where mc.account_id = current_account_id() "+
 		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not startswith(mc.att_relname, '%s') and %s",
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
+
+	InformationSchemaColumnsDDL = informationSchemaSubscriptionColumnsDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -370,7 +474,7 @@ var (
 		"DATABASE_COLLATION varchar(64)" +
 		")"
 
-	InformationSchemaTablesDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLES AS "+informationSchemaMetadataVisibilityCTE()+
+	InformationSchemaTablesV41DDL = fmt.Sprintf("CREATE VIEW information_schema.TABLES AS "+informationSchemaMetadataVisibilityCTE()+
 		"SELECT 'def' AS TABLE_CATALOG,"+
 		"reldatabase AS TABLE_SCHEMA,"+
 		"relname AS TABLE_NAME,"+
@@ -399,6 +503,8 @@ var (
 		"FROM __mo_visible_tables tbl "+
 		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
+
+	InformationSchemaTablesDDL = informationSchemaSubscriptionTablesDDL()
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +

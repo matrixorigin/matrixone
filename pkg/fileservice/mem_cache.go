@@ -394,11 +394,6 @@ func newMemCacheWithMetricScope(
 var _ IOVectorCache = new(MemCache)
 var _ CacheDataAllocator = new(MemCache)
 
-// cacheDataAllocationCapacityGuarded marks allocators that reserve FIFO cache
-// capacity before allocating. DiskCache uses it to avoid a second eviction
-// pass when its cache data is allocated directly into this MemCache.
-func (*MemCache) cacheDataAllocationCapacityGuarded() {}
-
 func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	return m.allocateCacheData(ctx, size, malloc.NoHints)
 }

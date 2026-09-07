@@ -74,7 +74,6 @@ func newFileServiceCaches(
 	perfCounterSets []*perfcounter.CounterSet,
 	name string,
 	enableDiskCache bool,
-	allocator CacheDataAllocator,
 ) (caches fileServiceCaches, err error) {
 	config.setDefaults()
 	defer func() {
@@ -83,13 +82,8 @@ func newFileServiceCaches(
 		}
 	}()
 
-	if config.RemoteCacheEnabled {
-		if config.QueryClient == nil {
-			return fileServiceCaches{}, moerr.NewInternalError(ctx, "query client is nil")
-		}
-		caches.remote = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
-		caches.remote.setAllocator(allocator)
-		logutil.Info("fileservice: remote cache initialized", zap.Any("fs-name", name))
+	if config.RemoteCacheEnabled && config.QueryClient == nil {
+		return fileServiceCaches{}, moerr.NewInternalError(ctx, "query client is nil")
 	}
 
 	if config.MemoryCapacity != nil && *config.MemoryCapacity > DisableCacheCapacity {
@@ -104,6 +98,14 @@ func newFileServiceCaches(
 			zap.Any("fs-name", name),
 			zap.Any("capacity", config.MemoryCapacity),
 		)
+	}
+
+	if config.RemoteCacheEnabled {
+		caches.remote = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		if caches.memory != nil {
+			caches.remote.allocator = caches.memory
+		}
+		logutil.Info("fileservice: remote cache initialized", zap.Any("fs-name", name))
 	}
 
 	if enableDiskCache && config.DiskCapacity != nil &&
@@ -124,9 +126,6 @@ func newFileServiceCaches(
 		)
 		if err != nil {
 			return caches, err
-		}
-		if caches.memory != nil {
-			caches.disk.memoryCache = caches.memory.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", name),
