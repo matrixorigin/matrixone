@@ -157,6 +157,47 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	return getFunctionByName(ctx, name, args, nil)
+}
+
+// StringDomainCheckMode separates an operand's current string domain from the
+// provenance rules that decide whether it participates in regexp charset
+// compatibility. A single boolean cannot represent both PREPARE-time
+// uncertainty and MySQL's execute-time parameter-marker exception.
+type StringDomainCheckMode uint8
+
+const (
+	// StringDomainCheckKnown applies the operand's current text/binary domain.
+	StringDomainCheckKnown StringDomainCheckMode = iota
+	// StringDomainCheckDeferred omits a PREPARE-time runtime-owned domain. The
+	// concrete execution must bind the operand again with a non-deferred mode.
+	StringDomainCheckDeferred
+	// StringDomainCheckParamMarker keeps the marker's current domain for
+	// compatibility with a fixed binary operand, but a binary marker does not
+	// itself trigger MySQL's static-binary restriction.
+	StringDomainCheckParamMarker
+	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
+	StringDomainCheckDomainless
+)
+
+// GetFunctionByNameWithStringDomainCheckModes resolves a function while
+// preserving the provenance needed by regexp charset checks. Ordinary argument
+// types remain authoritative for overload selection, casts, result metadata,
+// and the executor's effective text/binary domain.
+func GetFunctionByNameWithStringDomainCheckModes(
+	ctx context.Context, name string, args []types.Type, modes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
+	if len(modes) != len(args) {
+		return r, moerr.NewInternalErrorf(
+			ctx, "string domain check mode count %d does not match argument count %d",
+			len(modes), len(args))
+	}
+	return getFunctionByName(ctx, name, args, modes)
+}
+
+func getFunctionByName(
+	ctx context.Context, name string, args []types.Type, stringDomainModes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
@@ -167,6 +208,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	check := f.checkFn(f.Overloads, args)
+	if f.stringDomainCheckFn != nil && len(stringDomainModes) > 0 {
+		check = f.stringDomainCheckFn(f.Overloads, args, stringDomainModes)
+	}
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -181,7 +225,10 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if check.invalidJSONArgumentIndex != 0 {
+		if check.characterSetMismatch[0] != "" {
+			err = moerr.NewCharacterSetMismatch(
+				ctx, check.characterSetMismatch[0], check.characterSetMismatch[1], name)
+		} else if check.invalidJSONArgumentIndex != 0 {
 			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
 		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
@@ -382,6 +429,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
 		TO_INTERVAL:
 		return false
@@ -529,6 +577,11 @@ type FuncNew struct {
 	// if matched, return the corresponding id of overload. If type conversion was required,
 	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
+
+	// stringDomainCheckFn is the optional second-stage checker for functions
+	// whose string compatibility depends on operand provenance as well as the
+	// current text/binary type.
+	stringDomainCheckFn func(overloads []overload, inputs []types.Type, modes []StringDomainCheckMode) checkResult
 
 	// layout was used for `explain SQL`.
 	layout FuncExplainLayout
@@ -686,6 +739,7 @@ type checkResult struct {
 	idx                      int
 	finalType                []types.Type
 	invalidJSONArgumentIndex int
+	characterSetMismatch     [2]string
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -700,6 +754,13 @@ func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
 	return checkResult{
 		status:                   failedFunctionParametersWrong,
 		invalidJSONArgumentIndex: argumentIndex,
+	}
+}
+
+func newCheckResultWithCharacterSetMismatch(left, right string) checkResult {
+	return checkResult{
+		status:               failedFunctionParametersWrong,
+		characterSetMismatch: [2]string{left, right},
 	}
 }
 

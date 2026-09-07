@@ -187,8 +187,9 @@ select sleep(1);
 insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
 select id, counter, create_at = update_at from users;
 
--- A primary-key-only no-op must not count or trigger implicit ON UPDATE, while
--- the same statement shape must still insert a non-conflicting key.
+-- A primary-key-only no-op must not trigger implicit ON UPDATE. mo-tester uses
+-- CLIENT_FOUND_ROWS, so it contributes one logical affected row; the same
+-- statement shape must still insert a non-conflicting key.
 drop table if exists t_pk_only_noop;
 create table t_pk_only_noop (
     id int primary key,

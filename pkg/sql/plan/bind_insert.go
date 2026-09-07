@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -368,6 +369,9 @@ func splitIrregularIndexesByUpdatedColumns(
 func (builder *QueryBuilder) modernInsertFkCheckEnabled(tableDef *plan.TableDef) (bool, error) {
 	hasChildParent := false
 	for _, fk := range tableDef.Fkeys {
+		if fk == nil {
+			return false, moerr.NewInternalError(builder.GetContext(), "malformed foreign-key metadata")
+		}
 		if fk.ForeignTbl != 0 {
 			hasChildParent = true
 			break
@@ -377,6 +381,102 @@ func (builder *QueryBuilder) modernInsertFkCheckEnabled(tableDef *plan.TableDef)
 		return false, nil
 	}
 	return IsForeignKeyChecksEnabled(builder.compCtx)
+}
+
+func odkuNonSelfForeignKeys(ctx context.Context, tableDef *plan.TableDef, enabled bool) (*plan.TableDef, error) {
+	filtered := *tableDef
+	filtered.Checks = nil
+	filtered.Fkeys = nil
+	if !enabled {
+		return &filtered, nil
+	}
+	for _, fk := range tableDef.Fkeys {
+		if fk == nil {
+			return nil, moerr.NewInternalError(ctx, "ON DUPLICATE KEY UPDATE has malformed foreign-key metadata")
+		}
+		if fk.ForeignTbl != 0 {
+			filtered.Fkeys = append(filtered.Fkeys, fk)
+		}
+	}
+	return &filtered, nil
+}
+
+func odkuUpdatedNotNullColumns(
+	tableDef *plan.TableDef,
+	updateColIdxList []int32,
+	updateColExprList []*plan.Expr,
+) []int32 {
+	seen := make(map[int32]struct{}, len(updateColIdxList))
+	result := make([]int32, 0, len(updateColIdxList))
+	for i, colIdx := range updateColIdxList {
+		if colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+			continue
+		}
+		col := tableDef.Cols[colIdx]
+		if col.Default == nil || col.Default.NullAbility ||
+			strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+			continue
+		}
+		// Most ODKU assignments into NOT NULL columns are already proven
+		// non-null (for example v = VALUES(v)). Keep those on the one-row-per-key
+		// fast path; action validation is needed only when an expression can
+		// actually produce NULL before a later action restores the final image.
+		if i < len(updateColExprList) && updateColExprList[i] != nil &&
+			updateColExprList[i].Typ.NotNullable {
+			continue
+		}
+		if _, exists := seen[colIdx]; exists {
+			continue
+		}
+		seen[colIdx] = struct{}{}
+		result = append(result, colIdx)
+	}
+	return result
+}
+
+func (builder *QueryBuilder) appendODKUActionNotNullAssertions(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	lastNodeID int32,
+	selectTag int32,
+	colIdxList []int32,
+) (int32, error) {
+	assertions := make([]*plan.Expr, 0, len(colIdxList))
+	for _, colIdx := range colIdxList {
+		col := tableDef.Cols[colIdx]
+		colType := col.Typ
+		// The action stream can temporarily contain NULL even though the target
+		// schema is NOT NULL. Do not let expression folding use the destination
+		// declaration to reduce isnotnull(action_value) to a constant true.
+		colType.NotNullable = false
+		colExpr := &plan.Expr{
+			Typ:  colType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: colIdx}},
+		}
+		isNotNull, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*plan.Expr{colExpr})
+		if err != nil {
+			return 0, err
+		}
+		assertion, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "_check_constraint_assert", []*plan.Expr{
+				isNotNull,
+				makePlan2StringConstExprWithType(fmt.Sprintf("Column '%s' cannot be null", col.Name)),
+			})
+		if err != nil {
+			return 0, err
+		}
+		assertions = append(assertions, assertion)
+	}
+	if len(assertions) == 0 {
+		return lastNodeID, nil
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{lastNodeID},
+		FilterList:      assertions,
+		FilterIsBarrier: true,
+	}, bindCtx), nil
 }
 
 func (builder *QueryBuilder) appendIrregularMaintSource(
@@ -497,8 +597,9 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 //
 //   - the main plan (the idxNeedUpdate joins + MULTI_UPDATE that follow) keeps
 //     reading finalProjTag refs via a sink-scan that reuses the same tag;
-//   - affected indexes use that materialized step for both deleting conflicting
-//     rows' old entries and inserting the final image;
+//   - for ODKU, affected indexes use a derivative containing only rows whose
+//     final image physically changed, for both deleting old entries and
+//     inserting the final image;
 //   - unaffected indexes use a shared derivative step filtered by old Row_ID IS
 //     NULL, so only genuinely new rows reach their insert maintenance.
 //
@@ -513,7 +614,7 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
-	targetRowNumberPos, targetActivePos int32,
+	targetRowNumberPos, targetActivePos, physicalChangedPos int32,
 	irregularIndexes, insertOnlyIndexes []*plan.IndexDef,
 	newRowMarkerPos int32,
 	tableDef *plan.TableDef,
@@ -536,10 +637,39 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
 		maintStep = builder.appendStep(selectedSinkID)
 	}
+	insertOnlyBaseStep := maintStep
+	// A changed-row derivative is useful only to affected indexes. Creating it
+	// for an insert-only maintenance plan leaves an orphan SINK step, which the
+	// compiler correctly rejects because it has no receiver.
+	if physicalChangedPos >= 0 && len(irregularIndexes) > 0 {
+		changedScanID := builder.appendTaggedSinkScan(bindCtx, maintStep, finalProjTag)
+		changedScan := builder.qry.Nodes[changedScanID]
+		if int(physicalChangedPos) >= len(changedScan.ProjectList) ||
+			changedScan.ProjectList[physicalChangedPos].Typ.Id != int32(types.T_bool) {
+			return 0, moerr.NewInternalError(builder.GetContext(),
+				"ON DUPLICATE KEY UPDATE cannot locate the physical-change marker for irregular index maintenance")
+		}
+		changedID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER,
+			Children: []int32{changedScanID},
+			FilterList: []*plan.Expr{{
+				Typ: changedScan.ProjectList[physicalChangedPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: finalProjTag,
+					ColPos: physicalChangedPos,
+				}},
+			}},
+		}, bindCtx)
+		changedSinkID := appendSinkNodeWithTag(builder, bindCtx, changedID, finalProjTag)
+		maintStep = builder.appendStep(changedSinkID)
+	}
 
 	insertOnlyStep := int32(-1)
 	if len(insertOnlyIndexes) > 0 {
-		newRowsScanID := builder.appendTaggedSinkScan(bindCtx, maintStep, finalProjTag)
+		// Unaffected indexes need only new rows. Derive them before the physical-
+		// change filter: every new row is already marked changed, and avoiding the
+		// redundant filter keeps this branch's plan and runtime work minimal.
+		newRowsScanID := builder.appendTaggedSinkScan(bindCtx, insertOnlyBaseStep, finalProjTag)
 		newRowsScan := builder.qry.Nodes[newRowsScanID]
 		if newRowMarkerPos < 0 || int(newRowMarkerPos) >= len(newRowsScan.ProjectList) {
 			return 0, moerr.NewInternalError(builder.GetContext(),
@@ -1089,24 +1219,13 @@ func (builder *QueryBuilder) determineShuffleForDMLSteps() {
 	}
 }
 
-// buildOnDupTargetPkResolution builds the conflict-resolution subgraph for
-// real-PK INSERT ... ON DUPLICATE KEY UPDATE so a unique-key conflict updates the
-// existing row (MySQL-aligned) instead of raising a duplicate-entry error.
-//
-// Treating PRIMARY as the 0th index, it LEFT JOINs a primary-key existence probe
-// plus every usable unique index, then projects
-//
-//	target_pk = coalesce(pk_probe, uk1_pri, uk2_pri, ...)
-//
-// in PK > unique-key definition order. A NULL unique-key value never matches its
-// index, so it contributes no candidate (MySQL: NULL never conflicts). The
-// returned project re-projects every original incoming column at its original
-// position and appends target_pk at the end; the caller rebinds selectTag to it
-// and keys the main DEDUP-update join on target_pk. Conflicting rows then carry a
-// non-NULL target_pk (UPDATE) while genuinely new rows carry NULL (INSERT) — the
-// exact predicate the existing createIfExpr masking already keys on, so the
-// per-unique-key FAIL dedup is preserved untouched as in-batch duplicate
-// protection (two brand-new rows sharing a new unique-key value still error).
+// buildOnDupTargetPkResolution builds the ordered conflict-resolution subgraph
+// for INSERT ... ON DUPLICATE KEY UPDATE. Treating a real PRIMARY as constraint
+// zero, it probes every constraint against the pre-statement snapshot, then a
+// single PRE_INSERT_UK arbiter resolves rows in input order against both those
+// probe targets and keys published by earlier INSERT actions in this statement.
+// UPDATE actions publish no incoming keys: ODKU rejects UNIQUE-key assignments,
+// so those candidate values never become stored state.
 //
 // It returns the new top node id, the new select binding tag, and the target_pk
 // column position within the new project list.
@@ -1126,35 +1245,51 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	pkTyp := tableDef.Cols[pkColIdx].Typ
 	incomingPkPos := colName2Idx[tableDef.Name+"."+pkName]
 
-	candExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
+	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
+	targetExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
-	// cand0: primary-key existence probe. A lightweight LEFT JOIN against the main
-	// table on the primary key; project the probe's pk (NULL when the row's pk does
-	// not yet exist). PK is the highest-priority candidate.
-	probeTag := builder.genNewBindTag()
-	builder.addNameByColRef(probeTag, tableDef)
-	probeScanID := builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     tableDef,
-		ObjRef:       objRef,
-		BindingTags:  []int32{probeTag},
-		ScanSnapshot: bindCtx.snapshot,
-	}, bindCtx)
-
-	probeCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: probeTag, ColPos: pkColIdx}}},
-		{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: incomingPkPos}}},
-	})
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{lastNodeID, probeScanID},
-		JoinType: plan.Node_LEFT,
-		OnList:   []*plan.Expr{probeCond},
-	}, bindCtx)
-	candExprs = append(candExprs, &plan.Expr{
-		Typ:  pkTyp,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: probeTag, ColPos: pkColIdx}},
-	})
+	if pkName != catalog.FakePrimaryKeyColName {
+		probeTag := builder.genNewBindTag()
+		builder.addNameByColRef(probeTag, tableDef)
+		probeScanID := builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     tableDef,
+			ObjRef:       objRef,
+			BindingTags:  []int32{probeTag},
+			ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		inputPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: selectTag, ColPos: incomingPkPos,
+		}}}
+		existingPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: probeTag, ColPos: pkColIdx,
+		}}}
+		var err error
+		inputPK, err = bindPrimaryKeyIdentityExpr(builder, inputPK, pkTyp)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		existingPK, err = bindPrimaryKeyIdentityExpr(builder, existingPK, pkTyp)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		probeCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			existingPK, DeepCopyExpr(inputPK),
+		})
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{lastNodeID, probeScanID},
+			JoinType: plan.Node_LEFT,
+			OnList:   []*plan.Expr{probeCond},
+		}, bindCtx)
+		keyExprs = append(keyExprs, inputPK)
+		targetExprs = append(targetExprs, &plan.Expr{
+			Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: probeTag, ColPos: pkColIdx}},
+		})
+	}
 
 	// candi: each usable unique index. LEFT JOIN the index table on its index
 	// column = the incoming unique-key value; project the index's primary column
@@ -1221,45 +1356,67 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			JoinType: plan.Node_LEFT,
 			OnList:   []*plan.Expr{joinCond},
 		}, bindCtx)
-		candExprs = append(candExprs, &plan.Expr{
+		keyExprs = append(keyExprs, DeepCopyExpr(incomingValExpr))
+		targetExprs = append(targetExprs, &plan.Expr{
 			Typ:  priColTyp,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: idxTag, ColPos: priColPos}},
 		})
 	}
 
-	// Re-project every original incoming column at its original position, then
-	// append target_pk = coalesce(cand0, cand1, ...). Positions [0, len) are
-	// preserved so colName2Idx stays valid; target_pk lands at len.
-	newTag := builder.genNewBindTag()
-	newProjList := make([]*plan.Expr, 0, len(incomingProjectList)+1)
+	if len(keyExprs) == 0 || len(keyExprs) != len(targetExprs) {
+		return 0, 0, 0, moerr.NewInternalError(builder.GetContext(),
+			"ODKU target arbitration requires at least one unique constraint")
+	}
+
+	projectTag := builder.genNewBindTag()
+	projectList := make([]*plan.Expr, 0, len(incomingProjectList)+2*len(keyExprs))
 	for i, expr := range incomingProjectList {
-		newProjList = append(newProjList, &plan.Expr{
+		projectList = append(projectList, &plan.Expr{
 			Typ:  expr.Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}},
 		})
 	}
-	targetPkPos := int32(len(newProjList))
-
-	var targetPkExpr *plan.Expr
-	if len(candExprs) == 1 {
-		targetPkExpr = candExprs[0]
-	} else {
-		var err error
-		targetPkExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce", candExprs)
-		if err != nil {
-			return 0, 0, 0, err
-		}
+	keyColumns := make([]int32, len(keyExprs))
+	targetColumns := make([]int32, len(targetExprs))
+	for i := range keyExprs {
+		keyColumns[i] = int32(len(projectList))
+		projectList = append(projectList, keyExprs[i])
+		targetColumns[i] = int32(len(projectList))
+		projectList = append(projectList, targetExprs[i])
 	}
-	newProjList = append(newProjList, targetPkExpr)
-
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
-		ProjectList: newProjList,
+		ProjectList: projectList,
 		Children:    []int32{lastNodeID},
-		BindingTags: []int32{newTag},
+		BindingTags: []int32{projectTag},
 	}, bindCtx)
 
-	return lastNodeID, newTag, targetPkPos, nil
+	outputTag := builder.genNewBindTag()
+	outputProject := make([]*plan.Expr, 0, len(incomingProjectList)+1)
+	for i, expr := range incomingProjectList {
+		outputProject = append(outputProject, &plan.Expr{
+			Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: int32(i)}},
+		})
+	}
+	targetPkPos := int32(len(outputProject))
+	outputProject = append(outputProject, &plan.Expr{
+		Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: incomingPkPos}},
+	})
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PRE_INSERT_UK,
+		Children:    []int32{lastNodeID},
+		ProjectList: outputProject,
+		BindingTags: []int32{outputTag},
+		PreInsertUkCtx: &plan.PreInsertUkCtx{
+			PkColumn:              incomingPkPos,
+			PkType:                pkTyp,
+			OdkuTargetArbitration: true,
+			KeyColumns:            keyColumns,
+			TargetColumns:         targetColumns,
+			OutputColumns:         int32(len(incomingProjectList)),
+		},
+	}, bindCtx)
+	return lastNodeID, outputTag, targetPkPos, nil
 }
 
 // appendModernChildFkMarkOks appends, for every non-self-referencing foreign key, a
@@ -1270,13 +1427,15 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 // the leading prefix of a composite primary key). The joins are binding-tagged, so the
 // result survives the full optimizer and is robust to the appended index-helper
 // columns a unique-key child carries. childColPos maps a child FK column name to its
-// position under selectTag.
+// position under selectTag. lockRows is false only for ODKU's transient action
+// validation stream; its retained final action is locked and revalidated later.
 func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
 	lastNodeID int32,
 	selectTag int32,
 	childColPos func(colName string) int32,
+	lockRows bool,
 ) (int32, []*plan.Expr, error) {
 	selectNode := builder.updateInputProjectNode(lastNodeID)
 	inputTypes := make([]plan.Type, len(selectNode.ProjectList))
@@ -1298,10 +1457,12 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	if len(nonSelfFks) == 0 {
 		return lastNodeID, nil, nil
 	}
-	lockForeignKeys := true
-	if proc := builder.compCtx.GetProcess(); proc != nil {
-		if txnOp := proc.GetTxnOperator(); txnOp != nil {
-			lockForeignKeys = txnOp.Txn().IsPessimistic()
+	lockForeignKeys := lockRows
+	if lockForeignKeys {
+		if proc := builder.compCtx.GetProcess(); proc != nil {
+			if txnOp := proc.GetTxnOperator(); txnOp != nil {
+				lockForeignKeys = txnOp.Txn().IsPessimistic()
+			}
 		}
 	}
 
@@ -1410,7 +1571,11 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			childExprs := make([]*plan.Expr, len(fk.Cols))
 			for i, childColID := range fk.Cols {
 				pos := childColPos(id2name[childColID])
-				childExpr := &plan.Expr{Typ: inputTypes[pos], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				childTyp := tableDef.Cols[tableDef.Name2ColIndex[id2name[childColID]]].Typ
+				if pos >= 0 && int(pos) < len(inputTypes) {
+					childTyp = inputTypes[pos]
+				}
+				childExpr := &plan.Expr{Typ: childTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: selectTag, ColPos: int32(pos),
 				}}}
 				var parentCol *plan.ColDef
@@ -1580,7 +1745,10 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		nullConds := make([]*plan.Expr, 0, len(fk.Cols))
 		for k, childColId := range fk.Cols {
 			childPos := childColPos(id2name[childColId])
-			childTyp := selectNode.ProjectList[childPos].Typ
+			childTyp := tableDef.Cols[tableDef.Name2ColIndex[id2name[childColId]]].Typ
+			if childPos >= 0 && int(childPos) < len(selectNode.ProjectList) {
+				childTyp = selectNode.ProjectList[childPos].Typ
+			}
 			parentPos := parentColId2Pos[fk.ForeignCols[k]]
 			parentTyp := parentTableDef.Cols[parentPos].Typ
 
@@ -1644,7 +1812,7 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 		childTyps[i] = e.Typ
 	}
 
-	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag, childColPos)
+	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag, childColPos, true)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1703,7 +1871,7 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	}
 
 	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag,
-		func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] })
+		func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1938,6 +2106,72 @@ func columnPossiblyChanged(tableDef *plan.TableDef, possiblyChanged map[string]s
 	return ok
 }
 
+// odkuAffectedActionConstraints returns only the row-level constraints whose
+// result can change during the ordered ODKU assignment stream.  Validating an
+// unrelated constraint is not merely wasted work: it can reject a historical
+// row that was admitted while that constraint (for example FK checks) was
+// disabled.  Generated-column dependencies are already present in
+// possiblyChanged.
+func odkuAffectedActionConstraints(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	possiblyChanged map[string]struct{},
+	includeForeignKeys bool,
+) (*plan.TableDef, error) {
+	filtered := *tableDef
+	filtered.Checks = nil
+	filtered.Fkeys = nil
+
+	for _, check := range tableDef.Checks {
+		if check == nil || check.Check == nil {
+			return nil, moerr.NewInternalError(ctx, "ON DUPLICATE KEY UPDATE has malformed CHECK metadata")
+		}
+		for _, pos := range collectRefColPos(check.Check) {
+			if pos < 0 || int(pos) >= len(tableDef.Cols) {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"ON DUPLICATE KEY UPDATE CHECK %s references invalid column position %d",
+					check.Name, pos)
+			}
+			if _, changed := possiblyChanged[tableDef.Cols[pos].Name]; changed {
+				filtered.Checks = append(filtered.Checks, check)
+				break
+			}
+		}
+	}
+
+	if !includeForeignKeys {
+		return &filtered, nil
+	}
+	colNameByID := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colNameByID[col.ColId] = col.Name
+	}
+	for _, fk := range tableDef.Fkeys {
+		if fk == nil {
+			return nil, moerr.NewInternalError(ctx, "ON DUPLICATE KEY UPDATE has malformed foreign-key metadata")
+		}
+		if fk.ForeignTbl == 0 { // self FKs remain statement-level
+			continue
+		}
+		if len(fk.Cols) == 0 {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"ON DUPLICATE KEY UPDATE foreign key %s has no child columns", fk.Name)
+		}
+		for _, colID := range fk.Cols {
+			name, ok := colNameByID[colID]
+			if !ok {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"ON DUPLICATE KEY UPDATE cannot locate foreign-key column %d", colID)
+			}
+			if _, changed := possiblyChanged[name]; changed {
+				filtered.Fkeys = append(filtered.Fkeys, fk)
+				break
+			}
+		}
+	}
+	return &filtered, nil
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -1997,9 +2231,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	// Keep the executable assignment stream separate from updateExprs. SQL
+	// assignments are ordered and a target may occur more than once; the map is
+	// only the final per-column summary used by index/no-op planning.
+	updateColIdxList := make([]int32, 0, len(astUpdateExprs))
+	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
-	allExplicitAssignmentsSkipped := false
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -2077,8 +2315,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				return 0, err
 			}
 			updateExprs[colDef.Name] = updateExpr
+			updateColIdxList = append(updateColIdxList, colIdx)
+			updateColExprList = append(updateColExprList, updateExpr)
 		}
-		allExplicitAssignmentsSkipped = len(updateExprs) == 0
 
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
@@ -2089,21 +2328,24 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 
 				updateExprs[col.Name] = newDefExpr
+				updateColIdxList = append(updateColIdxList, tableDef.Name2ColIndex[col.Name])
+				updateColExprList = append(updateColExprList, newDefExpr)
 				autoUpdateCols[col.Name] = true
 			}
 		}
 
-		for colName, updateExpr := range updateExprs {
+		for i, updateExpr := range updateColExprList {
 			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
 			if err != nil {
 				return 0, err
 			}
-			updateExprs[colName] = updateExpr
+			updateColExprList[i] = updateExpr
+			updateExprs[tableDef.Cols[updateColIdxList[i]].Name] = updateExpr
 		}
 
 		// Keep the dependency set separate from updateExprs: updateExprs is the
-		// final row image and receives every generated expression below, while
-		// possiblyChangedCols describes which keys may need maintenance.
+		// final per-column summary and receives every generated expression below,
+		// while possiblyChangedCols describes which keys may need maintenance.
 		seedCols := make(map[string]struct{}, len(updateExprs))
 		for colName := range updateExprs {
 			seedCols[colName] = struct{}{}
@@ -2115,25 +2357,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			return 0, err
 		}
 
-		// Recompute generated columns from the final updated row image, so
-		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
-		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))
-		for i, col := range tableDef.Cols {
-			if expr, ok := updateExprs[col.Name]; ok {
-				finalRowExprs[i] = expr
-				continue
-			}
-			finalRowExprs[i] = &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: int32(i),
-						Name:   col.Name,
-					},
-				},
-			}
-		}
+		// Generated expressions are appended to the same ordered stream and read
+		// the current row image. Do not inline earlier assignments: doing so would
+		// re-evaluate volatile expressions and would break left-to-right semantics.
 		for i, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue
@@ -2142,9 +2368,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				builder.isInsertIgnore,
 			)
-			genExpr = substituteColRefsInExpr(genExpr, finalRowExprs, 0)
-			finalRowExprs[i] = genExpr
+			replaceColRefTag(genExpr, 0, scanTag)
 			updateExprs[col.Name] = genExpr
+			updateColIdxList = append(updateColIdxList, int32(i))
+			updateColExprList = append(updateColExprList, genExpr)
 		}
 	}
 
@@ -2260,15 +2487,112 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	// real-PK ON DUPLICATE KEY UPDATE: resolve a single UPDATE target up front so a
-	// cross-row unique-key conflict updates the existing row (MySQL-aligned) rather
-	// than erroring. The resolved target_pk re-keys the main DEDUP-update join
-	// below; the per-unique-key FAIL dedup is kept as in-batch duplicate protection.
-	useTargetPk := !isFakePK && onDupAction == plan.Node_UPDATE &&
+	// ODKU with secondary UNIQUE constraints resolves one target identity per
+	// action, including conflicts created by earlier input rows. The target_pk
+	// re-keys the main DEDUP-update join below for both real and synthetic PKs.
+	useTargetPk := onDupAction == plan.Node_UPDATE &&
 		firstUniqueIdxPos >= 0 && !builder.canSkipDedup(tableDef)
 	targetPkPos := int32(-1)
+	affectedRowsInputPos := int32(-1)
+	physicalChangedRowsInputPos := int32(-1)
+	actionFinalInputPos := int32(-1)
+	var odkuFkEligibilityInputPos []int32
+	var odkuActionFkEligibilityInputPos []int32
+	odkuCheckInsertEligibilityInputPos := int32(-1)
+	odkuNeedFkCheck := false
+	odkuActionConstraintDef := tableDef
+	odkuAllForeignKeyDef := tableDef
+	odkuFinalOnlyCheckDef := *tableDef
+	odkuFinalOnlyCheckDef.Checks = nil
+	odkuFinalOnlyCheckDef.Fkeys = nil
+	odkuNotNullColIdxList := odkuUpdatedNotNullColumns(
+		tableDef, updateColIdxList, updateColExprList)
+	if onDupAction == plan.Node_UPDATE {
+		fkChecksEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
+		if err != nil {
+			return 0, err
+		}
+		odkuActionConstraintDef, err = odkuAffectedActionConstraints(
+			builder.GetContext(), tableDef, possiblyChangedCols, fkChecksEnabled)
+		if err != nil {
+			return 0, err
+		}
+		odkuAllForeignKeyDef, err = odkuNonSelfForeignKeys(
+			builder.GetContext(), tableDef, fkChecksEnabled)
+		if err != nil {
+			return 0, err
+		}
+		odkuNeedFkCheck = len(odkuAllForeignKeyDef.Fkeys) > 0
+		affectedChecks := make(map[*plan.CheckDef]struct{}, len(odkuActionConstraintDef.Checks))
+		for _, check := range odkuActionConstraintDef.Checks {
+			affectedChecks[check] = struct{}{}
+		}
+		for _, check := range tableDef.Checks {
+			if _, affected := affectedChecks[check]; !affected {
+				odkuFinalOnlyCheckDef.Checks = append(odkuFinalOnlyCheckDef.Checks, check)
+			}
+		}
+	}
+	emitODKUActionRows := onDupAction == plan.Node_UPDATE &&
+		(len(odkuActionConstraintDef.Checks) > 0 || len(odkuActionConstraintDef.Fkeys) > 0 || len(odkuNotNullColIdxList) > 0)
+	appendODKUFinalOnlyChecks := func(nodeID, inputTag int32) (int32, error) {
+		if len(odkuFinalOnlyCheckDef.Checks) == 0 {
+			return nodeID, nil
+		}
+		if odkuCheckInsertEligibilityInputPos < 0 {
+			return 0, moerr.NewInternalError(builder.GetContext(),
+				"ON DUPLICATE KEY UPDATE CHECK eligibility column is missing")
+		}
+		eligible := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: inputTag, ColPos: odkuCheckInsertEligibilityInputPos,
+			}},
+		}
+		return appendCheckConstraintPlanWithColLookupAndEligibility(
+			builder, bindCtx, &odkuFinalOnlyCheckDef, nodeID, inputTag,
+			func(colName string) (int32, bool) {
+				pos, ok := colName2Idx[tableDef.Name+"."+colName]
+				return pos, ok
+			}, false, eligible)
+	}
+	odkuActionValidationApplied := false
+	if onDupAction == plan.Node_UPDATE {
+		affectedRowsInputPos = int32(len(selectNode.ProjectList))
+		selectNode.ProjectList = append(selectNode.ProjectList, makePlan2Uint64ConstExprWithType(1))
+		physicalChangedRowsInputPos = int32(len(selectNode.ProjectList))
+		selectNode.ProjectList = append(selectNode.ProjectList, MakePlan2BoolConstExprWithType(true))
+		if emitODKUActionRows {
+			actionFinalInputPos = int32(len(selectNode.ProjectList))
+			selectNode.ProjectList = append(selectNode.ProjectList, MakePlan2BoolConstExprWithType(true))
+		}
+		if odkuNeedFkCheck {
+			actionFKs := make(map[*plan.ForeignKeyDef]struct{}, len(odkuActionConstraintDef.Fkeys))
+			for _, fk := range odkuActionConstraintDef.Fkeys {
+				actionFKs[fk] = struct{}{}
+			}
+			for _, fk := range odkuAllForeignKeyDef.Fkeys {
+				pos := int32(len(selectNode.ProjectList))
+				odkuFkEligibilityInputPos = append(
+					odkuFkEligibilityInputPos, pos)
+				if _, affected := actionFKs[fk]; affected {
+					odkuActionFkEligibilityInputPos = append(odkuActionFkEligibilityInputPos, pos)
+				}
+				selectNode.ProjectList = append(selectNode.ProjectList, MakePlan2BoolConstExprWithType(true))
+			}
+		}
+		if len(odkuFinalOnlyCheckDef.Checks) > 0 {
+			odkuCheckInsertEligibilityInputPos = int32(len(selectNode.ProjectList))
+			selectNode.ProjectList = append(selectNode.ProjectList, MakePlan2BoolConstExprWithType(true))
+		}
+	}
 	if useTargetPk {
 		oldSelectTag := selectTag
+		// Append action metadata before target resolution so the stateful arbiter's
+		// resolved target remains the final output column. PRE_INSERT_UK emits a
+		// physical batch directly rather than evaluating its Plan.ProjectList; adding
+		// metadata after this node would shift the runtime target away from the column
+		// consumed by the main DEDUP join.
 		lastNodeID, selectTag, targetPkPos, err = builder.buildOnDupTargetPkResolution(
 			bindCtx, dmlCtx, tableDef, lastNodeID, selectTag, colName2Idx, skipUniqueIdx, selectNode.ProjectList)
 		if err != nil {
@@ -2279,7 +2603,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// The update expressions (e.g. VALUES(col)) were bound against the original
 		// select tag; the resolution project re-projects every incoming column at
 		// its original position under the new tag, so retarget those references.
-		for _, updateExpr := range updateExprs {
+		for _, updateExpr := range updateColExprList {
 			replaceColRefTag(updateExpr, oldSelectTag, selectTag)
 		}
 	}
@@ -2290,22 +2614,48 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	//lock main table
 	lockTargets := make([]*plan.LockTarget, 0, len(tableDef.Indexes)+1)
+	pkInTableCols := false
 	for _, col := range tableDef.Cols {
-		if col.Name == pkName && pkName != catalog.FakePrimaryKeyColName {
-			lockTarget := &plan.LockTarget{
-				TableId:            tableDef.TblId,
-				ObjRef:             DeepCopyObjectRef(objRef),
-				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
-				PrimaryColRelPos:   selectTag,
-				PrimaryColTyp:      col.Typ,
-				// LOAD owns the target table for the whole statement. Mark only
-				// the base-table target so compile can acquire it once before the
-				// pipeline; unique-index targets keep their row-level checks.
-				LockTable: builder.qry.LoadTag,
-			}
-			lockTargets = append(lockTargets, lockTarget)
+		if col.Name == pkName {
+			pkInTableCols = true
 			break
 		}
+	}
+	mainLockColPos := int32(-1)
+	if useTargetPk {
+		// The arbiter resolves a secondary-UNIQUE conflict to the existing
+		// base row's identity. Lock that resolved identity, not the incoming PK:
+		// the latter can name a different row and therefore cannot serialize the
+		// UPDATE. Synthetic-PK tables need the same base-row lock once the hidden
+		// identity has been resolved.
+		mainLockColPos = targetPkPos
+	} else if pkName != catalog.FakePrimaryKeyColName && pkInTableCols {
+		var ok bool
+		mainLockColPos, ok = colName2Idx[tableDef.Name+"."+pkName]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind insert err, can not find primary key projection %s", pkName)
+		}
+	}
+	if mainLockColPos >= 0 {
+		if int(mainLockColPos) >= len(selectNode.ProjectList) {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind insert err, invalid primary key projection %d", mainLockColPos)
+		}
+		lockTargets = append(lockTargets, &plan.LockTarget{
+			TableId:            tableDef.TblId,
+			ObjRef:             DeepCopyObjectRef(objRef),
+			PrimaryColIdxInBat: mainLockColPos,
+			PrimaryColRelPos:   selectTag,
+			// Type the lock from the actual pipeline column. This also covers
+			// composite PK encodings, whose synthetic storage column need not be
+			// present in TableDef.Cols.
+			PrimaryColTyp: selectNode.ProjectList[mainLockColPos].Typ,
+			// LOAD owns the target table for the whole statement. Mark only
+			// the base-table target so compile can acquire it once before the
+			// pipeline; unique-index targets keep their row-level checks.
+			LockTable: builder.qry.LoadTag,
+		})
 	}
 	// lock unique key table
 	for i, idxDef := range tableDef.Indexes {
@@ -2347,13 +2697,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		lockTargets = append(lockTargets, lockTarget)
 	}
 	if len(lockTargets) > 0 {
+		lockTag := builder.genNewBindTag()
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewBindTag()},
+			BindingTags: []int32{lockTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
+		if useTargetPk {
+			if builder.preserveLockProjection == nil {
+				builder.preserveLockProjection = make(map[int32]struct{})
+			}
+			builder.preserveLockProjection[lastNodeID] = struct{}{}
+		}
 		applyLockTableFallback(builder)
 	}
 
@@ -2542,11 +2899,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// table. That unique index is then skipped in the unique-key dedup loop
 		// below (its conflict is already handled as an UPDATE here, not a FAIL).
 		pkRoleIdxPos := -1
-		if isFakePK && onDupAction == plan.Node_UPDATE {
+		if isFakePK && onDupAction == plan.Node_UPDATE && !useTargetPk {
 			pkRoleIdxPos = firstUniqueIdxPos
 		}
 
-		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0) {
+		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0 || useTargetPk) {
 			builder.addNameByColRef(scanTag, tableDef)
 
 			scanNodeID := builder.appendNode(&plan.Node{
@@ -2648,21 +3005,194 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					oldColList[i].ColPos = int32(i)
 				}
 
-				updateColIdxList := make([]int32, 0, len(astUpdateExprs))
-				updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
-				for colName, updateExpr := range updateExprs {
-					updateColIdxList = append(updateColIdxList, tableDef.Name2ColIndex[colName])
-					updateColExprList = append(updateColExprList, updateExpr)
+				noopSkipSeeds := make(map[string]struct{}, len(autoUpdateCols))
+				for name := range autoUpdateCols {
+					noopSkipSeeds[name] = struct{}{}
 				}
-
+				noopSkipCols, err := collectGeneratedColumnDependents(
+					builder.GetContext(), tableDef, noopSkipSeeds,
+				)
+				if err != nil {
+					return 0, err
+				}
+				updateCheckColIdxList := make([]int32, 0, len(updateExprs))
+				for i, col := range tableDef.Cols {
+					if col.Name == catalog.Row_ID || col.Hidden {
+						continue
+					}
+					if _, skipped := noopSkipCols[col.Name]; skipped {
+						continue
+					}
+					if _, written := updateExprs[col.Name]; written {
+						updateCheckColIdxList = append(updateCheckColIdxList, int32(i))
+					}
+				}
+				countFoundRows := false
+				if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+					countFoundRows = !proc.GetSessionInfo().CountUpdateChangedRows
+				}
 				dedupJoinNode.DedupJoinCtx = &plan.DedupJoinCtx{
-					OldColList:        oldColList,
-					UpdateColIdxList:  updateColIdxList,
-					UpdateColExprList: updateColExprList,
+					OldColList:             oldColList,
+					UpdateColIdxList:       updateColIdxList,
+					UpdateColExprList:      updateColExprList,
+					AffectedRowsCol:        &plan.ColRef{RelPos: selectTag, ColPos: affectedRowsInputPos},
+					PhysicalChangedRowsCol: &plan.ColRef{RelPos: selectTag, ColPos: physicalChangedRowsInputPos},
+					UpdateCheckColIdxList:  updateCheckColIdxList,
+					CountFoundRows:         countFoundRows,
+					EmitActionRows:         emitODKUActionRows,
+				}
+				if emitODKUActionRows {
+					dedupJoinNode.DedupJoinCtx.ActionFinalCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: actionFinalInputPos,
+					}
+				}
+				if odkuNeedFkCheck {
+					colByID := make(map[uint64]int32, len(tableDef.Cols))
+					for i, col := range tableDef.Cols {
+						colByID[col.ColId] = int32(i)
+					}
+					for fkIdx, fk := range odkuAllForeignKeyDef.Fkeys {
+						check := plan.ODKUForeignKeyCheck{EligibilityCol: &plan.ColRef{
+							RelPos: selectTag, ColPos: odkuFkEligibilityInputPos[fkIdx],
+						}}
+						for _, colID := range fk.Cols {
+							pos, ok := colByID[colID]
+							if !ok {
+								return 0, moerr.NewInternalErrorf(builder.GetContext(),
+									"ON DUPLICATE KEY UPDATE cannot locate foreign-key column %d", colID)
+							}
+							check.ColIdxList = append(check.ColIdxList, pos)
+						}
+						dedupJoinNode.DedupJoinCtx.ForeignKeyChecks = append(
+							dedupJoinNode.DedupJoinCtx.ForeignKeyChecks, check)
+					}
+				}
+				if odkuCheckInsertEligibilityInputPos >= 0 {
+					pkPos, ok := tableDef.Name2ColIndex[pkName]
+					if !ok || pkPos < 0 || int(pkPos) >= len(tableDef.Cols) {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ON DUPLICATE KEY UPDATE cannot locate primary-key eligibility column")
+					}
+					// Reuse the existing tuple-eligibility transport for the one
+					// statement-level bit needed by unaffected CHECKs. The primary
+					// key cannot be updated by ODKU, so it is eligible exactly for a
+					// newly inserted group and false for an existing target.
+					dedupJoinNode.DedupJoinCtx.ForeignKeyChecks = append(
+						dedupJoinNode.DedupJoinCtx.ForeignKeyChecks, plan.ODKUForeignKeyCheck{
+							ColIdxList: []int32{pkPos}, EligibilityCol: &plan.ColRef{
+								RelPos: selectTag, ColPos: odkuCheckInsertEligibilityInputPos,
+							},
+						})
 				}
 			}
 
 			lastNodeID = builder.appendNode(dedupJoinNode, bindCtx)
+			if emitODKUActionRows {
+				if len(odkuActionConstraintDef.Checks) > 0 {
+					lastNodeID, err = appendCheckConstraintPlan(
+						builder, bindCtx, odkuActionConstraintDef, lastNodeID, selectTag, colName2Idx, false)
+					if err != nil {
+						return 0, err
+					}
+				}
+				lastNodeID, err = builder.appendODKUActionNotNullAssertions(
+					bindCtx, tableDef, lastNodeID, selectTag, odkuNotNullColIdxList)
+				if err != nil {
+					return 0, err
+				}
+				if len(odkuActionConstraintDef.Fkeys) > 0 {
+					var oks []*plan.Expr
+					lastNodeID, oks, err = builder.appendModernChildFkMarkOks(
+						bindCtx, odkuActionConstraintDef, lastNodeID, selectTag,
+						func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, false)
+					if err != nil {
+						return 0, err
+					}
+					if len(oks) != len(odkuActionFkEligibilityInputPos) {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ON DUPLICATE KEY UPDATE foreign-key eligibility count mismatch")
+					}
+					assertConds := make([]*plan.Expr, len(oks))
+					fkErrExpr := makePlan2StringConstExprWithType(
+						"Cannot add or update a child row: a foreign key constraint fails")
+					for i, ok := range oks {
+						eligible := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectTag, ColPos: odkuActionFkEligibilityInputPos[i],
+						}}}
+						ok, err = guardConstraintByEligibility(builder.GetContext(), ok, eligible)
+						if err != nil {
+							return 0, err
+						}
+						assertConds[i], err = BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+						if err != nil {
+							return 0, err
+						}
+					}
+					lastNodeID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_FILTER, Children: []int32{lastNodeID}, FilterList: assertConds,
+						FilterIsBarrier: true,
+					}, bindCtx)
+				}
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType: plan.Node_FILTER,
+					Children: []int32{lastNodeID},
+					FilterList: []*plan.Expr{{
+						Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: actionFinalInputPos}},
+					}},
+					FilterIsBarrier: true,
+				}, bindCtx)
+				lastNodeID, err = appendODKUFinalOnlyChecks(lastNodeID, selectTag)
+				if err != nil {
+					return 0, err
+				}
+				odkuActionValidationApplied = true
+			}
+		}
+		if emitODKUActionRows && !odkuActionValidationApplied {
+			if len(odkuActionConstraintDef.Checks) > 0 {
+				lastNodeID, err = appendCheckConstraintPlan(
+					builder, bindCtx, odkuActionConstraintDef, lastNodeID, selectTag, colName2Idx, false)
+				if err != nil {
+					return 0, err
+				}
+			}
+			lastNodeID, err = builder.appendODKUActionNotNullAssertions(
+				bindCtx, tableDef, lastNodeID, selectTag, odkuNotNullColIdxList)
+			if err != nil {
+				return 0, err
+			}
+			if len(odkuActionConstraintDef.Fkeys) > 0 {
+				lastNodeID, selectTag, err = builder.buildModernChildFkAssert(
+					bindCtx, odkuActionConstraintDef, lastNodeID, selectTag,
+					func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] })
+				if err != nil {
+					return 0, err
+				}
+				selectNode = builder.qry.Nodes[lastNodeID]
+			}
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_FILTER,
+				Children: []int32{lastNodeID},
+				FilterList: []*plan.Expr{{
+					Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectTag, ColPos: actionFinalInputPos,
+					}},
+				}},
+				FilterIsBarrier: true,
+			}, bindCtx)
+			lastNodeID, err = appendODKUFinalOnlyChecks(lastNodeID, selectTag)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if onDupAction == plan.Node_UPDATE && !emitODKUActionRows {
+			lastNodeID, err = appendODKUFinalOnlyChecks(lastNodeID, selectTag)
+			if err != nil {
+				return 0, err
+			}
 		}
 
 		// dedup#2:handle unique key dedup
@@ -2794,115 +3324,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 
-		}
-	}
-
-	// ODKU no-op guard: drop rows where every column the update actually writes
-	// is NULL-safe-equal between the old image (scanTag) and the final written
-	// value the dedup-update join materialized into the new image (selectTag).
-	// MySQL returns affected-rows=0 for such rows.
-	// Placed before the final PROJECT so scanTag columns survive column remapping.
-	if onDupAction == plan.Node_UPDATE {
-		// Columns excluded from the no-op equality chain: implicit ON UPDATE
-		// columns (whose new value always advances) plus any generated column
-		// that transitively derives from such a column — otherwise the recomputed
-		// generated value would defeat the no-op guard even when the user's
-		// explicit update changed nothing. A generated column whose source is a
-		// user-updated column is still caught by that source column's own <=>.
-		noopSkipSeeds := make(map[string]struct{}, len(autoUpdateCols))
-		for name := range autoUpdateCols {
-			noopSkipSeeds[name] = struct{}{}
-		}
-		noopSkipCols, err := collectGeneratedColumnDependents(
-			builder.GetContext(), tableDef, noopSkipSeeds,
-		)
-		if err != nil {
-			return 0, err
-		}
-		var allColsEqual *plan.Expr
-		for i, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID || col.Hidden {
-				continue
-			}
-			if _, skipped := noopSkipCols[col.Name]; skipped {
-				continue
-			}
-			// Only compare columns the update actually writes. A column absent from
-			// updateExprs keeps its old value and is trivially unchanged, so it must
-			// be excluded — otherwise an immutable key column resolved through a
-			// secondary UNIQUE conflict (where the incoming PK differs from the
-			// existing row's PK) would spuriously fail the equality chain and turn a
-			// no-op update into a counted one.
-			if _, written := updateExprs[col.Name]; !written {
-				continue
-			}
-			// Compare the old value against the FINAL written value already
-			// materialized by the dedup-update join, not a fresh evaluation of the
-			// assignment expression. The join evaluates each update expression once
-			// and writes the result back into the new-image (selectTag) column at
-			// colName2Idx; re-executing it here would double-evaluate non-
-			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
-			// check could disagree with the value actually stored.
-			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
-			if !ok {
-				continue
-			}
-			oldColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: int32(i),
-					},
-				},
-			}
-			newColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: newColPos,
-					},
-				},
-			}
-			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
-			if allColsEqual == nil {
-				allColsEqual = eqExpr
-			} else {
-				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
-			}
-		}
-		if allColsEqual != nil || allExplicitAssignmentsSkipped {
-			// The dedup-join output also carries non-conflicting rows, whose old
-			// image is all-NULL. Such a row must always be inserted. Conversely, if
-			// every explicit assignment was removed as a semantic no-op, an existing
-			// row must be dropped without evaluating implicit ON UPDATE expressions.
-			// The old rowid distinguishes those two cases without comparing incoming
-			// values that are not physically updated.
-			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
-			oldRowIDExpr := &plan.Expr{
-				Typ: tableDef.Cols[rowIDIdx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: rowIDIdx,
-					},
-				},
-			}
-			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
-			keepExpr := noOldRowExpr
-			if allColsEqual != nil {
-				// NULL-safe equality is true for an all-NULL new-row image too, so
-				// retain the rowid branch while keeping genuine updates whose compared
-				// columns differ.
-				notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
-				keepExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
-			}
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{lastNodeID},
-				FilterList: []*plan.Expr{keepExpr},
-			}, bindCtx)
 		}
 	}
 
@@ -3112,21 +3533,44 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
-		if onDupAction == plan.Node_UPDATE {
-			lastNodeID, err = appendCheckConstraintPlan(
-				builder,
-				bindCtx,
-				tableDef,
-				lastNodeID,
-				selectTag,
-				colName2Idx,
-				false,
-			)
+		if onDupAction == plan.Node_UPDATE && odkuNeedFkCheck {
+			var oks []*plan.Expr
+			lastNodeID, oks, err = builder.appendModernChildFkMarkOks(
+				bindCtx, odkuAllForeignKeyDef, lastNodeID, finalProjTag,
+				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true)
 			if err != nil {
 				return 0, err
 			}
+			if len(oks) != len(odkuFkEligibilityInputPos) {
+				return 0, moerr.NewInternalError(builder.GetContext(),
+					"ON DUPLICATE KEY UPDATE foreign-key eligibility count mismatch")
+			}
+			assertConds := make([]*plan.Expr, len(oks))
+			fkErrExpr := makePlan2StringConstExprWithType(
+				"Cannot add or update a child row: a foreign key constraint fails")
+			for i, ok := range oks {
+				eligible := &plan.Expr{
+					Typ: newProjList[odkuFkEligibilityInputPos[i]].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: finalProjTag, ColPos: odkuFkEligibilityInputPos[i],
+					}},
+				}
+				ok, err = guardConstraintByEligibility(builder.GetContext(), ok, eligible)
+				if err != nil {
+					return 0, err
+				}
+				assertConds[i], err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+				if err != nil {
+					return 0, err
+				}
+			}
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_FILTER, Children: []int32{lastNodeID}, FilterList: assertConds,
+				FilterIsBarrier: true,
+			}, bindCtx)
+			selectNode = builder.qry.Nodes[lastNodeID]
 		}
-
 		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
 		// so the main plan, the irregular-index maintenance, and the row-scoped
 		// child→parent foreign-key check can all read it. The dedup PK is immutable,
@@ -3137,10 +3581,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// (e.g. inserted earlier under FOREIGN_KEY_CHECKS=0) and its cost does not
 		// scale with table size. It is deferred to finishIrregularIndexMaintenance
 		// (post-createQuery) like the plain-INSERT FK check.
-		odkuNeedFkCheck, err := builder.modernInsertFkCheckEnabled(tableDef)
-		if err != nil {
-			return 0, err
-		}
 		// ON DUPLICATE KEY UPDATE enforces child->parent FKs in the data flow with the
 		// same per-FK MARK-join check as INSERT, over this final merged image. Each FK is
 		// asserted independently (its parent exists OR one of that FK's own columns is
@@ -3150,28 +3590,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// Unlike plain INSERT this does NOT re-project to a fresh tag: ODKU's downstream
 		// MULTI_UPDATE reads both the merged image (finalProjTag) and the delete columns
 		// (delColName2Idx) from this subtree, which a re-project would hide.
-		if onDupAction == plan.Node_UPDATE && odkuNeedFkCheck {
-			var oks []*plan.Expr
-			if lastNodeID, oks, err = builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, finalProjTag,
-				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }); err != nil {
-				return 0, err
-			}
-			if len(oks) > 0 {
-				fkErrExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
-				assertConds := make([]*plan.Expr, len(oks))
-				for i, ok := range oks {
-					if assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)}); err != nil {
-						return 0, err
-					}
-				}
-				lastNodeID = builder.appendNode(&plan.Node{
-					NodeType:   plan.Node_FILTER,
-					Children:   []int32{lastNodeID},
-					FilterList: assertConds,
-				}, bindCtx)
-				selectNode = builder.qry.Nodes[lastNodeID]
-			}
-		}
 		if onDupAction == plan.Node_UPDATE && len(irregularIndexes) > 0 {
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
@@ -3188,7 +3606,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
-				-1, -1,
+				-1, -1, physicalChangedRowsInputPos,
 				affectedIrregularIndexes, insertOnlyIrregularIndexes, oldRowIDRef[1],
 				tableDef, dmlCtx.objRefs[0])
 			if err != nil {
@@ -3285,7 +3703,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	if onDupAction == plan.Node_UPDATE {
-		updateCtx.CountDeleteAffectRows = true
+		updateCtx.AffectedRowsWeightCol = &plan.ColRef{
+			RelPos: selectTag, ColPos: affectedRowsInputPos,
+		}
+		updateCtx.PhysicalChangedRowsCol = &plan.ColRef{
+			RelPos: selectTag, ColPos: physicalChangedRowsInputPos,
+		}
 
 		deleteCols := make([]plan.ColRef, 2)
 		updateCtx.DeleteCols = deleteCols
@@ -3322,6 +3745,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		if idxNeedUpdate[i] {
+			updateCtx.PhysicalChangedRowsCol = &plan.ColRef{
+				RelPos: selectTag, ColPos: physicalChangedRowsInputPos,
+			}
 			deleteCols := make([]plan.ColRef, 2)
 			updateCtx.DeleteCols = deleteCols
 

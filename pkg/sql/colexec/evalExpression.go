@@ -720,6 +720,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	isBinaryString := false
+	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
+		isBinaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
@@ -736,6 +743,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetIsBinaryString(isBinaryString)
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -770,6 +778,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetIsBinaryString(isBinaryString)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
@@ -1674,7 +1683,10 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	if vec.IsConstNull() {
+	// A grouping-set sentinel has no value payload and therefore also satisfies
+	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
+	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
+	if vec.IsConstNull() && !vec.IsGrouping() {
 		var err error
 		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {

@@ -72,7 +72,7 @@ select row_count();
 insert into odku values (1,100) on duplicate key update v=v;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
-0
+1
 create table load_t(id int, v varchar(10));
 load data infile '$resources/load_data/row_count.csv' into table load_t fields terminated by ',';
 select row_count();
