@@ -27,6 +27,16 @@ Keeping the implementation present but unreachable by default lets normal
 release integration validate its contracts without silently broadening a
 deployment's data-plane surface.
 
+## Independent implementation approval record
+
+The independent approval for this mergeable, fail-closed implementation is
+recorded in [PR review #5127791633](https://github.com/matrixorigin/matrixone/pull/28145#pullrequestreview-5127791633), submitted against exact revision
+`53af58d64c2e1d928445cd8104511346a5a156a3`. Its decision is `APPROVED` for
+merging the fail-closed implementation, while expressly retaining provider,
+aggregate-admission, mixed-version, and rollout-owner gates. This record does
+not claim approval to enable a deployment: those separately deferred decisions
+remain governed by the readiness matrix below.
+
 ## Contract preserved by this decision
 
 The implementation remains LOAD-only: it does not add Arrow external tables,

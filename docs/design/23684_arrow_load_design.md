@@ -1,9 +1,11 @@
 # #23684 Arrow LOAD design
 
-Status: implementation proposal; independent design approval is pending. This
-is the stable, versioned design artifact for implementation PR #28145, not
-evidence of approval. Until approval is recorded, all Arrow LOAD modes are
-fail-closed by default. The release-readiness matrix is maintained in
+Status: approved for fail-closed implementation delivery; production rollout
+approval is pending. The independent implementation approval is recorded at
+[PR review #5127791633](https://github.com/matrixorigin/matrixone/pull/28145#pullrequestreview-5127791633)
+for reviewed revision `53af58d64c2e1d928445cd8104511346a5a156a3`. It approves
+merging the fail-closed implementation and expressly does not authorize remote
+or distributed production enablement. The release-readiness matrix is maintained in
 [`evidence/23684_arrow_load_release_readiness.md`](evidence/23684_arrow_load_release_readiness.md).
 The separately versioned
 [`implementation delivery decision`](evidence/23684_arrow_load_delivery_decision.md)
