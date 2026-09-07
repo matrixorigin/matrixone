@@ -794,9 +794,9 @@ const (
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
 	// function `mo_view_definition`
-	MO_VIEW_DEFINITION = 578
+	MO_VIEW_DEFINITION = 579
 	// function `mo_view_check_option`
-	MO_VIEW_CHECK_OPTION = 579
+	MO_VIEW_CHECK_OPTION = 580
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -850,7 +850,7 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 580
+	FUNCTION_END_NUMBER = 581
 )
 
 // functionIdRegister is what function we have registered already.
