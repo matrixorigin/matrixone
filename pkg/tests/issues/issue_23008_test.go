@@ -93,10 +93,10 @@ func TestIssue23008MemberOfScalarDomains(t *testing.T) {
 		// The binary driver's PREPARE/EXECUTE path also reaches the real filter.
 		stmt, err := conn.PrepareContext(ctx, "select count(*) from scalar_values where e member of (?)")
 		require.NoError(t, err)
+		defer stmt.Close()
 		var count int64
 		require.NoError(t, stmt.QueryRowContext(ctx, `["blue"]`).Scan(&count))
 		require.Equal(t, int64(1), count)
-		require.NoError(t, stmt.Close())
 		value("select 1", 1)
 	})
 }
