@@ -2599,8 +2599,12 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
 			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
-			if v1 == types.ZeroTimestamp || unixMicro < 0 || null1 {
+			if null1 {
 				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else if v1 == types.ZeroTimestamp || unixMicro < 0 {
+				if err := rs.Append(zero, false); err != nil {
 					return err
 				}
 			} else {
@@ -2617,9 +2621,12 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if v1 == types.ZeroTimestamp || val < 0 || null1 {
-			// XXX v1 < 0 need to raise error here.
+		if null1 {
 			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else if v1 == types.ZeroTimestamp || val < 0 {
+			if err := rs.Append(0, false); err != nil {
 				return err
 			}
 		} else {
@@ -2653,7 +2660,7 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
 			val := timestamp.Unix()
 			if timestamp == types.ZeroTimestamp || val < 0 {
-				if err := rs.Append(0, true); err != nil {
+				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
@@ -2682,7 +2689,7 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
 			unix := val.UnixToFloat()
 			if val == types.ZeroTimestamp || unix < 0 {
-				if err := rs.Append(0, true); err != nil {
+				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
@@ -2708,8 +2715,8 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 			}
 		} else {
 			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
-			if timestamp == types.ZeroTimestamp {
-				if err := rs.Append(d, true); err != nil {
+			if timestamp == types.ZeroTimestamp || timestamp < types.UnixToTimestamp(0) {
+				if err := rs.Append(d, false); err != nil {
 					return err
 				}
 				continue
@@ -2717,12 +2724,6 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
-			}
-			if val.Compare(types.Decimal128{B0_63: 0, B64_127: 0}) <= 0 {
-				if err := rs.Append(d, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err

@@ -106,6 +106,25 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+func fromUnixTimeReturnType(parameters []types.Type) types.Type {
+	scale := int32(0)
+	if len(parameters) > 0 {
+		switch parameters[0].Oid {
+		case types.T_float32, types.T_float64:
+			scale = 6
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			scale = parameters[0].Scale
+			if scale > 6 {
+				scale = 6
+			}
+			if scale < 0 {
+				scale = 0
+			}
+		}
+	}
+	return types.T_datetime.ToTypeWithScale(scale)
+}
+
 func concatReturnType(parameters []types.Type) types.Type {
 	return mergedDerivedStringReturnType(parameters, 0)
 }
@@ -9744,9 +9763,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return DatetimeAdd
 				},
@@ -9937,9 +9954,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
 				},
@@ -9998,9 +10013,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return DatetimeSub
 				},
@@ -10153,9 +10166,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeInt64
 				},

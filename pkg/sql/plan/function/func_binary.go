@@ -6473,8 +6473,12 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null {
 			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if v < 0 || v > maxUnixTimestampInt {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
 				return err
 			}
 		} else {
@@ -6494,8 +6498,12 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || v > maxUnixTimestampInt {
+		if null {
 			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if v > maxUnixTimestampInt {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
 				return err
 			}
 		} else {
@@ -6594,8 +6602,12 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null {
 			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if v < 0 || v > maxUnixTimestampInt {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
 				return err
 			}
 		} else {
@@ -6621,8 +6633,12 @@ func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResult
 			return convErr
 		}
 
-		if null || !ok {
+		if null {
 			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if !ok {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
 				return err
 			}
 		} else {
@@ -9045,6 +9061,9 @@ func PeriodAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 		// Parse period P (YYMM or YYYYMM format) using helper function
 		year, month, err := parsePeriod(period)
 		if err != nil {
+			if periodHasInvalidMonth(period) {
+				return moerr.NewInvalidArgNoCtx("PERIOD_ADD", period)
+			}
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -9152,6 +9171,18 @@ func parsePeriod(period int64) (int32, uint8, error) {
 	return year, month, nil
 }
 
+func periodHasInvalidMonth(period int64) bool {
+	if period < 0 {
+		return false
+	}
+	digits := len(strconv.FormatInt(period, 10))
+	if digits != 3 && digits != 4 && digits != 6 {
+		return false
+	}
+	month := period % 100
+	return month < 1 || month > 12
+}
+
 // PeriodDiff: PERIOD_DIFF(P1, P2) - Returns the number of months between periods P1 and P2.
 // P1 and P2 should be in the format YYMM or YYYYMM.
 func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9227,6 +9258,9 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 		// Parse period1
 		year1, month1, err1 := parsePeriod(period1)
 		if err1 != nil {
+			if periodHasInvalidMonth(period1) {
+				return moerr.NewInvalidArgNoCtx("PERIOD_DIFF", period1)
+			}
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -9236,6 +9270,9 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 		// Parse period2
 		year2, month2, err2 := parsePeriod(period2)
 		if err2 != nil {
+			if periodHasInvalidMonth(period2) {
+				return moerr.NewInvalidArgNoCtx("PERIOD_DIFF", period2)
+			}
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}

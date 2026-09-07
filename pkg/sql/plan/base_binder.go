@@ -5048,6 +5048,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	case "date_add", "date_sub":
+		if len(args) == 3 && isBoundDateFunctionArgs(args) {
+			break
+		}
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
 		// Prepared execution rebinds the already-rewritten internal three-argument
@@ -5301,11 +5304,14 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 	case "str_to_date", "to_date":
+		if len(args) == 3 && isBoundStrToDateArgs(args) {
+			break
+		}
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 
-		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+		if types.T(args[1].Typ.Id).IsMySQLString() {
 			var tp = types.T_date
 			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
@@ -5891,6 +5897,23 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 
+	case "date_add", "date_sub":
+		if len(args) == 3 {
+			inputType := argsType[0]
+			switch inputType.Oid {
+			case types.T_datetime, types.T_timestamp, types.T_time:
+				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
+				if unit, known := dateFunctionUnitFromPlanExpr(args[2]); !known || unit == types.MicroSecond {
+					if returnType.Scale < 6 {
+						returnType.Scale = 6
+					}
+					if returnType.Width < returnType.Scale {
+						returnType.Width = returnType.Scale
+					}
+				}
+			}
+		}
+
 	case "repeat":
 		refineRepeatLiteralReturnType(args, &returnType)
 
@@ -6424,6 +6447,38 @@ func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
 	}
 	unit, err := types.IntervalTypeOf(strings.ToUpper(value.Sval))
 	return unit, err == nil
+}
+
+func dateFunctionUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	v, ok := lit.GetValue().(*plan.Literal_I64Val)
+	if !ok {
+		return 0, false
+	}
+	u := types.IntervalType(v.I64Val)
+	return u, u > types.IntervalTypeInvalid && u < types.IntervalTypeMax
+}
+
+func isBoundDateFunctionArgs(args []*Expr) bool {
+	if len(args) != 3 {
+		return false
+	}
+	_, ok := dateFunctionUnitFromPlanExpr(args[2])
+	return ok
+}
+
+func isBoundStrToDateArgs(args []*Expr) bool {
+	if len(args) != 3 || args[2] == nil || args[2].GetLit() == nil || !args[2].GetLit().Isnull {
+		return false
+	}
+	switch types.T(args[2].Typ.Id) {
+	case types.T_date, types.T_datetime, types.T_time:
+		return true
+	}
+	return false
 }
 
 func timestampAddDateUnit(unit types.IntervalType) bool {
