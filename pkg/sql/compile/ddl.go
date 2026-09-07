@@ -84,14 +84,31 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
 	dbName := createDatabase.GetDatabase()
+
+	// A positive catalog lookup is already authoritative for this transaction's
+	// snapshot and must not wait behind unrelated DDL that holds a shared
+	// database lock. Only the absence-to-create transition needs serialization.
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return err
 	}
 
+	// Serialize competing creators, then recheck under the lock. Another
+	// transaction may have created the database after the optimistic lookup.
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return err
 	}
 
@@ -106,7 +123,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	c.setAffectedRows(1)
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {

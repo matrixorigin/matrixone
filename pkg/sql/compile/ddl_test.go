@@ -16,8 +16,10 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +56,304 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
+	lookupFailure := errors.New("catalog lookup failed")
+	lockErr := errors.New("catalog lock failed")
+	createErr := errors.New("catalog create failed")
+
+	type lookupResult struct {
+		existing bool
+		err      error
+	}
+	for _, tc := range []struct {
+		name         string
+		ifNotExists  bool
+		lookups      []lookupResult
+		lockErr      error
+		createErr    error
+		wantCreate   bool
+		wantErr      error
+		wantErrCode  uint16
+		wantAffected uint64
+		wantEvents   []string
+	}{
+		{
+			name: "physical creation",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			wantCreate:   true,
+			wantAffected: 1,
+			wantEvents:   []string{"lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:        "if not exists fast no-op",
+			ifNotExists: true,
+			lookups:     []lookupResult{{existing: true}},
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:        "strict duplicate fast failure",
+			lookups:     []lookupResult{{existing: true}},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:       "initial lookup failure is not absence",
+			lookups:    []lookupResult{{err: lookupFailure}},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup"},
+		},
+		{
+			name:       "lock failure stops before locked recheck",
+			lookups:    []lookupResult{{err: moerr.GetOkExpectedEOB()}},
+			lockErr:    lockErr,
+			wantErr:    lockErr,
+			wantEvents: []string{"lookup", "lock"},
+		},
+		{
+			name: "locked recheck failure is not absence",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: lookupFailure},
+			},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name:        "concurrent create becomes if not exists no-op",
+			ifNotExists: true,
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "concurrent create becomes strict duplicate",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "create failure has no affected row",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			createErr:  createErr,
+			wantCreate: true,
+			wantErr:    createErr,
+			wantEvents: []string{"lookup", "lock", "lookup", "create"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			events := make([]string, 0, 4)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "db1", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				return tc.lockErr
+			})
+			defer lockStub.Reset()
+
+			if len(tc.lookups) != 0 {
+				db := mock_frontend.NewMockDatabase(ctrl)
+				lookup := 0
+				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+						events = append(events, "lookup")
+						result := tc.lookups[lookup]
+						lookup++
+						if result.existing {
+							return db, result.err
+						}
+						return nil, result.err
+					},
+				).Times(len(tc.lookups))
+			}
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return tc.createErr
+					},
+				)
+			}
+
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			c := &Compile{e: eng, proc: proc, affectRows: new(atomic.Uint64)}
+			s := &Scope{
+				Magic: CreateDatabase,
+				Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+						Database:    "db1",
+						IfNotExists: tc.ifNotExists,
+					}},
+				}}},
+			}
+
+			err := c.run(s)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else if tc.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.wantErrCode), "unexpected error: %v", err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantAffected, c.getAffectedRows())
+			require.Equal(t, tc.wantEvents, events)
+		})
+	}
+}
+
+func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ifNotExists   bool
+		existsOnRetry bool
+		wantCreate    bool
+		wantAffected  uint64
+		wantLockCalls int
+		wantEvents    []string
+	}{
+		{
+			name:          "retry then physical create",
+			wantCreate:    true,
+			wantAffected:  1,
+			wantLockCalls: 2,
+			wantEvents:    []string{"lookup", "lock", "lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:          "retry observes concurrent create as valid no-op",
+			ifNotExists:   true,
+			existsOnRetry: true,
+			wantLockCalls: 1,
+			wantEvents:    []string{"lookup", "lock", "lookup"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			lockCalls := 0
+			lookupCalls := 0
+			events := make([]string, 0, 6)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "retry_db", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				lockCalls++
+				if lockCalls == 1 {
+					return moerr.NewTxnNeedRetryNoCtx()
+				}
+				return nil
+			})
+			defer lockStub.Reset()
+
+			db := mock_frontend.NewMockDatabase(ctrl)
+			wantLookupCalls := 3
+			if tc.existsOnRetry {
+				wantLookupCalls = 2
+			}
+			eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+				func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+					events = append(events, "lookup")
+					lookupCalls++
+					if tc.existsOnRetry && lookupCalls == 2 {
+						return db, nil
+					}
+					return nil, moerr.GetOkExpectedEOB()
+				},
+			).Times(wantLookupCalls)
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return nil
+					},
+				).Times(1)
+			}
+
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().Buf = buffer.New()
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnClient
+			proc.Base.TxnOperator = txnOp
+			pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_CREATE_DATABASE,
+				Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+					Database:    "retry_db",
+					IfNotExists: tc.ifNotExists,
+				}},
+			}}}
+			c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+			require.NoError(t, c.Compile(ctx, pn, nil))
+
+			result, err := c.Run(0)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLockCalls, lockCalls)
+			require.Equal(t, 1, c.retryTimes)
+			require.Equal(t, tc.wantAffected, result.AffectRows)
+			require.Equal(t, tc.wantEvents, events)
+			c.Release()
+			proc.GetSessionInfo().Buf.Free()
+		})
+	}
+
+	t.Run("non-retry lock failure has no catalog side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		lockErr := errors.New("catalog lock unavailable")
+		lookupCalled := false
+		eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+			func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+				lookupCalled = true
+				return nil, moerr.GetOkExpectedEOB()
+			},
+		).Times(1)
+		lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			require.True(t, lookupCalled)
+			return lockErr
+		})
+		defer lockStub.Reset()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().Buf = buffer.New()
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+		proc.Base.TxnClient = txnClient
+		proc.Base.TxnOperator = txnOp
+		pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			DdlType: plan2.DataDefinition_CREATE_DATABASE,
+			Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+				Database: "retry_db",
+			}},
+		}}}
+		c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+		require.NoError(t, c.Compile(ctx, pn, nil))
+
+		_, err := c.Run(0)
+		require.ErrorIs(t, err, lockErr)
+		require.Zero(t, c.retryTimes)
+		c.Release()
+		proc.GetSessionInfo().Buf.Free()
+	})
+}
 
 type mongoDBMappingTestExecutor struct {
 	results map[string]executor.Result
