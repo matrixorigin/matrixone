@@ -369,6 +369,315 @@ func TestInsertIgnoreMultiDedupCarriesAcceptedKeysAcrossBatchesAndReset(t *testi
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestODKUTargetArbitrationUsesOrderedStatementLocalState(t *testing.T) {
+	testCases := []struct {
+		name              string
+		ids               []int32
+		uniqueKeys        []int32
+		uniqueNulls       []bool
+		existingPKTargets []int32
+		existingPKNulls   []bool
+		existingUKTargets []int32
+		existingUKNulls   []bool
+		wantTargets       []int32
+	}{
+		{
+			name: "repeated new primary key is insert then update",
+			ids:  []int32{1, 1}, uniqueKeys: []int32{10, 11},
+			existingPKNulls: []bool{true, true}, existingUKNulls: []bool{true, true},
+			wantTargets: []int32{1, 1},
+		},
+		{
+			name: "repeated new secondary key updates first inserted row",
+			ids:  []int32{1, 2}, uniqueKeys: []int32{10, 10},
+			existingPKNulls: []bool{true, true}, existingUKNulls: []bool{true, true},
+			wantTargets: []int32{1, 1},
+		},
+		{
+			name: "update action does not reserve its unused incoming primary key",
+			ids:  []int32{1, 2, 2}, uniqueKeys: []int32{10, 10, 20},
+			existingPKNulls: []bool{true, true, true}, existingUKNulls: []bool{true, true, true},
+			wantTargets: []int32{1, 1, 2},
+		},
+		{
+			name: "primary constraint wins when existing constraints name different rows",
+			ids:  []int32{1}, uniqueKeys: []int32{10},
+			existingPKTargets: []int32{100}, existingUKTargets: []int32{200},
+			wantTargets: []int32{100},
+		},
+		{
+			name: "nullable unique keys do not conflict",
+			ids:  []int32{1, 2}, uniqueKeys: []int32{0, 0}, uniqueNulls: []bool{true, true},
+			existingPKNulls: []bool{true, true}, existingUKNulls: []bool{true, true},
+			wantTargets: []int32{1, 2},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			input := makeODKUTargetArbitrationBatch(t, proc, tc.ids, tc.uniqueKeys,
+				tc.uniqueNulls, tc.existingPKTargets, tc.existingPKNulls,
+				tc.existingUKTargets, tc.existingUKNulls)
+			arg := newODKUTargetArbitrationArgument(input)
+			account := installODKUTestAllocation(t, arg)
+			require.NoError(t, arg.Prepare(proc))
+
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantTargets,
+				vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2])[:result.Batch.RowCount()])
+
+			arg.Free(proc, false, nil)
+			require.NoError(t, arg.ClearAllocationAccount(account))
+			input.Clean(proc.Mp())
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestODKUTargetArbitrationCarriesStateAcrossBatchesAndReset(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{1}, []int32{10}, nil, nil, []bool{true}, nil, []bool{true})
+	second := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{2}, []int32{10}, nil, nil, []bool{true}, nil, []bool{true})
+	arg := newODKUTargetArbitrationArgument(first, second)
+	account := installODKUTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
+
+	arg.Reset(proc, false, nil)
+	arg.Children = nil
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{second}))
+	require.NoError(t, arg.Prepare(proc))
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]),
+		"Reset must begin a fresh statement-local arbitration generation")
+
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestODKUTargetArbitrationSupportsSingleSyntheticIdentityConstraint(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for _, value := range []int32{10, 10} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(0), true, proc.Mp()))
+	}
+	input.SetRowCount(2)
+	arg := &PreInsertUnique{PreInsertCtx: &plan.PreInsertUkCtx{
+		PkColumn: 0, OdkuTargetArbitration: true,
+		KeyColumns: []int32{0}, TargetColumns: []int32{1}, OutputColumns: 1,
+	}}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	account := installODKUTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{10, 10},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1]))
+
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestODKUTargetArbitrationHandlesConstNullSnapshotTargets(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{1, 2}, []int32{10, 10}, nil, nil, []bool{true, true}, nil, []bool{true, true})
+	// Hash joins over INSERT ... SELECT can represent an unmatched lookup column
+	// as a const-NULL vector with no physical values. Reading only its raw null
+	// bitmap misclassifies it as a pre-statement target.
+	input.Vecs[2].Free(proc.Mp())
+	input.Vecs[2] = vector.NewConstNull(types.T_int32.ToType(), input.RowCount(), proc.Mp())
+	input.Vecs[3].Free(proc.Mp())
+	input.Vecs[3] = vector.NewConstNull(types.T_int32.ToType(), input.RowCount(), proc.Mp())
+	arg := newODKUTargetArbitrationArgument(input)
+	account := installODKUTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1, 1},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestODKUTargetArbitrationRejectsDifferentTargetRepresentation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{1}, []int32{10}, nil, nil, []bool{true}, nil, []bool{true})
+	// A planner metadata bug must fail closed before UnionOne copies bytes using
+	// the destination representation.  Fix canonical metadata at the producer;
+	// do not weaken this guard to make incompatible key types look equivalent.
+	input.Vecs[3].Free(proc.Mp())
+	input.Vecs[3] = vector.NewConstNull(types.T_int64.ToType(), input.RowCount(), proc.Mp())
+	arg := newODKUTargetArbitrationArgument(input)
+	account := installODKUTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	_, err := arg.Call(proc)
+	require.ErrorContains(t, err, "ODKU target primary-key type mismatch")
+
+	arg.Free(proc, true, err)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestODKUTargetArbitrationAllocationAccountLifecycle(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{1, 2}, []int32{10, 10}, nil, nil, []bool{true, true}, nil, []bool{true, true})
+	arg := newODKUTargetArbitrationArgument(input)
+
+	require.ErrorIs(t, arg.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+	account := installODKUTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+	_, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Positive(t, account.Snapshot().Used,
+		"statement-local hash keys, target rows, and ordinals must share the statement account")
+	require.ErrorIs(t, arg.ClearAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestODKUTargetArbitrationHonorsAllocationCapacity(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeODKUTargetArbitrationBatch(t, proc,
+		[]int32{1}, []int32{10}, nil, nil, []bool{true}, nil, []bool{true})
+	arg := newODKUTargetArbitrationArgument(input)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	require.NoError(t, arg.SetAllocationAccount(account))
+
+	err = arg.Prepare(proc)
+	if err == nil {
+		_, err = arg.Call(proc)
+	}
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	arg.Reset(proc, true, err)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Free(proc, true, err)
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderedUniqueKeyArbitrationRejectsMalformedContext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  *plan.PreInsertUkCtx
+		want string
+	}{
+		{name: "missing context", want: "missing pre-insert unique context"},
+		{name: "conflicting modes", ctx: &plan.PreInsertUkCtx{
+			InsertIgnoreMultiDedup: true, OdkuTargetArbitration: true,
+			KeyColumns: []int32{0}, ConflictColumns: []int32{1}, TargetColumns: []int32{2}, OutputColumns: 1,
+		}, want: "conflicting ordered unique-key arbitration modes"},
+		{name: "mismatched ODKU metadata", ctx: &plan.PreInsertUkCtx{
+			OdkuTargetArbitration: true, KeyColumns: []int32{0, 1}, TargetColumns: []int32{2}, OutputColumns: 1,
+		}, want: "invalid ODKU target arbitration context"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			arg := &PreInsertUnique{PreInsertCtx: tc.ctx}
+			err := arg.Prepare(proc)
+			require.ErrorContains(t, err, tc.want)
+			arg.Free(proc, true, err)
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func makeODKUTargetArbitrationBatch(
+	t *testing.T,
+	proc *process.Process,
+	ids, uniqueKeys []int32,
+	uniqueNulls []bool,
+	existingPKTargets []int32,
+	existingPKNulls []bool,
+	existingUKTargets []int32,
+	existingUKNulls []bool,
+) *batch.Batch {
+	t.Helper()
+	input := batch.NewWithSize(4)
+	for i := range input.Vecs {
+		input.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+	}
+	for row := range ids {
+		uniqueNull := len(uniqueNulls) > row && uniqueNulls[row]
+		pkTargetNull := len(existingPKNulls) > row && existingPKNulls[row]
+		ukTargetNull := len(existingUKNulls) > row && existingUKNulls[row]
+		var pkTarget, ukTarget int32
+		if len(existingPKTargets) > row {
+			pkTarget = existingPKTargets[row]
+		}
+		if len(existingUKTargets) > row {
+			ukTarget = existingUKTargets[row]
+		}
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], ids[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], uniqueKeys[row], uniqueNull, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], pkTarget, pkTargetNull, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[3], ukTarget, ukTargetNull, proc.Mp()))
+	}
+	input.SetRowCount(len(ids))
+	return input
+}
+
+func newODKUTargetArbitrationArgument(inputs ...*batch.Batch) *PreInsertUnique {
+	arg := &PreInsertUnique{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			PkColumn:              0,
+			OdkuTargetArbitration: true,
+			KeyColumns:            []int32{0, 1},
+			TargetColumns:         []int32{2, 3},
+			OutputColumns:         2,
+		},
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	return arg
+}
+
+func installODKUTestAllocation(t testing.TB, arg *PreInsertUnique) *mpool.AllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 60)
+	require.NoError(t, err)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	return account
+}
+
 func makeInsertIgnoreMultiDedupBatch(
 	t *testing.T,
 	proc *process.Process,

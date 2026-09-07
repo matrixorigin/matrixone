@@ -3,6 +3,13 @@ SELECT REGEXP_INSTR('', '^$') AS default_pos_match;
 SELECT REGEXP_INSTR('', 'x') AS default_pos_no_match;
 SELECT REGEXP_INSTR('', '^$', 1) AS explicit_pos_match;
 SELECT REGEXP_INSTR('', 'x', 1) AS explicit_pos_no_match;
+SELECT REGEXP_INSTR('', '^$', 5) AS empty_subject_late_anchor,
+       REGEXP_INSTR('', '.', 5) AS empty_subject_late_no_match,
+       REGEXP_INSTR('', '^$', 5, 2) AS empty_subject_second_occurrence,
+       REGEXP_INSTR(CAST(_binary'' AS VARBINARY(1)), CAST(_binary'^$' AS VARBINARY(2)), 5, 1, 1) AS empty_binary_late_anchor;
+SELECT REGEXP_INSTR(NULL, '');
+SELECT REGEXP_INSTR('abc', '', 0);
+SELECT REGEXP_INSTR(NULL, '*');
 
 SELECT REGEXP_INSTR('Cat', 'at') Result;
 SELECT REGEXP_INSTR('Cat', '^at') Result;
@@ -117,3 +124,139 @@ select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 
 select REGEXP_SUBSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
 select REGEXP_SUBSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
 drop database big_data_test;
+
+# Positional arguments and returned offsets are one-based character positions,
+# not byte offsets, for UTF-8 strings.
+SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
+       REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
+SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
+       REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
+
+# INSTR rebases its matcher subject at pos; SUBSTR and REPLACE retain the
+# original subject for anchors and boundaries.
+SELECT REGEXP_INSTR('abc', '^', 2) AS instr_beginning,
+       REGEXP_INSTR('abc', '(?m)^b', 2) AS instr_multiline_beginning,
+       REGEXP_INSTR(CAST(_binary'中' AS VARBINARY(3)), CAST(_binary'^.' AS VARBINARY(2)), 2) AS binary_beginning;
+SELECT REGEXP_SUBSTR('abc', '^', 2) IS NULL AS substr_original_anchor,
+       REGEXP_REPLACE('abc', '^', 'X', 2) AS replace_original_anchor;
+
+DROP DATABASE IF EXISTS regexp_utf8_test;
+CREATE DATABASE regexp_utf8_test;
+USE regexp_utf8_test;
+DROP TABLE IF EXISTS t_regexp_utf8;
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+INSERT INTO t_regexp_utf8 VALUES
+    (1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
+    (2, 'ASCII', _binary'ASCII', _binary'ASCII');
+SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
+SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
+SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
+       REGEXP_INSTR(vb, CAST(_binary'中' AS VARBINARY(3)), 2) AS vb_pos,
+       REGEXP_INSTR(bl, CAST(_binary'中' AS BINARY(3)), 2) AS blob_pos,
+       HEX(REGEXP_SUBSTR(bl, CAST(_binary'中' AS BINARY(3)), 2)) AS blob_substr,
+       HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
+FROM t_regexp_utf8 WHERE id = 1;
+
+# BINARY and BLOB select byte matching but, unlike VARBINARY, do not trigger
+# MySQL error 3995 when paired with a text operand.
+SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
+       REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
+FROM t_regexp_utf8 WHERE id = 1;
+
+# SQL prepared parameters must be rebound from their current string domain on
+# every execution; binary -> text -> binary must not retain stale metadata.
+PREPARE regexp_domain_rebind FROM
+    'SELECT ORD(?), REGEXP_INSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2), ORD(REGEXP_SUBSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2))';
+SET @regexp_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+SET @regexp_subject = '中中';
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+# A NULL execution keeps the marker's PREPARE-time text domain; it is not the
+# same as a bare NULL literal.
+SET @regexp_subject = NULL;
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+SET @regexp_subject = CAST(_binary'中中' AS BLOB);
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+DEALLOCATE PREPARE regexp_domain_rebind;
+
+# A direct PARAM_ITEM's current binary domain selects byte execution, but does
+# not by itself trigger the static-binary charset restriction against text.
+PREPARE regexp_marker_static_text FROM
+    'SELECT REGEXP_INSTR(?, ''b'') AS marker_static_text';
+SET @regexp_marker_subject = CAST(_binary'abc' AS VARBINARY(3));
+EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
+SET @regexp_marker_subject = 'abc';
+EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
+DEALLOCATE PREPARE regexp_marker_static_text;
+
+# Scalar-subquery flattening must retain the runtime string domain of each
+# parameter. Rebinding the same cached plan must neither lose byte semantics
+# nor leak the prior execution's domain.
+PREPARE regexp_scalar_domain_rebind FROM
+    'SELECT REGEXP_INSTR((SELECT ? FROM t_regexp_utf8 LIMIT 1), (SELECT ? FROM t_regexp_utf8 LIMIT 1), 2) AS scalar_pos';
+SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_scalar_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+SET @regexp_scalar_subject = '中中';
+SET @regexp_scalar_pattern = '中';
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+SET @regexp_scalar_subject = CAST(_binary'中中' AS BLOB);
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+DEALLOCATE PREPARE regexp_scalar_domain_rebind;
+
+# Derived-table and CTE projections introduce ColRefs before scalar-subquery
+# flattening. Their parameter domain must survive that extra lineage hop too.
+PREPARE regexp_derived_scalar_domain_rebind FROM
+    'SELECT REGEXP_INSTR((SELECT d.subject FROM (SELECT ? AS subject) d), (SELECT d.pattern FROM (SELECT ? AS pattern) d), 2) AS derived_scalar_pos';
+SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+SET @regexp_derived_subject = '中中';
+SET @regexp_derived_pattern = '中';
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+DEALLOCATE PREPARE regexp_derived_scalar_domain_rebind;
+
+# A nested domain-preserving REGEXP expression can depend on several prepared
+# parameters jointly. PREPARE must not reject the legal binary/binary state or
+# retain it across a later text execution.
+PREPARE regexp_nested_domain_rebind FROM
+    'SELECT ORD(REGEXP_SUBSTR(?, ?)), REGEXP_INSTR(REGEXP_SUBSTR(?, ?), CAST(_binary''.'' AS VARBINARY(1)), 1)';
+SET @regexp_nested_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_nested_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+SET @regexp_nested_subject = '中中';
+SET @regexp_nested_pattern = '中';
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+SET @regexp_nested_subject = NULL;
+SET @regexp_nested_pattern = NULL;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+SET @regexp_nested_subject = CAST(_binary'中中' AS BLOB);
+SET @regexp_nested_pattern = CAST(_binary'中' AS BLOB);
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+DEALLOCATE PREPARE regexp_nested_domain_rebind;
+
+# REGEXP_REPLACE's replacement participates in compatibility but cannot make
+# its text subject-pattern result dynamic. The fixed outer text/binary mismatch
+# must therefore be rejected at PREPARE rather than deferred to every EXECUTE.
+PREPARE regexp_nested_replacement_static_mismatch FROM
+    'SELECT REGEXP_INSTR(REGEXP_REPLACE(''a'', ''a'', ?), CAST(_binary''a'' AS VARBINARY(1)), 1)';
+DROP TABLE t_regexp_utf8;
+DROP DATABASE regexp_utf8_test;
+
+# Binary subjects use one-based byte positions; text subjects use characters.
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2) AS binary_pos,
+       REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2) AS varbinary_pos,
+       REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 1) AS varbinary_end;
+
+# Binary regexp escape atoms and ranges operate on bytes, not Unicode code points.
+SELECT REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5C784646' AS BINARY(4))) AS hex_escape,
+       REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5B5C7838302D5C7846465D' AS BINARY(11))) AS byte_range;

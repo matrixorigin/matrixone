@@ -15,6 +15,7 @@
 package group
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"runtime"
@@ -23,8 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type groupSpillWriteOnly struct {
+	io.Writer
+}
 
 type groupSpillCountingWriter struct {
 	writes int
@@ -193,6 +200,88 @@ func TestGroupSpillWriterReconcilesPartialPhysicalWrites(t *testing.T) {
 			generation.Close()
 			budget.Close()
 			require.Zero(t, pool.CurrNB())
+		})
+	}
+}
+
+func TestGroupSpillWriterCoalescesSelectedFixedRowsWithoutChangingWire(t *testing.T) {
+	pool := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	values := make([]int64, 8192)
+	rows := make([]int32, 0, len(values))
+	for i := range values {
+		values[i] = int64(i*19 - 5)
+		rows = append(rows, int32(len(values)-1-i))
+	}
+	require.NoError(t, vector.AppendFixedList(source, values, nil, pool))
+
+	var reference bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+	var fallbackTarget bytes.Buffer
+	fallbackRecord := spillRecordWriter{target: &fallbackTarget}
+	require.NoError(t, source.MarshalSelectedRowsTo(&fallbackRecord, rows))
+	require.Equal(t, reference.Bytes(), fallbackTarget.Bytes())
+	require.Equal(t, int64(reference.Len()), fallbackRecord.written)
+
+	var target bytes.Buffer
+	writer, err := newGroupSpillWriter(
+		&container{mp: pool}, &target, context.Background(), nil)
+	require.NoError(t, err)
+	record := spillRecordWriter{target: writer}
+	require.NoError(t, source.MarshalSelectedRowsTo(&record, rows))
+	require.NoError(t, writer.Flush())
+	require.Equal(t, int64(reference.Len()), record.written)
+	require.Equal(t, reference.Bytes(), target.Bytes())
+
+	writer.Free()
+	source.Free(pool)
+	require.Zero(t, pool.CurrNB())
+}
+
+func BenchmarkGroupSpillSelectedFixedRows(b *testing.B) {
+	pool := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	values := make([]int64, 8192)
+	rows := make([]int32, 0, 256)
+	for i := range values {
+		values[i] = int64(i)
+		if i%32 == 0 {
+			rows = append(rows, int32(i))
+		}
+	}
+	require.NoError(b, vector.AppendFixedList(source, values, nil, pool))
+	b.Cleanup(func() {
+		source.Free(pool)
+		require.Zero(b, pool.CurrNB())
+	})
+
+	for _, test := range []struct {
+		name string
+		fast bool
+	}{
+		{name: "reference"},
+		{name: "coalesced", fast: true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			writer, err := newGroupSpillWriter(
+				&container{mp: pool}, io.Discard, context.Background(), nil)
+			require.NoError(b, err)
+			record := spillRecordWriter{target: writer}
+			var target io.Writer = &record
+			if !test.fast {
+				target = groupSpillWriteOnly{Writer: &record}
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(rows) * types.T_int64.TypeLen()))
+			b.ResetTimer()
+			for b.Loop() {
+				if err := source.MarshalSelectedRowsTo(target, rows); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			require.NoError(b, writer.Flush())
+			writer.Free()
 		})
 	}
 }

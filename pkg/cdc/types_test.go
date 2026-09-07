@@ -16,18 +16,98 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+func TestRetryableTargetLockError(t *testing.T) {
+	cause := errors.New("target unavailable")
+	err := newRetryableTargetLockError(cause)
+	require.True(t, IsRetryableTargetLockError(err))
+	require.ErrorIs(t, err, cause)
+	require.Same(t, err, newRetryableTargetLockError(err))
+	require.Nil(t, newRetryableTargetLockError(nil))
+}
+
+func TestRetryableConnectionError(t *testing.T) {
+	cause := errors.New("target unavailable")
+	err := newRetryableConnectionError(cause)
+	require.True(t, IsRetryableConnectionError(err))
+	require.ErrorIs(t, err, cause)
+	require.Same(t, err, newRetryableConnectionError(err))
+	require.Nil(t, newRetryableConnectionError(nil))
+}
+
+func TestOwnerFenceErrorClassification(t *testing.T) {
+	t.Run("superseded claim is lifecycle control", func(t *testing.T) {
+		fence := NewOwnerFence(func(ctx context.Context) error {
+			return moerr.NewInvalidTask(ctx, "old-owner", 7)
+		})
+		err := fence.Check(context.Background())
+		require.True(t, IsOwnerFenceLostError(err))
+		require.False(t, IsRetryableOwnerFenceError(err))
+		var underlying *moerr.Error
+		require.ErrorAs(t, err, &underlying)
+		require.True(t, moerr.IsMoErrCode(underlying, moerr.ErrInvalidTask))
+	})
+
+	t.Run("wrapped superseded claim remains lifecycle control", func(t *testing.T) {
+		invalidTask := moerr.NewInvalidTask(context.Background(), "old-owner", 7)
+		fence := NewOwnerFence(func(context.Context) error {
+			return fmt.Errorf("task service check: %w", invalidTask)
+		})
+		err := fence.Check(context.Background())
+		require.True(t, IsOwnerFenceLostError(err))
+		require.False(t, IsRetryableOwnerFenceError(err))
+		require.ErrorIs(t, err, invalidTask)
+	})
+
+	t.Run("backend failure remains retryable", func(t *testing.T) {
+		backendErr := errors.New("task storage unavailable")
+		fence := NewOwnerFence(func(context.Context) error { return backendErr })
+		err := fence.Check(context.Background())
+		require.True(t, IsRetryableOwnerFenceError(err))
+		require.ErrorIs(t, err, backendErr)
+	})
+
+	t.Run("caller cancellation remains a control signal", func(t *testing.T) {
+		fence := NewOwnerFence(func(context.Context) error { return context.Canceled })
+		err := fence.Check(context.Background())
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, IsOwnerFenceLostError(err))
+		require.False(t, IsRetryableOwnerFenceError(err))
+	})
+}
+
+func TestOwnerFenceSupersedesEqualClaimTimestampByLocalPublicationOrder(t *testing.T) {
+	generation := time.Unix(100, 0)
+	oldFence := NewOwnerFenceForGeneration(generation, func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(generation, func(context.Context) error { return nil })
+
+	require.True(t, newFence.supersedes(oldFence))
+	require.False(t, oldFence.supersedes(newFence))
+
+	oldUnranked := NewOwnerFence(func(context.Context) error { return nil })
+	newUnranked := NewOwnerFence(func(context.Context) error { return nil })
+	require.True(t, newUnranked.supersedes(oldUnranked))
+	require.False(t, oldUnranked.supersedes(newUnranked))
+	require.True(t, oldFence.supersedes(newUnranked),
+		"a durable claim rank must dominate an unranked compatibility fence")
+}
 
 func TestNewAtomicBatch(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
@@ -726,7 +806,7 @@ func TestDecoderOutput_Close(t *testing.T) {
 	t.Run("ReleasesSnapshotPermitOnce", func(t *testing.T) {
 		releases := 0
 		d := &DecoderOutput{snapshotPermit: &snapshotPermit{
-			release: func() { releases++ },
+			release: func(bool) { releases++ },
 		}}
 		d.Close()
 		d.Close()
@@ -776,6 +856,45 @@ func TestDecoderOutput_Close(t *testing.T) {
 		d.Close()
 		assert.NotPanics(t, func() { d.Close() })
 	})
+}
+
+func TestFinalizeInitialSnapshotOptions(t *testing.T) {
+	t.Run("split is fenced for old executors", func(t *testing.T) {
+		opts := map[string]any{CDCTaskExtraOptions_InitSnapshotSplitTxn: true}
+		FinalizeInitialSnapshotOptions(opts)
+		assert.Equal(t, false, opts[CDCTaskExtraOptions_InitSnapshotSplitTxn])
+		assert.Equal(t, CDCInitialSnapshotProtocolStableEpoch,
+			opts[CDCTaskExtraOptions_InitialSnapshotProtocol])
+	})
+
+	t.Run("atomic mode has no protocol marker", func(t *testing.T) {
+		opts := map[string]any{CDCTaskExtraOptions_InitSnapshotSplitTxn: false}
+		FinalizeInitialSnapshotOptions(opts)
+		assert.Equal(t, false, opts[CDCTaskExtraOptions_InitSnapshotSplitTxn])
+		_, ok := opts[CDCTaskExtraOptions_InitialSnapshotProtocol]
+		assert.False(t, ok)
+	})
+}
+
+func TestUsesStableEpochInitialSnapshot(t *testing.T) {
+	assert.True(t, UsesStableEpochInitialSnapshot(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_InitialSnapshotProtocol,
+		CDCInitialSnapshotProtocolStableEpoch,
+	)))
+	assert.False(t, UsesStableEpochInitialSnapshot(`{"InitSnapshotSplitTxn":true}`))
+	assert.False(t, UsesStableEpochInitialSnapshot(`{"_InitialSnapshotProtocol":"future"}`))
+	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
+}
+
+func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
+	require.NoError(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), false, defines.MORPCVersion47))
+	require.NoError(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
+	err := ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion47)
+	require.ErrorContains(t, err, "protocol version 48")
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

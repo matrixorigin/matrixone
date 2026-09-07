@@ -1579,7 +1579,8 @@ null
 99999999999999999999999999999999999.833
 99999999999999999999999999999999999.833
 select avg(d) over (partition by d) from decimal01 where d = 28888888888888888888888888888888888.123;
-invalid input: Decimal128 Div overflow: 28888888888888888888888888888888888.123/1
+avg(d) over (partition by d)
+28888888888888888888888888888888888.1230000
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
 drop table decimal01;
@@ -3356,7 +3357,17 @@ select count(*) from td;
 count(*)
 20971520
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-[unknown result because it is related to issue#13008]
+avg(d) over (order by d range between 2 preceding and 2 following)
+2
+2.5
+3
+4
+5
+6
+7
+8
+9
+10
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
 sum(d) over (order by d rows between 10 preceding and 10 following)
 66

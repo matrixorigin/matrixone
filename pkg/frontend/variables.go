@@ -1332,7 +1332,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		// after it. A token the planner reads at bind time must also be wired
 		// into updateSqlModeCaches and PrepareStmt, as ONLY_FULL_GROUP_BY is.
 		Type:    InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL", "ENABLE_BOOL_SUMAVG"),
-		Default: "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
+		Default: "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG",
 	},
 	"completion_type": {
 		Name:              "completion_type",
@@ -3744,6 +3744,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel": {
+		Name:              "experimental_parquet_load_parallel",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_parquet_load_parallel"),
+		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel_min_size": {
+		Name:              "experimental_parquet_load_parallel_min_size",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("experimental_parquet_load_parallel_min_size", 1, 128*1024*1024, false),
+		Default:           int64(128 * 1024 * 1024),
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",

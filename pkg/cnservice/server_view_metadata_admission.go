@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -227,6 +228,17 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 			return viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive)
 		}
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return upgradeOwnerActive
+	}
+	// Catalog fencing is a startup read/write transaction. A rolling restart can
+	// temporarily leave its cached lock-table owner unavailable while discovery
+	// and the allocator converge. Retry the complete transaction within the
+	// existing startup deadline; mixed errors still fail closed because joined
+	// leaves are classified independently above.
+	if morpc.IsConnectionError(err) {
+		return true
+	}
 	var moErr *moerr.Error
 	if errors.As(err, &moErr) {
 		switch moErr.ErrorCode() {
@@ -236,7 +248,7 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 			return upgradeOwnerActive
 		}
 	}
-	return upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
+	return false
 }
 
 func (s *service) acceptViewMetadataAdmissionSnapshot(

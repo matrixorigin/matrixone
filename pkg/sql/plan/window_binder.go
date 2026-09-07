@@ -841,7 +841,7 @@ func bindWindowSpec(
 ) (*plan.WindowSpec, error) {
 	w := &plan.WindowSpec{}
 
-	if consumerSpecific && function.GetFunctionIsWinValueFunByName(funcName) && !ws.HasFrame {
+	if consumerSpecific && function.GetFunctionIgnoresWindowFrameByName(funcName) && !ws.HasFrame {
 		ws.Frame = &tree.FrameClause{Type: tree.Rows}
 		ws.Frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
 		ws.Frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
@@ -861,7 +861,7 @@ func bindWindowSpec(
 		// Partition membership is an equality boundary.  Normalize only the
 		// key expression so value-returning window functions still expose the
 		// original padded representation.
-		expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+		expr, err = appendPadSpaceWindowKeyCastIfNeeded(b.GetContext(), expr)
 		if err != nil {
 			return nil, err
 		}
@@ -899,7 +899,7 @@ func bindWindowSpec(
 			// Window peer groups and rank ordering use this expression as a key.
 			// Apply the same semantic key normalization after any storage-order
 			// rewrite, without touching the window function result itself.
-			expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+			expr, err = appendPadSpaceWindowKeyCastIfNeeded(b.GetContext(), expr)
 			if err != nil {
 				return nil, err
 			}

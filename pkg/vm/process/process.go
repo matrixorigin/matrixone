@@ -193,10 +193,15 @@ func (proc *Process) SetPrepareParamsWithReusableMeta(
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
 	metadata []bool,
+	binaryString ...[]bool,
 ) []bool {
 	metadata = prepareParamMetadataWithTypesReuse(
 		prepareParams, isBin, kinds, nil, metadata)
-	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, metadata, binary, false)
 	return metadata
 }
 
@@ -210,10 +215,15 @@ func (proc *Process) SetPrepareParamsWithReusableTypedMeta(
 	kinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 	metadata []bool,
+	binaryString ...[]bool,
 ) []bool {
 	metadata = prepareParamMetadataWithTypesReuse(
 		prepareParams, isBin, kinds, paramTypes, metadata)
-	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, metadata, binary, false)
 	return metadata
 }
 

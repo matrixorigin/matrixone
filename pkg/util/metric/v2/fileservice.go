@@ -142,6 +142,20 @@ var (
 )
 
 var (
+	fsMultipartInitCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "multipart_init_total",
+			Help:      "Total number of multipart initialization lifecycle events.",
+		}, []string{"event"})
+	FSMultipartInitAttemptCounter   = fsMultipartInitCounter.WithLabelValues("attempt")
+	FSMultipartInitAmbiguousCounter = fsMultipartInitCounter.WithLabelValues("ambiguous")
+	FSMultipartInitRecoveredCounter = fsMultipartInitCounter.WithLabelValues("recovered")
+	FSMultipartInitCleanupCounter   = fsMultipartInitCounter.WithLabelValues("cleanup")
+)
+
+var (
 	FSObjectStorageOperations = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",

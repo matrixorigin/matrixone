@@ -3021,13 +3021,25 @@ func TestLargeUpdateTableLockRequiresUnrestrictedSingleTarget(t *testing.T) {
 			wantTableLock: false,
 		},
 		{
-			name:    "incomplete float keyspace stays row scoped",
-			sql:     "UPDATE NATION SET N_NAME = 'updated'",
-			maxRows: 1,
+			name:          "float64 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
 			prepare: func(mock *MockOptimizer) {
 				tableDef := mock.ctxt.tables["nation"]
 				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
+		{
+			name:          "float32 full keyspace can use table lock",
+			sql:           "UPDATE NATION SET N_NAME = 'updated'",
+			maxRows:       1,
+			wantTableLock: true,
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
 			},
 		},
 		{
@@ -3151,8 +3163,9 @@ func TestLargeUnrestrictedIndexedUpdateLocksEveryWrittenNamespace(t *testing.T) 
 
 func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
+		name    string
+		sql     string
+		prepare func(*MockOptimizer)
 	}{
 		{
 			name: "select for share",
@@ -3166,11 +3179,32 @@ func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
 			name: "foreign key validation",
 			sql:  "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)",
 		},
+		{
+			name: "float32 select for share",
+			sql:  "SELECT N_NATIONKEY FROM NATION FOR SHARE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float32)}
+			},
+		},
+		{
+			name: "float64 lock in share mode",
+			sql:  "SELECT N_NATIONKEY FROM NATION LOCK IN SHARE MODE",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+				tableDef.Cols[pkPos].Typ = plan.Type{Id: int32(types.T_float64)}
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
+			if test.prepare != nil {
+				test.prepare(mock)
+			}
 			proc := testutil.NewProc(t)
 			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
 			lockService.EXPECT().GetConfig().Return(lockservice.Config{
@@ -3309,6 +3343,287 @@ func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
 				"temporary-table %s should stay on the modern insert path", test.name)
 		})
 	}
+}
+
+const clusterGeneratedInsertTable = "cluster_generated_insert"
+
+func addClusterGeneratedInsertTableForTest(mock *MockOptimizer) {
+	intType := plan.Type{Id: int32(types.T_int32)}
+	accountType := plan.Type{Id: int32(types.T_uint32), NotNullable: true}
+	cols := []*plan.ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
+			Default: &plan.Default{NullAbility: false}},
+		{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
+				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: 1, Name: "base_value",
+				}}},
+				IsStored: true,
+			}},
+		{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
+			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
+				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: 1, Name: "base_value",
+				}}},
+				IsStored: false,
+			}},
+		{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
+			Default: &plan.Default{NullAbility: false, Expr: makePlan2Uint32ConstExprWithType(catalog.System_Account)}},
+	}
+	compPkey := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	compPkey.ColId = 5
+	compPkey.OriginName = catalog.CPrimaryKeyColName
+	compPkey.Primary = true
+	rowID := MakeRowIdColDef()
+	rowID.ColId = 6
+	rowID.OriginName = catalog.Row_ID
+	cols = append(cols, compPkey, rowID)
+
+	name2ColIndex := make(map[string]int32, len(cols))
+	for i, col := range cols {
+		name2ColIndex[col.Name] = int32(i)
+	}
+	tableDef := &plan.TableDef{
+		TableType:     catalog.SystemClusterRel,
+		TblId:         27923,
+		Name:          clusterGeneratedInsertTable,
+		Cols:          cols,
+		Name2ColIndex: name2ColIndex,
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id", "account_id"},
+			Cols:        []uint64{0, 4},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: compPkey,
+		},
+	}
+	mock.ctxt.objects[clusterGeneratedInsertTable] = &plan.ObjectRef{
+		SchemaName: "tpch", ObjName: clusterGeneratedInsertTable, Obj: 27923,
+	}
+	mock.ctxt.tables[clusterGeneratedInsertTable] = tableDef
+	mock.ctxt.id2name[tableDef.TblId] = clusterGeneratedInsertTable
+	mock.ctxt.pks[clusterGeneratedInsertTable] = []int{0, 4}
+}
+
+func exprContainsTypedNull(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.Isnull
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if exprContainsTypedNull(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsIntegerLiteral(expr *plan.Expr, want int64) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *plan.Literal_I32Val:
+			return int64(value.I32Val) == want
+		case *plan.Literal_I64Val:
+			return value.I64Val == want
+		case *plan.Literal_U32Val:
+			return int64(value.U32Val) == want
+		case *plan.Literal_U64Val:
+			return value.U64Val <= uint64(^uint64(0)>>1) && int64(value.U64Val) == want
+		}
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if exprContainsIntegerLiteral(arg, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requireModernClusterInsertPlan(
+	t *testing.T,
+	query *plan.Query,
+	wantAccountID *int64,
+	wantIgnoreDedup bool,
+) {
+	t.Helper()
+
+	var multiUpdate *plan.Node
+	hasIgnoreDedup := false
+	for _, node := range query.Nodes {
+		require.NotEqual(t, plan.Node_INSERT, node.NodeType,
+			"cluster-table writes must not fall back to the legacy INSERT path")
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			hasIgnoreDedup = true
+		}
+	}
+	require.NotNil(t, multiUpdate)
+	if wantIgnoreDedup {
+		require.True(t, hasIgnoreDedup)
+	}
+
+	var tableCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef != nil && updateCtx.TableDef.Name == clusterGeneratedInsertTable {
+			tableCtx = updateCtx
+			break
+		}
+	}
+	require.NotNil(t, tableCtx)
+
+	var preInsert *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT && node.PreInsertCtx != nil &&
+			node.PreInsertCtx.TableDef.GetName() == clusterGeneratedInsertTable {
+			preInsert = node
+			break
+		}
+	}
+	require.NotNil(t, preInsert)
+	require.Len(t, preInsert.Children, 1)
+	rowImage := query.Nodes[preInsert.Children[0]]
+
+	writeExpr := func(colName string) *plan.Expr {
+		colPos, ok := tableCtx.TableDef.Name2ColIndex[colName]
+		require.True(t, ok)
+		require.Less(t, int(colPos), len(tableCtx.InsertCols))
+		ref := tableCtx.InsertCols[colPos]
+		require.Equal(t, colPos, ref.ColPos)
+		require.Less(t, int(colPos), len(rowImage.ProjectList))
+		return rowImage.ProjectList[colPos]
+	}
+
+	for _, generated := range []struct {
+		name     string
+		isStored bool
+	}{
+		{name: "stored_value", isStored: true},
+		{name: "virtual_value", isStored: false},
+	} {
+		col := tableCtx.TableDef.Cols[tableCtx.TableDef.Name2ColIndex[generated.name]]
+		require.NotNil(t, col.GeneratedCol)
+		require.Equal(t, generated.isStored, col.GeneratedCol.IsStored)
+		require.False(t, exprContainsTypedNull(writeExpr(generated.name)),
+			"generated column %s must not reach the physical write as a typed NULL", generated.name)
+	}
+
+	if wantAccountID != nil {
+		accountExpr := writeExpr("account_id")
+		require.True(t, exprContainsIntegerLiteral(accountExpr, *wantAccountID),
+			"account_id must remain in its target column position: %s", accountExpr.String())
+	}
+
+	compPkeyExpr := preInsert.PreInsertCtx.CompPkeyExpr
+	require.NotNil(t, compPkeyExpr)
+	require.Equal(t, "serial", compPkeyExpr.GetF().GetFunc().GetObjName())
+	require.Len(t, compPkeyExpr.GetF().Args, 2)
+	require.Equal(t, int32(0), compPkeyExpr.GetF().Args[0].GetCol().ColPos)
+	require.Equal(t, int32(4), compPkeyExpr.GetF().Args[1].GetCol().ColPos)
+}
+
+func TestClusterTableInsertUsesModernPath(t *testing.T) {
+	tests := []struct {
+		name            string
+		sql             string
+		prepared        bool
+		wantAccountID   int64
+		wantIgnoreDedup bool
+	}{
+		{
+			name: "values",
+			sql:  "insert into cluster_generated_insert (id, base_value) values (1, 4)",
+		},
+		{
+			name:          "insert select with explicit account",
+			sql:           "insert into cluster_generated_insert (id, base_value, account_id) select 2, 6, 17",
+			wantAccountID: 17,
+		},
+		{
+			name:     "prepared values",
+			sql:      "prepare cluster_insert from 'insert into cluster_generated_insert (id, base_value) values (?, ?)'",
+			prepared: true,
+		},
+		{
+			name:            "insert ignore",
+			sql:             "insert ignore into cluster_generated_insert (id, base_value) values (1, 4)",
+			wantIgnoreDedup: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addClusterGeneratedInsertTableForTest(mock)
+
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			if test.prepared {
+				prepare := logicPlan.GetDcl().GetPrepare()
+				require.NotNil(t, prepare)
+				query = prepare.Plan.GetQuery()
+			}
+			require.NotNil(t, query)
+			wantAccountID := test.wantAccountID
+			requireModernClusterInsertPlan(t, query, &wantAccountID, test.wantIgnoreDedup)
+		})
+	}
+}
+
+func TestClusterTableInsertRejectsUnsupportedSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "overwrite",
+			sql:     "insert overwrite cluster_generated_insert (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT OVERWRITE currently supports Iceberg table mappings",
+		},
+		{
+			name:    "partition values",
+			sql:     "insert into cluster_generated_insert partition(p = 1) (id, base_value) values (1, 4)",
+			wantErr: "not supported: INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addClusterGeneratedInsertTableForTest(mock)
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
+func TestClusterTableLoadUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addClusterGeneratedInsertTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"load data inline format='csv', data='1,4,0' into table cluster_generated_insert fields terminated by ',' "+
+			"(id, base_value, account_id)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, query.LoadTag)
+	requireModernClusterInsertPlan(t, query, nil, false)
 }
 
 func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
@@ -4866,7 +5181,14 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
 	t.Helper()
 	tableDef := mock.ctxt.tables[tableName]
-	colPos := tableDef.Name2ColIndex[columnName]
+	colPos := int32(-1)
+	for i, col := range tableDef.Cols {
+		if col.Name == columnName {
+			colPos = int32(i)
+			break
+		}
+	}
+	require.NotEqual(t, int32(-1), colPos, "column %s.%s", tableName, columnName)
 	checkExpr, err := BindFuncExprImplByPlanExpr(
 		t.Context(),
 		">",
@@ -5241,16 +5563,21 @@ func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
 
 	hasMultiUpdate := false
 	hasDedupJoin := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		switch {
 		case node.NodeType == plan.Node_MULTI_UPDATE:
 			hasMultiUpdate = true
 		case node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP:
 			hasDedupJoin = true
+		case node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration():
+			hasTargetArbiter = true
 		}
 	}
 	assert.True(t, hasMultiUpdate, "fake-PK ODKU plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "fake-PK ODKU plan should contain DEDUP JOIN node")
+	assert.True(t, hasTargetArbiter,
+		"fake-PK ODKU must arbitrate pre-statement and statement-local unique conflicts")
 }
 
 func TestInsertOnDupFKUsesModernPath(t *testing.T) {
@@ -5404,24 +5731,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
-		tableDef := mock.ctxt.tables["emp"]
-		colPos := tableDef.Name2ColIndex["deptno"]
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
-			},
-		}
-		checkExpr, err := BindFuncExprImplByPlanExpr(
-			t.Context(),
-			">",
-			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
-		)
-		require.NoError(t, err)
-		tableDef.Checks = []*plan.CheckDef{{
-			Name:  "positive_deptno",
-			Check: checkExpr,
-		}}
+		addPositiveCheck(t, mock, "emp", "deptno")
 
 		logicPlan, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err)
@@ -5506,7 +5816,14 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		addCheck := func(tableName, checkName, colName string) {
 			tableDef := mock.ctxt.tables[tableName]
-			colPos := tableDef.Name2ColIndex[colName]
+			colPos := int32(-1)
+			for i, col := range tableDef.Cols {
+				if col.Name == colName {
+					colPos = int32(i)
+					break
+				}
+			}
+			require.NotEqual(t, int32(-1), colPos, "column %s.%s", tableName, colName)
 			colExpr := &plan.Expr{
 				Typ:  tableDef.Cols[colPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: colPos}},
@@ -5606,19 +5923,21 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 			return false
 		}
 		require.Len(t, query.Nodes[assertNodeID].Children, 1)
-		require.Equal(t, plan.Node_PROJECT, query.Nodes[query.Nodes[assertNodeID].Children[0]].NodeType,
-			"ODKU CHECK must be attached directly to the final merged projection")
+		require.Equal(t, plan.Node_JOIN, query.Nodes[query.Nodes[assertNodeID].Children[0]].NodeType,
+			"ODKU CHECK must consume the per-action DEDUP UPDATE stream")
 		hasDedupUpdateBelowAssert := false
 		for nodeID, node := range query.Nodes {
 			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
 				node.OnDuplicateAction == plan.Node_UPDATE &&
 				containsNode(query.Nodes[assertNodeID].Children[0], int32(nodeID)) {
+				require.NotNil(t, node.DedupJoinCtx)
+				require.True(t, node.DedupJoinCtx.EmitActionRows)
 				hasDedupUpdateBelowAssert = true
 				break
 			}
 		}
 		require.True(t, hasDedupUpdateBelowAssert,
-			"CHECK assertion must remain above the DEDUP UPDATE final-row mutation")
+			"CHECK assertion must remain above every ordered DEDUP UPDATE action")
 	})
 }
 
@@ -5670,13 +5989,9 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 	// a unique-key conflict on a real-PK table must trigger an UPDATE of the
 	// conflicting row instead of raising a duplicate-entry error.
 	//
-	// The modern plan achieves this by resolving a single UPDATE target row up
-	// front: target_pk = coalesce(pk-existence-probe, uk1_pri, uk2_pri, ...),
-	// treating PRIMARY as the 0th index. The main DEDUP-update join then keys on
-	// target_pk so a cross-row UK conflict lands on the existing row's UPDATE.
-	// The per-UK FAIL dedup join is intentionally kept as in-batch protection
-	// (two brand-new rows sharing a new UK value still error, avoiding a
-	// duplicated unique-index entry).
+	// The modern plan resolves a single UPDATE target in PRIMARY/UNIQUE priority
+	// order against both the table snapshot and prior INSERT actions in this
+	// statement. The main DEDUP-update join then keys on that target identity.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = 'LA'")
 	if err != nil {
@@ -5688,7 +6003,7 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 
 	hasMultiUpdate := false
 	hasUpdateDedupJoin := false
-	hasTargetPkResolve := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
@@ -5697,27 +6012,28 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 			node.OnDuplicateAction == plan.Node_UPDATE {
 			hasUpdateDedupJoin = true
 		}
-		for _, expr := range node.ProjectList {
-			if exprContainsFuncName(expr, "coalesce") {
-				hasTargetPkResolve = true
-			}
+		if node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			hasTargetArbiter = true
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2,
+				"PRIMARY and secondary UNIQUE must participate in one ordered arbiter")
+			require.Len(t, node.PreInsertUkCtx.TargetColumns, 2)
+			require.Equal(t, int(node.PreInsertUkCtx.OutputColumns)+1, len(node.ProjectList),
+				"the runtime-resolved target identity must remain the final arbiter output")
 		}
 	}
 	assert.True(t, hasMultiUpdate, "real-PK ODKU plan should contain MULTI_UPDATE node")
 	assert.True(t, hasUpdateDedupJoin,
 		"real-PK ODKU plan should contain a DEDUP JOIN with OnDuplicateAction=UPDATE")
-	assert.True(t, hasTargetPkResolve,
-		"real-PK ODKU must resolve a coalesce(pk, uk...) target so unique-key "+
-			"conflicts update the existing row (MySQL-aligned), not just dedup on PK")
+	assert.True(t, hasTargetArbiter,
+		"real-PK ODKU must arbitrate existing and statement-local PK/UNIQUE conflicts")
 }
 
 func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// dept_ck has a real PK (deptno) and a composite unique key (dname, loc),
-	// plus a free column note. The target_pk resolution must serialize the
-	// composite unique-key value to probe its index table, so a composite
-	// unique-key conflict also resolves into the UPDATE target (MySQL-aligned).
+	// plus a free column note. The target arbiter must consume the serialized
+	// composite key used by its hidden index table.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO dept_ck VALUES (1, 'Sales', 'NY', 'n') ON DUPLICATE KEY UPDATE note = 'x'")
 	if err != nil {
@@ -5728,20 +6044,20 @@ func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
 	assert.NotNil(t, query)
 
 	hasMultiUpdate := false
-	hasTargetPkResolve := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
 		}
-		for _, expr := range node.ProjectList {
-			if exprContainsFuncName(expr, "coalesce") {
-				hasTargetPkResolve = true
-			}
+		if node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			hasTargetArbiter = true
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2)
+			require.Len(t, node.PreInsertUkCtx.TargetColumns, 2)
 		}
 	}
 	assert.True(t, hasMultiUpdate, "composite-UK real-PK ODKU should contain MULTI_UPDATE node")
-	assert.True(t, hasTargetPkResolve,
-		"composite-UK real-PK ODKU should resolve a coalesce(pk, composite-uk) target")
+	assert.True(t, hasTargetArbiter,
+		"composite-UK real-PK ODKU should use ordered target arbitration")
 }
 
 // TestInsertOnDupIndexMetaTableUsesModernPath guards the regression where

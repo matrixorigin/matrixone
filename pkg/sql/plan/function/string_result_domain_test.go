@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -232,6 +233,43 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
 	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
+}
+
+func TestRegexpReplaceReturnTypeCoversZeroWidthExpansion(t *testing.T) {
+	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
+	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
+
+	text := regexpReplaceReturnType([]types.Type{varchar(2), varchar(1), varchar(3)})
+	require.Equal(t, types.T_varchar, text.Oid)
+	require.Equal(t, int32(11), text.Width, "S+(S+1)*R")
+	for _, args := range [][]types.Type{
+		{varchar(2), varchar(1), varchar(3)},
+		{varchar(2), varchar(1), varchar(3), types.T_int64.ToType()},
+		{varchar(2), varchar(1), varchar(3), types.T_int64.ToType(), types.T_int64.ToType()},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "regexp_replace", args)
+		require.NoError(t, err)
+		require.Equal(t, int32(11), resolved.GetReturnType().Width,
+			"every REGEXP_REPLACE arity must use the expansion-aware callback")
+	}
+
+	textWithBlobReplacement := regexpReplaceReturnType([]types.Type{
+		varchar(2), varchar(1), varbinary(3),
+	})
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(textWithBlobReplacement))
+	require.Equal(t, int32(11), textWithBlobReplacement.Width)
+
+	binary := regexpReplaceReturnType([]types.Type{
+		varbinary(2), varbinary(1), varchar(3),
+	})
+	require.Equal(t, types.T_varbinary, binary.Oid)
+	// A VARCHAR(3) replacement can occupy twelve UTF-8 bytes in byte mode.
+	require.Equal(t, int32(38), binary.Width)
+
+	unbounded := regexpReplaceReturnType([]types.Type{
+		types.T_text.ToType(), varchar(1), varchar(3),
+	})
+	require.Equal(t, types.T_text, unbounded.Oid)
 }
 
 func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {

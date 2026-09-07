@@ -16,12 +16,15 @@ package compile
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1309,6 +1312,182 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the post-bind form of an omitted PARALLEL clause that crossed the
+	// admission threshold. The files are deliberately not Parquet: successful
+	// compilation proves the file-fanout branch does not open a footer before it
+	// creates the independently executable scopes.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.Extern.ParallelLoadRequested)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
+		require.Empty(t, ext.Es.ParquetRowGroupShards)
+		require.Len(t, ext.Es.FileList, 1)
+	}
+}
+
+// parquetFanoutCancellationProbe models an admitted file shard that has begun
+// execution and will only finish when the statement context is canceled.  The
+// test uses it after compileExternScan has constructed the real bounded
+// whole-file fanout shape; it deliberately has no timing dependency.
+type parquetFanoutCancellationProbe struct {
+	*colexec.MockOperator
+	started    chan<- struct{}
+	terminated *atomic.Int32
+}
+
+func (op *parquetFanoutCancellationProbe) Call(proc *process.Process) (vm.CallResult, error) {
+	op.started <- struct{}{}
+	<-proc.Ctx.Done()
+	op.terminated.Add(1)
+	return vm.CancelResult, proc.Ctx.Err()
+}
+
+func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the admitted post-bind form of an omitted PARALLEL clause. The
+	// plan package owns the parser/binder/default transition; its focused tests
+	// prove that transition. Here two files fill DOP, so compilation must create
+	// two independently executable whole-file scopes without footer reads.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	scopes, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+
+	queryCtx, cancelQuery := context.WithCancel(context.Background())
+	t.Cleanup(cancelQuery)
+	testCompile.proc.BuildPipelineContext(queryCtx)
+	started := make(chan struct{}, len(scopes))
+	var terminated atomic.Int32
+	for _, scope := range scopes {
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.Len(t, ext.Es.FileList, 1)
+		scope.Proc = testCompile.proc.NewContextChildProc(0)
+		scope.RootOp = &parquetFanoutCancellationProbe{
+			MockOperator: colexec.NewMockOperator(),
+			started:      started,
+			terminated:   &terminated,
+		}
+	}
+	testCompile.scopes = scopes
+	testCompile.pn = &plan.Plan{}
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.affectRows = &atomic.Uint64{}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- testCompile.runOnce() }()
+	for range scopes {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("admitted parquet fanout shard did not begin execution")
+		}
+	}
+
+	// The client/query context is canceled only after every shard is in flight.
+	// runOnce must return, and each independently admitted scope must observe
+	// that cancellation. Transactional zero-partial-row visibility remains
+	// asserted through the real LOAD rollback BVT.
+	cancelQuery()
+	select {
+	case err := <-runDone:
+		// Scope cancellation is normalized at this execution boundary; the
+		// frontend request context reports the client-visible cancellation.
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not terminate admitted parquet fanout")
+	}
+	require.Equal(t, int32(len(scopes)), terminated.Load())
+	for _, scope := range scopes {
+		require.ErrorIs(t, scope.Proc.Ctx.Err(), context.Canceled)
+	}
+}
+
 func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
 	tasks := []*pipeline.IcebergDataFileTask{
 		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
@@ -1572,6 +1751,39 @@ func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	require.Equal(t, int64(110), loads["cn2:6001"])
 }
 
+func TestSplitParquetRowGroupShardsKeepsEachFileContiguous(t *testing.T) {
+	fileList := []string{"warehouse/load/many-groups.parquet"}
+	fileSize := []int64{800}
+	rowGroups := make([]parquetRowGroupMeta, 8)
+	for i := range rowGroups {
+		rowGroups[i] = parquetRowGroupMeta{
+			fileIndex:     0,
+			rowGroupIndex: int32(i),
+			numRows:       10,
+			bytes:         100,
+		}
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	require.NoError(t, err)
+	require.Len(t, shards, 2)
+
+	ranges := make([][2]int32, 0, 2)
+	for _, shard := range shards {
+		require.Equal(t, fileList, shard.fileList)
+		require.Len(t, shard.rowGroupShards, 1)
+		ranges = append(ranges, [2]int32{
+			shard.rowGroupShards[0].RowGroupStart,
+			shard.rowGroupShards[0].RowGroupEnd,
+		})
+	}
+	slices.SortFunc(ranges, func(left, right [2]int32) int {
+		return cmp.Compare(left[0], right[0])
+	})
+	require.Equal(t, [][2]int32{{0, 4}, {4, 8}}, ranges)
+}
+
 func TestCompileExternScanParquetRowGroupFanout(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
@@ -1680,6 +1892,62 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 }
 
+type parquetMetadataIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetMetadataReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetMetadataTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetMetadataReadRange
+}
+
+func (r *parquetMetadataTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetMetadataReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetMetadataTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetMetadataIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetMetadataIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	reader := &parquetMetadataTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	file, err := openParquetLoadMetadataFile(reader, int64(data.Len()))
+	require.NoError(t, err)
+	require.Len(t, file.RowGroups(), 3)
+	require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+	require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+	require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+}
+
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "cn1:6001"
@@ -1704,8 +1972,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 			Tail:     &tree.TailParameter{},
 		},
 		ExParam: tree.ExParam{
-			ExternType: int32(plan.ExternType_LOAD),
-			Parallel:   true,
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
 		},
 	}
 	createSQL, err := json.Marshal(param)
@@ -1922,6 +2191,7 @@ func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
 		ext := scope.RootOp.(*external.External)
 		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
 		require.Len(t, ext.Es.FileOffsetTotal, 1)

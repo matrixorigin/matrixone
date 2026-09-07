@@ -2380,6 +2380,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
 			nil,
 			-1,
@@ -4665,8 +4666,7 @@ func (builder *QueryBuilder) hasExistingLockTargets() bool {
 
 // lockTargetsCoverCompleteKeyspaces keeps table-lock admission atomic across
 // every namespace written by the UPDATE. A partial admission can invert lock
-// order against a bounded UPDATE, and FLOAT/DOUBLE table ranges do not cover
-// infinities or every NaN payload even though their ordinary row locks work.
+// order against a bounded UPDATE.
 func lockTargetsCoverCompleteKeyspaces(lockTargets []*plan.LockTarget) bool {
 	foundExclusive := false
 	for _, target := range lockTargets {

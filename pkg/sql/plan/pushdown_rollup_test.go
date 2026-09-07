@@ -32,7 +32,9 @@ func TestRollupDerivedFilterPushdownRespectsGroupingFlag(t *testing.T) {
 		{name: "is not null", predicate: "grp is not null", filterName: "isnotnull"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			mock := NewMockOptimizer(false)
+			useLegacyGroupingSetPlan(t, mock)
+			logicPlan, err := runOneStmt(mock, t, `
 				select grp, total
 				from (
 					select n_comment as grp, sum(n_regionkey) as total
@@ -92,7 +94,9 @@ func TestRollupMultiColumnFilterPushdownRespectsEachBranch(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+			mock := NewMockOptimizer(false)
+			useLegacyGroupingSetPlan(t, mock)
+			logicPlan, err := runOneStmt(mock, t, `
 				select grp1, grp2, total
 				from (
 					select n_comment as grp1, n_regionkey as grp2, sum(n_nationkey) as total

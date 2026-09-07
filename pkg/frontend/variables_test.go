@@ -102,6 +102,26 @@ func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestExperimentalParquetLoadParallelVariables(t *testing.T) {
+	gate, ok := gSysVarsDefs["experimental_parquet_load_parallel"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, gate.Scope)
+	assert.True(t, gate.Dynamic)
+	assert.Equal(t, int8(0), gate.Default)
+
+	minSize, ok := gSysVarsDefs["experimental_parquet_load_parallel_min_size"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, minSize.Scope)
+	assert.True(t, minSize.Dynamic)
+	assert.Equal(t, int64(128*1024*1024), minSize.Default)
+
+	converted, err := minSize.Type.Convert(int64(1))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), converted)
+	_, err = minSize.Type.Convert(int64(128*1024*1024 + 1))
+	assert.Error(t, err)
+}
+
 func TestCollationServerMatchesImplicitTableDefault(t *testing.T) {
 	sv, ok := gSysVarsDefs["collation_server"]
 	assert.True(t, ok)
