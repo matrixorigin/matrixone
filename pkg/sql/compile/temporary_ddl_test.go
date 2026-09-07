@@ -310,8 +310,11 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	// choosing to return this object from a later allocation.
 	released := NewCompile("cn", "test", "", "", "", nil, testutil.NewProcess(t), nil, false, nil, time.Now())
 	released.temporaryDDLInExecutorTxn = true
-	released.Release()
+	// Keep ownership in this test while exercising the reset seam. Only return
+	// the object to the global reuse pool after the assertion is complete.
+	released.clear()
 	require.False(t, released.temporaryDDLInExecutorTxn)
+	doCompileRelease(released)
 
 	// A separately initialized top-level compile must still take the client
 	// session-schema path after an executor generation has been cleared.
