@@ -39,6 +39,18 @@ func TestViewDefinitionFunctionRegistration(t *testing.T) {
 	functionID, _ := DecodeOverloadID(function.GetEncodedOverloadID())
 	require.Equal(t, int32(MO_VIEW_DEFINITION), functionID)
 	require.Equal(t, types.T_text, function.GetReturnType().Oid)
+
+	registered = allSupportedFunctions[MO_VIEW_CHECK_OPTION]
+	require.Equal(t, MO_VIEW_CHECK_OPTION, registered.functionId)
+	require.Len(t, registered.Overloads, 1)
+	require.Equal(t, types.T_varchar, registered.Overloads[0].retType(nil).Oid)
+	require.NotNil(t, registered.Overloads[0].newOp())
+	function, err = GetFunctionByName(
+		context.Background(), "mo_view_check_option", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	functionID, _ = DecodeOverloadID(function.GetEncodedOverloadID())
+	require.Equal(t, int32(MO_VIEW_CHECK_OPTION), functionID)
+	require.Equal(t, types.T_varchar, function.GetReturnType().Oid)
 }
 
 func TestViewDefinitionFromPersistedData(t *testing.T) {
@@ -123,6 +135,36 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 	}
 }
 
+func TestViewMetadataPreservesLegacyCheckOption(t *testing.T) {
+	tests := []struct {
+		name        string
+		persisted   string
+		definition  string
+		checkOption string
+	}{
+		{
+			name:        "legacy cascaded check option",
+			persisted:   `{"Stmt":"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION"}`,
+			definition:  "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:        "current frozen metadata",
+			persisted:   `{"Stmt":"CREATE VIEW v AS SELECT 1","definition":"select frozen","check_option":"LOCAL"}`,
+			definition:  "select frozen",
+			checkOption: "LOCAL",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metadata, ok := viewMetadataFromPersistedData(context.Background(), test.persisted)
+			require.True(t, ok)
+			require.Equal(t, test.definition, strings.ToLower(metadata.definition))
+			require.Equal(t, test.checkOption, metadata.checkOption)
+		})
+	}
+}
+
 func TestBuiltInViewDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	current := `{"Stmt":"create view v as select 0","definition":"select frozen from t"}`
@@ -177,4 +219,22 @@ func TestBuiltInViewDefinition(t *testing.T) {
 			nullResult.GetResultVector()).GetStrValue(0)
 		require.True(t, isNull)
 	})
+}
+
+func TestBuiltInViewCheckOption(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(input,
+		[]string{`{"Stmt":"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION"}`, `{"Stmt":"CREATE VIEW"}`},
+		[]bool{false, false}, proc.Mp()))
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+	require.NoError(t, builtInViewCheckOption(
+		[]*vector.Vector{input}, result, proc, input.Length(), nil))
+	values := vector.GenerateFunctionStrParameter(result.GetResultVector())
+	value, isNull := values.GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, "CASCADED", string(value))
+	_, isNull = values.GetStrValue(1)
+	require.True(t, isNull)
 }
