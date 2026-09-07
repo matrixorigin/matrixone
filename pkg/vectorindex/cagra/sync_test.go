@@ -159,7 +159,10 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 		"expected 2 INSERT records buffered")
 
 	require.NoError(t, s.Save(sqlproc))
-	require.Len(t, rec.statements, 1)
+	// The chunk statement, plus the frame's metadata row recording its bytes and the version
+	// it applied.
+	require.Len(t, rec.statements, 2)
+	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
 	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
@@ -199,7 +202,10 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 
 	require.NoError(t, s.Save(sqlproc))
-	require.Len(t, rec.statements, 1)
+	// The chunk statement, plus the frame's metadata row recording its bytes and the version
+	// it applied.
+	require.Len(t, rec.statements, 2)
+	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
 	// chunk_id == 7 (nextChunkId mock).
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
@@ -510,8 +516,21 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, flush2))
 	require.NoError(t, s.Save(sqlproc))
 
-	// First flush at chunk_id=0, second at chunk_id=1.
-	require.GreaterOrEqual(t, len(rec.statements), 2)
-	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
-	require.Contains(t, rec.statements[1], "'cdc_tail', 1,")
+	// First flush at chunk_id=0, second at chunk_id=1 -- and each flush also writes the
+	// metadata row naming the chunk id its frame starts at.
+	var chunkStmts, metaStmts []string
+	for _, st := range rec.statements {
+		if strings.Contains(st, "__meta") {
+			metaStmts = append(metaStmts, st)
+		} else {
+			chunkStmts = append(chunkStmts, st)
+		}
+	}
+	require.Len(t, chunkStmts, 2)
+	require.Contains(t, chunkStmts[0], "'cdc_tail', 0,")
+	require.Contains(t, chunkStmts[1], "'cdc_tail', 1,")
+	require.Len(t, metaStmts, 2)
+	require.Contains(t, metaStmts[0], "'cdc_tail:0'")
+	require.Contains(t, metaStmts[1], "'cdc_tail:1'",
+		"each frame's row is keyed by the chunk id it starts at")
 }

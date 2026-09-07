@@ -74,6 +74,9 @@ type CagraSync struct {
 	// SQL-emit helpers stay parameterized rather than hard-coding the
 	// constant in dozens of fmt.Sprintfs).
 	activeIndexId string
+	// buildTS is the base-table version this sync's frames reflect: the upper bound of the
+	// change range ISCP applied, set via SetBuildTS. 0 when no consumer supplied one.
+	buildTS int64
 
 	dim                int
 	vecBytesPerRow     int // dim * base element size (4*dim for f32, 2*dim for f16)
@@ -306,6 +309,21 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	// indexes); when a sub-index IS loaded the search prefers the
 	// model tar's colMetaJSON, so the redundancy is harmless.
 	sqls, serr := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	if serr == nil && len(sqls) > 0 {
+		// One metadata row for the frame this flush wrote, keyed by the chunk id it starts
+		// at, carrying its byte length, its record count, and the base-table version it
+		// applied. Written in THIS transaction with the chunks it describes, so an index's
+		// recorded coverage cannot disagree with the bytes it stores.
+		// ONE shape decision, used for both the column list and the values: naming six
+		// columns and supplying four (or the reverse) is a malformed statement, and the
+		// table may still be the narrow pre-v4_0_7 shape.
+		provenance := sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+			catalog.Cagra_TblCol_Metadata_Build_Ts)
+		sqls = append(sqls, sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
+			[]string{sqlexec.MetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
+				time.Now().UnixMicro(), int64(len(s.pendingRecords)),
+				int64(len(s.pendingSizes)), s.buildTS)}))
+	}
 	if serr != nil {
 		return serr
 	}
@@ -362,3 +380,8 @@ func (s *CagraSync) runSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
 		return nil
 	})
 }
+
+// SetBuildTS records the data version this sync's frames will reflect: the upper bound of the
+// change range ISCP applied, not the writing transaction's SnapshotTS, which is later and would
+// claim coverage of changes collected after the range but never applied.
+func (s *CagraSync) SetBuildTS(ts int64) { s.buildTS = ts }

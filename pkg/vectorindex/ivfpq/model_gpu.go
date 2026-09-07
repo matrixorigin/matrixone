@@ -853,7 +853,12 @@ func (idx *IvfpqModel[B, Q]) Unload() error {
 
 // LoadMetadata loads IvfpqModel descriptors from the metadata table.
 func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*IvfpqModel[B, Q], error) {
-	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
+	// The BASE sub-indexes only. The metadata table also holds one row per CDC tail frame
+	// (see vectorindex.TailFrameMetaId); a tail row read here would become a sub-index model
+	// with no tar behind it.
+	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY timestamp ASC",
+		sqlquote.QualifiedIdent(dbname, metatbl),
+		vectorindex.NotTailFrameSQL(catalog.Ivfpq_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err

@@ -127,7 +127,10 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 
 	require.NoError(t, s.Save(sqlproc))
-	require.Len(t, rec.statements, 1)
+	// The chunk statement, plus the frame's metadata row recording its bytes and the version
+	// it applied.
+	require.Len(t, rec.statements, 2)
+	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
@@ -157,7 +160,10 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	}
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
-	require.Len(t, rec.statements, 1)
+	// The chunk statement, plus the frame's metadata row recording its bytes and the version
+	// it applied.
+	require.Len(t, rec.statements, 2)
+	require.Contains(t, rec.statements[1], vectorindex.TailFrameMetaPrefix)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 16, 0)

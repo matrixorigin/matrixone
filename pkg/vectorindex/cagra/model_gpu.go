@@ -877,7 +877,12 @@ func replayEventChunks[B cuvs.VectorType](
 // LoadMetadata loads CagraModel descriptors from the metadata table.
 // Each returned model has Id, Checksum, Timestamp, and FileSize set; Index is nil.
 func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*CagraModel[B, Q], error) {
-	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
+	// The BASE sub-indexes only. The metadata table also holds one row per CDC tail frame
+	// (see vectorindex.TailFrameMetaId); a tail row read here would become a sub-index model
+	// with no tar behind it.
+	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY timestamp ASC",
+		sqlquote.QualifiedIdent(dbname, metatbl),
+		vectorindex.NotTailFrameSQL(catalog.Cagra_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err

@@ -15,6 +15,7 @@
 package vectorindex
 
 import (
+	"fmt"
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,6 +69,28 @@ const (
 // "active id" coordination problem entirely — search reads it once at Load
 // time alongside the real sub-index models.
 const CdcTailId = "cdc_tail"
+
+// TailFrameMetaId names the metadata row describing ONE tail frame, keyed by the chunk id the
+// frame starts at. That key is what lets the row be referred back to its bytes: chunk ids are
+// assigned contiguously in frame order, so a frame owns
+// [startChunkId, startChunkId+ceil(filesize/MaxChunkSize)) and any chunk belongs to the row with
+// the greatest start id at or below it.
+func TailFrameMetaId(startChunkId int64) string {
+	return fmt.Sprintf("%s:%d", CdcTailId, startChunkId)
+}
+
+// TailFrameMetaPrefix matches every tail frame row and nothing else: base/sub-index ids are
+// "<index table>:<ts>:<n>" or ":<n>:<n>:<n>", so they cannot begin with this.
+const TailFrameMetaPrefix = CdcTailId + ":"
+
+// NotTailFrameSQL is the predicate a metadata query needs when it means "the bases".
+//
+// The metadata table holds two kinds of row: one per base/sub-index, and one per CDC tail frame.
+// A reader that forgets this loads a tail frame AS a base, or folds the tail's bytes into the
+// base totals.
+func NotTailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("%s NOT LIKE '%s%%'", indexIdCol, TailFrameMetaPrefix)
+}
 
 type DistributionMode uint16
 

@@ -243,29 +243,18 @@ func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegm
 	return TailFramesInsertSqlsAt(cfg, startChunkId, frames, 0)
 }
 
-// TailFrameMetaId is the metadata row that describes ONE tail frame. Frames are keyed by the
-// chunk id they start at, which is what lets a row be referred back to its bytes: chunk ids are
-// assigned contiguously in frame order (see NextTailChunkIdSql), so a frame owns
-// [startChunkId, startChunkId+ceil(filesize/MaxChunkSize)) and any chunk belongs to the row with
-// the greatest start id at or below it.
-func TailFrameMetaId(startChunkId int64) string {
-	return fmt.Sprintf("%s:%d", vectorindex.CdcTailId, startChunkId)
-}
+// TailFrameMetaId / TailFrameMetaPrefix name a tail frame's metadata row. Defined once in
+// pkg/vectorindex because cagra and ivfpq key their tail rows the same way.
+var (
+	TailFrameMetaId     = vectorindex.TailFrameMetaId
+	TailFrameMetaPrefix = vectorindex.TailFrameMetaPrefix
+)
 
-// notTailFrame excludes the per-frame tail rows from a metadata query.
-//
-// The metadata table now holds two kinds of row: one per BASE segment, and one per tail FRAME.
-// Every reader that means "the bases" has to say so -- a reader that does not would try to load
-// a tail frame as a base, or fold the tail's bytes into the base totals. The prefix cannot
-// collide: base ids are "<index table>:<ts>:<n>".
+// notTailFrame excludes the per-frame tail rows from a metadata query, for every reader that
+// means "the bases".
 func notTailFrame() string {
-	return fmt.Sprintf("%s NOT LIKE %s",
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%"))
+	return vectorindex.NotTailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id)
 }
-
-// TailFrameMetaPrefix matches every tail frame row, and NOTHING else: base ids are
-// "<index table>:<ts>:<n>", so they cannot begin with this.
-var TailFrameMetaPrefix = vectorindex.CdcTailId + ":"
 
 // TailFramesInsertSqlsAt persists the frames AND one metadata row each, recording the size of
 // the frame and the base-table version buildTS its content reflects.
