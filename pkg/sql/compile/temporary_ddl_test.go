@@ -197,6 +197,35 @@ func TestSessionTemporaryDDLRollout(t *testing.T) {
 	require.True(t, supportsSessionTemporaryDDL(proc.GetService()))
 }
 
+func TestSessionTemporaryDDLRejectsInvalidExecutor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+	proc.Base.IsFrontend = true
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	proc.Session = owner
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	previousVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, "invalid")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previousVersion)
+	})
+
+	qry := &plan.CreateTable{Database: "test", Temporary: true, TableDef: &plan.TableDef{Name: "t"}}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: qry}}}}
+	eng := newStubEngine()
+	eng.dbs["test"] = newStubDatabase("test")
+	c := NewCompile("test", "test", "create temporary table t (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = pn
+
+	err := (&Scope{Plan: pn}).CreateTable(c)
+	require.ErrorContains(t, err, "temporary DDL executor has an invalid type")
+	require.Empty(t, owner.tables)
+	require.Empty(t, owner.retired)
+}
+
 func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 	s := &temporaryDDLSession{sessionID: uuid.New(), generation: uuid.NewString()}
 	unique := catalog.UniqueIndexTableNamePrefix + uuid.NewString()

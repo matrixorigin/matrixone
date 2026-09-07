@@ -107,6 +107,10 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	if !ok {
 		return moerr.NewInternalError(c.proc.Ctx, "temporary DDL executor is unavailable")
 	}
+	exec, ok := v.(executor.SQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx, "temporary DDL executor has an invalid type")
+	}
 	account, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -122,7 +126,7 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 			owner.RetireTemporaryTable(db, alias, physical, nil)
 		}
 	}()
-	err = v.(executor.SQLExecutor).ExecTxn(c.proc.Ctx, func(tx executor.TxnExecutor) (err error) {
+	err = exec.ExecTxn(c.proc.Ctx, func(tx executor.TxnExecutor) (err error) {
 		// ExecTxn rolls back returned errors; it does not recover callback panics.
 		// Convert here so every admitted schema transaction reaches its owner.
 		defer func() {
