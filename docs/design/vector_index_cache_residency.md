@@ -1,9 +1,27 @@
 # Named-snapshot index reads and index-cache residency
 
-- Status: Ready for review
+- Status: **Design approved** 2026-09-07 (Eric) — implementation complete
 - Issues: [#27941](https://github.com/matrixorigin/matrixone/issues/27941),
   [#27927](https://github.com/matrixorigin/matrixone/issues/27927)
 - Implementation: branch `bug_27941`
+
+## 0. Design decisions and sign-off
+
+This document is a contract, not a summary of a merged change: green CI and GPU
+evidence show the implementation matches it, not that the contract is the right
+one. These are the resource and lifecycle decisions that outlive this PR, and the
+sign-off they carry. Implementation conformance is reviewed against them.
+
+| decision | where | approved by / date |
+|---|---|---|
+| Admission **refuses** a load under overload rather than preempting | §5.3 | Eric — 2026-09-07 |
+| The **only-occupant exception**: no index is ever unloadable | §5.3 | Eric — 2026-09-07 |
+| Capacity **derivation** (90% of RAM/VRAM, sentinel handling, no fallback) | §5.1 | Eric — 2026-09-07 |
+| Isolation and **eviction ownership** (per-tenant vs CN-wide, coldest-first, pay-first) | §5.2, §5.3 | Eric — 2026-09-07 |
+| **Migration**: widening every index metadata table, and the rolling-upgrade contract | §7 | Eric — 2026-09-07 |
+
+A later change to any of these rows is a change to the contract, not an
+implementation detail: it needs the row re-approved, not just the code updated.
 
 ## 1. Problem and contract
 
@@ -101,6 +119,12 @@ resident index is charged, because a current generation occupies the same memory
 as a historical one.
 
 ## 5. The governor
+
+`VectorIndexGovernor` is a type of its own, not a set of fields on the cache. The
+cache is a map of loaded indexes with a TTL; the governor is a policy with its own
+state — memoized catalog reads, derived machine capacity, in-flight admissions,
+eviction counters. They meet in exactly two places: the governor reads the cache's
+map to see what is resident, and calls back into it to evict.
 
 ### 5.1 Budgets, and where they come from
 
@@ -366,8 +390,37 @@ Housekeeping also re-derives the automatic host budget when the machine's capaci
 has changed (§5.1) — applying a reduced automatic budget is the same job as
 applying a reduced operator one.
 
-Neither can do anything until a first miss has run: before that there is no CN
-uuid to query with, and nothing is resident to enforce against.
+**Cadence and refresh set, precisely.** The housekeeping ticker fires every
+`VectorIndexCacheTTL/2`; each tick dispatches the cap pass to its own goroutine,
+single-flighted, so a tick is dropped rather than queued while one is running.
+The pass itself refreshes at most once per `sysLimitTTL` (15s) per row.
+
+The set it refreshes is derived from **current residency**, not from history:
+
+- the CN-wide row, once per TTL window;
+- one row per account that currently holds resident bytes;
+- every other `acctLimits` entry is **pruned**, not refreshed.
+
+That pruning is the load-bearing part. The memo gains an entry for every account
+that has ever loaded an index on this CN, and nothing removed them, so refreshing
+"every account seen" meant one catalog read per dead tenant, forever. An account
+holding nothing has nothing this pass could evict, and its memo costs nothing to
+rebuild at its next miss.
+
+The whole pass also shares **one** deadline rather than one per read: per-read
+timeouts bound each call but not their sum, and the sum is what the caller waits
+for. When the budget is spent the remaining accounts keep their last known caps
+and are revisited on the next tick — the same guarantee a failed read already
+gives them.
+
+**None of it runs on the lifecycle goroutine.** That goroutine also serves TTL
+eviction, the lifecycle hooks and `Stop`/SIGTERM, and a catalog read is exactly
+the kind of work that turns into a timeout when a cluster is unwell. Shutdown must
+not queue behind a catalog.
+
+Neither the SYS nor the tenant refresh can do anything until a first miss has run:
+before that there is no CN uuid to query with, and nothing is resident to enforce
+against.
 
 ### 5.6 Invalidation: the current generation, and everything
 
@@ -515,9 +568,10 @@ generation does not record — so `build_ts` makes the BASE half verifiable and
 leaves the CDC half open. This is the mechanism a future read-path check would
 rest on.
 
-**Upgrade.** Readers tolerating the old four-column shape is not sufficient: a CN
-running this code *writes* six-value rows, so the first CDC sync or rebuild
-against an index created earlier fails on a column-count mismatch. Because each
+**Upgrade, and the rolling window.** Readers tolerating the old four-column shape
+is not sufficient: a CN running this code *writes* the provenance columns, so the
+first CDC sync or rebuild against an index created earlier would fail on a shape
+mismatch. Because each
 metadata table is created per index at `CREATE INDEX`, and `REINDEX` rewrites its
 rows rather than the table, such an index would stay broken for writes forever.
 The **v4_0_7** tenant upgrade therefore alters every metadata table an account
@@ -529,6 +583,24 @@ the shared `UpgradeEntry` framework untouched.
 The ALTER preserves `relkind`. A copy-rebuild that drops it un-hides an index
 metadata table from restore and CLONE, which is a separate defect this branch also
 fixes.
+
+A rolling upgrade has **two** windows, and they need different answers:
+
+| window | who meets what | answer |
+|---|---|---|
+| mixed CNs, migration not yet started | an OLD CN writes four positional values into a table another CN may have widened | `RequiredProtocolVersion` holds the tenant snapshot until every service reports the protocol carrying the new writer, so the widening cannot begin while such a CN is alive |
+| all CNs new, migration running | a NEW CN serves a tenant whose tables are not widened yet — the migration is asynchronous and per tenant | the writer **names its columns** and omits the provenance ones until the table has them |
+
+The second is the load-bearing half: the protocol barrier delays the migration, it
+does not delay the tenant's traffic. So the writer asks the table
+(`sqlexec.HasProvenanceColumns`, memoized per table, positive answers only — a
+table never loses the columns) and emits the shape that table accepts. A named
+INSERT is correct on both shapes; a positional one is correct on exactly one, and
+which one depends on a migration the writer cannot see.
+
+Omitting the columns costs provenance and nothing else: they are `not null
+default 0`, and `0` is already the documented "unknown" sentinel. A read failure
+answers "legacy" for the same reason — degrade to the shape that always works.
 
 ## 8. Concurrency
 
