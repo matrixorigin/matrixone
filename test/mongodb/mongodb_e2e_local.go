@@ -252,6 +252,20 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		return err
 	}
 	r.Cases = append(r.Cases, "explicit-reducing-aggregation-pipeline")
+
+	sortQuery := `{"pipeline":[{"$sort":{"_id":-1}},{"$limit":1}]}`
+	if err := expectScalar(ctx, db,
+		"select mongo_id from mongodb_ci.events where __mo_query = '"+sortQuery+"'",
+		"64b000000000000000000005"); err != nil {
+		return err
+	}
+	unwindQuery := `{"pipeline":[{"$set":{"fanout":["$site_id","$device_id"]}},{"$unwind":"$fanout"}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindQuery+"'", "10"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-sort-and-unwind-pipeline")
+
 	if err := expectExplainRedacted(ctx, db,
 		"explain select device_id,event_count from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"' and event_count >= 1",
 		[]string{"operation=aggregate", "query_digest=", "event_count"},

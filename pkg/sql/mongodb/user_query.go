@@ -300,11 +300,6 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 	return nil
 }
 
-var allowedUserPipelineStages = map[string]struct{}{
-	"$match": {}, "$project": {}, "$set": {}, "$addFields": {},
-	"$unset": {}, "$group": {}, "$limit": {}, "$skip": {}, "$count": {},
-}
-
 // allowedUserQueryOperators is intentionally an allowlist. It covers the
 // common read-only filter, expression, and accumulator subset needed by the
 // first implementation. Adding an operator requires an explicit security and
@@ -341,10 +336,9 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 		return moerr.NewInvalidInput(ctx, "each MongoDB pipeline stage must contain exactly one operator")
 	}
 	operator := stage[0].Key
-	if _, ok := allowedUserPipelineStages[operator]; !ok {
-		return moerr.NewInvalidInput(ctx, "MongoDB pipeline stage is not allowed")
-	}
 	value := stage[0].Value
+	// Keep the stage allowlist and the stage-specific validation in one switch so
+	// a reviewed stage cannot be accidentally rejected by a second, stale list.
 	switch operator {
 	case "$match", "$project", "$set", "$addFields", "$group", "$sort":
 		if _, ok := asBSONDocument(value); !ok {
@@ -372,6 +366,8 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 				return moerr.NewInvalidInput(ctx, "MongoDB $unwind requires a field path or object")
 			}
 		}
+	default:
+		return moerr.NewInvalidInput(ctx, "MongoDB pipeline stage is not allowed")
 	}
 	return validateMongoValue(ctx, value)
 }

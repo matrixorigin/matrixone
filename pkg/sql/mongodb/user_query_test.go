@@ -62,6 +62,26 @@ func TestParseUserQueryPipelineAndPlanRoundTrip(t *testing.T) {
 	require.Equal(t, source, restored.Source)
 }
 
+func TestParseUserQueryAcceptsSortAndUnwind(t *testing.T) {
+	for _, source := range []string{
+		`{"pipeline":[{"$sort":{"site_id":1}}]}`,
+		`{"pipeline":[{"$unwind":"$site_id"}]}`,
+		`{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"index","preserveNullAndEmptyArrays":true}}]}`,
+	} {
+		query, err := ParseUserQuery(t.Context(), source)
+		require.NoError(t, err, source)
+		require.Equal(t, UserQueryPipeline, query.Kind, source)
+		require.Equal(t, source, query.Source, source)
+		require.Len(t, query.Pipeline, 1, source)
+
+		encoded := new(plan.MongoScan)
+		require.NoError(t, ApplyUserQueryToPlan(t.Context(), query, encoded), source)
+		restored, err := UserQueryFromPlan(t.Context(), encoded)
+		require.NoError(t, err, source)
+		require.Equal(t, query.Pipeline, restored.Pipeline, source)
+	}
+}
+
 func TestRedactSQLForDiagnostics(t *testing.T) {
 	for _, sql := range []string{
 		`select * from t where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
@@ -102,7 +122,8 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "limit negative", source: `{"pipeline":[{"$limit":-1}]}`, want: "non-negative integer"},
 		{name: "count field path", source: `{"pipeline":[{"$count":"a.b"}]}`, want: "valid output field"},
 		{name: "unset empty", source: `{"pipeline":[{"$unset":[]}]}`, want: "field name"},
-		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "stage is not allowed"},
+		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires an object"},
+		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a field path or object"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -137,8 +158,6 @@ func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 		`{"$indexStats":{}}`,
 		`{"$currentOp":{}}`,
 		`{"$planCacheStats":{}}`,
-		`{"$sort":{"value":1}}`,
-		`{"$unwind":"$values"}`,
 		`{"$futureStage":{}}`,
 	} {
 		_, err := ParseUserQuery(t.Context(), `{"pipeline":[`+stage+`]}`)

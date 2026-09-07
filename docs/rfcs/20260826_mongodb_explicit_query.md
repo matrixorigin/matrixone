@@ -3,6 +3,7 @@
 - Authors: iamlinjunhong
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27553
 - Issue: https://github.com/matrixorigin/matrixone/issues/27536
+- Capacity amendment issue: https://github.com/matrixorigin/matrixone/issues/28337
 
 # Explicit read-only MongoDB queries for external-table scans
 
@@ -19,6 +20,20 @@ read surface, fail-closed allowlist, bounded capacity envelope, 30-second
 client lifetime, digest-only diagnostics, compatibility fencing, ownership
 model, rollout/fallback, and validation map. This status update records that
 decision; it does not self-approve the implementation.
+
+**Capacity amendment (2026-09-07): ACCEPTED.** Issue #28337 admits `$sort` and
+`$unwind` to the collection-scoped stage allowlist without changing the existing
+operation, concurrency, spill, timeout, or output budgets. `$sort` is a blocking
+stage in the same bounded MongoDB aggregation-memory envelope already accepted
+for `$group`; `allowDiskUse=false` makes excess memory fail instead of spilling.
+`$unwind` is a streaming fan-out stage whose returned rows and bytes remain
+subject to the existing cursor batch, statement row, statement raw-byte, value,
+and decoded-batch limits. Both stages remain bounded by one operation at
+`max_parallelism=1`, the source limiter, and the shorter configured timeout or
+30-second client deadline. The minimum real-MongoDB regression sorts five
+documents and exercises a two-output-per-input unwind. Array accumulators, disk
+spill, cross-collection stages, and user-controlled resource options remain
+excluded.
 
 **Scope and trigger.** This is a feature, not a bug fix.  It adds a SQL-visible
 operation selector, changes the `MongoScan` plan/pipeline payload, and crosses
@@ -139,10 +154,10 @@ The query is data, not a command language.  The parser accepts only an object
 with one supported envelope, rejects duplicate JSON/BSON keys and trailing
 values, and applies an allowlist to stages and `$` operators recursively.
 Allowed stages are `$match`, `$project`, `$set`, `$addFields`, `$unset`,
-`$group`, `$limit`, `$skip`, and `$count`; each has a shape-specific
-validation. `$sort`, `$unwind`, `$push`, and `$addToSet` are excluded from the
-initial resource envelope. Unknown stages/operators and server-side JavaScript
-BSON values are rejected. This deliberately rejects `$out`, `$merge`,
+`$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`; each has a
+shape-specific validation. `$push` and `$addToSet` remain excluded from the
+resource envelope. Unknown stages/operators and server-side JavaScript BSON
+values are rejected. This deliberately rejects `$out`, `$merge`,
 `$lookup`, `$graphLookup`, `$unionWith`, `$collStats`, `$indexStats`,
 `$currentOp`, and `$planCacheStats`, rather than trusting a read-only MongoDB
 credential as the only control.
@@ -169,11 +184,13 @@ or retry queue is introduced.
 The statement context bounds the initial driver operation and every `getMore`.
 Driver `Aggregate` explicitly sets `allowDiskUse=false`; users cannot override
 it. Existing scan-row, raw-byte, batch-byte, conversion-error, value-size, and
-source-concurrency limits are unchanged. The initial envelope is deliberately
-narrowed to 64 KiB, depth 32, and 16 stages. It excludes `$sort`, `$unwind`,
-`$push`, and `$addToSet`; each permitted accumulator has scalar value state,
-while `$group` key cardinality remains subject to MongoDB's configured
-aggregation-memory limit. Every explicit query receives a context deadline of
+source-concurrency limits are unchanged. The envelope is deliberately narrowed
+to 64 KiB, depth 32, and 16 stages. `$sort` and `$group` remain subject to
+MongoDB's configured aggregation-memory limit and fail rather than spill;
+`$unwind` streams its fan-out into the existing cursor and MatrixOne output
+limits. `$push` and `$addToSet` stay excluded because their per-group array state
+adds a second unbounded-growth dimension. Every explicit query receives a
+context deadline of
 the shorter configured socket timeout or 30 seconds; that context also bounds
 every `getMore` and the MatrixOne-side lifetime of the operation. MongoDB may
 return a document already buffered locally without consulting the context, so
@@ -189,12 +206,13 @@ Metrics add only fixed labels (`find`/`aggregate` and lifecycle phases), never
 query content.
 
 This does not claim that a MongoDB aggregation has a universal fixed CPU or
-memory cost: `$match`, `$group`, and `$count` may scan an operator's collection
-until cancellation or a MongoDB resource limit. The rollout is therefore opt-in
-and admits only the above envelope. Any expansion to sorting, fan-out, array
-accumulators, larger input/stage/depth limits, a higher mapping parallelism, or
-a longer timeout requires a new capacity decision, workload measurement, and
-regression before allowlisting it.
+memory cost: `$match`, `$group`, `$sort`, `$unwind`, and `$count` may scan an
+operator's collection until cancellation or a MongoDB resource limit. The
+rollout is therefore opt-in and admits only the above envelope. Any expansion
+to array accumulators, larger input/stage/depth limits, a higher mapping
+parallelism, a longer timeout, disk spill, or user-controlled resource options
+requires a new capacity decision, workload measurement, and regression before
+allowlisting it.
 
 Cancellation before admission returns without a lease; cancellation after
 admission reaches the driver context and cleanup.  A stale/disabled or
@@ -272,7 +290,7 @@ rechecking only changed base-side contracts.
 
 1. **Operator allowlist evolution:** every added MongoDB operator/stage requires
    a new security/resource semantics decision and regression before admission.
-2. **Capacity expansion:** the initial envelope and 30-second cap above are the
+2. **Capacity expansion:** the amended envelope and 30-second cap above are the
    accepted rollout limit. Any broader stage/operator set or budget is a new
    design decision owned by the MongoDB connector maintainers, with an attached
    workload measurement; it is not an open blocker for this revision.
