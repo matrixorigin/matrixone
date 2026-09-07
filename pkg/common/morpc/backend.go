@@ -698,6 +698,11 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
 		return time.Time{}
 	}
 	deadline := time.Now().Add(v)
+	if f.streamOwner != nil &&
+		!f.streamOwner.assignSendSequence(&f.send) {
+		f.messageSent(backendClosed)
+		return time.Time{}
+	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
@@ -1717,6 +1722,8 @@ type stream struct {
 	id                   uint64
 	sequence             uint32
 	lastReceivedSequence uint32
+	sendSequenceMu       sync.Mutex
+	sendSequenceClosed   bool
 	mu                   struct {
 		sync.RWMutex
 		closed   bool
@@ -1749,7 +1756,10 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
+	s.sendSequenceMu.Lock()
 	s.sequence = 0
+	s.sendSequenceClosed = false
+	s.sendSequenceMu.Unlock()
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	s.mu.terminal = false
@@ -1811,13 +1821,12 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
 	f.init(RPCMessage{
-		Ctx:            ctx,
-		Message:        request,
-		stream:         true,
-		streamSequence: s.sequence,
+		Ctx:     ctx,
+		Message: request,
+		stream:  true,
 	})
+	f.streamOwner = s
 	f.ref()
 	err := s.sendFunc(f)
 	if err != nil {
@@ -1840,6 +1849,9 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
@@ -1864,6 +1876,21 @@ func (s *stream) Close(closeConn bool) error {
 		panic("BUG: stream close notification channel is full")
 	}
 	return nil
+}
+
+// assignSendSequence runs in the single backend write loop after a request has
+// passed filter and context checks. Assigning at Stream.Send time would consume
+// a sequence for a queued request that expires before transport write, making
+// the next control message look out of order to the server.
+func (s *stream) assignSendSequence(message *RPCMessage) bool {
+	s.sendSequenceMu.Lock()
+	defer s.sendSequenceMu.Unlock()
+	if s.sendSequenceClosed {
+		return false
+	}
+	s.sequence++
+	message.streamSequence = s.sequence
+	return true
 }
 
 func (s *stream) ID() uint64 {

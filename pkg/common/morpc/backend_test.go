@@ -1785,6 +1785,148 @@ func TestStreamSendFailureReleasesAndReusesFuture(t *testing.T) {
 	require.Equal(t, int32(2), releases.Load())
 }
 
+func TestSkippedStreamRequestDoesNotCreateSequenceGap(t *testing.T) {
+	sequences := make(chan uint32, 2)
+	var attempts atomic.Int32
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			sequences <- value.(RPCMessage).streamSequence
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			stream, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close(false)) }()
+
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+			require.ErrorIs(t,
+				stream.Send(ctx, newTestMessage(stream.ID())),
+				messageSkipped)
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+
+			for _, expected := range []uint32{1, 2} {
+				select {
+				case sequence := <-sequences:
+					require.Equal(t, expected, sequence)
+				case <-ctx.Done():
+					t.Fatal("timed out waiting for stream request")
+				}
+			}
+		},
+		WithBackendBatchSendSize(1),
+		WithBackendFilter(func(Message, string) bool {
+			return attempts.Add(1) != 2
+		}),
+	)
+}
+
+func TestCanceledStreamRequestDoesNotCreateSequenceGap(t *testing.T) {
+	sequences := make(chan uint32, 1)
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			sequences <- value.(RPCMessage).streamSequence
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			stream, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close(false)) }()
+
+			canceledCtx, cancelSend := context.WithTimeout(context.Background(), time.Second)
+			cancelSend()
+			require.ErrorIs(t,
+				stream.Send(canceledCtx, newTestMessage(stream.ID())),
+				context.Canceled)
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+
+			select {
+			case sequence := <-sequences:
+				require.Equal(t, uint32(1), sequence)
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for stream request")
+			}
+		},
+		WithBackendBatchSendSize(1),
+	)
+}
+
+func TestAssignStreamSequenceRejectsClosedStream(t *testing.T) {
+	stream := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	stream.init(1, false)
+	require.NoError(t, stream.Close(false))
+
+	message := RPCMessage{stream: true}
+	require.False(t, stream.assignSendSequence(&message))
+	require.Zero(t, message.streamSequence)
+	require.Zero(t, stream.sequence)
+}
+
+func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
+	sendEntered := make(chan struct{})
+	releaseSend := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseSend) }) }
+	defer release()
+	stream := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(f *Future) error {
+			close(sendEntered)
+			<-releaseSend
+			f.messageSent(nil)
+			return nil
+		},
+		func(*stream) {},
+		func() {},
+	)
+	stream.init(1, false)
+	defer func() { require.NoError(t, stream.Close(false)) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- stream.Send(ctx, newTestMessage(stream.ID()))
+	}()
+	select {
+	case <-sendEntered:
+	case <-ctx.Done():
+		t.Fatal("send did not reach the admission barrier")
+	}
+
+	message := RPCMessage{stream: true}
+	assigned := make(chan bool, 1)
+	go func() { assigned <- stream.assignSendSequence(&message) }()
+	select {
+	case ok := <-assigned:
+		require.True(t, ok)
+		require.Equal(t, uint32(1), message.streamSequence)
+	case <-ctx.Done():
+		t.Fatal("sequence assignment blocked behind stream send admission")
+	}
+
+	release()
+	select {
+	case err := <-sendDone:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("blocked send did not finish")
+	}
+}
+
 func TestStreamClosedByConnReset(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
