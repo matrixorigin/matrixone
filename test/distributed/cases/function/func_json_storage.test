@@ -27,6 +27,18 @@ select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 wh
 update json_storage_28034 set j = json_remove(j, '$.longer') where id = 7;
 select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
 
+update json_storage_28034 set j = json_replace(j, '$.a', true) where id = 7;
+select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
+update json_storage_28034 set j = '{"a":1}' where id = 7;
+update json_storage_28034 set j = '{"direct":true}' where id = 7;
+select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
+update json_storage_28034 set j = '{"a":1}' where id = 7;
+
+select json_storage_size();
+select json_storage_size(1);
+select json_storage_free();
+select json_storage_free(1);
+
 select json_storage_size('{invalid');
 select json_storage_free('{invalid');
 

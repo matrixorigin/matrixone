@@ -157,6 +157,37 @@ func TestJsonStorageFree(t *testing.T) {
 		succeed, info := fc.Run()
 		require.True(t, succeed, "%s: %s", typ, info)
 	}
+
+	t.Run("const null", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, true})},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+			JsonStorageFree)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("select list skips malformed row", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json", `"x"`}, nil),
+			}, types.T_int64.ToType(), JsonStorageFree,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		require.True(t, vec.IsNull(0))
+		value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
+		require.False(t, isNull)
+		require.Zero(t, value)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
+			JsonStorageFree)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+		require.Zero(t, fc.GetResultVectorDirectly().Length())
+	})
 }
 
 func TestJsonStorageRejectsInvalidJSON(t *testing.T) {
