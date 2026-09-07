@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/big"
 	"strconv"
@@ -278,9 +277,9 @@ func jsonValueExecuteCore(
 	length int,
 	selectList *FunctionSelectList,
 	onEmpty, onError int64,
-	appendValue func(jsonValueExtracted) error,
+	appendValue func(jsonValueExtracted) (conversionErr, outputErr error),
 	appendNull func() error,
-	appendDefault func(uint64) error,
+	appendDefault func(uint64, bool) error,
 ) error {
 	docParam := newJsonValueInputParameter(ivecs[0])
 	pathParam := newJsonValueInputParameter(ivecs[1])
@@ -341,7 +340,13 @@ func jsonValueExecuteCore(
 		case jsonValueHardError:
 			return extracted.err
 		case jsonValueOneValue:
-			if err := appendValue(extracted); err != nil {
+			err, outputErr := appendValue(extracted)
+			// ON ERROR is a value-conversion policy, not an allocation fallback.
+			// Never publish a NULL/default after failing to append the result.
+			if outputErr != nil {
+				return outputErr
+			}
+			if err != nil {
 				extracted.err = err
 				if onError != jsonValueErrorResponse {
 					appendJSONValueWarning(proc, err, true)
@@ -360,14 +365,14 @@ func jsonValueApplyResponse(
 	mode int64,
 	row uint64,
 	appendNull func() error,
-	appendDefault func(uint64) error,
+	appendDefault func(uint64, bool) error,
 	ctx context.Context,
 ) error {
 	switch mode {
 	case jsonValueNullResponse:
 		return appendNull()
 	case jsonValueDefaultResponse:
-		return appendDefault(row)
+		return appendDefault(row, extracted.state == jsonValueEmpty)
 	case jsonValueErrorResponse:
 		if extracted.state == jsonValueEmpty {
 			return moerr.NewMissingJSONValue(ctx, extracted.path)
@@ -415,17 +420,22 @@ func jsonValueTextResult(
 	onEmpty, onError int64,
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	defaults := vector.GenerateFunctionStrParameter(ivecs[4])
+	emptyDefault := vector.GenerateFunctionStrParameter(ivecs[4])
+	errorDefault := vector.GenerateFunctionStrParameter(ivecs[6])
 	return jsonValueExecuteCore(ivecs, proc, length, selectList, onEmpty, onError,
-		func(extracted jsonValueExtracted) error {
+		func(extracted jsonValueExtracted) (error, error) {
 			value, err := jsonValueTextBytes(extracted.text, target)
 			if err != nil {
-				return err
+				return err, nil
 			}
-			return rs.AppendBytes(value, false)
+			return nil, rs.AppendBytes(value, false)
 		},
 		rs.AppendMustNullForBytesResult,
-		func(row uint64) error {
+		func(row uint64, onEmpty bool) error {
+			defaults := errorDefault
+			if onEmpty {
+				defaults = emptyDefault
+			}
 			value, null := defaults.GetStrValue(row)
 			return rs.AppendBytes(value, null)
 		})
@@ -440,13 +450,18 @@ func jsonValueJSONResult(
 	onEmpty, onError int64,
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	defaults := vector.GenerateFunctionStrParameter(ivecs[4])
+	emptyDefault := vector.GenerateFunctionStrParameter(ivecs[4])
+	errorDefault := vector.GenerateFunctionStrParameter(ivecs[6])
 	return jsonValueExecuteCore(ivecs, proc, length, selectList, onEmpty, onError,
-		func(extracted jsonValueExtracted) error {
-			return rs.AppendByteJson(extracted.value, false)
+		func(extracted jsonValueExtracted) (error, error) {
+			return nil, rs.AppendByteJson(extracted.value, false)
 		},
 		rs.AppendMustNullForBytesResult,
-		func(row uint64) error {
+		func(row uint64, onEmpty bool) error {
+			defaults := errorDefault
+			if onEmpty {
+				defaults = emptyDefault
+			}
 			value, null := defaults.GetStrValue(row)
 			if null {
 				return rs.AppendMustNullForBytesResult()
@@ -470,20 +485,25 @@ func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
 	convert func(jsonValueExtracted, types.Type) (T, error),
 ) error {
 	rs := vector.MustFunctionResult[T](result)
-	defaults := vector.GenerateFunctionFixedTypeParameter[T](ivecs[4])
+	emptyDefault := vector.GenerateFunctionFixedTypeParameter[T](ivecs[4])
+	errorDefault := vector.GenerateFunctionFixedTypeParameter[T](ivecs[6])
 	return jsonValueExecuteCore(ivecs, proc, length, selectList, onEmpty, onError,
-		func(extracted jsonValueExtracted) error {
+		func(extracted jsonValueExtracted) (error, error) {
 			value, err := convert(extracted, target)
 			if err != nil {
-				return err
+				return err, nil
 			}
-			return rs.Append(value, false)
+			return nil, rs.Append(value, false)
 		},
 		func() error {
 			var zero T
 			return rs.Append(zero, true)
 		},
-		func(row uint64) error {
+		func(row uint64, onEmpty bool) error {
+			defaults := errorDefault
+			if onEmpty {
+				defaults = emptyDefault
+			}
 			value, null := defaults.GetValue(row)
 			return rs.Append(value, null)
 		})
@@ -582,7 +602,7 @@ func parseJSONValueInt64(e jsonValueExtracted, _ types.Type) (int64, error) {
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(numericText, 0) {
-		return 0, fmt.Errorf("invalid SIGNED value %q: fractional precision would be lost", e.text)
+		return 0, moerr.NewDataTruncatedNoCtxf("SIGNED", "value %q loses fractional precision", e.text)
 	}
 	switch e.value.Type {
 	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
@@ -603,7 +623,7 @@ func parseJSONValueInt64(e jsonValueExtracted, _ types.Type) (int64, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("invalid SIGNED value %q", e.text)
+	return 0, moerr.NewOutOfRangeNoCtxf("SIGNED", "JSON_VALUE value %q", e.text)
 }
 
 func checkedIntegerRange(err error, value, min, max int64) error {
@@ -611,7 +631,7 @@ func checkedIntegerRange(err error, value, min, max int64) error {
 		return err
 	}
 	if value < min || value > max {
-		return fmt.Errorf("JSON_VALUE integer %d is out of range", value)
+		return moerr.NewOutOfRangeNoCtxf("SIGNED", "JSON_VALUE integer %d", value)
 	}
 	return nil
 }
@@ -649,7 +669,7 @@ func parseJSONValueUint64(e jsonValueExtracted, _ types.Type) (uint64, error) {
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(numericText, 0) {
-		return 0, fmt.Errorf("invalid UNSIGNED value %q: fractional precision would be lost", e.text)
+		return 0, moerr.NewDataTruncatedNoCtxf("UNSIGNED", "value %q loses fractional precision", e.text)
 	}
 	switch e.value.Type {
 	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
@@ -670,7 +690,7 @@ func parseJSONValueUint64(e jsonValueExtracted, _ types.Type) (uint64, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("invalid UNSIGNED value %q", e.text)
+	return 0, moerr.NewOutOfRangeNoCtxf("UNSIGNED", "JSON_VALUE value %q", e.text)
 }
 
 func checkedUnsignedRange(err error, value, max uint64) error {
@@ -678,7 +698,7 @@ func checkedUnsignedRange(err error, value, max uint64) error {
 		return err
 	}
 	if value > max {
-		return fmt.Errorf("JSON_VALUE unsigned integer %d is out of range", value)
+		return moerr.NewOutOfRangeNoCtxf("UNSIGNED", "JSON_VALUE integer %d", value)
 	}
 	return nil
 }
@@ -690,7 +710,7 @@ func parseJSONValueFloat32(e jsonValueExtracted, _ types.Type) (float32, error) 
 	}
 	v, err := strconv.ParseFloat(s, 32)
 	if err != nil || math.IsInf(v, 0) {
-		return 0, fmt.Errorf("invalid FLOAT value %q", s)
+		return 0, moerr.NewOutOfRangeNoCtxf("FLOAT", "JSON_VALUE value %q", s)
 	}
 	return float32(v), nil
 }
@@ -702,7 +722,7 @@ func parseJSONValueFloat64(e jsonValueExtracted, _ types.Type) (float64, error) 
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsInf(v, 0) {
-		return 0, fmt.Errorf("invalid DOUBLE value %q", s)
+		return 0, moerr.NewOutOfRangeNoCtxf("DOUBLE", "JSON_VALUE value %q", s)
 	}
 	return v, nil
 }
@@ -713,7 +733,7 @@ func parseJSONValueDecimal64(e jsonValueExtracted, target types.Type) (types.Dec
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return 0, fmt.Errorf("invalid DECIMAL(%d,%d) value %q: fractional precision would be lost", target.Width, target.Scale, s)
+		return 0, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal64(s, target.Width, target.Scale)
 }
@@ -724,7 +744,7 @@ func parseJSONValueDecimal128(e jsonValueExtracted, target types.Type) (types.De
 		return types.Decimal128{}, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return types.Decimal128{}, fmt.Errorf("invalid DECIMAL(%d,%d) value %q: fractional precision would be lost", target.Width, target.Scale, s)
+		return types.Decimal128{}, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal128(s, target.Width, target.Scale)
 }
@@ -735,7 +755,7 @@ func parseJSONValueDecimal256(e jsonValueExtracted, target types.Type) (types.De
 		return types.Decimal256{}, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return types.Decimal256{}, fmt.Errorf("invalid DECIMAL(%d,%d) value %q: fractional precision would be lost", target.Width, target.Scale, s)
+		return types.Decimal256{}, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal256(s, target.Width, target.Scale)
 }

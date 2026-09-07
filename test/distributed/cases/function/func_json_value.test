@@ -1,16 +1,34 @@
 -- basic string extraction
+--- @metacmp(true)
 select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.fname');
 select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.lname');
 
--- composite values use canonical JSON text in the implicit CHAR(512) result
+-- composite values use canonical JSON text in the implicit VARCHAR(512) result
 select json_value('{"a":[12]}', '$.a');
 select json_value('{"a":{"k":1}}', '$.a');
 select json_value('{}', '$.missing' default 'empty' on empty);
 select json_value('{"a":"bad"}', '$.a' returning unsigned default 7 on error);
 select json_value('{"a":1,"b":2}', '$.*' returning unsigned default 7 on error);
 select json_value('{"a":[12]}', '$.a' returning json);
-select json_value('{"a":"long"}', '$.a' returning char(4) default 'fallback' on error);
+select json_value('{"a":"longer"}', '$.a' returning char(4) default 'back' on error);
 select json_value(null, '$.a' default 'empty' on empty);
+
+-- Different response defaults must remain independent in every result family.
+select json_value('{}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
+select json_value('{"a":"bad"}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
+select json_value('{"a":1,"b":2}', '$.*' default 'empty' on empty default 'error' on error) as s;
+select json_value('not-json', '$' returning json default '5' on empty default '7' on error) as j;
+select json_value('{}', '$.a' returning json default '5' on empty default '7' on error) as j;
+
+create table json_value_responses (id int, doc varchar(100));
+insert into json_value_responses values (1, '{}'), (2, '{"a":"bad"}'), (3, '{"a":9}'), (4, '{"a":null}');
+select id, json_value(doc, '$.a' returning unsigned default 5 on empty default 7 on error) as n from json_value_responses order by id;
+select id from json_value_responses where json_value(doc, '$.a' returning unsigned default 5 on empty default 7 on error) = 7 order by id;
+drop table json_value_responses;
+
+create view json_value_view as select json_value('{"a":[12]}', '$.a') as extracted;
+select extracted from json_value_view;
+drop view json_value_view;
 
 -- prepared execution keeps the document parameter unbounded and applies ON ERROR
 prepare json_value_stmt from 'select json_value(?, ''$.a'' returning unsigned default 7 on error)';
@@ -25,14 +43,8 @@ select extracted from json_value_ctas;
 drop table json_value_ctas;
 
 drop table if exists json_value_generated;
-create table json_value_generated (
-    id int primary key,
-    doc json,
-    extracted varchar(512) generated always as (json_value(doc, '$.a')) stored,
-    key extracted_idx (extracted)
-);
-insert into json_value_generated(id, doc) values
-    (1, '{"a":[12]}'), (2, '{"a":{"k":1}}'), (3, '{"a":"scalar"}');
+create table json_value_generated (id int primary key, doc json, extracted varchar(512) generated always as (json_value(doc, '$.a')) stored, key extracted_idx (extracted));
+insert into json_value_generated(id, doc) values (1, '{"a":[12]}'), (2, '{"a":{"k":1}}'), (3, '{"a":"scalar"}');
 select id, extracted from json_value_generated order by id;
 select id, extracted from json_value_generated force index(extracted_idx) where extracted = '[12]';
 select id, extracted from json_value_generated force index(extracted_idx) where extracted = '{"k": 1}';

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1741,6 +1742,39 @@ func TestJsonValue(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	t.Run("binary JSON input returns canonical composite text", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value binary JSON composite",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"a":[12]}`)},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{`[12]`}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("legacy default width routes an over-wide value to NULL", func(t *testing.T) {
+		longJSON := `{"a":"` + strings.Repeat("x", 513) + `"}`
+		tc := tcTemp{
+			info: "json_value legacy default width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{longJSON}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
 	t.Run("json typed object and array matches return json text", func(t *testing.T) {
 		documents := []string{`{"a":[12]}`, `{"a":{"k":1}}`}
 		encoded := make([]string, len(documents))
@@ -1759,21 +1793,6 @@ func TestJsonValue(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{`[12]`, `{"k": 1}`}, []bool{false, false}),
-		}
-		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
-		require.True(t, s, info)
-	})
-
-	t.Run("legacy default width routes an over-wide value to NULL", func(t *testing.T) {
-		longJSON := `{"a":"` + strings.Repeat("x", 513) + `"}`
-		tc := tcTemp{
-			info: "json_value legacy default width",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{longJSON}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
@@ -1925,6 +1944,165 @@ func TestJsonValueReturningAndResponses(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMissingJSONValue))
 	})
+}
+
+// The binder supplies separate typed defaults at positions 4 and 6. Using
+// equal defaults here would hide a crossed ON EMPTY/ON ERROR selection.
+func TestJsonValueDistinctResponseDefaults(t *testing.T) {
+	for _, target := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_json.ToType()} {
+		for _, emptyNull := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/emptyNull=%v", target.Oid, emptyNull), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				var zero, empty, failure, expected any
+				switch target.Oid {
+				case types.T_int64:
+					zero, empty, failure = []int64{0}, []int64{7}, []int64{9}
+					expected = []int64{7, 9, 9, 1, 0, 7}
+				default:
+					zero, empty, failure = []string{""}, []string{"7"}, []string{"9"}
+					expected = []string{"7", "9", "9", "1", "", "7"}
+					if target.Oid == types.T_json {
+						empty, failure = []string{mustJsonBinaryString(t, "7")}, []string{mustJsonBinaryString(t, "9")}
+						expected = []string{mustJsonBinaryString(t, "7"), mustJsonBinaryString(t, "9"), mustJsonBinaryString(t, "9"), mustJsonBinaryString(t, "1"), "", mustJsonBinaryString(t, "7")}
+					}
+				}
+				inputs := []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`, `{"a":1,"b":2}`, `not-json`, `{"a":1}`, `{"a":null}`, `{}`}, []bool{false, false, false, false, false, false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`, `$.*`, `$`, `$.a`, `$.a`, `$.a`}, []bool{false, false, false, false, false, false}),
+					NewFunctionTestConstInput(target, zero, []bool{true}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+					NewFunctionTestConstInput(target, empty, []bool{emptyNull}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+					NewFunctionTestConstInput(target, failure, []bool{false}),
+				}
+				fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, false, expected, []bool{emptyNull, false, false, false, true, emptyNull}), JsonValue)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			})
+		}
+	}
+}
+
+func TestJsonValueOutputCapacityFailureIsTerminal(t *testing.T) {
+	for _, oid := range []types.T{types.T_varchar, types.T_json} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			target := oid.ToType()
+			payload := strings.Repeat("x", 128)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"` + payload + `"}`}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, true, nil, nil), JsonValue)
+			defer func() {
+				fc.result.Free()
+				for _, v := range fc.parameters {
+					v.Free(proc.Mp())
+				}
+			}()
+			const capacity = int64(1 << 20)
+			mp, err := mpool.NewMPool(t.Name(), capacity, mpool.NoLock)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(mp)
+			result := vector.NewFunctionResultWrapper(target, mp)
+			var filler []byte
+			defer func() { mp.Free(filler); result.Free(); require.Zero(t, mp.CurrNB()) }()
+			require.NoError(t, result.PreExtendAndReset(1))
+			filler, err = mp.Alloc(int(capacity-mp.CurrNB()), true)
+			require.NoError(t, err)
+			err = JsonValue(fc.parameters, result, proc, 1, nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "output failure must not become NULL ON ERROR: %v", err)
+			mp.Free(filler)
+			filler = nil
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, JsonValue(fc.parameters, result, proc, 1, nil))
+			v := result.GetResultVector()
+			require.False(t, v.IsNull(0))
+			if oid == types.T_json {
+				bj, err := decodeJSONValueStored(v.GetBytesAt(0))
+				require.NoError(t, err)
+				require.Equal(t, payload, string(bj.GetString()))
+			} else {
+				require.Equal(t, payload, string(v.GetBytesAt(0)))
+			}
+		})
+	}
+}
+
+func TestJsonValueNumericExponentBoundary(t *testing.T) {
+	// math/big's exponent allocation guard must not turn a zero mantissa
+	// into a conversion failure, or a tiny nonzero number into exact zero.
+	for _, mantissa := range []string{"0", "1"} {
+		for _, direction := range []string{"+", "-"} {
+			for _, exponent := range []string{"999999", "1000000", "1000001"} {
+				t.Run(mantissa+"e"+direction+exponent, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"` + mantissa + "e" + direction + exponent + `"}`}, []bool{false}),
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+						NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+						NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+						NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{9}, []bool{false}),
+					}
+					want := uint64(9)
+					if mantissa == "0" {
+						want = 0
+					}
+					fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{want}, []bool{false}), JsonValue)
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		}
+	}
+}
+
+func TestJsonValueConversionDiagnosticsAreTyped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func() error
+		code uint16
+	}{
+		{"signed fractional", func() error {
+			_, err := parseJSONValueInt64(jsonValueExtract([]byte(`{"a":1.5}`), []byte(`$.a`), types.T_varchar), types.T_int64.ToType())
+			return err
+		}, moerr.ErrDataTruncated},
+		{"unsigned negative", func() error {
+			_, err := parseJSONValueUint64(jsonValueExtract([]byte(`{"a":-1}`), []byte(`$.a`), types.T_varchar), types.T_uint64.ToType())
+			return err
+		}, moerr.ErrOutOfRange},
+		{"narrow signed", func() error { return checkedIntegerRange(nil, 128, -128, 127) }, moerr.ErrOutOfRange},
+		{"narrow unsigned", func() error { return checkedUnsignedRange(nil, 256, 255) }, moerr.ErrOutOfRange},
+		{"float overflow", func() error {
+			_, err := parseJSONValueFloat32(jsonValueExtract([]byte(`{"a":"1e100"}`), []byte(`$.a`), types.T_varchar), types.T_float32.ToType())
+			return err
+		}, moerr.ErrOutOfRange},
+		{"double overflow", func() error {
+			_, err := parseJSONValueFloat64(jsonValueExtract([]byte(`{"a":"1e1000"}`), []byte(`$.a`), types.T_varchar), types.T_float64.ToType())
+			return err
+		}, moerr.ErrOutOfRange},
+		{"decimal64 scale", func() error {
+			_, err := parseJSONValueDecimal64(jsonValueExtract([]byte(`{"a":1.23}`), []byte(`$.a`), types.T_varchar), types.New(types.T_decimal64, 10, 1))
+			return err
+		}, moerr.ErrDataTruncated},
+		{"decimal128 scale", func() error {
+			_, err := parseJSONValueDecimal128(jsonValueExtract([]byte(`{"a":1.23}`), []byte(`$.a`), types.T_varchar), types.New(types.T_decimal128, 30, 1))
+			return err
+		}, moerr.ErrDataTruncated},
+		{"decimal256 scale", func() error {
+			_, err := parseJSONValueDecimal256(jsonValueExtract([]byte(`{"a":1.23}`), []byte(`$.a`), types.T_varchar), types.New(types.T_decimal256, 60, 1))
+			return err
+		}, moerr.ErrDataTruncated},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.True(t, moerr.IsMoErrCode(tc.run(), tc.code)) })
+	}
 }
 
 func TestJsonValueWarningDiagnostics(t *testing.T) {
