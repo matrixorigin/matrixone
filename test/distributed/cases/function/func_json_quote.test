@@ -18,8 +18,8 @@ select json_quote(a) from t1;
 select json_quote('xax') from t1;
 select json_quote(null) from t1;
 
-select hex(json_quote(char(65, 0, 1, 31, 66)));
-select hex(json_quote(char(65, 127, 66)));
+select hex(json_quote(char(65, 0, 1, 31, 66 using utf8mb4)));
+select hex(json_quote(char(65, 127, 66 using utf8mb4)));
 select hex(json_quote('你好'));
 select char_length(json_quote('abc'));
 select concat(json_quote('abc'), 'x');
@@ -37,7 +37,7 @@ set @json_quote_value = repeat('a', 16383);
 execute json_quote_length_stmt using @json_quote_value;
 set @json_quote_value = repeat('a', 16384);
 execute json_quote_length_stmt using @json_quote_value;
-set @json_quote_value = repeat(char(1), 16384);
+set @json_quote_value = repeat(char(1 using utf8mb4), 16384);
 execute json_quote_length_stmt using @json_quote_value;
 deallocate prepare json_quote_length_stmt;
 
@@ -56,7 +56,7 @@ drop table json_quote_null_ctas;
 drop table if exists json_quote_text_ctas;
 drop table if exists json_quote_text_source;
 create table json_quote_text_source (v text);
-insert into json_quote_text_source values (repeat(char(1), 65535));
+insert into json_quote_text_source values (repeat(char(1 using utf8mb4), 65535));
 select length(v), length(json_quote(v)), hex(left(json_quote(v), 7)), hex(right(json_quote(v), 7)) from json_quote_text_source;
 create table json_quote_text_ctas as select json_quote(v) as quoted from json_quote_text_source;
 select data_type, character_maximum_length from information_schema.columns where table_schema = database() and table_name = 'json_quote_text_ctas' and column_name = 'quoted';
