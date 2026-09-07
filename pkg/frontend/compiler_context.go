@@ -1052,6 +1052,31 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	return udVar.IsBin, nil
 }
 
+// ResolveVariableBinaryString reports the SQL string domain independently of
+// the legacy IsBin literal/conversion flag. User variables retain the type
+// fixed when they were assigned, so BINARY/VARBINARY/BLOB values keep byte
+// semantics when rebound through EXECUTE ... USING.
+func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
+	varName string, isSystemVar, _ bool,
+) (bool, error) {
+	if _, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+		tcc.execCtx.reqCtx, varName,
+	); ok {
+		if !hasDeclaredType {
+			return false, nil
+		}
+		return types.StaticStringDomain(plan2.MakeTypeByPlan2Type(declaredType)) == types.StringDomainBinary, nil
+	}
+	if isSystemVar {
+		return false, nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, nil
+	}
+	return types.StaticStringDomain(plan2.MakeTypeByPlan2Type(udVar.Type)) == types.StringDomainBinary, nil
+}
+
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,
