@@ -198,7 +198,7 @@ func TestJSONValueSemanticNormalizationAndClone(t *testing.T) {
 	implicit := parseExpr(`select json_value('1', '$')`)
 	explicitNull := parseExpr(`select json_value('1', '$' null on empty null on error)`)
 	require.Equal(t, semanticAstKey(implicit), semanticAstKey(explicitNull))
-	require.Contains(t, tree.String(implicit, dialect.MYSQL), "returning char(512)")
+	require.NotContains(t, tree.String(implicit, dialect.MYSQL), "returning")
 	require.Contains(t, tree.String(explicitNull, dialect.MYSQL), "null on empty null on error")
 
 	withDefault := parseExpr(`select json_value('1', '$' default 0 on error)`)
