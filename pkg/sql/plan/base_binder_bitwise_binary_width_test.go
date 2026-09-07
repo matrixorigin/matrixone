@@ -33,29 +33,38 @@ func TestBindBitwiseAggregateSubstringBinaryWidth(t *testing.T) {
 		{name: "varbinary", typ: types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)},
 	} {
 		t.Run(source.name, func(t *testing.T) {
-			sourceExpr := &planpb.Expr{
-				Typ: makePlan2Type(&source.typ),
-				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
-					RelPos: 0,
-					ColPos: 0,
-				}},
-			}
-
 			for _, test := range []struct {
 				name      string
+				start     int64
 				length    int64
+				hasLength bool
 				wantWidth int32
 				wantError bool
 			}{
-				{name: "bounded", length: 511, wantWidth: 511},
-				{name: "still oversized", length: 512, wantWidth: 512, wantError: true},
+				{name: "three args bounded", start: 1, length: 511, hasLength: true, wantWidth: 511},
+				{name: "three args still oversized", start: 1, length: 512, hasLength: true, wantWidth: 512, wantError: true},
+				{name: "two args suffix", start: 2, wantWidth: 511},
+				{name: "three args suffix", start: 2, length: 512, hasLength: true, wantWidth: 511},
+				{name: "zero start", start: 0, length: 512, hasLength: true, wantWidth: 0},
+				{name: "negative start", start: -2, wantWidth: 2},
+				{name: "negative start with length", start: -2, length: 512, hasLength: true, wantWidth: 2},
+				{name: "negative start before source", start: -513, wantWidth: 0},
+				{name: "minimum negative start", start: -1 << 63, wantWidth: 0},
+				{name: "two args still oversized", start: 1, wantWidth: 512, wantError: true},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", []*planpb.Expr{
-						sourceExpr,
-						makePlan2Int64ConstExprWithType(1),
-						makePlan2Int64ConstExprWithType(test.length),
-					})
+					sourceExpr := &planpb.Expr{
+						Typ: makePlan2Type(&source.typ),
+						Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+						}},
+					}
+					args := []*planpb.Expr{sourceExpr, makePlan2Int64ConstExprWithType(test.start)}
+					if test.hasLength {
+						args = append(args, makePlan2Int64ConstExprWithType(test.length))
+					}
+					substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", args)
 					require.NoError(t, err)
 					require.Equal(t, int32(types.T_varbinary), substring.Typ.Id)
 					require.Equal(t, test.wantWidth, substring.Typ.Width)

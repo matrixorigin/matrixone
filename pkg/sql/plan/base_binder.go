@@ -5786,7 +5786,7 @@ func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 }
 
 func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
-	if len(args) != 3 {
+	if len(args) != 2 && len(args) != 3 {
 		return
 	}
 
@@ -5804,29 +5804,84 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	lengthLiteral := args[2].GetLit()
-	if lengthLiteral == nil || lengthLiteral.Isnull {
-		return
-	}
-
-	var length uint64
-	if signed, ok := literalSignedValue(lengthLiteral); ok {
-		if signed > 0 {
-			length = uint64(signed)
+	if len(args) == 3 {
+		if length, known := binarySubstringLengthBound(args[2].GetLit()); known && length == 0 {
+			refineKnownStringResultType(returnType, 0, binary)
+			return
 		}
-	} else if unsigned, ok := literalUnsignedValue(lengthLiteral); ok {
-		length = unsigned
-	} else {
+	}
+
+	sourceBound, known := stringExprBound(args[0], binary)
+	if !known {
+		return
+	}
+	bound, known := binarySubstringStartBound(sourceBound, args[1].GetLit())
+	if !known {
 		return
 	}
 
-	// Binary SUBSTRING is byte-preserving, so a constant length is a truthful
-	// stored-byte upper bound even when the source is an unbounded BLOB.
-	bound := length
-	if sourceBound, known := stringExprBound(args[0], binary); known && sourceBound < bound {
-		bound = sourceBound
+	if len(args) == 3 {
+		if length, known := binarySubstringLengthBound(args[2].GetLit()); known && length < bound {
+			bound = length
+		}
 	}
+
+	// Binary SUBSTRING is byte-preserving. A constant start and, when present,
+	// length therefore give a truthful stored-byte upper bound even when the
+	// source declaration is wider than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
+}
+
+func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	if signed, ok := literalSignedValue(lit); ok {
+		if signed <= 0 {
+			return 0, true
+		}
+		return uint64(signed), true
+	}
+	if unsigned, ok := literalUnsignedValue(lit); ok {
+		return unsigned, true
+	}
+	return 0, false
+}
+
+func binarySubstringStartBound(sourceBound uint64, lit *plan.Literal) (uint64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	if signed, ok := literalSignedValue(lit); ok {
+		if signed == 0 {
+			return 0, true
+		}
+		if signed > 0 {
+			offset := uint64(signed - 1)
+			if offset >= sourceBound {
+				return 0, true
+			}
+			return sourceBound - offset, true
+		}
+
+		// Avoid overflowing when taking the magnitude of MinInt64.
+		magnitude := uint64(-(signed + 1)) + 1
+		if magnitude > sourceBound {
+			return 0, true
+		}
+		return magnitude, true
+	}
+	if unsigned, ok := literalUnsignedValue(lit); ok {
+		if unsigned == 0 {
+			return 0, true
+		}
+		offset := unsigned - 1
+		if offset >= sourceBound {
+			return 0, true
+		}
+		return sourceBound - offset, true
+	}
+	return 0, false
 }
 
 func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {

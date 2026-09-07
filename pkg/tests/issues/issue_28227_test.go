@@ -80,6 +80,10 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 			{name: "uuid_to_bin", expression: uuidExpression, hexLength: 32},
 			{name: "inet6_aton", expression: "inet6_aton('2001:db8::1')", hexLength: 32},
 			{name: "substring", expression: "substring(v512, 1, 511)", hexLength: 4},
+			{name: "substring_two_arg_start2", expression: "substring(v512, 2)", hexLength: 2},
+			{name: "substring_three_arg_start2", expression: "substring(v512, 2, 512)", hexLength: 2},
+			{name: "substring_zero_start", expression: "substring(v512, 0, 512)", hexLength: 0},
+			{name: "substring_negative_start", expression: "substring(v512, -2)", hexLength: 4},
 			{name: "binary_and", expression: uuidExpression + " & " + uuidExpression, hexLength: 32},
 			{name: "binary_or", expression: uuidExpression + " | " + uuidExpression, hexLength: 32},
 			{name: "binary_xor", expression: uuidExpression + " ^ " + uuidExpression, hexLength: 32},
@@ -120,35 +124,83 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 		}
 
 		t.Run("substring derived boundaries and byte semantics", func(t *testing.T) {
-			expectedBytes := map[string]string{
-				"bit_and": "E40001",
-				"bit_or":  "FFB8AD",
-				"bit_xor": "1BB8AC",
-			}
-			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
-				expression := fmt.Sprintf("%s(substring(vbytes, 1, 511))", functionName)
-				queries := []string{
-					fmt.Sprintf("select hex(%s) from %s where g=1", expression, tableName),
-					fmt.Sprintf("select hex(%s(s)) from (select substring(vbytes, 1, 511) as s from %s where g=1) q", functionName, tableName),
-					fmt.Sprintf("with q as (select substring(vbytes, 1, 511) as s from %s where g=1) select hex(%s(s)) from q", tableName, functionName),
-				}
-				for _, query := range queries {
-					var got string
-					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got), query)
-					require.Equal(t, expectedBytes[functionName], got, query)
-				}
-			}
+			for _, substringCase := range []struct {
+				name       string
+				expression string
+				expected   map[string]string
+			}{
+				{
+					name:       "three_arg_start1",
+					expression: "substring(vbytes, 1, 511)",
+					expected: map[string]string{
+						"bit_and": "E40001",
+						"bit_or":  "FFB8AD",
+						"bit_xor": "1BB8AC",
+					},
+				},
+				{
+					name:       "two_arg_start2",
+					expression: "substring(vbytes, 2)",
+					expected: map[string]string{
+						"bit_and": "0001",
+						"bit_or":  "B8AD",
+						"bit_xor": "B8AC",
+					},
+				},
+				{
+					name:       "three_arg_start2",
+					expression: "substring(vbytes, 2, 511)",
+					expected: map[string]string{
+						"bit_and": "0001",
+						"bit_or":  "B8AD",
+						"bit_xor": "B8AC",
+					},
+				},
+				{
+					name:       "three_arg_zero_start",
+					expression: "substring(vbytes, 0, 511)",
+					expected: map[string]string{
+						"bit_and": "",
+						"bit_or":  "",
+						"bit_xor": "",
+					},
+				},
+				{
+					name:       "two_arg_negative_start",
+					expression: "substring(vbytes, -2)",
+					expected: map[string]string{
+						"bit_and": "0001",
+						"bit_or":  "B8AD",
+						"bit_xor": "B8AC",
+					},
+				},
+			} {
+				t.Run(substringCase.name, func(t *testing.T) {
+					for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+						queries := []string{
+							fmt.Sprintf("select hex(%s(%s)) from %s where g=1", functionName, substringCase.expression, tableName),
+							fmt.Sprintf("select hex(%s(s)) from (select %s as s from %s where g=1) q", functionName, substringCase.expression, tableName),
+							fmt.Sprintf("with q as (select %s as s from %s where g=1) select hex(%s(s)) from q", substringCase.expression, tableName, functionName),
+						}
+						for _, query := range queries {
+							var got string
+							require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got), query)
+							require.Equal(t, substringCase.expected[functionName], got, query)
+						}
+					}
 
-			viewName := fmt.Sprintf("`%s`.bitwise_28227_bytes", dbName)
-			execSQLRequire(t, ctx, db, fmt.Sprintf(
-				"create view %s as select substring(vbytes, 1, 511) as s from %s where g=1",
-				viewName, tableName))
-			defer execSQLMaybe(t, ctx, db, "drop view if exists "+viewName)
-			for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
-				var got string
-				require.NoError(t, db.QueryRowContext(ctx,
-					fmt.Sprintf("select hex(%s(s)) from %s", functionName, viewName)).Scan(&got))
-				require.Equal(t, expectedBytes[functionName], got)
+					viewName := fmt.Sprintf("`%s`.bitwise_28227_bytes_%s", dbName, substringCase.name)
+					execSQLRequire(t, ctx, db, fmt.Sprintf(
+						"create view %s as select %s as s from %s where g=1",
+						viewName, substringCase.expression, tableName))
+					defer execSQLMaybe(t, ctx, db, "drop view if exists "+viewName)
+					for _, functionName := range []string{"bit_and", "bit_or", "bit_xor"} {
+						var got string
+						require.NoError(t, db.QueryRowContext(ctx,
+							fmt.Sprintf("select hex(%s(s)) from %s", functionName, viewName)).Scan(&got))
+						require.Equal(t, substringCase.expected[functionName], got)
+					}
+				})
 			}
 		})
 
@@ -206,6 +258,11 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 					fmt.Sprintf("select id,%s(substring(v512, 1, 512)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
 					fmt.Sprintf("select %s(s) from (select substring(v512, 1, 512) as s from %s where g=1) q", functionName, tableName),
 					fmt.Sprintf("with q as (select substring(v512, 1, 512) as s from %s where g=1) select %s(s) from q", tableName, functionName),
+					fmt.Sprintf("select %s(substring(v512, 1)) from %s where g=1", functionName, tableName),
+					fmt.Sprintf("select g,%s(substring(v512, 1)) from %s where g=1 group by g", functionName, tableName),
+					fmt.Sprintf("select id,%s(substring(v512, 1)) over (order by id) from %s where id <= 2 order by id", functionName, tableName),
+					fmt.Sprintf("select %s(s) from (select substring(v512, 1) as s from %s where g=1) q", functionName, tableName),
+					fmt.Sprintf("with q as (select substring(v512, 1) as s from %s where g=1) select %s(s) from q", tableName, functionName),
 				} {
 					_, err := db.ExecContext(ctx, statement)
 					require.Error(t, err, "%s must be rejected", statement)
