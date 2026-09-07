@@ -81,6 +81,39 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 		defer plan.SetForceScanOnMultiCN(false)
 		plan.SetForceScanOnMultiCN(true)
 
+		t.Run("bounded top preserves remote order and prepared reuse", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
+			query := "select a,b from " + deleteTable + " order by a desc limit 2"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			require.Contains(t, strings.ToLower(physical.Text), "merge top")
+			readRows := func(rows *sql.Rows, queryErr error, want [][2]string) {
+				t.Helper()
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				var got [][2]string
+				for rows.Next() {
+					var row [2]string
+					require.NoError(t, rows.Scan(&row[0], &row[1]))
+					got = append(got, row)
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, want, got)
+			}
+			rows, queryErr := db.QueryContext(ctx, query+" offset 1")
+			readRows(rows, queryErr, [][2]string{{"7", "7"}, {"3", "3"}})
+			stmt, prepareErr := db.PrepareContext(ctx,
+				"select a,b from "+deleteTable+" order by a desc limit ?")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for range 2 {
+				rows, queryErr = stmt.QueryContext(ctx, 2)
+				readRows(rows, queryErr, [][2]string{{"8", "8"}, {"7", "7"}})
+			}
+		})
+
 		t.Run("delete and select retain exact rows", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
 			planResult, planErr := testutils.QueryTextResult(ctx, db,

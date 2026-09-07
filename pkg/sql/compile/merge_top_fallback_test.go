@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -65,11 +66,22 @@ func TestCompileTopRoutesMultiScopeLimits(t *testing.T) {
 	tests := []struct {
 		name    string
 		limit   *plan.Expr
+		stats   *plan.Stats
 		ordered bool
 	}{
 		{
 			name:  "resident threshold",
 			limit: plan2.MakePlan2Uint64ConstExprWithType(mergeTopResidentPlanThreshold),
+			stats: &plan.Stats{Cost: 1_000, Rowsize: 100},
+		},
+		{
+			name:  "resident row threshold with wide candidates",
+			limit: plan2.MakePlan2Uint64ConstExprWithType(mergeTopResidentPlanThreshold),
+			stats: &plan.Stats{
+				Cost:    float64(mergeTopResidentPlanThreshold * 2),
+				Rowsize: float64(distributedTopNStreamingThresholdBytes)/(float64(mergeTopResidentPlanThreshold)*2) + 1,
+			},
+			ordered: true,
 		},
 		{
 			name:    "large literal",
@@ -87,6 +99,7 @@ func TestCompileTopRoutesMultiScopeLimits(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			c := newMergeTopFallbackTestCompile(t)
 			node := newMergeTopFallbackTestNode(test.limit)
+			node.Stats = test.stats
 			result := c.compileTop(node, test.limit, newMergeTopFallbackTestScopes(c, 2))
 			require.Len(t, result, 1)
 			require.Len(t, result[0].PreScopes, 2)
@@ -149,7 +162,7 @@ func TestShouldUseDistributedOrderedTopUsesCandidateBytes(t *testing.T) {
 		&plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
 		scopes))
 	dynamicLimit := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
-	require.False(t, shouldUseDistributedOrderedTop(
+	require.True(t, shouldUseDistributedOrderedTop(
 		&plan.Node{Stats: &plan.Stats{Cost: 1_000_000, Rowsize: 146}},
 		dynamicLimit,
 		scopes))
@@ -159,6 +172,23 @@ func TestShouldUseDistributedOrderedTopUsesCandidateBytes(t *testing.T) {
 		scopes))
 	require.False(t, shouldUseDistributedOrderedTop(
 		&plan.Node{}, plan2.MakePlan2Uint64ConstExprWithType(0), scopes))
+
+	residentLimit := plan2.MakePlan2Uint64ConstExprWithType(mergeTopResidentPlanThreshold)
+	residentCandidates := float64(mergeTopResidentPlanThreshold * 16)
+	exactThresholdRowSize := float64(distributedTopNStreamingThresholdBytes) / residentCandidates
+	residentNode := newMergeTopFallbackTestNode(residentLimit)
+	residentNode.Stats = &plan.Stats{Cost: residentCandidates, Rowsize: exactThresholdRowSize}
+	require.False(t, shouldUseDistributedOrderedTop(
+		residentNode,
+		residentLimit,
+		scopes))
+	residentNode.Stats.Rowsize++
+	require.True(t, shouldUseDistributedOrderedTop(
+		residentNode,
+		residentLimit,
+		scopes))
+	require.True(t, shouldUseDistributedOrderedTop(
+		&plan.Node{}, residentLimit, scopes))
 }
 
 func TestCompileTopKeepsSingleScopeLargeLimitLocal(t *testing.T) {
@@ -178,6 +208,59 @@ func TestCompileTopKeepsSingleScopeLargeLimitLocal(t *testing.T) {
 	result[0].FreeOperator(c)
 	result[0].release()
 	c.proc.Free()
+}
+
+func TestCompileTopStaleStatisticsCannotAdmitVarlenPayload(t *testing.T) {
+	for _, k := range []uint64{16383, 16384, 16385} {
+		for _, version := range []int64{defines.MORPCVersion52, defines.MORPCLatestVersion} {
+			c := newMergeTopFallbackTestCompile(t)
+			runtime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(runtime.MOProtocolVersion, version)
+			node := newMergeTopFallbackTestNode(plan2.MakePlan2Uint64ConstExprWithType(k))
+			node.Stats = &plan.Stats{Cost: 1, Rowsize: 1}
+			node.ProjectList = append(node.ProjectList, &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}})
+			result := c.compileTop(node, node.Limit, newMergeTopFallbackTestScopes(c, 2))
+			if version >= defines.MORPCVersion53 && k <= mergeTopResidentPlanThreshold {
+				gather, ok := result[0].RootOp.(*mergetop.MergeTop)
+				require.True(t, ok)
+				require.True(t, gather.OrderedStreams)
+			} else {
+				globalLimit, ok := result[0].RootOp.(*limit.Limit)
+				require.True(t, ok)
+				_, ok = globalLimit.GetChildren(0).(*mergeorder.MergeOrder)
+				require.True(t, ok)
+			}
+			result[0].FreeOperator(c)
+			result[0].release()
+			c.proc.Free()
+		}
+	}
+}
+
+func TestResidentTopPayloadProofUsesPhysicalInputSchema(t *testing.T) {
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(16384)
+	node := newMergeTopFallbackTestNode(limitExpr)
+	require.True(t, residentTopPayloadFits(node, limitExpr))
+	for _, kind := range []plan.Node_NodeType{plan.Node_SORT, plan.Node_TIME_WINDOW} {
+		node.NodeType = kind
+		// These projections run after Top; a narrow final projection says
+		// nothing about the width of retained child payload.
+		require.False(t, residentTopPayloadFits(node, limitExpr))
+	}
+	node.NodeType = plan.Node_PROJECT
+	node.ProjectList = nil
+	require.False(t, residentTopPayloadFits(node, limitExpr))
+	node.ProjectList = []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_any)}}}
+	require.False(t, residentTopPayloadFits(node, limitExpr))
+	node.ProjectList = []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_tuple)}}}
+	require.False(t, residentTopPayloadFits(node, limitExpr))
+	node.ProjectList = []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)}}}
+	require.False(t, residentTopPayloadFits(node, plan2.MakePlan2Uint64ConstExprWithType(^uint64(0))))
+	// Widen the fixed-width payload beyond the resident allowance without
+	// allocating rows or relying on optimizer estimates.
+	for range 128 {
+		node.ProjectList = append(node.ProjectList, node.ProjectList[0])
+	}
+	require.False(t, residentTopPayloadFits(node, limitExpr))
 }
 
 func TestCompileTopFallsBackDuringRollingUpgrade(t *testing.T) {
@@ -261,10 +344,15 @@ func enableDistributedOrderedTopForTest(t *testing.T, proc *process.Process) {
 }
 
 func newMergeTopFallbackTestNode(limitExpr *plan.Expr) *plan.Node {
+	key := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
 	return &plan.Node{
-		Limit: limitExpr,
+		Limit:       limitExpr,
+		ProjectList: []*plan.Expr{key},
 		OrderBy: []*plan.OrderBySpec{{
-			Expr: &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			Expr: key,
 		}},
 	}
 }

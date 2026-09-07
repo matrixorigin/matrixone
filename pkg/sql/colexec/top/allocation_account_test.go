@@ -15,7 +15,6 @@
 package top
 
 import (
-	"bytes"
 	"context"
 	"testing"
 
@@ -317,17 +316,11 @@ func TestAccountedTopPrepareExactCapacityBoundary(t *testing.T) {
 
 func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	op := newAccountedTop(3)
+	// Fixed-width input retains the resident allocation-rejection contract;
+	// varlen payload now takes the spill-resource admission path.
+	op := newAccountedTop(8192)
 	state := installTopTestAllocation(t, op, proc, 64<<10)
-	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(
-		src.Vecs[0],
-		bytes.Repeat([]byte("x"), 1<<20),
-		false,
-		proc.Mp(),
-	))
-	src.SetRowCount(1)
+	src := newInt64TopBatch(t, proc, make([]int64, 8192))
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{src})
 	op.AppendChild(child)
 	require.NoError(t, op.Prepare(proc))
@@ -337,6 +330,33 @@ func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
 
 	child.Free(proc, true, err)
 	op.Free(proc, true, err)
+	finalizeTopTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := newAccountedTop(3)
+	state := installTopTestAllocation(t, op, proc, 64<<20)
+	// Exhaust the explicit spill budget before the first actual-schema guard
+	// enables spilling. Prepare itself remains on the small-limit path.
+	blocker, err := state.generation.ReserveSpillDisk(state.generation.SpillDiskCap())
+	require.NoError(t, err)
+	t.Cleanup(func() { blocker.Release() })
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newNullableVarcharTopBatch(t, proc, 1, make([]byte, 1<<20), false),
+	})
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+	require.False(t, op.ctr.spilling)
+	_, err = vm.Exec(op, proc)
+	var resourceErr *process.ExecutionResourceError
+	require.ErrorAs(t, err, &resourceErr)
+	require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+	child.Free(proc, true, err)
+	op.Free(proc, true, err)
+	blocker.Release()
 	finalizeTopTestAllocation(t, op, state)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())

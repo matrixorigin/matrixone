@@ -6365,8 +6365,10 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 			if topN < limit || topN < offset {
 				overflow = true
 			}
-			if !overflow && topN <= mergeTopResidentPlanThreshold {
-				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+			if !overflow {
+				// Convert `ORDER BY ... LIMIT m OFFSET n` to `Top(m+n)` plus
+				// the final offset. compileTop owns the resident-versus-bounded
+				// physical decision for the checked candidate prefix.
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
@@ -6397,19 +6399,72 @@ const mergeTopResidentPlanThreshold uint64 = 8192 * 2
 // repeatedly spilling a much larger P*K candidate set.
 const distributedTopNStreamingThresholdBytes = 4 * 128 * mpool.MB
 
-// canUseResidentMergeTop limits the resident-only global MergeTop to small,
-// statically bounded plans. Large or runtime limits use the existing spill-capable
-// Top and MergeOrder operators instead.
+// canUseResidentMergeTop limits the collection-based global MergeTop fallback
+// to small, statically bounded plans. When ordered streams are unavailable,
+// larger or runtime limits retain the spill-capable Top and MergeOrder path.
 func canUseResidentMergeTop(topN *plan.Expr) bool {
-	if topN == nil {
+	value, ok := staticTopNValue(topN)
+	return ok && value <= mergeTopResidentPlanThreshold
+}
+
+// residentTopPayloadFits proves a bound from types, never from statistics.
+// Varlen replacement can append dead area even with a fixed survivor count.
+// Leave room for headers, input copies and growth/shuffle overlap.
+func residentTopPayloadFits(node *plan.Node, topN *plan.Expr) bool {
+	rows, ok := staticTopNValue(topN)
+	if !ok || node == nil || len(node.ProjectList) == 0 {
 		return false
+	}
+	// These nodes run compileSort before their projection (and TIME_WINDOW
+	// before aggregation). Their ProjectList does not describe Top's input.
+	if node.NodeType == plan.Node_SORT || node.NodeType == plan.Node_TIME_WINDOW {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	remaining := uint64(64*mpool.MB/4) / rows
+	check := func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		typ := types.T(expr.Typ.Id)
+		if typ.TypeLen() <= 0 || !typ.IsFixedLen() {
+			return false
+		}
+		bytes := uint64(typ.TypeLen()) + 1 // null bitmap, conservatively per row
+		if bytes > remaining {
+			return false
+		}
+		remaining -= bytes
+		return true
+	}
+	for _, expr := range node.ProjectList {
+		if !check(expr) {
+			return false
+		}
+	}
+	for _, spec := range node.OrderBy {
+		if spec == nil || !check(spec.Expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func staticTopNValue(topN *plan.Expr) (uint64, bool) {
+	if topN == nil {
+		return 0, false
 	}
 	literal, ok := topN.Expr.(*plan.Expr_Lit)
 	if !ok || literal.Lit == nil {
-		return false
+		return 0, false
 	}
 	value, ok := literal.Lit.Value.(*plan.Literal_U64Val)
-	return ok && value.U64Val <= mergeTopResidentPlanThreshold
+	if !ok {
+		return 0, false
+	}
+	return value.U64Val, true
 }
 
 func shouldUseDistributedOrderedTop(
@@ -6420,8 +6475,16 @@ func shouldUseDistributedOrderedTop(
 	if topN == nil {
 		return false
 	}
-	if canUseResidentMergeTop(topN) {
+	staticLimit, hasStaticLimit := staticTopNValue(topN)
+	if hasStaticLimit && staticLimit == 0 {
 		return false
+	}
+	// Large static limits already use spill-capable Top + MergeOrder below
+	// the performance threshold. Small/runtime limits may otherwise retain
+	// payload, so lack of a type-based bound must select ordered streams.
+	if (!hasStaticLimit || staticLimit <= mergeTopResidentPlanThreshold) &&
+		!residentTopPayloadFits(node, topN) {
+		return true
 	}
 	if node == nil || node.Stats == nil ||
 		node.Stats.Cost <= 0 || node.Stats.Rowsize <= 0 ||
@@ -6441,16 +6504,11 @@ func shouldUseDistributedOrderedTop(
 		return true
 	}
 	candidateRows := node.Stats.Cost
-	if literal, ok := topN.Expr.(*plan.Expr_Lit); ok && literal.Lit != nil {
-		if value, ok := literal.Lit.Value.(*plan.Literal_U64Val); ok {
-			if value.U64Val == 0 {
-				return false
-			}
-			candidateRows = math.Min(
-				candidateRows,
-				float64(value.U64Val)*float64(fanout),
-			)
-		}
+	if hasStaticLimit {
+		candidateRows = math.Min(
+			candidateRows,
+			float64(staticLimit)*float64(fanout),
+		)
 	}
 	candidateBytes := candidateRows * node.Stats.Rowsize
 	return math.IsInf(candidateBytes, 0) ||
@@ -6497,7 +6555,7 @@ func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*S
 	ss = c.mergeShuffleScopesIfNeeded(ss, false)
 	rs := c.newMergeScope(ss)
 	currentFirstFlag = c.anal.isFirst
-	if canUseResidentMergeTop(topN) {
+	if canUseResidentMergeTop(topN) && residentTopPayloadFits(node, topN) {
 		arg := constructMergeTop(node, topN)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)

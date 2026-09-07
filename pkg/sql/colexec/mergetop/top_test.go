@@ -17,11 +17,14 @@ package mergetop
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -276,6 +279,54 @@ func TestMergeTopOrderedStreamsVarlenNullsFirst(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestMergeTopOrderedStreamsVarlenByteBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Reg.MergeReceivers = []*process.WaitRegister{
+		process.NewPipelineEdge(2, 1), process.NewPipelineEdge(2, 1),
+	}
+	const byteLimit = 1024
+	expected := make([]string, 20)
+	for i := range expected {
+		expected[i] = fmt.Sprintf("%04d%s", i, bytes.Repeat([]byte("x"), 130+i))
+	}
+	// An indivisible valid row may exceed the normal output window.
+	expected[19] += string(bytes.Repeat([]byte("y"), 2*byteLimit))
+	for parity := range 2 {
+		var values []string
+		for i := parity; i < len(expected); i += 2 {
+			values = append(values, expected[i])
+		}
+		sendStringStream(t, proc, proc.Reg.MergeReceivers[parity], values, make([]bool, len(values)))
+	}
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(uint64(len(expected)))).
+		WithFs([]*plan.OrderBySpec{{Expr: newStringExpression(0)}}).WithOrderedStreams()
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.stream.outputByteLimit = byteLimit
+	var got []string
+	batches := 0
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		batches++
+		if result.Batch.Size() > byteLimit {
+			require.Equal(t, 1, result.Batch.RowCount())
+		}
+		for row := range result.Batch.RowCount() {
+			got = append(got, string(result.Batch.Vecs[0].GetBytesAt(row)))
+		}
+	}
+	require.Greater(t, batches, 2)
+	require.Equal(t, expected, got)
+	arg.Reset(proc, false, nil)
+	arg.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestMergeTopOrderedStreamsPropagatesTerminalError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
@@ -297,6 +348,66 @@ func TestMergeTopOrderedStreamsPropagatesTerminalError(t *testing.T) {
 	arg.Release()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeTopOrderedStreamsPreservesQueryTerminalOverLateEdgeFailure(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildContext func(*process.Process) (context.Context, func())
+		wantErr      error
+	}{
+		{
+			name: "query cancellation",
+			buildContext: func(proc *process.Process) (context.Context, func()) {
+				queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+				_, cancel := process.GetQueryCtxFromProc(proc)
+				return queryCtx, cancel
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name: "query deadline",
+			buildContext: func(proc *process.Process) (context.Context, func()) {
+				parentCtx, cancel := context.WithDeadline(
+					proc.GetTopContext(), time.Now().Add(-time.Second))
+				return proc.Base.GetContextBase().BuildQueryCtx(parentCtx), cancel
+			},
+			wantErr: context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			queryCtx, cancelQuery := test.buildContext(proc)
+			proc.BuildPipelineContext(queryCtx)
+			edge := process.NewPipelineEdge(1, 1)
+			proc.Reg.MergeReceivers = []*process.WaitRegister{edge}
+			arg := NewArgument().
+				WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).
+				WithFs([]*plan.OrderBySpec{{Expr: newExpression(0)}}).
+				WithOrderedStreams()
+			var callErr error
+			t.Cleanup(func() {
+				arg.Reset(proc, callErr != nil, callErr)
+				arg.Release()
+				proc.Cancel(nil)
+				cancelQuery()
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+
+			require.NoError(t, arg.Prepare(proc))
+			edge.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+			cancelQuery()
+			lateErr := moerr.NewDuplicateEntryNoCtx("ordered-top", "primary")
+			require.False(t, edge.SendError(lateErr))
+
+			_, callErr = arg.Call(proc)
+			require.ErrorIs(t, callErr, test.wantErr)
+			require.NotErrorIs(t, callErr, lateErr)
+		})
+	}
 }
 
 func TestMergeTopOrderedStreamsRejectsInvalidOrderColumn(t *testing.T) {

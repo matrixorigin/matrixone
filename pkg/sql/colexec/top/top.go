@@ -66,19 +66,25 @@ func growTopSlice[T any](
 	site mpool.AllocationSite,
 ) ([]T, error) {
 	if length < len(values) || proc == nil {
-		return nil, mpool.ErrAllocationAccountInvalid
+		return values, mpool.ErrAllocationAccountInvalid
 	}
 	if length <= cap(values) {
 		return values[:length], nil
 	}
 	if allocation != nil {
-		return spillutil.GrowAccountedSlice(
+		grown, err := spillutil.GrowAccountedSlice(
 			values,
 			length,
 			proc.Mp(),
 			allocation,
 			site,
 		)
+		if err != nil {
+			// Callers assign the returned slice back to its owning field. Failed
+			// growth leaves the old allocation live and owned until Reset/Free.
+			return values, err
+		}
+		return grown, nil
 	}
 	values = slices.Grow(values, length-len(values))
 	return values[:length], nil
@@ -151,7 +157,10 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		top.ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
 	}
 
-	if top.ctr.limit > topSpillThreshold {
+	// Ordered output is consumed as a byte-bounded stream. Use the external
+	// path even for a small row limit so wide payloads never have to be
+	// reconstructed as one resident result batch.
+	if top.OrderedOutput || top.ctr.limit > topSpillThreshold {
 		top.ctr.spilling = true
 	}
 
@@ -262,6 +271,23 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 	}
 
 	if len(ctr.cmps) == 0 {
+		// The actual input schema is authoritative, including compatible plans
+		// and runtime limits. Varlen replacement history is not bounded by K.
+		// Decide before retaining any payload so no migration/replay is needed.
+		if !ctr.spilling {
+			remaining := uint64(evalSpillChunkBytes / 4)
+			if ctr.limit > 0 {
+				remaining /= ctr.limit
+			}
+			for _, vec := range bat.Vecs {
+				size := vec.GetType().TypeSize()
+				if size <= 0 || !vec.GetType().Oid.IsFixedLen() || uint64(size)+1 > remaining {
+					ctr.spilling = true
+					break
+				}
+				remaining -= uint64(size) + 1
+			}
+		}
 		mp := make(map[int]int)
 		for i, pos := range ctr.poses {
 			mp[int(pos)] = i
@@ -721,6 +747,10 @@ func (ctr *container) nextSpillOutputChunkEnd(start int) (int, error) {
 	if ctr.evalSpillOutputBytes != 0 {
 		byteLimit = ctr.evalSpillOutputBytes
 	}
+	// Leave growth/overlap slack under the actual allocator ceiling as well as
+	// the ordinary logical output window. A single oversized row still gets the
+	// existing resource/representation error instead of splitting a SQL row.
+	byteLimit = min(byteLimit, uint64(mpool.MaxAllocationSize()/4))
 	endLimit := min(start+evalSpillChunkSize, len(ctr.sels))
 	end := start
 	var outputBytes uint64

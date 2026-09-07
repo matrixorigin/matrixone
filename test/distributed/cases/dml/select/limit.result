@@ -66,3 +66,22 @@ create table t1 (a int primary key, b varchar);
 insert into t1 select result, repeat("abcdefg",500) from generate_series (1, 30000)g;
 select a, left(b,3) from t1 order by a desc limit 32000, 2;
 a    left(b, 3)
+select a, left(b,3) from t1 order by a desc limit 2, 3;
+a    left(b, 3)
+29998    abc
+29997    abc
+29996    abc
+prepare bounded_top from 'select a, left(b,3) from t1 order by a desc limit ?';
+set @bounded_k = 3;
+execute bounded_top using @bounded_k;
+a    left(b, 3)
+30000    abc
+29999    abc
+29998    abc
+execute bounded_top using @bounded_k;
+a    left(b, 3)
+30000    abc
+29999    abc
+29998    abc
+deallocate prepare bounded_top;
+drop table t1;

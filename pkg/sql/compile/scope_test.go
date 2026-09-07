@@ -391,48 +391,73 @@ func TestScopeSerialization(t *testing.T) {
 
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
-	scope := generateScopeCases(t, []string{
-		"select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
-	})[0]
+	tests := []struct {
+		name                 string
+		sql                  string
+		candidateLimit       uint64
+		offset               uint64
+		expectResidentGather bool
+	}{
+		{
+			name:                 "resident candidate prefix",
+			sql:                  "select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
+			name:           "candidate prefix above resident threshold",
+			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+	}
 
-	var topLimits []uint64
-	var offsets []uint64
-	var opTypes []vm.OpType
-	var visitOperator func(vm.Operator)
-	visitOperator = func(operator vm.Operator) {
-		if operator == nil {
-			return
-		}
-		base := operator.GetOperatorBase()
-		for i := 0; i < base.NumChildren(); i++ {
-			visitOperator(base.GetChildren(i))
-		}
-		opTypes = append(opTypes, operator.OpType())
-		switch op := operator.(type) {
-		case *top.Top:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *mergetop.MergeTop:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *offset.Offset:
-			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
-		}
-	}
-	var visitScope func(*Scope)
-	visitScope = func(current *Scope) {
-		visitOperator(current.RootOp)
-		for _, preScope := range current.PreScopes {
-			visitScope(preScope)
-		}
-	}
-	visitScope(scope)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scope := generateScopeCases(t, []string{test.sql})[0]
+			var topLimits []uint64
+			var offsets []uint64
+			var opTypes []vm.OpType
+			var visitOperator func(vm.Operator)
+			visitOperator = func(operator vm.Operator) {
+				if operator == nil {
+					return
+				}
+				base := operator.GetOperatorBase()
+				for i := 0; i < base.NumChildren(); i++ {
+					visitOperator(base.GetChildren(i))
+				}
+				opTypes = append(opTypes, operator.OpType())
+				switch op := operator.(type) {
+				case *top.Top:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *mergetop.MergeTop:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *offset.Offset:
+					offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+				}
+			}
+			var visitScope func(*Scope)
+			visitScope = func(current *Scope) {
+				visitOperator(current.RootOp)
+				for _, preScope := range current.PreScopes {
+					visitScope(preScope)
+				}
+			}
+			visitScope(scope)
 
-	require.NotEmpty(t, topLimits)
-	for _, candidateLimit := range topLimits {
-		require.Equal(t, uint64(7), candidateLimit)
+			require.NotEmpty(t, topLimits)
+			for _, candidateLimit := range topLimits {
+				require.Equal(t, test.candidateLimit, candidateLimit)
+			}
+			require.Contains(t, offsets, test.offset)
+			require.NotContains(t, opTypes, vm.Order)
+			if test.expectResidentGather {
+				require.NotContains(t, opTypes, vm.MergeOrder)
+			}
+		})
 	}
-	require.Contains(t, offsets, uint64(2))
-	require.NotContains(t, opTypes, vm.Order)
-	require.NotContains(t, opTypes, vm.MergeOrder)
 }
 
 func checkScopeRoot(t *testing.T, s *Scope) {

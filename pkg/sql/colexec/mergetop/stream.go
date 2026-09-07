@@ -55,6 +55,18 @@ type streamContainer struct {
 	output        *batch.Batch
 	primed        bool
 	done          bool
+	// A per-instance seam for byte-boundary tests; zero uses the normal window.
+	outputByteLimit int
+}
+
+func (ctr *streamContainer) outputBytesLimit() int {
+	limit := mergeTopStreamBatchBytes
+	if ctr.outputByteLimit > 0 {
+		limit = min(limit, ctr.outputByteLimit)
+	}
+	// Payload chunks must remain feasible with a reduced allocator ceiling.
+	// Reserve slack for vector growth, headers and simultaneous old/new buffers.
+	return min(limit, int(mpool.MaxAllocationSize()/4))
 }
 
 type streamHeap struct {
@@ -138,8 +150,8 @@ func (mergeTop *MergeTop) prepareStream(proc *process.Process) (err error) {
 
 	ctr.streams = make([]orderedStream, len(proc.Reg.MergeReceivers))
 	for i, reg := range proc.Reg.MergeReceivers {
-		ctr.streams[i].receiver = process.InitPipelineSignalReceiver(
-			proc.Ctx, []*process.WaitRegister{reg})
+		ctr.streams[i].receiver = process.InitPipelineSignalReceiverFromProcess(
+			proc, []*process.WaitRegister{reg})
 	}
 	return nil
 }
@@ -194,7 +206,7 @@ func (mergeTop *MergeTop) callStream(
 	for uint64(rows) < maxRows && ctr.heap.Len() > 0 {
 		winner := ctr.heap.items[0]
 		stream := &ctr.streams[winner]
-		if rows > 0 && ctr.output.Size()+stream.rowBytes() > mergeTopStreamBatchBytes {
+		if rows > 0 && ctr.output.Size()+stream.rowBytes() > ctr.outputBytesLimit() {
 			break
 		}
 		chunk := ctr.winnerChunk(winner, int(maxRows)-rows)
@@ -219,7 +231,7 @@ func (mergeTop *MergeTop) callStream(
 		} else {
 			heap.Fix(&ctr.heap, 0)
 		}
-		if ctr.output.Size() >= mergeTopStreamBatchBytes {
+		if ctr.output.Size() >= ctr.outputBytesLimit() {
 			break
 		}
 	}
@@ -280,7 +292,7 @@ func (ctr *streamContainer) winnerChunk(winner, maxRows int) int {
 		if rowBytes <= 0 {
 			return 1
 		}
-		budgetRows := (mergeTopStreamBatchBytes - ctr.output.Size()) / rowBytes
+		budgetRows := (ctr.outputBytesLimit() - ctr.output.Size()) / rowBytes
 		if budgetRows < 1 {
 			return 1
 		}
@@ -288,7 +300,7 @@ func (ctr *streamContainer) winnerChunk(winner, maxRows int) int {
 			maxRows = budgetRows
 		}
 	} else {
-		budget := mergeTopStreamBatchBytes - ctr.output.Size()
+		budget := ctr.outputBytesLimit() - ctr.output.Size()
 		used := 0
 		budgetRows := 0
 		for budgetRows < maxRows {

@@ -1,6 +1,8 @@
 # Bounded distributed ORDER BY / LIMIT
 
-Status: implemented and validated on 2026-09-07; ready for review.
+Status: local correctness fixes validated on 2026-09-07; design approval and
+rollout performance/compatibility acceptance remain pending. Historical measurements below are not
+acceptance evidence for the revised worktree.
 Owner: issue #28285; regression constraint: #27968 must remain executable.
 Source baseline: `6e5f82f568b1ec3e013e8d4ab9031b2360300b84`.
 Implementation branch: `xp/fix-28285-bounded-merge-top`.
@@ -74,9 +76,12 @@ This supports these invariants:
 1. Ordinary Top-K returns exactly min(K, S) rows in the existing SQL order.
 2. Global merging does not retain K payload rows or consume all P*K candidates
    before it can return output.
-3. Transport, reconstructed payload, and ordered-gather output are bounded in
-   physical bytes, including allocation overlap. Large result cardinality alone
-   never requires one large payload allocation.
+3. Reconstructed payload and ordered-gather output have a 64 MiB logical payload
+   window and an 8,192-row window, reduced further for a smaller allocator cap.
+   Vector capacity rounding, sidecars, input windows, and growth overlap are
+   charged by the existing allocation accounts, not by `Batch.Size()`. The
+   64 MiB window is not an exact physical peak/RSS guarantee. Large result
+   cardinality alone never requires one large payload allocation.
 4. Local Top spills source payload, but v1 still retains O(K) row references
    and ordering keys per producer. Those allocations remain query-accounted;
    a fully external key-selection state is a separate follow-up boundary.
@@ -115,13 +120,26 @@ Implementation v1 uses the following deliberately narrow activation contract:
 - every runtime DOP worker gets its own one-sender edge, a CN-local gather
   reduces those streams to one ordered CN stream, and the coordinator repeats
   the same bounded merge;
-- a static plan uses the hierarchy only when the estimated candidate set
+- for large static limits, a plan uses the hierarchy when the estimated candidate set
   `min(input rows, K * runtime fanout) * row size` exceeds 512 MiB. This is four
   MergeOrder spill windows: below it, the existing vectorized path avoids the
   extra hierarchy. Runtime parameters use the full estimated input as their
-  candidate upper bound; missing/invalid estimates choose the bounded path;
+  candidate upper bound; missing/invalid estimates choose the bounded path.
+  Small static limits additionally require a type-based resident payload proof:
+  all projected/order values are fixed width, with K times their widths fitting
+  a 16 MiB allowance (including conservative bitmap space). Runtime limits and
+  unbounded/unknown payload types choose the hierarchy independently of estimates.
+  When the protocol/order-expression gate forbids hierarchy, these unsafe resident
+  plans use Top plus MergeOrder. Every updated local Top also checks its actual
+  first input schema before retaining any payload. Varlen payload uses external
+  storage because replacement history is not bounded by the number of survivors;
+- once the hierarchy is selected, every local Top uses external payload storage
+  and byte-bounded ordered output even when K is at or below 16,384. This keeps
+  wide rows from being reconstructed into one resident result vector;
 - output is bounded by both 8,192 rows and 64 MiB (except that one individually
-  valid row must be allowed to make progress). Fixed and variable-width winner
+  valid row must be allowed to make progress). The logical window is additionally
+  capped at one quarter of the allocator's single-allocation ceiling, reserving
+  slack for vector growth. Fixed and variable-width winner
   runs are copied in bounded chunks using actual varlen payload sizes;
 - cleanup shares one 30-second deadline across every receiver. The first
   implementation drains already-produced local Top output rather than
@@ -267,10 +285,21 @@ spill codec. No table/catalog or persistent storage migration is proposed.
 Spill is attempt-local and not resumable after restart. Rollback uses the
 compatible planner path for new attempts after active generations quiesce.
 
-Diagnostics expose bounded per-operator counters: consumed/emitted rows,
-stream count, physical peak bytes, spill read/write bytes, merge passes, and
-prefix-stop reason. Do not add per-row logging, source-row labels, or a second
-estimated memory ledger. All resources remain charged to the owning tenant.
+Existing analyzer counters expose input/output rows and Top spill rows/bytes;
+allocation accounts own actual allocation admission and peak accounting. Cleanup
+timeout diagnostics include receiver/channel state. Dedicated stream-count,
+spill-read, and prefix-stop metrics are not implemented in this revision; neither
+external key merge passes nor producer early-stop is implemented. Do not infer
+these metrics from `Batch.Size()`, or add a second estimated memory ledger.
+All resources remain charged to the owning tenant.
+
+The type-based guard intentionally retains the small fixed-width fast path.
+Small varlen Top-N now incurs local payload spill even when the actual values are
+short. A runtime resident-to-external migration can recover that optimization in
+a follow-up only after publication, comparator reuse, and partial-failure
+ownership are proved. Updating a cluster cannot retrofit this runtime guard onto
+old CN binaries: mixed-version fallback preserves protocol compatibility, while
+the full payload safety guarantee requires all executors to carry this fix.
 
 ## Cost model and alternatives
 
@@ -318,8 +347,9 @@ storage reads, and INSERT. No speedup multiplier is promised before measurement.
 
 ## Validation and delivery sequence
 
-Implementation acceptance completed on 55 (`10.222.1.55`) with the same
-service configuration and data for fixed/main comparisons:
+Historical author measurements on 55 (`10.222.1.55`) used the same service
+configuration and data for fixed/main comparisons. They predate the type-based
+payload admission change and are not performance acceptance for that change:
 
 - 1M input / K=500K stayed on the compatible path and completed in 1.286s,
   matching the main-path envelope; forcing the hierarchy here was rejected
@@ -335,6 +365,44 @@ service configuration and data for fixed/main comparisons:
 - Focused package, topology, codec, allocation-generation, and race tests pass;
   static analysis reports zero issues. The five failures in the full compile
   package are identical Parquet fanout failures on the clean base commit.
+
+### Revised-worktree validation (2026-09-07)
+
+Base: `f14eb824df4c74fb341ebecd46d2da3358503a95`; rebased PR commit:
+`76670d12eb71fe010c426908a5b82ab47a65b6eb`, plus the local fixes. Unlike the
+historical run above, the current complete compile package passes.
+
+- Complete Top, MergeTop and compile packages pass in normal mode. Top and
+  MergeTop also pass under the race detector. Changed packages and the DML
+  consumer pass `go vet`; the final service builds successfully.
+- A 1 MiB allocator ceiling test executes K=8192 with varlen payload and no
+  ordered-output hint. Independent exact survivor/order and multi-batch checks
+  pass. MergeTop tests exercise interleaved varlen winners and an indivisible
+  row exceeding the injected logical output window.
+- Fixed-width allocation rejection exposed an 8192-byte selection leak: failed
+  slice growth returned nil over the live owner. The Top wrapper now preserves
+  the original slice on failure. The regression asserts error classification
+  and zero account/pool ownership after cleanup. Small-K runtime spill disk
+  rejection also asserts the disk resource error and zero disk/FD/memory usage.
+- The existing forced multi-CN DML fixture now includes five-row varlen Top-N,
+  a real remote physical plan, exact global OFFSET results and prepared reuse.
+  The entire fixture passed twice in one process on 55 (20.60s including cluster
+  startup, then 3.38s; the added subtest took 0.09s and 0.01s). Test executable
+  SHA256: `0abd0ab7a055a5d81334d3ec2ae40701066949877d7c83581d30ade36a01db0f`.
+- LIMIT BVT extends its existing data with small-K varlen and prepared queries;
+  it adds no rows. Normal comparison passed 34/34 statements twice on the same
+  two-CN instance, and the test table count was zero after teardown.
+  Final service SHA256:
+  `455a8209b59ec9619860fb4e7c31b3139ff76e49048615b50e2a132121e7deb7`.
+- Test startup incident: restarting the launch fixture with its existing data
+  failed CN admission before any SQL. Original data and logs were retained;
+  a clean test-owned data directory reached SQL and ISCP readiness. This is not
+  evidence of restart acceptance or a Top-N execution failure.
+
+The revised small-varlen spill cost and original large-scale performance matrix
+have not been remeasured. Final design approval, mixed-version execution and
+restart acceptance remain separate rollout requirements; no approval is implied
+by this local validation record.
 
 1. Prove typed topology and a deterministic minimal gather, including shared
    receiver and runtime-DOP counterexamples, before large benchmarks.

@@ -25,3 +25,12 @@ drop table if exists t1;
 create table t1 (a int primary key, b varchar);
 insert into t1 select result, repeat("abcdefg",500) from generate_series (1, 30000)g;
 select a, left(b,3) from t1 order by a desc limit 32000, 2;
+-- Small K with varlen payload must select bounded output independently of
+-- estimated cardinality/width. Exact order and prepared reuse are public oracles.
+select a, left(b,3) from t1 order by a desc limit 2, 3;
+prepare bounded_top from 'select a, left(b,3) from t1 order by a desc limit ?';
+set @bounded_k = 3;
+execute bounded_top using @bounded_k;
+execute bounded_top using @bounded_k;
+deallocate prepare bounded_top;
+drop table t1;
