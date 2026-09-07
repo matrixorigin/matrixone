@@ -146,14 +146,29 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
-	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
-		metaTbl,
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
-		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
-		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
-		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
-		buildTS))
+	// build_ts is named only when the table has it. A fulltext2 index created before the column
+	// existed keeps the narrower shape until its tenant's v4_0_7 migration runs, and that
+	// migration is asynchronous while this CN already serves the tenant -- so naming the column
+	// unconditionally fails the whole write on a table this CN did not create. Omitting it
+	// leaves the documented 0 = unknown.
+	if sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts) {
+		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
+			metaTbl,
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
+			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
+			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
+			catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
+			buildTS))
+	} else {
+		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
+			metaTbl,
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
+			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
+			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
+			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
+	}
 	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }

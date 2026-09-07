@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -640,7 +638,9 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// deliberately NOT this transaction's SnapshotTS: that is >= the applied range and would
 	// claim coverage of changes committed after the range was collected but never applied.
 	// 0 when no consumer supplied one (a direct caller outside ISCP), meaning unknown.
-	sqls, err := s.ToSql(s.ts, s.buildTS)
+	sqls, err := s.ToSql(s.ts, s.buildTS,
+		sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+			catalog.Hnsw_TblCol_Metadata_Build_Ts))
 	if err != nil {
 		return err
 	}
@@ -760,8 +760,10 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 // 1. sync the metadata table
 // 2. sync the index file to index table
 // ToSql emits the CDC sync's inserts. ts orders the generations (wall clock); buildTS is the
-// transaction SnapshotTS the content reflects.
-func (s *HnswSync[T]) ToSql(ts int64, buildTS int64) ([]string, error) {
+// transaction SnapshotTS the content reflects. provenance says whether the metadata table has
+// the nrow/build_ts columns yet -- a CDC sync is the path most likely to meet a table created
+// before they existed, since it writes to indexes it did not create.
+func (s *HnswSync[T]) ToSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil
@@ -810,13 +812,12 @@ func (s *HnswSync[T]) ToSql(ts int64, buildTS int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
-			idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, sqlexec.MetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 		ts++
 	}
 
 	if len(metas) > 0 {
-		metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", "))
+		metasql := sqlexec.MetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas)
 		sqls = append(sqls, metasql)
 	}
 	return sqls, nil

@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 
@@ -290,4 +291,15 @@ func buildSnapshotTS(proc *process.Process) int64 {
 		return 0
 	}
 	return sqlexec.NewSqlProcess(proc).BuildSnapshotTS()
+}
+
+// metadataProvenance reports whether this index's metadata table already carries the appended
+// nrow/build_ts columns, so the writer names them only when they exist. See
+// sqlexec.HasProvenanceColumns for why a CN can meet either shape.
+func metadataProvenance(proc *process.Process, dbName, metadataTable string) bool {
+	if proc == nil {
+		return false
+	}
+	return sqlexec.HasProvenanceColumns(
+		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.Hnsw_TblCol_Metadata_Build_Ts)
 }

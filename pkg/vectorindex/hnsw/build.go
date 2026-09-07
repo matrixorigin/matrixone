@@ -19,11 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -314,8 +312,9 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // 2. sync the index file to index table
 // ToInsertSql emits the index-chunk and metadata inserts. ts is the CN wall clock that orders
 // generations; buildTS is the transaction SnapshotTS (physical) the content was built from, i.e.
-// the base-table version this generation reflects.
-func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
+// the base-table version this generation reflects. provenance says whether the metadata table
+// carries the nrow/build_ts columns yet -- see sqlexec.HasProvenanceColumns.
+func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
 
 	// Surface any worker error from the multi-threaded build. Without this a worker
 	// that failed on the last queued vector (after Add already returned nil) would be
@@ -351,11 +350,10 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d, %d, %d)",
-			idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, sqlexec.MetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(h.tblcfg.DbName, h.tblcfg.MetadataTable), strings.Join(metas, ", "))
+	metasql := sqlexec.MetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

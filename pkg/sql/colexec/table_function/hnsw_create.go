@@ -74,10 +74,11 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	sqls := hnsw.ClearIndexSqls(u.tblcfg)
 
 	ts := time.Now().UnixMicro()
+	provenance := metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable)
 	switch u.idxcfg.Usearch.Quantization {
 	case usearch.F32:
 		if u.buildf32 != nil {
-			insertSqls, err := u.buildf32.ToInsertSql(ts, buildSnapshotTS(proc))
+			insertSqls, err := u.buildf32.ToInsertSql(ts, buildSnapshotTS(proc), provenance)
 			if err != nil {
 				return err
 			}
@@ -85,7 +86,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 	case usearch.F64:
 		if u.buildf64 != nil {
-			insertSqls, err := u.buildf64.ToInsertSql(ts, buildSnapshotTS(proc))
+			insertSqls, err := u.buildf64.ToInsertSql(ts, buildSnapshotTS(proc), provenance)
 			if err != nil {
 				return err
 			}

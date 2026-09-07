@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +36,18 @@ func metadataInsert(t *testing.T, sqls []string, metaTbl string) string {
 	return ""
 }
 
+// metadataInsertAny returns the metadata insert whatever shape it is in.
+func metadataInsertAny(t *testing.T, sqls []string, metaTbl string) string {
+	t.Helper()
+	for _, sql := range sqls {
+		if strings.Contains(sql, metaTbl) {
+			return sql
+		}
+	}
+	t.Fatalf("no metadata insert in %v", sqls)
+	return ""
+}
+
 // The caller supplies build_ts, because the two writers know different things and the tag cannot
 // tell them apart -- both persist a tag=0 base.
 //
@@ -44,6 +57,9 @@ func metadataInsert(t *testing.T, sqls []string, metaTbl string) string {
 // does not have; its inputs include unversioned CDC tails, so it has no version to name.
 func TestToInsertSqlsRecordsTheCallersBuildTS(t *testing.T) {
 	cfg := TableConfig{DbName: "db", IndexTable: "idx", MetadataTable: "meta"}
+	// The table has the column; whether the writer NAMES it is what the sibling tests cover.
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
 
 	for _, c := range []struct {
 		name    string
@@ -70,9 +86,12 @@ func TestToInsertSqlsRecordsTheCallersBuildTS(t *testing.T) {
 }
 
 // The insert names its columns rather than relying on positions, which is what lets it keep
-// working against a metadata table whose column order or width changes.
+// working against a metadata table whose column order or width changes -- and, during a rolling
+// upgrade, against one that has not been widened yet.
 func TestToInsertSqlsUsesNamedColumns(t *testing.T) {
 	cfg := TableConfig{DbName: "db", IndexTable: "idx", MetadataTable: "meta"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
 	seg := &Segment{Id: "s1", N: 3}
 	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 1, int(vectorindex.Tag_ModelChunk), 42)
 	require.NoError(t, err)
@@ -87,4 +106,23 @@ func TestToInsertSqlsUsesNamedColumns(t *testing.T) {
 	} {
 		require.Contains(t, ins, col)
 	}
+}
+
+// On a table that predates the column, the same writer must omit build_ts rather than fail. The
+// tenant's v4_0_7 migration is asynchronous, so this CN can be asked to write here first.
+func TestToInsertSqlsOmitsBuildTSOnALegacyTable(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "idx", MetadataTable: "legacymeta"}
+	sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable)
+	seg := &Segment{Id: "s1", N: 3}
+
+	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 1, int(vectorindex.Tag_ModelChunk), 42)
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	ins := metadataInsertAny(t, sqls, cfg.MetadataTable)
+	require.NotContains(t, ins, catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		"naming a column the table does not have fails the whole write")
+	require.Contains(t, ins, catalog.FullText2Index_TblCol_Metadata_Nrow)
+	require.NotContains(t, ins, "42", "and the value goes with the column it was for")
 }
