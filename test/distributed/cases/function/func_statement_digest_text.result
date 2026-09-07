@@ -4,6 +4,12 @@ use statement_digest_text_test;
 select statement_digest_text('SELECT 1') as digest;
 digest
 SELECT ?
+select statement_digest_text('SELECT 1;') as trailing_digest;
+trailing_digest
+SELECT ?
+select statement_digest_text('BEGIN SELECT 1; END;') as compound_digest;
+compound_digest
+BEGIN SELECT ? ; END
 select statement_digest_text('SELECT 2 /* comment */ WHERE 10=20') as digest;
 digest
 SELECT ? WHERE ? = ?

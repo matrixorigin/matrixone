@@ -4,6 +4,8 @@ create database statement_digest_text_test;
 use statement_digest_text_test;
 
 select statement_digest_text('SELECT 1') as digest;
+select statement_digest_text('SELECT 1;') as trailing_digest;
+select statement_digest_text('BEGIN SELECT 1; END;') as compound_digest;
 select statement_digest_text('SELECT 2 /* comment */ WHERE 10=20') as digest;
 select statement_digest_text('SELECT a + b, a - b FROM t1,t2,t3 WHERE a=c') as digest;
 select statement_digest_text('SELECT 1,2,3') as digest;
