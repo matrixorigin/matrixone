@@ -220,7 +220,7 @@ func TestIssue28227BitwiseAggregateBinaryOperandWidth(t *testing.T) {
 				execSQLRequire(t, ctx, db, fmt.Sprintf(
 					"create view %s as select substring(v512, 1, 512) as s from %s where g=1",
 					viewName, tableName))
-				_, err := db.ExecContext(ctx, fmt.Sprintf("select %s(s) from %s", functionName, viewName))
+				_, err = db.ExecContext(ctx, fmt.Sprintf("select %s(s) from %s", functionName, viewName))
 				require.Error(t, err)
 				require.ErrorContains(t, err,
 					"Aggregate bitwise functions cannot accept arguments longer than 511 bytes")
