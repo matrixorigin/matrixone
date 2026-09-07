@@ -16,8 +16,9 @@ package process
 
 import (
 	"context"
-	"errors"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // sequenceGate is a one-permit semaphore.  It deliberately lives on
@@ -67,7 +68,7 @@ func (g *sequenceGate) acquire(ctx context.Context) (func(), error) {
 // error paths can safely use a deferred cleanup without leaking the permit.
 func (proc *Process) AcquireSequence(ctx context.Context) (func(), error) {
 	if proc == nil || proc.Base == nil {
-		return nil, errors.New("sequence gate: process base is nil")
+		return nil, moerr.NewInternalErrorNoCtx("sequence gate: process base is nil")
 	}
 	return proc.Base.sequenceGate.acquire(ctx)
 }

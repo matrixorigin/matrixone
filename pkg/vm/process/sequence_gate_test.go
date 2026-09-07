@@ -19,8 +19,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAcquireSequenceRejectsNilProcessBase(t *testing.T) {
+	for _, proc := range []*Process{nil, {}} {
+		t.Run("nil process/base", func(t *testing.T) {
+			release, err := proc.AcquireSequence(context.Background())
+			require.Nil(t, release)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+			require.EqualError(t, err, "internal error: sequence gate: process base is nil")
+		})
+	}
+}
 
 func TestAcquireSequenceSharesGateWithChildProcesses(t *testing.T) {
 	base := &BaseProcess{}
