@@ -971,3 +971,42 @@ func TestHousekeepingSurvivesACnUuidWhoseServiceIsGone(t *testing.T) {
 	require.EqualValues(t, 4096, kept.host,
 		"and an unreachable service must not silently unbound the cache")
 }
+
+// The prune walks residency BEFORE the catalog I/O and deletes after it, and that I/O can take
+// seconds. An account that cold-loads in that window writes itself a fresh memo, which a
+// delete-by-key would then throw away -- leaving it resident but unknown to acctLimits, so no
+// later pass refreshes or applies its cap and a reduction waits for a miss that a warm tenant
+// never takes.
+func TestHousekeepingDoesNotPruneAMemoWrittenDuringItsOwnPass(t *testing.T) {
+	c := newBoundCache(t)
+	mp := mpool.MustNewZero()
+
+	const resident = uint32(11) // holds bytes, so it is refreshed
+	const arriving = uint32(12) // absent at walk time, arrives mid-pass
+
+	sp := govProc(t, c, resident, caps{}, caps{})
+	loadInto(t, c, sp, "__mo_index_secondary_res", 100, 0)
+	entryOf(t, c, "__mo_index_secondary_res").accountID.Store(resident)
+
+	// arriving holds nothing right now, so the walk marks its memo prunable.
+	c.gov().acctLimits.Store(arriving, acctLimitEntry{
+		value: hostCap(1 << 30), fetched: time.Now().Add(-2 * sysLimitTTL), service: "gov-test-cn"})
+	c.gov().acctLimits.Store(resident, acctLimitEntry{
+		value: hostCap(1 << 20), fetched: time.Now().Add(-2 * sysLimitTTL), service: "gov-test-cn"})
+
+	fresh := acctLimitEntry{value: hostCap(4096), fetched: time.Now(), service: "gov-test-cn"}
+	withSysSql(t, c, func(_ context.Context, _ string, account uint32, _, _ string) (executor.Result, error) {
+		if account == resident {
+			// arriving cold-loads while the pass is inside its catalog read, exactly as
+			// another goroutine's miss would, and writes itself a current memo.
+			c.gov().acctLimits.Store(arriving, fresh)
+		}
+		return varRows(t, mp), nil
+	})
+
+	houseKeepingSync(t, c)
+
+	got, ok := c.gov().acctLimits.Load(arriving)
+	require.True(t, ok, "the memo written during the pass must survive it")
+	require.Equal(t, fresh, got, "and must be the value the arrival wrote")
+}

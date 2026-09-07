@@ -1036,14 +1036,31 @@ func (g *VectorIndexGovernor) refreshMemoizedAccountLimits(residents map[uint32]
 	ctx, cancel := context.WithTimeout(context.Background(), capRefreshPassBudget)
 	defer cancel()
 
-	var stale []uint32
+	// Key AND the value observed with it. The prune below runs after catalog I/O that can take
+	// seconds, and an account can cold-load in that window: tenantCacheLimits writes it a fresh
+	// memo, which a delete-by-key would then throw away. The account is resident from then on
+	// but absent from acctLimits, so no later pass refreshes or applies its cap and a cap
+	// reduction waits for its next miss -- indefinitely, if it stays warm.
+	type observed struct {
+		account uint32
+		entry   acctLimitEntry
+	}
+	var stale []observed
 	g.acctLimits.Range(func(key, value any) bool {
 		account, ok := key.(uint32)
 		if !ok {
 			return true
 		}
 		if _, resident := residents[account]; !resident {
-			stale = append(stale, account)
+			// Not resident is not the same as gone. An account cold-loading right now has
+			// written its memo but has no STATUS_LOADED entry yet, so residency cannot see
+			// it -- and neither can a residency snapshot taken before this pass's catalog
+			// I/O. A memo written within the TTL means the account is in use, whatever
+			// residency says, so only an ALSO-stale memo is prunable.
+			if e, ok := value.(acctLimitEntry); ok && !e.fetched.IsZero() &&
+				time.Since(e.fetched) >= sysLimitTTL {
+				stale = append(stale, observed{account, e})
+			}
 			return true
 		}
 		entry, ok := value.(acctLimitEntry)
@@ -1059,7 +1076,9 @@ func (g *VectorIndexGovernor) refreshMemoizedAccountLimits(residents map[uint32]
 		g.accountCacheLimitWithin(ctx, capRefreshPassBudget, entry.service, account)
 		return true
 	})
-	for _, account := range stale {
-		g.acctLimits.Delete(account)
+	for _, dead := range stale {
+		// Compare-and-delete: a value written since the walk means the account came back, and
+		// the memo it wrote is the current one.
+		g.acctLimits.CompareAndDelete(dead.account, dead.entry)
 	}
 }
