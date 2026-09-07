@@ -117,6 +117,20 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 			append:   func(v *vector.Vector, mp *mpool.MPool) error { return vector.AppendFixed(v, uint64(10), false, mp) },
 			wantJSON: `"base64:type16:Cg=="`, wantType: "BIT",
 		},
+		{
+			name: "decimal256", typ: types.New(types.T_decimal256, 76, 2),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendFixed(v, types.Decimal256{B0_63: 12345}, false, mp)
+			},
+			wantJSON: `123.45`, wantType: "DECIMAL",
+		},
+		{
+			name: "float64 array", typ: types.T_array_float64.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, types.ArrayToBytes([]float64{1.25, -2.5}), false, mp)
+			},
+			wantJSON: `[1.25, -2.5]`, wantType: "ARRAY",
+		},
 	}
 
 	for _, tc := range tests {

@@ -372,6 +372,10 @@ func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	timeValue, err := types.ParseTime("04:05:06", 0)
 	require.NoError(t, err)
+	datetimeValue, err := types.ParseDatetime("2024-02-03 04:05:06.12", 2)
+	require.NoError(t, err)
+	timestampValue, err := types.ParseTimestamp(jsonSessionTimeZone(proc), "2024-02-03 04:05:06.12", 2)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name string
@@ -389,6 +393,24 @@ func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
 			key: NewFunctionTestInput(types.T_binary.ToType(),
 				[]string{"\x00\xff"}, []bool{false}),
 			want: `{"AP8=": 1}`,
+		},
+		{
+			name: "datetime keeps declared scale",
+			key: NewFunctionTestInput(types.New(types.T_datetime, 0, 2),
+				[]types.Datetime{datetimeValue}, []bool{false}),
+			want: `{"2024-02-03 04:05:06.12": 1}`,
+		},
+		{
+			name: "timestamp keeps session timezone and declared scale",
+			key: NewFunctionTestInput(types.New(types.T_timestamp, 0, 2),
+				[]types.Timestamp{timestampValue}, []bool{false}),
+			want: `{"2024-02-03 04:05:06.12": 1}`,
+		},
+		{
+			name: "year remains a member name",
+			key: NewFunctionTestInput(types.T_year.ToType(),
+				[]types.MoYear{2024}, []bool{false}),
+			want: `{"2024": 1}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
