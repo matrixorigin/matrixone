@@ -446,6 +446,10 @@ func rewriteProxyError(err error) (uint16, string, string) {
 		errorCode = definition.ErrorCode
 		sqlState = definition.SqlStates[0]
 		msg = definition.ErrorMsgOrFormat
+	} else if isCacheAuthRejected(err) {
+		definition := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		errorCode = definition.ErrorCode
+		sqlState = definition.SqlStates[0]
 	}
 	return errorCode, sqlState, msg
 }

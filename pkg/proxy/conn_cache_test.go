@@ -608,6 +608,65 @@ func TestConnCacheRefreshAuthenticationRejectionStopsCompatibleScan(t *testing.T
 		"a terminal authentication rejection must not drain other compatible entries")
 }
 
+func TestConnCacheRefreshAuthenticationRejectionPreservesAccessDeniedProductionPath(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	var refreshCalls atomic.Int64
+	runTestWithQueryServiceHandlersAndRefresh(t, cn, nil, nil,
+		func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+			if req.RefreshSessionAuthRequest == nil {
+				return moerr.NewInternalError(ctx, "missing RefreshSessionAuth request")
+			}
+			refreshCalls.Add(1)
+			resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{
+				AuthenticationFailed: true,
+			}
+			// A frontend authenticationRejectedError is converted to this
+			// generic wire error by query.Response.WrapError. The response
+			// disposition is the stable signal that must survive the RPC.
+			return fmt.Errorf("there is no user dump")
+		},
+		func(cc *clientConn, _ string) {
+			cache := newConnCache(
+				context.Background(), "", runtime.DefaultRuntime().Logger(),
+				withMOCluster(cc.moCluster),
+				withQueryClient(cc.queryClient),
+			)
+			defer cache.Close()
+
+			identity := cacheReuseIdentity{tenant: "tenant-a", username: "dump"}
+			for range 2 {
+				sc, _, cleanup := newPipeServerConnForCacheTest(t)
+				defer cleanup()
+				require.True(t, cache.(identityConnCache).PushWithIdentity(
+					"tenant-a", sc, identity))
+			}
+
+			requestCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			sc, err := cache.(*connCache).PopContextWithIdentityError(
+				requestCtx,
+				"tenant-a", 7, nil, nil,
+				clientInfo{
+					labelInfo: labelInfo{Tenant: "tenant-a"},
+					username:  "dump",
+				},
+				identity,
+			)
+			require.Nil(t, sc)
+			require.Error(t, err)
+			require.Equal(t, int64(1), refreshCalls.Load(),
+				"one rejected login must reach the query service once")
+			require.Equal(t, 1, cache.Count(),
+				"the untouched compatible generation must remain cached")
+
+			code, state, message := rewriteProxyError(err)
+			require.Equal(t, moerr.ER_ACCESS_DENIED_ERROR, code)
+			require.Equal(t, "28000", state)
+			require.Contains(t, message, "there is no user dump")
+		},
+	)
+}
+
 func TestConnCacheRefreshRequestDeterministicFailureStopsCompatibleScan(t *testing.T) {
 	var calls atomic.Int64
 	cache := newConnCache(
