@@ -7289,7 +7289,7 @@ func supportsRemoteAutoIncrementSessionOptions(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion55
+	return ok && protocolVersion >= defines.MORPCVersion56
 }
 
 func supportsRemoteUpdateChangedRows(service string) bool {

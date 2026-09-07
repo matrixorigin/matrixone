@@ -179,6 +179,16 @@ type Session interface {
 	GetSqlModeNoAutoValueOnZero() (bool, bool)
 }
 
+// TemporaryTableDDL is an optional capability of a user session. Internal
+// sessions deliberately keep temporary DDL in their shared transaction.
+// Physical cleanup is owned by the session after its data transaction ends.
+type TemporaryTableDDL interface {
+	CheckTemporaryTableCapacity(context.Context) error
+	OwnsTemporaryTable(database, physicalName string) bool
+	PublishTemporaryTable(database, alias, physicalName string)
+	RetireTemporaryTable(database, alias, physicalName string, indexNames []string)
+}
+
 // ForeignConn is a connection to a foreign data source (Elasticsearch, an
 // external SQL database, ...) cached on an interactive session for esql_tvf /
 // sql_tvf. The session owns its lifetime and closes it when the session ends.

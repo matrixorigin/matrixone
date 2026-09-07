@@ -1038,12 +1038,12 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 
 	proc.Base.SessionInfo.AutoIncrementIncrement = 3
 	proc.Base.SessionInfo.AutoIncrementOffset = 2
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 	_, _, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline),
-		"requires MORPC protocol version 55")
+		"requires MORPC protocol version 56")
 
 	// New wire metadata is not optional merely because the session happens to
 	// use the default 1/1 series. An older receiver would silently drop these
@@ -1051,14 +1051,14 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	proc.Base.SessionInfo.AutoIncrementIncrement = 1
 	proc.Base.SessionInfo.AutoIncrementOffset = 1
 	_, _, err = convertToPipelineInstruction(orderedPreInsert, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
 	_, _, err = convertToPipelineInstruction(orderedPreInsertUnique, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 55")
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, orderedPipeline),
-		"requires MORPC protocol version 55")
+		"requires MORPC protocol version 56")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
 	_, instruction, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.HasAutoCol)
@@ -4354,11 +4354,11 @@ func TestCancelConsumedDispatchRegistrationCancelsOwnerProcess(t *testing.T) {
 		colexecServer: colexec.GetServer(""),
 	}
 	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
-	registeredProc, notifyChannel, state, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	registeredProc, notifyChannel, state, _, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
 	require.Equal(t, colexec.RemoteReceiverAttachedNow, state)
 	require.Same(t, dispatchProc, registeredProc)
 	require.Equal(t, notifyCh, notifyChannel)
-	receiver.cancelConsumedDispatchRegistration(registeredProc, cancelCause)
+	receiver.cancelConsumedDispatchRegistration(registeredProc, nil, cancelCause)
 
 	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
 	colexec.GetServer("").RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)

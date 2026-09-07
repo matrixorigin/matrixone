@@ -10663,7 +10663,7 @@ func inheritViewMetadataRevalidation(
 	serviceID string,
 	accountID uint32,
 ) error {
-	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(ctx, bh); err != nil {
 		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
 			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
 			return nil

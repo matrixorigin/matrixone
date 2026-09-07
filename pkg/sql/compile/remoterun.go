@@ -1969,7 +1969,7 @@ func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, re
 	}
 	if proc == nil || !supportsRemoteAutoIncrementSessionOptions(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment session/provenance metadata requires MORPC protocol version 55",
+			"remote auto-increment session/provenance metadata requires MORPC protocol version 56",
 		)
 	}
 	return nil
