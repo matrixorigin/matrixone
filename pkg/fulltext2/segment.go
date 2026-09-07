@@ -378,18 +378,13 @@ type Segment struct {
 	// term dict, LOADED-side representation — set by Deserialize, nil on a
 	// build-side segment. `dict` is the vellum FST mapping term → the BYTE OFFSET of
 	// that term's self-contained directory entry in `ranking`. A loaded segment does
-	// NOT expand any term at load: query lookup (LookupLoaded) decodes just the touched
-	// term's directory entry from `ranking` on demand and points its blocks/positions at
-	// `blocks`/`positions` — so the resident directory heap is O(the current query), not
-	// O(vocabulary). `ranking`/`blocks`/`positions` are views into the mmap/blob (kept
-	// alive by mmapData or GC). The build-side `terms` map is left nil.
+	// not traverse posting directories at load: LookupLoaded decodes the touched
+	// term's directory on demand, while clean-segment DF reads only its header.
+	// Block/position data remains in `blocks`/`positions`, so resident directory heap
+	// is O(the current query), not O(vocabulary). These slices are views into the
+	// mmap/blob (kept alive by mmapData or GC). The build-side `terms` map is left nil.
 	dict                       *termDict
 	ranking, blocks, positions []byte
-	// headerDFSafe is set only after every FST-reachable posting directory entry has
-	// passed the same structural parser used by LookupLoaded. A corrupt entry disables
-	// the header-only DF fast path for the whole segment, preserving the old per-term
-	// safe-miss behavior without retaining O(vocabulary) validation state.
-	headerDFSafe bool
 
 	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
 	// FST, the compressed docID/tf blocks, and the compressed positions section are
@@ -697,7 +692,6 @@ func (s *Segment) Free() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
-	s.headerDFSafe = false
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

@@ -332,13 +332,15 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	require.Equal(t, "seg0", loaded.Id)
 	require.Equal(t, int64(5), loaded.Recency)
 	require.Equal(t, seg.N, loaded.N)
-	require.True(t, loaded.headerDFSafe)
+	df, ok := loaded.lookupLoadedDF("hello")
+	require.True(t, ok)
+	require.Equal(t, 2, df)
 	loaded.Free()
 
 	// A checksum authenticates bytes, not their internal structure. Persist a
 	// matching checksum for a blob whose "hello" entry has a valid DF header but
-	// an invalid block directory. Load remains backward compatible, while the
-	// header-only DF fast path is disabled and healthy terms use the full decoder.
+	// an invalid block directory. Load does not validate all directories: header DF
+	// remains readable, while search rejects the corrupted entry independently.
 	badDirectory := corruptSerializedTermDirectory(t, buf, "hello")
 	badDirectoryChecksum := vectorindex.CheckSumFromBuffer(badDirectory)
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
@@ -350,9 +352,9 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	})
 	loaded, err = LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
-	require.False(t, loaded.headerDFSafe)
-	_, ok := loaded.lookupLoadedDF("world")
-	require.False(t, ok)
+	df, ok = loaded.lookupLoadedDF("hello")
+	require.True(t, ok)
+	require.Equal(t, 2, df)
 	_, ok = loaded.LookupLoaded("hello")
 	require.False(t, ok)
 	_, ok = loaded.LookupLoaded("world")

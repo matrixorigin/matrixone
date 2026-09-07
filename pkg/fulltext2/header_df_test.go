@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,19 +42,20 @@ func loadedHeaderOnlySegment(t *testing.T, df int) *Segment {
 	return &Segment{dict: dict, ranking: ranking, blocks: make([]byte, df)}
 }
 
-func TestLookupLoadedDFRequiresValidatedDirectory(t *testing.T) {
+func TestLookupLoadedDFReadsOnlyHeader(t *testing.T) {
 	seg := loadedHeaderOnlySegment(t, 7)
 
-	// A readable DF header is insufficient: the normal decoder rejects this
-	// intentionally incomplete directory, so the fast path must reject it too.
+	// Deliberately absent directory proves that clean DF does not invoke the full
+	// decoder. Corrupt-directory score equivalence is not part of this fast path.
 	_, ok := seg.LookupLoaded("term")
 	require.False(t, ok)
-	_, ok = seg.lookupLoadedDF("term")
-	require.False(t, ok)
+	df, ok := seg.lookupLoadedDF("term")
+	require.True(t, ok)
+	require.Equal(t, 7, df)
 
 	idx := &Index{segments: []*Segment{seg}, liveOrd: [][]bool{nil}}
 	gs := &globalStats{idx: idx, dfCache: make(map[string]int)}
-	require.Zero(t, gs.df("term"))
+	require.Equal(t, 7, gs.df("term"))
 
 	_, ok = seg.lookupLoadedDF("missing")
 	require.False(t, ok)
@@ -64,7 +66,6 @@ func TestLookupLoadedDFRequiresValidatedDirectory(t *testing.T) {
 		"term": {docIDs: []int64{0, 1}, tfs: []uint8{1, 1}, positions: [][]int32{{0}, {0}}},
 	})
 	loaded := roundtrip(t, orig)
-	require.True(t, loaded.headerDFSafe)
 	idx = NewIndex([]*Segment{loaded}, nil)
 	gs = idx.newGlobalStats()
 	require.Equal(t, 2, gs.df("term"))
@@ -89,7 +90,7 @@ func corruptSerializedTermDirectory(t *testing.T, data []byte, term string) []by
 	return corrupt
 }
 
-func TestCorruptLoadedDirectoryDoesNotContributeGlobalDF(t *testing.T) {
+func TestCorruptLoadedDirectoryWithReadableHeader(t *testing.T) {
 	badBuild := buildSegment(int32(types.T_int64),
 		[]any{int64(1), int64(2), int64(3), int64(4), int64(5), int64(6), int64(7)},
 		[]int32{1, 1, 1, 1, 1, 1, 1},
@@ -106,7 +107,6 @@ func TestCorruptLoadedDirectoryDoesNotContributeGlobalDF(t *testing.T) {
 	bad, err := Deserialize("bad", bytes.NewReader(badData))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = bad.dict.Close() })
-	require.False(t, bad.headerDFSafe)
 
 	off, ok, err := bad.dict.get("term")
 	require.NoError(t, err)
@@ -116,32 +116,28 @@ func TestCorruptLoadedDirectoryDoesNotContributeGlobalDF(t *testing.T) {
 	require.Equal(t, 7, df)
 	_, ok = bad.LookupLoaded("term")
 	require.False(t, ok, "the reference decoder rejects the damaged directory")
-	_, ok = bad.lookupLoadedDF("term")
-	require.False(t, ok, "an unvalidated segment must not use the header fast path")
-
-	emptyBuild := buildSegment(int32(types.T_int64),
-		[]any{int64(1), int64(2), int64(3), int64(4), int64(5), int64(6), int64(7)},
-		[]int32{1, 1, 1, 1, 1, 1, 1}, nil)
-	empty := roundtrip(t, emptyBuild)
+	df, ok = bad.lookupLoadedDF("term")
+	require.True(t, ok)
+	require.Equal(t, 7, df)
 	healthy := roundtrip(t, buildSegment(int32(types.T_int64), []any{int64(100)}, []int32{1}, map[string]*termPostings{
 		"term": {docIDs: []int64{0}, tfs: []uint8{1}, positions: [][]int32{{0}}},
 	}))
 
 	gotIdx := NewIndex([]*Segment{bad, healthy}, nil)
-	wantIdx := NewIndex([]*Segment{empty, healthy}, nil)
+	// A damaged term contributes its header DF but never supplies a posting. We
+	// do not assert score/ranking equivalence with the old full-decoder DF path.
+	require.Equal(t, 8, gotIdx.newGlobalStats().df("term"))
 	for _, algo := range []ScoreAlgo{BM25, TfIdf} {
 		got, err := gotIdx.SearchQuery([]byte("+term"), true, ParserDefault, algo, 10, nil)
 		require.NoError(t, err)
-		want, err := wantIdx.SearchQuery([]byte("+term"), true, ParserDefault, algo, 10, nil)
-		require.NoError(t, err)
 		require.Len(t, got, 1)
-		require.Len(t, want, 1)
-		require.Equal(t, want[0].Pk, got[0].Pk)
-		require.Equal(t, math.Float32bits(want[0].Score), math.Float32bits(got[0].Score))
+		require.Equal(t, int64(100), got[0].Pk)
+		require.False(t, math.IsNaN(float64(got[0].Score)))
+		require.False(t, math.IsInf(float64(got[0].Score), 0))
 	}
 }
 
-func TestCorruptEntryFallsBackForHealthyTermsInSameSegment(t *testing.T) {
+func TestCorruptEntryDoesNotDisableHealthyTerms(t *testing.T) {
 	build := buildSegment(int32(types.T_int64), []any{int64(1), int64(2)}, []int32{1, 1}, map[string]*termPostings{
 		"bad":  {docIDs: []int64{0}, tfs: []uint8{1}, positions: [][]int32{{0}}},
 		"good": {docIDs: []int64{1}, tfs: []uint8{1}, positions: [][]int32{{0}}},
@@ -151,12 +147,11 @@ func TestCorruptEntryFallsBackForHealthyTermsInSameSegment(t *testing.T) {
 	loaded, err := Deserialize("mixed", bytes.NewReader(corruptSerializedTermDirectory(t, data, "bad")))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = loaded.dict.Close() })
-	require.False(t, loaded.headerDFSafe)
 
-	// Segment-wide fallback is conservative: the damaged term remains a miss,
-	// while unrelated healthy terms still use the reference decoder and search.
-	_, ok := loaded.lookupLoadedDF("good")
-	require.False(t, ok)
+	// An unrelated damaged directory does not disable the healthy term's header.
+	df, ok := loaded.lookupLoadedDF("good")
+	require.True(t, ok)
+	require.Equal(t, 1, df)
 	idx := NewIndex([]*Segment{loaded}, nil)
 	require.Equal(t, 1, idx.newGlobalStats().df("good"))
 	got, err := idx.SearchQuery([]byte("+good"), true, ParserDefault, BM25, 10, nil)
@@ -174,6 +169,8 @@ func TestLookupLoadedDFGuardsMalformedHeader(t *testing.T) {
 		wantOK  bool
 	}{
 		{name: "offset-out-of-range", ranking: []byte{1}, blocks: []byte{1}, value: 1},
+		{name: "offset-max-uint64", ranking: []byte{1}, blocks: []byte{1}, value: math.MaxUint64},
+		{name: "truncated-varint", ranking: []byte{0x80}, blocks: []byte{1}},
 		{name: "varint-overflow", ranking: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, blocks: make([]byte, 8), value: 0},
 		{name: "df-larger-than-blocks", ranking: []byte{9}, blocks: make([]byte, 8), value: 0},
 		{name: "zero-df", ranking: []byte{0}, blocks: []byte{1}, value: 0},
@@ -185,9 +182,13 @@ func TestLookupLoadedDFGuardsMalformedHeader(t *testing.T) {
 			dict, err := loadTermDict(fstBytes)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = dict.Close() })
-			seg := &Segment{dict: dict, ranking: tc.ranking, blocks: tc.blocks, headerDFSafe: true}
+			seg := &Segment{dict: dict, ranking: tc.ranking, blocks: tc.blocks}
 			_, ok := seg.lookupLoadedDF("term")
 			require.Equal(t, tc.wantOK, ok)
+			require.NotPanics(t, func() {
+				_, ok := seg.LookupLoaded("term")
+				require.False(t, ok)
+			})
 		})
 	}
 }
@@ -202,7 +203,153 @@ func TestGlobalStatsDFLoadedDirtyStillUsesLivePostings(t *testing.T) {
 	require.Equal(t, 2, gs.df("term"))
 }
 
-func benchmarkLoadedTermDFSegment(b *testing.B, df int) *Segment {
+func TestDecodeTermEntryUnsignedBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		baseB, baseP uint64
+		blockLens    []uint64
+		posLens      []uint64
+		wantOK       bool
+	}{
+		{name: "huge-block-base", baseB: 1 << 63, blockLens: []uint64{1}, posLens: []uint64{0}},
+		{name: "huge-position-base", baseP: 1 << 63, blockLens: []uint64{1}, posLens: []uint64{1}},
+		{name: "max-block-base", baseB: math.MaxUint64, blockLens: []uint64{1}, posLens: []uint64{0}},
+		{name: "max-position-base", baseP: math.MaxUint64, blockLens: []uint64{1}, posLens: []uint64{1}},
+		{name: "cumulative-block-length", blockLens: []uint64{2, 1}, posLens: []uint64{0, 0}},
+		{name: "cumulative-position-length", blockLens: []uint64{1, 1}, posLens: []uint64{2, 1}},
+		{name: "overflow-block-length", blockLens: []uint64{1, math.MaxUint64}, posLens: []uint64{0, 0}},
+		{name: "overflow-position-length", blockLens: []uint64{1, 1}, posLens: []uint64{1, math.MaxUint64}},
+		{name: "base-plus-block-length", baseB: 2, blockLens: []uint64{1}, posLens: []uint64{0}},
+		{name: "base-plus-position-length", baseP: 2, blockLens: []uint64{1}, posLens: []uint64{1}},
+		{name: "empty-at-end", baseB: 2, baseP: 2, blockLens: []uint64{0}, posLens: []uint64{0}, wantOK: true},
+		{name: "last-byte", baseB: 1, baseP: 1, blockLens: []uint64{1}, posLens: []uint64{1}, wantOK: true},
+		{name: "position-free", blockLens: []uint64{2}, posLens: []uint64{0}, wantOK: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A minimal directory with tiny backing sections isolates arithmetic
+			// boundaries without allocating memory based on the malformed values.
+			r := binary.AppendUvarint(nil, uint64(len(tc.blockLens)))
+			r = binary.AppendUvarint(r, uint64(len(tc.blockLens)))
+			r = binary.AppendUvarint(r, tc.baseB)
+			r = binary.AppendUvarint(r, tc.baseP)
+			r = append(r, 1, 1) // max TF, min doc length
+			for i, n := range tc.blockLens {
+				r = append(r, 1, 1, 1) // last doc gap, max TF, min doc length
+				r = binary.AppendUvarint(r, n)
+				r = binary.AppendUvarint(r, tc.posLens[i])
+			}
+			seg := &Segment{ranking: r, blocks: []byte{0, 1}, positions: []byte{0, 1}}
+			if tc.name == "position-free" {
+				seg.positions = nil
+			}
+			require.NotPanics(t, func() {
+				p, ok := seg.decodeTermEntry(0)
+				require.Equal(t, tc.wantOK, ok)
+				if !ok {
+					require.Nil(t, p)
+					return
+				}
+				var nb, np uint64
+				for i, n := range tc.blockLens {
+					nb += n
+					np += tc.posLens[i]
+				}
+				require.Equal(t, seg.blocks[tc.baseB:tc.baseB+nb], p.blockData)
+				require.Equal(t, seg.positions[tc.baseP:tc.baseP+np], p.posRaw)
+			})
+		})
+	}
+}
+
+func TestHeaderDFValidIndexScoreParity(t *testing.T) {
+	for _, count := range []int{1, 4, 10} {
+		for _, dirty := range []bool{false, true} {
+			t.Run(fmt.Sprintf("segments=%d/dirty=%t", count, dirty), func(t *testing.T) {
+				var builds, loaded []*Segment
+				for si := 0; si < count; si++ {
+					b := NewBuilder(fmt.Sprintf("seg-%d", si), int32(types.T_int64))
+					for i := 0; i < BlockSize+3; i++ {
+						terms := []string{"alpha", "beta"}
+						if i%3 == 0 {
+							terms = append(terms, "beta", "gamma")
+						}
+						if i%5 == 0 {
+							terms = []string{"alpine", "delta"}
+						}
+						pk := int64(si*1000 + i)
+						if dirty && si > 0 && i == 1 {
+							pk = 1 // supersede the older copy, independently of deletes
+							terms = []string{"gamma"}
+						}
+						feed(t, b, pk, terms...)
+					}
+					s, err := b.Finish()
+					require.NoError(t, err)
+					s.Recency = int64(si)
+					builds = append(builds, s)
+					l := roundtrip(t, s)
+					l.Recency = s.Recency
+					loaded = append(loaded, l)
+				}
+				deletes := map[any]int64{}
+				if dirty {
+					deletes[int64(2)] = int64(count)
+				}
+				wantIdx, gotIdx := NewIndex(builds, deletes), NewIndex(loaded, deletes)
+				gs := gotIdx.newGlobalStats()
+				for _, term := range []string{"alpha", "alpine", "beta", "gamma", "delta", "missing"} {
+					want := 0
+					for si, s := range loaded {
+						if p, ok := s.LookupLoaded(term); ok {
+							want += materializedLiveDF(p, gotIdx.liveOrd[si])
+						}
+					}
+					require.Equal(t, want, gs.df(term), term)
+				}
+				for _, q := range []struct {
+					text    string
+					boolean bool
+				}{
+					{"+alpha +beta", true}, {"+alpha +alpha", true}, {"+alpha +missing", true},
+					{"alpha gamma", true}, {"+alpha -gamma", true}, {"+(alpha delta) beta", true},
+					{"al*", true}, {"+\"alpha beta\"", true}, {"alpha beta", false},
+				} {
+					for _, algo := range []ScoreAlgo{BM25, TfIdf} {
+						for _, limit := range []int{0, 1, 1000, int(wantIdx.globalN) + 1} {
+							want, err := wantIdx.SearchQuery([]byte(q.text), q.boolean, ParserDefault, algo, limit, nil)
+							require.NoError(t, err)
+							got, err := gotIdx.SearchQuery([]byte(q.text), q.boolean, ParserDefault, algo, limit, nil)
+							require.NoError(t, err)
+							if limit == 0 || len(want) < limit {
+								require.Equal(t, resultScoreBits(want), resultScoreBits(got), "query=%s algo=%d limit=%d", q.text, algo, limit)
+								continue
+							}
+							// Equal-score segment merging may choose different PKs at a
+							// tied cutoff. Check every returned PK against the unbounded
+							// oracle, and require the same complete Top-K score sequence.
+							full, err := wantIdx.SearchQuery([]byte(q.text), q.boolean, ParserDefault, algo, int(wantIdx.globalN)+1, nil)
+							require.NoError(t, err)
+							bits := resultScoreBits(full)
+							require.Len(t, got, len(want))
+							for _, r := range got {
+								v, exists := bits[r.Pk]
+								require.True(t, exists)
+								require.Equal(t, v, math.Float32bits(r.Score))
+							}
+							sort.Slice(full, func(i, j int) bool { return full[i].Score > full[j].Score })
+							sort.Slice(got, func(i, j int) bool { return got[i].Score > got[j].Score })
+							for i := range got {
+								require.Equal(t, math.Float32bits(full[i].Score), math.Float32bits(got[i].Score))
+							}
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func benchmarkLoadedTermDFSegment(b *testing.B, df int) (*Segment, uint64) {
 	b.Helper()
 	nblk := (df + BlockSize - 1) / BlockSize
 	ranking := make([]byte, 0, 16+nblk*8)
@@ -242,22 +389,16 @@ func benchmarkLoadedTermDFSegment(b *testing.B, df int) *Segment {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = dict.Close() })
-	return &Segment{dict: dict, ranking: ranking, blocks: blocks, headerDFSafe: true}
-}
-
-func BenchmarkValidateLoadedPostingsDirectory(b *testing.B) {
-	for _, df := range []int{256, 10_000, 50_000, 200_000} {
-		b.Run(fmt.Sprintf("df=%d", df), func(b *testing.B) {
-			seg := benchmarkLoadedTermDFSegment(b, df)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if !seg.validateLoadedPostingsDirectory() {
-					b.Fatal("valid posting directory rejected")
-				}
-			}
-		})
+	seg := &Segment{dict: dict, ranking: ranking, blocks: blocks}
+	got, ok := seg.termDFAt(entryOff)
+	if !ok || got != df {
+		b.Fatalf("header at offset %d: got (%d, %t), want %d", entryOff, got, ok, df)
 	}
+	tp, ok := seg.LookupLoaded("term")
+	if !ok || tp.df() != df {
+		b.Fatal("benchmark directory does not match header DF")
+	}
+	return seg, entryOff
 }
 
 func BenchmarkLoadedTermDFHeader(b *testing.B) {
@@ -267,7 +408,7 @@ func BenchmarkLoadedTermDFHeader(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				segs := make([]*Segment, segments)
 				for i := range segs {
-					segs[i] = benchmarkLoadedTermDFSegment(b, df)
+					segs[i], _ = benchmarkLoadedTermDFSegment(b, df)
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -281,65 +422,15 @@ func BenchmarkLoadedTermDFHeader(b *testing.B) {
 	}
 }
 
-func benchmarkLoadedVocabularySegment(b *testing.B, n int) *Segment {
-	b.Helper()
-	terms := make([]string, n)
-	values := make([]uint64, n)
-	ranking := make([]byte, 1+8, 1+8+n*12)
-	ranking[0] = postingsFormatV1
-	binary.LittleEndian.PutUint64(ranking[1:], uint64(n))
-	blocks := make([]byte, n*2)
-	for i := 0; i < n; i++ {
-		terms[i] = fmt.Sprintf("term-%06d", i)
-		values[i] = uint64(len(ranking))
-		ranking = binary.AppendUvarint(ranking, 1)           // df
-		ranking = binary.AppendUvarint(ranking, 1)           // nblk
-		ranking = binary.AppendUvarint(ranking, uint64(2*i)) // blockDataBase
-		ranking = binary.AppendUvarint(ranking, 0)           // posRawBase
-		ranking = append(ranking, 1)                         // termMaxTf
-		ranking = binary.AppendUvarint(ranking, 1)           // minDocLen
-		ranking = binary.AppendUvarint(ranking, 0)           // lastDocGap
-		ranking = append(ranking, 1)                         // blockMaxTf
-		ranking = binary.AppendUvarint(ranking, 1)           // blockMinDocLen
-		ranking = binary.AppendUvarint(ranking, 2)           // block bytes
-		ranking = binary.AppendUvarint(ranking, 0)           // no positions
-	}
-	fstBytes, err := buildTermDictFST(terms, values)
-	if err != nil {
-		b.Fatal(err)
-	}
-	dict, err := loadTermDict(fstBytes)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(func() { _ = dict.Close() })
-	return &Segment{dict: dict, ranking: ranking, blocks: blocks}
-}
-
-func BenchmarkValidateLoadedPostingsDirectoryVocabulary(b *testing.B) {
-	for _, terms := range []int{1_000, 10_000, 100_000} {
-		b.Run(fmt.Sprintf("terms=%d", terms), func(b *testing.B) {
-			seg := benchmarkLoadedVocabularySegment(b, terms)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if !seg.validateLoadedPostingsDirectory() {
-					b.Fatal("valid posting directory rejected")
-				}
-			}
-		})
-	}
-}
-
 func BenchmarkLoadedTermDFHeaderAtOffset(b *testing.B) {
 	for _, df := range []int{256, 10_000, 50_000, 200_000} {
 		name := fmt.Sprintf("df=%d", df)
 		b.Run(name, func(b *testing.B) {
-			seg := benchmarkLoadedTermDFSegment(b, df)
+			seg, entryOff := benchmarkLoadedTermDFSegment(b, df)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchmarkDFSink, _ = seg.termDFAt(0)
+				benchmarkDFSink, _ = seg.termDFAt(entryOff)
 			}
 		})
 	}
@@ -352,7 +443,7 @@ func BenchmarkLoadedTermDFDecode(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				segs := make([]*Segment, segments)
 				for i := range segs {
-					segs[i] = benchmarkLoadedTermDFSegment(b, df)
+					segs[i], _ = benchmarkLoadedTermDFSegment(b, df)
 				}
 				b.ReportAllocs()
 				b.ResetTimer()

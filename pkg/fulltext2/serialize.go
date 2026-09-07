@@ -133,9 +133,9 @@ func sliceMembers(data []byte) (docmap, fst, ranking, blocks, positions []byte, 
 }
 
 // decodeSegment builds the loaded segment over data (an in-memory blob or an mmap):
-// the ranking DIRECTORY (per-block skip/max meta) expands RESIDENT, while the FST,
-// the docID/tf blocks, and the compressed positions stay as views into data (decoded
-// on demand). Callers keep data alive (mmapData for a base, GC for a tail).
+// the FST, ranking directory, docID/tf blocks and compressed positions remain views
+// into data. Posting directories are decoded on demand, not traversed at load.
+// Callers keep data alive (mmapData for a base, GC for a tail).
 func (s *Segment) decodeSegment(data []byte) error {
 	docmap, fst, ranking, blocks, positions, err := sliceMembers(data)
 	if err != nil {
@@ -152,11 +152,6 @@ func (s *Segment) decodeSegment(data []byte) error {
 		return err
 	}
 	s.dict = dict
-	// Structural corruption may have a matching outer checksum (for example, a bad
-	// writer or restored blob). Keep loading for backward-compatible safe-miss
-	// behavior, but enable header-only DF only when every FST target is accepted by
-	// the same parser as LookupLoaded.
-	s.headerDFSafe = s.validateLoadedPostingsDirectory()
 	// s.N is set by decodeDocmap (loaded segments have pks==nil, so len(s.pks) is 0).
 	return nil
 }
@@ -540,9 +535,9 @@ func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []by
 }
 
 // decodePostings BINDS the loaded segment to its (mmap'd) ranking/blocks/positions
-// sections WITHOUT expanding any term. V6 entries are self-contained and reachable by
-// byte offset (the FST value), so terms decode lazily in LookupLoaded — the resident
-// directory heap is O(the current query), not O(vocabulary).
+// sections without traversing posting directories. Entries are self-contained
+// and reachable by byte offset (the FST value), so terms materialize lazily in
+// LookupLoaded — the resident directory heap is O(the current query), not O(vocabulary).
 func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 	if len(ranking) == 0 {
 		s.ranking, s.blocks, s.positions = nil, nil, nil
@@ -560,26 +555,12 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 
 // decodeTermEntry lazily decodes ONE term's self-contained directory entry at byte
 // offset `off` in s.ranking (the FST value) into a transient termPostings whose
-// blockData/posRaw are views into s.blocks/s.positions. Callers hold the result for the
-// query's lifetime (WAND/phrase cursors, evalClause), so the entry decodes at most a few
-// times per query and never persists — resident directory heap is O(query), not O(vocab).
+// blockData/posRaw are views into s.blocks/s.positions. Query callers hold this
+// transient metadata (WAND/phrase cursors, evalClause); it is not retained by the
+// segment. Resident directory heap is O(query), not O(vocab).
 // Returns (nil,false) on a corrupt/out-of-bounds entry (defense-in-depth on already-CRC'd
 // data).
 func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
-	return s.parseTermEntry(off, true)
-}
-
-// validateTermEntry parses the complete directory entry without allocating the
-// transient block metadata slices returned to search cursors.
-func (s *Segment) validateTermEntry(off int) bool {
-	_, ok := s.parseTermEntry(off, false)
-	return ok
-}
-
-// parseTermEntry is the single structural parser for loaded posting-directory
-// entries. materialize=false performs exactly the same bounds/varint walk while
-// retaining only O(1) scalar state.
-func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool) {
 	r := s.ranking
 	if off < 0 || off >= len(r) {
 		return nil, false
@@ -623,20 +604,15 @@ func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool
 		return nil, false
 	}
 	df, nblk := int(dfu), int(nblku)
-	var tp *termPostings
-	if materialize {
-		tp = &termPostings{ndoc: df, maxTf: termMaxTf, minDocLen: int32(minDLu)}
-	}
+	tp := &termPostings{ndoc: df, maxTf: termMaxTf, minDocLen: int32(minDLu)}
 	if nblk == 0 {
 		return tp, true
 	}
-	if materialize {
-		tp.blockLastDoc = make([]int64, nblk)
-		tp.blockMaxTf = make([]uint8, nblk)
-		tp.blockMinDocLn = make([]int32, nblk)
-		tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
-		tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
-	}
+	tp.blockLastDoc = make([]int64, nblk)
+	tp.blockMaxTf = make([]uint8, nblk)
+	tp.blockMinDocLn = make([]int32, nblk)
+	tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
+	tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
 	var prevLast int64
 	var cb, cpos uint64
 	for b := 0; b < nblk; b++ {
@@ -645,9 +621,7 @@ func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool
 			return nil, false
 		}
 		prevLast += int64(gap)
-		if materialize {
-			tp.blockLastDoc[b] = prevLast
-		}
+		tp.blockLastDoc[b] = prevLast
 		if p >= len(r) {
 			return nil, false
 		}
@@ -665,21 +639,18 @@ func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool
 		if !ok || cpos > uint64(len(s.positions)) || posLen > uint64(len(s.positions))-cpos {
 			return nil, false
 		}
-		if materialize {
-			tp.blockMaxTf[b] = blockMaxTf
-			tp.blockMinDocLn[b] = int32(mdl)
-			tp.blockOff[b] = int64(cb)
-			tp.blockPosOff[b] = int64(cpos)
-		}
+		tp.blockMaxTf[b] = blockMaxTf
+		tp.blockMinDocLn[b] = int32(mdl)
+		tp.blockOff[b] = int64(cb)
+		tp.blockPosOff[b] = int64(cpos)
 		cb += blkLen
 		cpos += posLen
 	}
+	// Check unsigned bases before subtraction or conversion. Signed addition can
+	// wrap on malformed varints and incorrectly admit an out-of-bounds slice.
 	if baseB > uint64(len(s.blocks)) || cb > uint64(len(s.blocks))-baseB ||
 		baseP > uint64(len(s.positions)) || cpos > uint64(len(s.positions))-baseP {
 		return nil, false
-	}
-	if !materialize {
-		return nil, true
 	}
 	tp.blockOff[nblk] = int64(cb)
 	tp.blockPosOff[nblk] = int64(cpos)
@@ -687,26 +658,6 @@ func (s *Segment) parseTermEntry(off int, materialize bool) (*termPostings, bool
 	tp.blockData = s.blocks[int(baseB):int(baseB+cb)]
 	tp.posRaw = s.positions[int(baseP):int(baseP+cpos)]
 	return tp, true
-}
-
-// validateLoadedPostingsDirectory validates every FST-reachable entry once at
-// load. A single corrupt entry conservatively disables the header-only DF fast
-// path for the segment; searches retain the prior per-term safe-miss behavior.
-func (s *Segment) validateLoadedPostingsDirectory() bool {
-	if s.dict == nil || len(s.ranking) < 1+8 || s.ranking[0] != postingsFormatV1 {
-		return false
-	}
-	nterms := binary.LittleEndian.Uint64(s.ranking[1 : 1+8])
-	if nterms != uint64(s.dict.len()) {
-		return false
-	}
-	valid, err := s.dict.everyValue(func(off uint64) bool {
-		if off > uint64(^uint(0)>>1) {
-			return false
-		}
-		return s.validateTermEntry(int(off))
-	})
-	return err == nil && valid
 }
 
 // deriveTermStats fills tp's raw, scorer-agnostic score-UB fields from its
@@ -768,7 +719,7 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 		return nil, false
 	}
 	off, ok, err := s.dict.get(term) // V6: the FST value is the entry's byte offset in ranking
-	if err != nil || !ok {
+	if err != nil || !ok || off >= uint64(len(s.ranking)) {
 		return nil, false
 	}
 	return s.decodeTermEntry(int(off))
@@ -778,11 +729,11 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 // only the document-frequency varint at the FST entry offset. The rest of the
 // directory (block max metadata and block/position ranges) is deliberately left
 // untouched: a clean segment can use its raw posting df without decoding it.
-// The fast path is enabled only after every FST target in the loaded segment has
-// passed the full structural parser. Dirty segments must use LookupLoaded because
-// their postings have to be streamed against the liveness bitmap.
+// This does not validate the remaining directory: already-corrupt entries may
+// contribute DF even when search rejects them. Dirty segments use LookupLoaded
+// because their postings must be streamed against the liveness bitmap.
 func (s *Segment) lookupLoadedDF(term string) (int, bool) {
-	if s.dict == nil || !s.headerDFSafe {
+	if s.dict == nil {
 		return 0, false
 	}
 	off, ok, err := s.dict.get(term)
@@ -794,8 +745,7 @@ func (s *Segment) lookupLoadedDF(term string) (int, bool) {
 
 // termDFAt reads the first field of one loaded posting-directory entry. It is
 // kept separate from the FST lookup so the header parse itself remains a
-// trivially allocation-free operation; the FST's byte-key conversion remains
-// unchanged until the later offset-cache stage is justified by profiling.
+// trivially allocation-free operation. The FST's byte-key conversion is unchanged.
 func (s *Segment) termDFAt(off uint64) (int, bool) {
 	if off >= uint64(len(s.ranking)) {
 		return 0, false
