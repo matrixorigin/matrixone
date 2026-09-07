@@ -145,7 +145,7 @@ ComputeGroupRef {
     membership_generation  monotonic uint64
     authority_epoch        durable monotonic uint64
     liveness_revision      monotonic uint64 within authority epoch
-    lifecycle              Provisioning | Ready | Incompatible | Draining | Deleting
+    lifecycle              Provisioning | Ready | Incompatible | DrainRequested | Draining | Deleting
     capability_version     monotonic or content-addressed version
 }
 ```
@@ -222,7 +222,7 @@ usable for a new execution only after all of these gates are true:
 4. required execution protocol capabilities are present;
 5. every member's authority liveness lease and the snapshot validity deadline
    cover new-attempt resolution;
-6. the group is not Draining or Deleting for new attempts.
+6. the group is not DrainRequested, Draining or Deleting for new attempts.
 
 Cached `WorkState=Working` is not a liveness proof after its authority lease
 expires. A consumer refreshes within a bounded deadline or rejects the group as
@@ -569,22 +569,62 @@ mutation, or remote start. It never changes DDL topology or migrates ingress.
 | Ready | member process restarts with a new execution incarnation | Ready, generation + 1 after sealing | use new incarnation | old-incarnation routes fail closed; started work follows failure/retry fencing |
 | Ready | current executable member loses capability | Incompatible, generation + 1 | reject incompatible | receiver validates pinned protocol and fails closed if necessary |
 | Incompatible | sealed compatible snapshot | Ready, generation + 1 | admit on new snapshot | none from incompatible generation |
-| Ready | drain requested | Draining, generation + 1 | reject | routes already Claimed/Started may finish until the bounded deadline; unclaimed routes fail closed |
+| Ready | drain requested | DrainRequested, generation + 1 | observers reject; stale receivers may still claim until sealed | existing claims retain bounded execution rights |
+| DrainRequested | every executable receiver incarnation acknowledges its seal | Draining, generation + 1 | globally reject | only claims preceding their receiver seal may finish until the bounded deadline |
 | Draining | deletion begins | Deleting, generation + 1 | reject | bounded cancellation/cleanup |
 | Deleting | generation-scoped deletion barrier completes | absent | reject unknown | none |
 
 A group name may be reused only with a new ID. Bindings to the old ID remain
 dangling and fail until explicitly updated.
 
-The static MVP has no distributed attempt registry that could safely backdate
-new route starts after a drain barrier. Therefore a route materialized but not
-yet claimed when Draining publishes is rejected before operator construction,
-even if its coordinator resolved the attempt earlier. The attempt unwinds its
-other routes, and a replacement attempt remains unavailable while the group is
-Draining. Only a receiver claim that linearized before the barrier may advance
-to Started and run until the drain deadline. A future design may relax this
-only with a generation-fenced attempt-admission record owned by the drain
-authority.
+Drain request publication is not the global start barrier. A receiver can hold
+an older Ready snapshot and an unexpired liveness lease while a registry update
+is delayed. Neither a generation field nor an authority lease tells that
+receiver about a publication it has not observed. The static MVP therefore uses
+a two-phase receiver seal, not a per-query distributed attempt registry:
+
+1. The authority durably records DrainRequested and the complete set of receiver
+   service IDs/execution incarnations that can still accept any outstanding
+   grant. Membership admission and Ready lease renewal are sealed for this
+   group; replacing/removing a member cannot erase an outstanding barrier
+   participant. New observers reject attempts immediately.
+2. Each receiver atomically seals local **and** remote route claims against the
+   same lock/CAS used to claim a route, before acknowledging
+   `(group_id, authority_epoch, drain_generation, execution_incarnation)`.
+   A claim before this local seal may finish within the drain deadline; a claim
+   after it fails before operator construction. Updating a cache alone is not
+   an acknowledgement. Duplicate seals/acks are idempotent; stale acks cannot
+   satisfy another generation or incarnation.
+3. Only after every participant acknowledges may the authority durably publish
+   Draining. This is the global effective barrier. An unclaimed route cannot
+   start after this point even at a receiver with a delayed registry cache.
+   Rejected attempts unwind sibling routes; retries cannot bypass the seal.
+
+A partitioned receiver may still claim during DrainRequested, but never after
+the effective barrier. The operation has a bounded control-plane request
+deadline: missing acknowledgements return a pending/failure outcome and retain
+DrainRequested, rather than reporting successful Draining or holding a request
+forever. Lease expiration or a wall-clock estimate alone does not substitute
+for an acknowledgement. Operators may retry reconciliation, but cannot remove
+an unacknowledged participant merely because it is unreachable. This deliberately
+trades drain availability for a clock-independent no-new-claims guarantee.
+Reclaiming a permanently lost participant requires a separately reviewed,
+irreversible execution-fencing protocol; it is not implicit in this MVP.
+
+The authority persists barrier progress through restart and advances its epoch
+before resuming; old-epoch acknowledgements must be re-established. A receiver
+restart creates a new incarnation and cannot accept old-incarnation grants or
+rejoin as Ready during DrainRequested/Draining. An acknowledged old process
+remains sealed until it exits. No cancellation of a partially completed drain
+may reopen old grants; reactivation requires a new sealed generation and fresh
+authorization. Barrier state is bounded by the group's admitted incarnations,
+with membership frozen until the barrier reaches a terminal lifecycle state.
+
+Alternatives: an authoritative claim CAS would close the same race but add a
+control-plane RPC/availability dependency to every route; a bounded lease-window
+contract would permit starts after publication and require explicit clock-drift
+assumptions. Receiver sealing retains a local claim hot path and the strong
+effective-barrier contract, with the availability limitation stated above.
 
 The control plane owns the deletion barrier. Operator, Proxy, authentication,
 and SQL registry participants acknowledge that a specific group ID/generation
@@ -730,9 +770,11 @@ target was removed or restarted before start, a stale generation/incarnation,
 missing fields from an old sender, or a replay fails before any operator/side
 effect. Route state is
 `Issued -> Claimed -> Started -> Terminal`, and status/cancel are idempotent.
-Claim is the start barrier for lifecycle purposes: once it has linearized, a
-later Draining publication may let that claim reach Started under the pinned
-snapshot until the drain deadline; an unclaimed grant receives no such right.
+Claim is serialized with the receiver seal in section 7: once it has linearized
+before that seal, later Draining publication may let it reach Started under the
+pinned snapshot until the drain deadline; an unclaimed grant receives no such
+right. The authority cannot publish effective Draining before every receiver
+seal is acknowledged, regardless of local snapshot propagation delays.
 Once a route has started, its attempt owns the pinned snapshot and follows
 normal drain/cancel rules. If a start response is lost, the coordinator queries
 status and either rejoins that exact attempt or cancels and observes its
@@ -819,6 +861,25 @@ invariants for dirty workspaces and `LOAD DATA LOCAL`: ingress must participate
 when it owns uncommitted state, and a client-local input stream is ingress-only.
 They remain inputs to a future compute-group resolver, not evidence that group
 identity, authorization, transaction pinning, or RemoteRun fencing exists.
+
+The legacy LOCAL protocol has an explicit terminal boundary: successful upload
+EOF permits connection reuse; an upload interrupted before EOF (runner failure,
+panic, query cancellation, lock-bind failure, or transport error) disconnects
+the client. Cancellation interrupts both the pipe and the network connection.
+The statement joins the upload owner, which in turn joins its cancellation
+watcher before freeing buffers or allowing session/ExecCtx cleanup. Unlimited
+discard-to-EOF and packet retries are not safe recovery: a client can keep them
+alive indefinitely, and a partially read packet cannot be retried as a new
+header. The tradeoff is intentional: interrupted clients must reconnect rather
+than receiving an error followed by reuse of an unproven protocol boundary.
+No successful-upload size limit, per-row cache, timer or background service is
+introduced. This is an independent protocol lifecycle repair, not the future
+compute-group drain implementation.
+
+The same ownership rule applies to UDF file import, which uses LOCAL transport
+to feed the shared file service: storage failure/panic cancels the upload before
+joining it. Its own cancellation goroutine is unnecessary because the common
+upload owner already interrupts both I/O directions and joins its watcher.
 
 Two candidate fixes found while auditing #26109 are explicitly outside this
 RFC and should be delivered as isolated correctness PRs if their regressions

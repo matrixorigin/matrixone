@@ -225,9 +225,13 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				// Create it only after compile/placement succeeds so a fail-closed
 				// scheduling decision cannot leave an unattached pipe behind.
 				reader, writer := io.Pipe()
+				uploadCtx, stopUpload := context.WithCancel(execCtx.reqCtx)
 				execCtx.proc.Base.LoadLocalReader = reader
 				execCtx.loadLocalWriter = writer
 				defer func() {
+					// Abort network I/O as well as pipe I/O before joining on
+					// runner error/panic. A client need not ever send upload EOF.
+					stopUpload()
 					if closeErr := reader.Close(); closeErr != nil {
 						ses.Error(execCtx.reqCtx,
 							"processLoadLocal goroutine failed",
@@ -252,7 +256,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, writer, reader)
+					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer, reader)
 				})
 			}
 		}

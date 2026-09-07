@@ -7553,7 +7553,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7576,7 +7576,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
@@ -7641,7 +7641,7 @@ func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
 			pu.SV.SkipCheckUser = true
 			setPu("", pu)
 			setSessionAlloc("", NewLeakCheckAllocator())
-			ioses, err := NewIOSession(tConn, pu, "")
+			ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 			require.NoError(t, err)
 			mysqlWriter := &trackedLoadLocalMysqlWriter{
 				testMysqlWriter: &testMysqlWriter{ioses: ioses},
@@ -7747,7 +7747,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7765,7 +7765,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
 	})
@@ -7793,7 +7793,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7825,7 +7825,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
 		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
@@ -7878,7 +7878,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7902,7 +7902,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		}()
 
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 
 		// Should return error containing "network read timeout"
 		convey.So(err, convey.ShouldNotBeNil)
