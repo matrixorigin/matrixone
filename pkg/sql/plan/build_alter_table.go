@@ -797,7 +797,7 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 				return false
 			}
 		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause,
-			*tree.AlterTableChangeColumnClause, *tree.AlterTableRenameColumnClause,
+			*tree.AlterTableRenameColumnClause,
 			*tree.AlterOptionTableName:
 			// supported column and name changes
 		default:

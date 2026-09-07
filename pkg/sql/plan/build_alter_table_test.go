@@ -1863,6 +1863,17 @@ func TestAlterTemporaryTablePlan(t *testing.T) {
 	}
 }
 
+func TestAlterTemporaryTableKeepsUnsupportedColumnOperationsClosed(t *testing.T) {
+	mock := newAutoIncrementAlterOptimizer()
+	source := mock.ctxt.tables["auto_incr_t"]
+	source.IsTemporary = true
+	source.TableType = catalog.SystemTemporaryTable
+
+	_, err := buildSingleStmt(mock, t,
+		"ALTER TABLE constraint_test.auto_incr_t CHANGE COLUMN v value_col BIGINT")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), "%v", err)
+}
+
 func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 	for _, temporaryDestination := range []bool{false, true} {
 		t.Run(fmt.Sprintf("temporary=%v", temporaryDestination), func(t *testing.T) {
