@@ -1,6 +1,3 @@
--- JSON_STORAGE_SIZE reports MatrixOne's ByteJson logical payload length.
--- JSON_STORAGE_FREE is zero after validation because updates rebuild ByteJson.
-
 drop database if exists json_storage_28034_db;
 create database json_storage_28034_db;
 use json_storage_28034_db;
@@ -15,20 +12,37 @@ insert into json_storage_28034 values
     (6, '[1,2,3]', '[1,2,3]'),
     (7, '{"a":1}', '{"a":1}'),
     (8, null, null);
-
 select id, json_storage_size(j), json_storage_size(s), json_storage_free(j), json_storage_free(s)
 from json_storage_28034 order by id;
+id	json_storage_size(j)	json_storage_size(s)	json_storage_free(j)	json_storage_free(s)
+1	2	2	0	0
+2	2	2	0	0
+3	3	3	0	0
+4	9	9	0	0
+5	9	9	0	0
+6	48	48	0	0
+7	29	29	0	0
+8	NULL	NULL	NULL	NULL
 select json_storage_size(json_object('a', 1)), json_storage_size(json_array(1, 2, 3));
+json_storage_size(json_object(a, 1))	json_storage_size(json_array(1, 2, 3))
+29	48
 select json_storage_size(json_arrayagg(j)) from json_storage_28034 where id <= 3;
-select json_storage_size(null), json_storage_free(null), json_storage_size(cast('null' as json));
-
+json_storage_size(json_arrayagg(j))
+26
+select json_storage_size(null), json_storage_free(null), json_storage_size(cast(null as json));
+json_storage_size(null)	json_storage_free(null)	json_storage_size(cast(null as json))
+NULL	NULL	2
 update json_storage_28034 set j = json_set(j, '$.longer', true) where id = 7;
 select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
+id	json_storage_size(j)	json_storage_free(j)
+7	46	0
 update json_storage_28034 set j = json_remove(j, '$.longer') where id = 7;
 select id, json_storage_size(j), json_storage_free(j) from json_storage_28034 where id = 7;
-
+id	json_storage_size(j)	json_storage_free(j)
+7	29	0
 select json_storage_size('{invalid');
+invalid argument json_storage_size, bad value invalid JSON document
 select json_storage_free('{invalid');
-
+invalid argument json_storage_free, bad value invalid JSON document
 drop table json_storage_28034;
 drop database json_storage_28034_db;
