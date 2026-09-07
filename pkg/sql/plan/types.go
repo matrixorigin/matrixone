@@ -501,10 +501,15 @@ type QueryBuilder struct {
 	// maintenance is intentionally absent.
 	irregularMaintInsertOnlySourceStep int32
 	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
-	irregularMaintTableDef             *plan.TableDef
-	irregularMaintObjRef               *plan.ObjectRef
-	irregularMaintSkipInsert           bool
-	irregularUpdateMaints              []irregularUpdateMaintenance
+	// irregularMaintValueChangedSourceSteps maps an affected logical index to a
+	// derivative source containing only new rows or conflict rows whose stored
+	// index inputs actually changed. Groups absent from the map retain the
+	// conservative unfiltered maintenance source.
+	irregularMaintValueChangedSourceSteps map[string]int32
+	irregularMaintTableDef                *plan.TableDef
+	irregularMaintObjRef                  *plan.ObjectRef
+	irregularMaintSkipInsert              bool
+	irregularUpdateMaints                 []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -549,15 +554,16 @@ type QueryBuilder struct {
 }
 
 type irregularUpdateMaintenance struct {
-	sourceStep           int32
-	deleteStep           int32
-	deletePkPos          int32
-	deletePkTyp          plan.Type
-	indexes              []*plan.IndexDef
-	insertOnlySourceStep int32
-	insertOnlyIndexes    []*plan.IndexDef
-	tableDef             *plan.TableDef
-	objRef               *plan.ObjectRef
+	sourceStep              int32
+	deleteStep              int32
+	deletePkPos             int32
+	deletePkTyp             plan.Type
+	indexes                 []*plan.IndexDef
+	insertOnlySourceStep    int32
+	insertOnlyIndexes       []*plan.IndexDef
+	valueChangedSourceSteps map[string]int32
+	tableDef                *plan.TableDef
+	objRef                  *plan.ObjectRef
 }
 
 type OptimizerHints struct {
