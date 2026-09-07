@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -115,12 +116,21 @@ func TestBaseDocCount(t *testing.T) {
 	})
 }
 
+// preloadStub answers the two reads Preload makes: the base doc/byte sums, and the tail size.
+func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailStored int64) {
+	t.Helper()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "LENGTH(") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailStored, 0)}}, nil
+		}
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, ndoc, bytes)}}, nil
+	})
+}
+
 // Preload records the count in preloadNdoc and sets preloaded.
 func TestFulltext2SearchPreload(t *testing.T) {
 	mp := mpool.MustNewZero()
-	swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 9, 0)}}, nil
-	})
+	preloadStub(t, mp, 9, 0, 0)
 
 	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta"})
 	require.NoError(t, s.Preload(nil))
@@ -129,6 +139,25 @@ func TestFulltext2SearchPreload(t *testing.T) {
 
 	host, _ := s.GetIndexSize()
 	require.Equal(t, int64(9*estBytesPerDocHeap), host, "the governor charges what Preload measured")
+}
+
+// A CDC-only index counts ZERO base docs. Publishing (0,0) put it outside admission entirely:
+// makeRoom takes its "nothing to account for" exit before registering a reservation, so
+// concurrent cold misses for distinct snapshot keys each tested the same free-memory reading,
+// each passed, and each then materialized a full tail on the Go heap.
+func TestFulltext2PreloadReservesTheCdcTail(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const stored = 8 << 20
+	preloadStub(t, mp, 0, 0, stored)
+
+	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "meta", IndexTable: "idx"})
+	require.NoError(t, s.Preload(nil))
+
+	host, device := s.GetIndexSize()
+	require.Zero(t, device)
+	require.Equal(t, int64(stored*tailLoadPeakFactor), host,
+		"a tail-only index must declare the tail, at the peak the load actually holds")
+	require.Positive(t, host, "otherwise the arrival never reaches the reservation at all")
 }
 
 // A failed count leaves preloaded false.

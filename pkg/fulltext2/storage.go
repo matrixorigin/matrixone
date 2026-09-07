@@ -571,28 +571,10 @@ func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, st
 // gates an INCREMENTAL load. The 0.8 headroom absorbs the (small) transient query-mpool
 // usage the formula omits.
 func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
-	// CAST AS SIGNED is load-bearing: SUM over an integer expression yields
-	// DECIMAL128, and the result is read as an int64 below. Without the cast the
-	// read reinterprets decimal bytes as an int64 — a garbage budget in a normal
-	// build, and a CN-killing panic in a type-checked one.
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
-		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	res, err := runSql(sqlproc, sql)
+	need, err := tailPeakBytes(sqlproc, cfg)
 	if err != nil {
 		return err
 	}
-	defer res.Close()
-	need := resultScalarInt64(res)
-	// LoadTailSegments holds SEVERAL full copies of the tail bytes at once — the raw
-	// per-chunk []byte copies, the reassembled per-frame buffers, and the Deserialized
-	// segments — so the real peak is a multiple of the stored bytes, not 1x. Scale the
-	// estimate up so the guard fails BEFORE that peak OOM-kills the CN rather than after
-	// the SUM passes. Conservative (may reject a borderline load that would just fit); a
-	// clear "compact/add memory" error beats a node-killing OOM.
-	const tailLoadPeakFactor = 3
-	need *= tailLoadPeakFactor
 	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
 	if need > avail {
 		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
@@ -601,6 +583,38 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 			cfg.DbName, cfg.IndexTable, need>>20, avail>>20))
 	}
 	return nil
+}
+
+// tailLoadPeakFactor scales stored tail bytes to the peak the load actually holds.
+//
+// LoadTailSegments holds SEVERAL full copies at once -- the raw per-chunk []byte copies, the
+// reassembled per-frame buffers, and the deserialized segments -- so the peak is a multiple of
+// the stored bytes, not 1x. Conservative on purpose: rejecting a borderline load beats an OOM.
+const tailLoadPeakFactor = 3
+
+// tailPeakBytes is what loading the CDC tail will cost at its peak, read from the stored chunk
+// sizes. Split out of checkTailLoadBudget so Preload can RESERVE it, not merely test it against
+// free memory at load time.
+//
+// Testing free memory is not a bound when two loads do it at once: two cold misses for distinct
+// named-snapshot keys both sample the same pre-allocation figure, both see room for one tail,
+// and both then materialize. The governor's reservation is what serializes them, and it can only
+// do that if the arrival declares these bytes before Load allocates them.
+func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	// CAST AS SIGNED is load-bearing: SUM over an integer expression yields DECIMAL128, and
+	// the result is read as an int64 below. Without the cast the read reinterprets decimal
+	// bytes as an int64 -- a garbage budget in a normal build, and a CN-killing panic in a
+	// type-checked one.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	return resultScalarInt64(res) * tailLoadPeakFactor, nil
 }
 
 // LoadTailSegments loads the tag=1 CdcTail: the SELECTed chunk rows are ordered,
