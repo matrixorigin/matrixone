@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,6 +103,22 @@ func TestV407UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
 			"insert into `%s`.`%s` values ('probe', 'chk', 1, 2, 3, 4)", dbName, metaTable))
 		require.Error(t, err, "six values into a legacy four-column metadata table must fail")
 
+		// THE WRITER MUST NOT DEPEND ON THE MIGRATION HAVING RUN. The migration is asynchronous
+		// per tenant while this CN already serves that tenant, so a build or CDC sync can land
+		// here first. What the writer actually emits for a table without the columns is the
+		// named legacy shape, and it has to succeed on this table, now, unmigrated.
+		legacy := sqlexec.MetadataInsertSql(dbName, metaTable, false,
+			[]string{sqlexec.MetadataRow(false, "probe-legacy", "chk", 1, 2, 3, 4)})
+		_, err = conn.ExecContext(ctx, legacy)
+		require.NoError(t, err, "the writer's legacy-shape SQL must work before the migration: %s", legacy)
+
+		// And the wide shape it would emit for a migrated table must NOT be sent here -- that is
+		// the failure above, and the reason the shape is asked rather than assumed.
+		wide := sqlexec.MetadataInsertSql(dbName, metaTable, true,
+			[]string{sqlexec.MetadataRow(true, "probe-wide", "chk", 1, 2, 3, 4)})
+		_, err = conn.ExecContext(ctx, wide)
+		require.Error(t, err, "naming absent columns fails, which is what HasProvenanceColumns prevents")
+
 		runV407TenantUpgrade(t, ctx, cn)
 
 		require.True(t, hasColumn(catalog.Hnsw_TblCol_Metadata_Nrow), "upgrade restores nrow")
@@ -109,6 +126,23 @@ func TestV407UpgradeAddsIndexMetadataProvenanceColumns(t *testing.T) {
 
 		// And the write that failed before now succeeds.
 		exec("insert into `%s`.`%s` values ('probe', 'chk', 1, 2, 3, 4)", dbName, metaTable)
+
+		// Both writer shapes are accepted by the widened table: the wide one records
+		// provenance, and the legacy one -- which a CN that asked before the migration may
+		// still be emitting -- leaves the defaulted 0 rather than failing.
+		_, err = conn.ExecContext(ctx, sqlexec.MetadataInsertSql(dbName, metaTable, true,
+			[]string{sqlexec.MetadataRow(true, "probe-wide2", "chk", 1, 2, 3, 4)}))
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, sqlexec.MetadataInsertSql(dbName, metaTable, false,
+			[]string{sqlexec.MetadataRow(false, "probe-legacy2", "chk", 1, 2, 3, 4)}))
+		require.NoError(t, err, "a named legacy write still works once the columns exist")
+
+		var provenance int64
+		require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+			"select %s from `%s`.`%s` where %s = 'probe-legacy2'",
+			catalog.Hnsw_TblCol_Metadata_Build_Ts, dbName, metaTable,
+			catalog.Hnsw_TblCol_Metadata_Index_Id)).Scan(&provenance))
+		require.Zero(t, provenance, "an omitted column defaults to the documented unknown sentinel")
 
 		// Idempotent: a second run is a no-op, not an error.
 		runV407TenantUpgrade(t, ctx, cn)

@@ -16,6 +16,7 @@ package v4_0_7
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"time"
 
 	"go.uber.org/zap"
@@ -44,6 +45,17 @@ func init() {
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
+			// The tenant migration WIDENS every existing index metadata table. A CN that
+			// predates these columns writes four positional values, which no longer matches a
+			// widened table -- so the widening must not begin while such a CN can still serve
+			// the tenant. This holds the tenant snapshot until every service reports the
+			// protocol that carries the new writer.
+			//
+			// It is only half the guarantee: the migration is asynchronous per tenant, so a
+			// new CN still meets not-yet-widened tables. That direction is handled on the
+			// write side, which names its columns and omits the provenance ones until the
+			// table has them (sqlexec.HasProvenanceColumns).
+			RequiredProtocolVersion: defines.MORPCVersion48,
 		},
 	}
 }
