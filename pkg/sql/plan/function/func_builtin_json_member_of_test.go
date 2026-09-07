@@ -303,6 +303,22 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 	require.True(t, succeed, message)
 }
 
+func TestJSONMemberOfNullRightSkipsPreparedLeftValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_text.ToType(), []string{"10"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		jsonMemberOf,
+	)
+	testCase.parameters[0].SetPrepareParamType(types.T_bit)
+	succeed, message := testCase.Run()
+	require.True(t, succeed, message)
+}
+
 func TestJSONMemberOfFunctionRegistration(t *testing.T) {
 	ctx := context.Background()
 	result, err := GetFunctionByName(ctx, "member of", []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})

@@ -320,6 +320,17 @@ func jsonMemberOf(
 			continue
 		}
 
+		// SQL NULL on either side short-circuits MEMBER OF before validating
+		// prepared domains or parsing the other operand. In particular, the
+		// prepared BIT/vector limitation must not turn `? MEMBER OF (NULL)`
+		// into an argument-1 type error.
+		if parameters[0].IsNull(row) || parameters[1].IsNull(row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if jsonMemberOfLeftHasInvalidRuntimeType(parameters[0], int(row)) {
 			return jsonMemberOfInvalidType(proc, 1)
 		}
@@ -333,16 +344,6 @@ func jsonMemberOf(
 			}
 			continue
 		}
-		if parameters[1].IsNull(row) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// SQL NULL on the left short-circuits the RHS completely. Keep all RHS
-		// domain and JSON parsing below that branch so invalid numeric, binary,
-		// and malformed JSON RHS values do not leak through NULL results.
 		if jsonMemberOfRightIsBinary(parameters[1], int(row)) {
 			return jsonMemberOfInvalidRightType(proc, true)
 		}
