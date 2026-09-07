@@ -278,7 +278,7 @@ semantic correctness.
 
 | Invariant | Cheapest proof and owning tests | Public-path/extra evidence |
 | --- | --- | --- |
-| Envelope parsing, canonical digest, strict duplicate/unsafe/oversize rejection | `pkg/sql/mongodb: TestParseUserQuery*`, `TestUserQueryPlanRevalidationFailsClosed` | Local MongoDB E2E filter/pipeline rejection coverage. |
+| Envelope parsing, canonical digest, strict duplicate/unsafe/oversize rejection | `pkg/sql/mongodb: TestParseUserQuery*`, `TestUserQueryPlanRevalidationFailsClosed` | Local MongoDB E2E covers unsafe stages plus invalid `$sort` direction and `$unwind` path through the public SQL path. |
 | Compile selection, residual separation, empty candidate and legacy behavior | `pkg/sql/compile: TestConfigureMongoUserQuery*` | Existing external-table execution path in CI. |
 | BSON transport revalidation and safe diagnostics | `pkg/sql/mongodb` plan round trips; `pkg/pb/plan` diagnostic tests; `pkg/sql/compile: TestCompileMongoDBQueryDiagnosticsAreRedacted` | CI UT and coverage jobs on the implementation head. |
 | Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses a real server command profiler: the raw MO aggregation returns five MongoDB documents and the reducing pipeline returns one; the JSON report records both counts. |

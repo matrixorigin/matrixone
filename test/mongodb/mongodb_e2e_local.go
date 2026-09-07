@@ -290,6 +290,18 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 			return err
 		}
 	}
+	for _, rejected := range []struct {
+		query string
+		want  string
+	}{
+		{query: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "$sort requires 1 to 32 fields"},
+		{query: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
+	} {
+		if err := expectQueryFailure(ctx, db,
+			"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+rejected.query+"'", rejected.want); err != nil {
+			return err
+		}
+	}
 	if err := expectQueryFailure(ctx, db,
 		`select count(*) from mongodb_ci.events where __mo_query = '{"FILTER":{"site_id":"site-west"}}'`,
 		"must contain only a filter or pipeline field"); err != nil {

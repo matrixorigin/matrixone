@@ -443,6 +443,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	for range 4 {
 		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
 	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $sort requires 1 to 32 fields"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $unwind requires a valid field path"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must contain only a filter or pipeline field"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
 	expectMongoDBE2EScalar(mock, "5")
