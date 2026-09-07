@@ -397,6 +397,10 @@ type Compile struct {
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
+	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
+	// owned by the SQL executor. It is intentionally separate from isInternal,
+	// which also controls routing and other execution policy.
+	temporaryDDLInExecutorTxn bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool

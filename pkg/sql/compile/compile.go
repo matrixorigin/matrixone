@@ -380,6 +380,10 @@ func (c *Compile) inheritPlanSnapshot(from *Compile) {
 	c.applyPlanSnapshot()
 }
 
+func (c *Compile) inheritTemporaryDDLPolicy(from *Compile) {
+	c.temporaryDDLInExecutorTxn = from.temporaryDDLInExecutorTxn
+}
+
 func (c *Compile) bindPlanSnapshotForCompile() {
 	if !c.hasPlanSnapshotTS {
 		c.capturePlanSnapshot()
@@ -510,6 +514,7 @@ func (c *Compile) clear() {
 	c.startAt = time.Time{}
 	c.needLockMeta = false
 	c.isInternal = false
+	c.temporaryDDLInExecutorTxn = false
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0

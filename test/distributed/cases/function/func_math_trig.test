@@ -203,4 +203,3 @@ SELECT cot(0.7e5);
 SELECT acos(1.1e5);
 SELECT atan(1.1e5);
 #SELECT atan2(1.1e5,0.5e4);
-

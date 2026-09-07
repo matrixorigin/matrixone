@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -1489,7 +1490,35 @@ func geom32WKB(t *testing.T, wkt string) string {
 	t.Helper()
 	g, err := geo.ParseWKT(wkt)
 	require.NoError(t, err)
-	return string(geo.WriteWKBFloat32(g))
+	out, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestReencodeGeom32RejectsMalformedPayload(t *testing.T) {
+	for _, malformed := range [][]byte{nil, {1, 1, 0, 0, 0}} {
+		out, err := reencodeGeom32(malformed, true)
+		require.Nil(t, out)
+		require.Error(t, err)
+	}
+
+	malformed := []byte{1, 1, 0, 0, 0}
+	out, err := reencodeGeom32(malformed, false)
+	require.NoError(t, err)
+	require.Equal(t, malformed, out)
+
+	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+		standard := make([]byte, 21)
+		if order == binary.LittleEndian {
+			standard[0] = 1
+		}
+		order.PutUint32(standard[1:5], 1)
+		order.PutUint64(standard[5:13], math.Float64bits(3.5e38))
+		order.PutUint64(standard[13:21], math.Float64bits(0))
+		out, err = reencodeGeom32(standard, true)
+		require.Nil(t, out)
+		require.ErrorContains(t, err, "not finite in GEOMETRY32")
+	}
 }
 
 func TestStXY32(t *testing.T) {
@@ -1525,6 +1554,72 @@ func TestStXY32(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func BenchmarkGeometryDerivedPayload(b *testing.B) {
+	for _, tc := range []struct{ name, input string }{
+		{"closed_boundary", "LINESTRING(0 0,1 1,0 0)"},
+		{"open_boundary", "LINESTRING(0 0,1 1)"},
+		{"empty_member", "MULTIPOINT(EMPTY,1 2)"},
+		{"nonempty_member", "MULTIPOINT(0 0,1 2)"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			g, err := geo.ParseWKT(tc.input)
+			require.NoError(b, err)
+			input := geo.WriteWKB(g)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if strings.Contains(tc.name, "boundary") {
+					_, err = boundaryFromPayload(input)
+				} else {
+					_, err = geometryNFromPayload(input, 1)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestGeometryEmptyDerivedWKB(t *testing.T) {
+	// Both widths and legacy-text/WKB inputs must produce actual WKB, not
+	// merely text that ST_AsText happens to accept.
+	cases := []struct{ name, input, want string }{
+		{"closed_boundary", "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY"},
+		{"empty_point_member", "MULTIPOINT(EMPTY,1 2)", "POINT EMPTY"},
+		{"empty_line_member", "MULTILINESTRING(EMPTY,(0 0,1 1))", "LINESTRING EMPTY"},
+		{"empty_polygon_member", "MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))", "POLYGON EMPTY"},
+		{"empty_collection_member", "GEOMETRYCOLLECTION(MULTIPOINT EMPTY,POINT(1 2))", "MULTIPOINT EMPTY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := geo.ParseWKT(tc.input)
+			require.NoError(t, err)
+			f32, err := geo.WriteWKBFloat32(g)
+			require.NoError(t, err)
+			for _, input := range [][]byte{[]byte(tc.input), geo.WriteWKB(g), f32} {
+				var out []byte
+				if tc.name == "closed_boundary" {
+					out, err = boundaryFromPayload(input)
+				} else {
+					var member string
+					member, err = geometryNFromPayload(input, 1)
+					out = []byte(member)
+				}
+				require.NoError(t, err)
+				decoded, err := geo.ReadWKB(out)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, geo.WriteWKT(decoded))
+				converted, err := reencodeGeom32(out, true)
+				require.NoError(t, err)
+				decoded, err = geo.ReadWKBFloat32(converted)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, geo.WriteWKT(decoded))
+			}
+		})
+	}
+}
+
 func TestGeometry32ReturningUnary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -1547,6 +1642,7 @@ func TestGeometry32ReturningUnary(t *testing.T) {
 	}
 
 	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StBoundary, "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY")
 	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
 	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
 	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
@@ -2539,7 +2635,7 @@ func initStBoundaryTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
 				[]string{
 					"MULTIPOINT((0 0),(4 2))",
-					"MULTIPOINT()",
+					"MULTIPOINT EMPTY",
 					"MULTILINESTRING((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
 					"SRID=4326;MULTILINESTRING((0 0,2 0,2 2,0 2,0 0))",
 				},
