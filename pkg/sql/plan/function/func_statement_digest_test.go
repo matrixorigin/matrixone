@@ -117,9 +117,16 @@ func TestStatementDigestTextBinaryCompatibility(t *testing.T) {
 
 	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
 		t.Run(oid.String(), func(t *testing.T) {
-			input, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
-			require.NoError(t, err)
+			nullInput := vector.NewConstNull(oid.ToType(), 1, proc.Mp())
 			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
+			require.NoError(t, err)
+			nullResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{nullInput}, 1)
+			nullInput.Free(proc.Mp())
+			require.NoError(t, err)
+			require.True(t, nullResult.IsNull(0))
+			nullResult.Free(proc.Mp())
+
+			input, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
 			require.NoError(t, err)
 			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
 			input.Free(proc.Mp())
@@ -169,12 +176,13 @@ func TestStatementDigestTextPreparedParamProvenance(t *testing.T) {
 func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	limit := int64(1024)
+	mode := ""
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		switch name {
 		case "sql_mode":
 			require.True(t, system)
 			require.False(t, global)
-			return "", nil
+			return mode, nil
 		case "max_digest_length":
 			require.True(t, system)
 			require.True(t, global)
@@ -197,6 +205,26 @@ func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
 	firstBytes := first.GetBytesAt(0)
 	secondBytes := second.GetBytesAt(0)
 	require.NotEqual(t, string(firstBytes), string(secondBytes))
+	first.Free(proc.Mp())
+	second.Free(proc.Mp())
+
+	limit = 1024
+	modeInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`SELECT "column" FROM t`), 1, proc.Mp())
+	require.NoError(t, err)
+	defer modeInput.Free(proc.Mp())
+	require.NoError(t, modeInput.SetStringSource(types.StringSourceLiteral))
+
+	mode = ""
+	stringModeResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{modeInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ? FROM `t`", stringModeResult.GetStringAt(0))
+	stringModeResult.Free(proc.Mp())
+
+	mode = "ANSI_QUOTES"
+	identifierModeResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{modeInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `column` FROM `t`", identifierModeResult.GetStringAt(0))
+	identifierModeResult.Free(proc.Mp())
 }
 
 func TestStatementDigestTextDoesNotDiscloseFoldedExpression(t *testing.T) {
