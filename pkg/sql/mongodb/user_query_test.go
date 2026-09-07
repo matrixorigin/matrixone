@@ -257,15 +257,28 @@ func TestUserQueryPlanRevalidationFailsClosed(t *testing.T) {
 	_, err = UserQueryFromPlan(ctx, &duplicatePlan)
 	require.ErrorContains(t, err, "duplicate document keys")
 
-	unsafeStage, err := bson.Marshal(bson.D{{Key: "$out", Value: "archive"}})
-	require.NoError(t, err)
 	pipeline, err := ParseUserQuery(ctx, `{"pipeline":[{"$match":{}}]}`)
 	require.NoError(t, err)
-	unsafePlan := new(plan.MongoScan)
-	require.NoError(t, ApplyUserQueryToPlan(ctx, pipeline, unsafePlan))
-	unsafePlan.UserPipelineStageBson[0] = unsafeStage
-	_, err = UserQueryFromPlan(ctx, unsafePlan)
-	require.ErrorContains(t, err, "is not allowed")
+	validPipelinePlan := new(plan.MongoScan)
+	require.NoError(t, ApplyUserQueryToPlan(ctx, pipeline, validPipelinePlan))
+	for _, test := range []struct {
+		name  string
+		stage bson.D
+		want  string
+	}{
+		{name: "unsafe stage", stage: bson.D{{Key: "$out", Value: "archive"}}, want: "is not allowed"},
+		{name: "invalid sort", stage: bson.D{{Key: "$sort", Value: bson.D{{Key: "site_id", Value: int32(0)}}}}, want: "1 or -1 directions"},
+		{name: "invalid unwind", stage: bson.D{{Key: "$unwind", Value: "site_id"}}, want: "valid field path"},
+	} {
+		t.Run(test.name+" in execution plan", func(t *testing.T) {
+			encodedStage, err := bson.Marshal(test.stage)
+			require.NoError(t, err)
+			candidate := *validPipelinePlan
+			candidate.UserPipelineStageBson = [][]byte{encodedStage}
+			_, err = UserQueryFromPlan(ctx, &candidate)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 func TestCombineFilters(t *testing.T) {
