@@ -11,7 +11,7 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 578 and 579), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 579 and 580), so the catalog contract is fenced by MORPC
 v56.
 
 ## Problem and invariant
