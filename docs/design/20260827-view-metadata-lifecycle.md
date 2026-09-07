@@ -1,10 +1,10 @@
 # View 元数据生命周期与分布式激活设计
 
-- **状态**：Pending re-approval
+- **状态**：Approved
 - **历史获批语义 checkpoint**：PR #27734 commit `351397e59a286ff13cef6113904f24313310a03c`，包含 cursor per-FETCH epoch fencing、E0 presence、disabled same-epoch semantics、metadata-only authority containment、独立 sealed provisional epoch gate，以及 multi-CN/frontend admission/hot-path evidence
-- **历史审批记录**：reviewer `fengttt` 于 `2026-08-30T00:00:03Z` 对包含该语义 checkpoint 的 exact head `310ad16bdb87ee74ac57f25f1d5a0ee3c2b2fe19` 提交 GitHub `APPROVED` review（[review 5059506799](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5059506799)）。该 approval 不覆盖后续 semantic changes。
+- **审批记录**：reviewer `fengttt` 于 `2026-09-06T17:41:15Z` 对 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b` 提交 GitHub `APPROVED` review（[review 5126100008](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5126100008)），覆盖最终 executable checkpoint `8c2332ecbbfc6e6c2196e734d345875b2edac134` 及其语义修订。
 - **重新审批原因**：`bc6f03e17e` 将 catalog capability 与 admission lease 解耦，使 catalog 已就绪但 admission-disabled 的 capable CN 仍维护当前 DDL metadata；后续 restore 修复改变 table/database restore 的 invalidation 与 rolling-upgrade catalog-readiness fallback。最终协议不使用 whole-account reset：relation-removal 在 restore 事务内将受影响 reverse closure 推进到非 `CURRENT` generation；disabled 但 catalog-ready 的 capable CN 同样发布 durable marker 与 affected-closure generation。事务末 reconciliation 按 restore scope 限定：table restore 只扫描目标 table identity/name，database restore 只扫描目标 database，只有 account restore 才扫描 account；各 scope 只删除 orphan targets/dependencies 并 seed missing restored Views。
-- **待审批语义 checkpoint**：`8c2332ecbbfc6e6c2196e734d345875b2edac134`（包含最终 authority-disabled 兼容修复、compile 边界证据、订阅表 Information Schema 可见性合并、隐式 View heading 长度兼容修复，以及 catalog readiness 测试同步证据的 executable/evidence head）。审批必须覆盖包含本修订与该 checkpoint 的 exact PR head；获批前状态保持 `Pending re-approval`。
+- **获批语义 checkpoint**：`8c2332ecbbfc6e6c2196e734d345875b2edac134`；审批覆盖 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b`。
 - **稳定版本**：PR 正文必须链接获批 checkpoint、审批记录与当前 conformance head；后续任何 semantic change 都重新进入 Pending re-approval
 - **Owning issue**：#26227
 - **实现系列**：#27267、#27370、#27430、#27734
@@ -248,4 +248,4 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-阻塞性开放问题：当前 affected-closure restore 修订尚未获得覆盖 exact head 的人工 approval。`351397e59a286ff13cef6113904f24313310a03c` 的历史人工 approval 仅作为审计记录，不代表当前实现已获批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+设计门禁已关闭：`fengttt` 的 review `5126100008` 覆盖获批 checkpoint；当前 conformance head 为 `55f98a6c63`，仅包含测试 fixture、main 合并与索引检查回归测试，不改变已获批运行时语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。

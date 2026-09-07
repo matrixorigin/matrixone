@@ -1682,6 +1682,36 @@ func legacyForeignKeyMigrationUpdatesForAssertion(updates []string) []string {
 	return ret
 }
 
+func TestTaskMetadataIndexUpgradeReadsRelationDefinition(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl     string
+		want, wantErr bool
+	}{
+		{name: "existing index", ddl: "create table t (a int, key IDX_ACCOUNT_ID(a))", want: true},
+		{name: "missing index", ddl: "create table t (a int, key other(a))"},
+		{name: "name in column comment is not index", ddl: "create table t (a int comment 'idx_account_id')"},
+		{name: "empty definition", wantErr: true}, {name: "wrong statement", ddl: "select 1", wantErr: true},
+		{name: "invalid SQL", ddl: "not sql", wantErr: true}, {name: "query failure", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				require.Equal(t, "SHOW CREATE TABLE `mo_task`.`sql_task`", sql)
+				if tc.name == "query failure" {
+					return executor.Result{}, errors.New("catalog unavailable")
+				}
+				return newShowCreateTableResult(t, "sql_task", tc.ddl), nil
+			})
+			found, err := addSQLTaskAccountIndex.CheckFunc(txn, 0)
+			require.Equal(t, tc.want, found)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
 	entry := ensureInformationSchemaCharacterSetsTable()
 	exists := false
