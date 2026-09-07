@@ -14390,6 +14390,7 @@ name_confict:
 |   DATABASE
 |   DAY
 |   DEDUP
+|   EMPTY_SYM
 |   HOUR
 |   IF
 |   FORMAT

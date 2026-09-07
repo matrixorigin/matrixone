@@ -56,5 +56,5 @@ cannot be downgraded to a server that does not parse these clauses.
 Parser, AST, binder/type, executor, protocol, CTAS, VIEW, generated-column and
 index tests must cover the state/policy matrix, prepared execution, warnings,
 and invalid inputs. A single-CN BVT is run twice on a clean instance. The final
-change requires `git diff --check`, `mo-self-review`, schema-v6 semantic
+change requires `git diff --check`, `mo-self-review`, schema-v7 semantic
 preflight, and exact-head CI.

@@ -61,3 +61,18 @@ func TestJSONValueDefaultLiteralAndClauseRejections(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONValueKeywordsPreserveExistingEmptyCalls(t *testing.T) {
+	for _, sql := range []string{
+		"select empty(''), empty('text')",
+		"select empty(instr('a', 'b'))",
+		"create table output as select empty(col) from input",
+		"select empty(json_value(doc, '$' default '' on empty error on error)) from input",
+		"select empty, error from empty as error",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}

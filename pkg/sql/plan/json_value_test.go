@@ -60,6 +60,14 @@ func TestJSONValueBindingContract(t *testing.T) {
 		require.Equal(t, int64(3), expr.GetF().Args[5].GetLit().GetI64Val())
 		require.NotNil(t, expr.GetF().Args[6])
 	})
+	t.Run("quoted name cannot expose the internal overload", func(t *testing.T) {
+		_, err := bind("select `json_value`('1', '$', '', 3, 7, 3, 9)", false)
+		require.Error(t, err)
+		// Quoted function names are not accepted by the function-call grammar;
+		// they do not provide an alternate route around the dedicated syntax.
+		_, err = bind("select `json_value`('1', '$')", false)
+		require.Error(t, err)
+	})
 
 	t.Run("prepared document and path remain parameters", func(t *testing.T) {
 		expr, err := bind(`select json_value(?, ? returning char(12))`, true)
@@ -81,6 +89,34 @@ func TestJSONValueBindingRejectsInvalidUnusedDefault(t *testing.T) {
 	binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
 	_, err = binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
 	require.Error(t, err)
+}
+
+func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		sql     string
+		oid     types.T
+		width   int32
+		charset uint8
+	}{
+		{`select json_value('{"a":[12]}', '$.a' default 'empty' on empty)`, types.T_varchar, 512, types.CharsetUTF8MB4Bin},
+		{`select json_value('{"a":[12]}', '$.a' returning char(12) character set utf8mb4 default 'empty' on empty default 'error' on error)`, types.T_char, 12, types.CharsetUTF8},
+	} {
+		sql := tc.sql
+		for range 2 {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
+			bound, err := binder.BindExpr(expr, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), bound.Typ.Id)
+			require.Equal(t, tc.width, bound.Typ.Width)
+			require.Equal(t, uint32(tc.charset), bound.Typ.Charset)
+			sql = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true))
+			stmt.Free()
+		}
+	}
 }
 
 func TestJSONValueBindingTypeAndDefaultBoundaries(t *testing.T) {
