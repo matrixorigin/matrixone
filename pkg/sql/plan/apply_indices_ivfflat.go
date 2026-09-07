@@ -687,7 +687,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			}
 		}
 	}
-	canIndexOnly := boundaryProj != nil &&
+	canIndexOnly := !vecCtx.hasMembership && boundaryProj != nil &&
 		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
@@ -829,7 +829,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	//   pre-filter:    JOIN(scanNode, SEMI(vectorScan, secondScan))
 	var joinRootID int32
 
-	pushdownEnabled := usePreFilter && len(remainingFilters) > 0
+	pushdownEnabled := !vecCtx.hasMembership && usePreFilter && len(remainingFilters) > 0
 	scanNode.FilterList = remainingFilters
 
 	if canIndexOnly {
@@ -1018,14 +1018,25 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID
 	} else {
+		// Keep an existing SEMI JOIN as the row-fetch side, preserving
+		// membership filtering before the final Top-K.
+		outerScanNodeID := scanNode.NodeId
+		if vecCtx.hasMembership {
+			outerScanNodeID = vecCtx.membershipNodeID
+		}
+		outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
+		if outerPkExpr == nil || outerPkExpr.GetCol() == nil {
+			return nodeID, nil
+		}
+
 		// JOIN( table, ivf )
 		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 			{
 				Typ: ivfCtx.pkType,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: scanNode.BindingTags[0],
-						ColPos: ivfCtx.pkPos, // tbl.pk
+						RelPos: outerPkExpr.GetCol().RelPos,
+						ColPos: outerPkExpr.GetCol().ColPos, // tbl.pk
 					},
 				},
 			},
@@ -1042,7 +1053,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{scanNode.NodeId, candidateNodeID},
+			Children: []int32{outerScanNodeID, candidateNodeID},
 			JoinType: plan.Node_INNER,
 			OnList:   []*Expr{wherePkEqPk},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
