@@ -7879,7 +7879,11 @@ func supportsDistributedOrderedTop(service string) bool {
 	if rt == nil {
 		return false
 	}
-	protocolVersion, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion53
 }
 
@@ -7893,7 +7897,7 @@ func supportsRemoteArrowLoadPipeline(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion53
+	return ok && protocolVersion >= defines.MORPCVersion54
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
