@@ -104,7 +104,9 @@ type service struct {
 		// remoteBindRefs is a source-local index of exact remote binds that a
 		// transaction may still depend on. A bind enters before its first remote
 		// Lock RPC and leaves only after transaction cleanup succeeds. Route-cache
-		// membership alone must not keep an owner-side lock lease alive.
+		// membership alone must not keep an owner-side lock lease alive. Once a
+		// bind is invalidated, its ref-counted tombstone remains for cleanup but no
+		// longer participates in owner-side heartbeats.
 		remoteBindRefs map[remoteBindKey]remoteBindRef
 		allocating     map[uint32]map[uint64]chan struct{}
 	}
@@ -353,8 +355,9 @@ type remoteBindKey struct {
 }
 
 type remoteBindRef struct {
-	bind pb.LockTable
-	refs uint64
+	bind        pb.LockTable
+	refs        uint64
+	invalidated bool
 }
 
 func makeRemoteBindKey(bind pb.LockTable) remoteBindKey {
@@ -1490,11 +1493,44 @@ func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {
 	delete(s.mu.remoteBindRefs, key)
 }
 
+// invalidateRemoteBindRef stops owner-side lease heartbeats for an exact bind
+// which is known to be unusable or superseded. Keep the ref-counted tombstone
+// until transaction cleanup releases every consumer: deleting it here would
+// let a late release decrement a newly acquired ref for the same exact key.
+func (s *service) invalidateRemoteBindRef(bind pb.LockTable) {
+	key := makeRemoteBindKey(bind)
+	s.mu.Lock()
+	ref, ok := s.mu.remoteBindRefs[key]
+	if ok && !ref.invalidated {
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
+func (s *service) invalidateRemoteBindRefsChangedBy(bind pb.LockTable) {
+	s.mu.Lock()
+	for key, ref := range s.mu.remoteBindRefs {
+		if ref.bind.Group != bind.Group ||
+			ref.bind.Table != bind.Table ||
+			!ref.bind.Changed(bind) ||
+			ref.invalidated {
+			continue
+		}
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
 func (s *service) collectRemoteLockBinds(scratch []pb.LockTable) []pb.LockTable {
 	oldLen := len(scratch)
 	binds := scratch[:0]
 	s.mu.RLock()
 	for _, ref := range s.mu.remoteBindRefs {
+		if ref.invalidated {
+			continue
+		}
 		binds = append(binds, ref.bind)
 	}
 	s.mu.RUnlock()
@@ -2230,6 +2266,7 @@ func (s *service) beginLockTablePublication() bool {
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
+	s.invalidateRemoteBindRefsChangedBy(bind)
 	if s.activeTxnHolder == nil {
 		return
 	}
@@ -2237,6 +2274,7 @@ func (s *service) fenceByBindChanged(bind pb.LockTable) {
 }
 
 func (s *service) fenceByExactBind(bind pb.LockTable) {
+	s.invalidateRemoteBindRef(bind)
 	if s.activeTxnHolder == nil {
 		return
 	}

@@ -449,6 +449,45 @@ func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 	)
 }
 
+func TestKeepRemoteLockRejectsRequestRoutedToReplacementCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"replacement-cn"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			bind := pb.LockTable{
+				Group:       0,
+				Table:       27707,
+				OriginTable: 27707,
+				ServiceID:   getServiceIdentifier("departed-cn", 1),
+				Version:     1,
+				Valid:       true,
+			}
+			require.NotEqual(t,
+				getUUIDFromServiceIdentifier(s.serviceID),
+				getUUIDFromServiceIdentifier(bind.ServiceID))
+			s.tableGroups.set(bind.Group, bind.Table, s.createLockTableByBind(bind))
+
+			req := &pb.Request{
+				Method:    pb.Method_KeepRemoteLock,
+				LockTable: bind,
+			}
+			req.KeepRemoteLock.ServiceID = "source-cn"
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged))
+			require.False(t, s.activeTxnHolder.hasRemoteLockBind(
+				req.KeepRemoteLock.ServiceID, bind, time.Hour))
+		},
+	)
+}
+
 func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
 	req := &pb.Request{
 		LockTable: pb.LockTable{
