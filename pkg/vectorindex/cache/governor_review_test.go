@@ -1084,3 +1084,98 @@ func TestGovernorTellsEachArrivalWhatIsPromisedAhead(t *testing.T) {
 
 	once.Do(func() { close(gate) })
 }
+
+// placedSearch reports its device bytes BY CARD, the way cagra/ivfpq do once they know their
+// participants and distribution mode.
+type placedSearch struct {
+	countingSearch
+	perCard map[int]int64
+}
+
+func (p *placedSearch) DeviceResidency() map[int]int64 { return p.perCard }
+
+// onDevice builds a SINGLE_GPU-shaped index: all of its device bytes on one card.
+func onDevice(device int, bytes int64) *placedSearch {
+	return &placedSearch{
+		countingSearch: countingSearch{device: bytes},
+		perCard:        map[int]int64{device: bytes},
+	}
+}
+
+// twoCards fabricates two 8 GiB GPUs. No CUDA involved: the capacity probe takes the device
+// count and per-device memory as functions precisely so placement can be tested without them.
+func twoCards(t *testing.T, c *VectorIndexCache) {
+	t.Helper()
+	perCard, err := automaticDeviceCapacityPerCard(
+		func() (int, error) { return 2, nil },
+		func(int) (uint64, error) { return 8 << 30, nil })
+	require.NoError(t, err)
+	aggregate, err := automaticDeviceCapacity(
+		func() (int, error) { return 2, nil },
+		func(int) (uint64, error) { return 8 << 30, nil })
+	require.NoError(t, err)
+
+	g := c.gov()
+	g.defaultLimitMu.Lock()
+	defer g.defaultLimitMu.Unlock()
+	g.defaultLimit.device = aggregate
+	g.defaultLimitPerCard = perCard
+	g.defaultLimitDeviceReady = true
+}
+
+// A budget that sums every card cannot govern a placement that uses one. With two 8 GiB cards
+// the aggregate is 14.4 GiB, so an idle 5 GiB entry on GPU0 plus a 5 GiB arrival for GPU0 is
+// under it and the governor evicts nothing -- and the load then fails its own free-VRAM gate,
+// because GPU0 lacks the room and GPU1's capacity is no use to an index pinned to devices[0].
+func TestGovernorEvictsOnTheCardTheArrivalNeeds(t *testing.T) {
+	c := newBoundCache(t)
+	twoCards(t, c)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	const five = int64(5) << 30
+	idle := "__mo_index_secondary_gpu0_idle"
+	_, _, err := c.Search(sp, idle, onDevice(0, five), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.True(t, isResident(c, idle))
+
+	// 5 + 5 GiB on GPU0 exceeds that card's 7.2 GiB budget, though not the 14.4 GiB aggregate.
+	_, _, err = c.Search(sp, "__mo_index_secondary_gpu0_new", onDevice(0, five), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err, "evicting the idle GPU0 entry admits it")
+	require.False(t, isResident(c, idle), "the victim is the one on the pressured card")
+	require.True(t, isResident(c, "__mo_index_secondary_gpu0_new"))
+}
+
+// And an entry on ANOTHER card is not a victim: evicting it frees nothing where the pressure is.
+func TestGovernorDoesNotEvictAcrossCards(t *testing.T) {
+	c := newBoundCache(t)
+	twoCards(t, c)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	const five = int64(5) << 30
+	other := "__mo_index_secondary_gpu1_idle"
+	_, _, err := c.Search(sp, other, onDevice(1, five), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+
+	// GPU0 is empty, so this arrival needs no eviction at all.
+	_, _, err = c.Search(sp, "__mo_index_secondary_gpu0_new", onDevice(0, five), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.True(t, isResident(c, other), "an index on GPU1 is untouched by pressure on GPU0")
+
+	// A second GPU1 arrival, though, must take the GPU1 incumbent.
+	_, _, err = c.Search(sp, "__mo_index_secondary_gpu1_new", onDevice(1, five), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.False(t, isResident(c, other))
+}
+
+// An index too large for the card it is pinned to is still admitted when it is that card's only
+// occupant -- the same rule the arena applies. Refusing would make it permanently unloadable.
+func TestGovernorAdmitsALoneIndexTooBigForItsCard(t *testing.T) {
+	c := newBoundCache(t)
+	twoCards(t, c)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	huge := int64(20) << 30 // well past one card's 7.2 GiB budget
+	_, _, err := c.Search(sp, "__mo_index_secondary_huge", onDevice(0, huge), nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err, "nobody to protect on that card, so nothing to refuse for")
+	require.True(t, isResident(c, "__mo_index_secondary_huge"))
+}

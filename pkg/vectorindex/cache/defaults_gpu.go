@@ -21,3 +21,8 @@ import "github.com/matrixorigin/matrixone/pkg/cuvs"
 func automaticDeviceLimit() (int64, error) {
 	return automaticDeviceCapacity(cuvs.GetGpuDeviceCount, cuvs.DeviceTotalMem)
 }
+
+// automaticDeviceLimitPerCard is the derived budget for each GPU on this CN.
+func automaticDeviceLimitPerCard() (map[int]int64, error) {
+	return automaticDeviceCapacityPerCard(cuvs.GetGpuDeviceCount, cuvs.DeviceTotalMem)
+}

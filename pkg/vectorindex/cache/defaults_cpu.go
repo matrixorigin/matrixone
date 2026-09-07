@@ -20,3 +20,6 @@ package cache
 // bytes. Zero leaves it unset and enforce skips it, which is exactly right -- naming a number
 // would describe hardware this binary cannot use.
 func automaticDeviceLimit() (int64, error) { return 0, nil }
+
+// automaticDeviceLimitPerCard: a non-gpu build has no cards to bound.
+func automaticDeviceLimitPerCard() (map[int]int64, error) { return nil, nil }

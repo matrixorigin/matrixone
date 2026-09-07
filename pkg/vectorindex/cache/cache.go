@@ -193,6 +193,16 @@ type cacheInvalidationAware interface {
 	OnCacheInvalidated(reason string)
 }
 
+// devicePlacement is implemented by an algorithm whose device bytes land on SPECIFIC GPUs. The
+// governor needs it because placement, not the sum, is what a load has to fit into: a SINGLE_GPU
+// index occupies devices[0] alone, so an aggregate budget spanning every card can be satisfied
+// while the one card the arrival needs is full.
+//
+// An algorithm that does not implement it is charged as before, against the aggregate.
+type devicePlacement interface {
+	DeviceResidency() map[int]int64
+}
+
 // reservationAware is implemented by an algorithm whose own load-time memory gate must account
 // for loads already in flight. The governor knows what the arrivals ahead of this one promised;
 // a gate that samples free memory alone cannot, and two concurrent loads then spend it twice.
@@ -258,8 +268,11 @@ type VectorIndexSearch struct {
 	// ONLY size the governor reads. Kept apart because RAM and VRAM are separate budgets.
 	// Both 0 until Preload runs; usage sums ignore them until Status is STATUS_LOADED, so the
 	// estimate never counts toward anyone's budget.
-	hostBytes        atomic.Int64
-	deviceBytes      atomic.Int64
+	hostBytes   atomic.Int64
+	deviceBytes atomic.Int64
+	// devicePerCard is deviceBytes broken down by GPU, published by captureSize when the
+	// algorithm knows its placement. nil means "aggregate only".
+	devicePerCard    atomic.Value // map[int]int64
 	invalidationOnce sync.Once
 }
 
@@ -458,6 +471,19 @@ func (s *VectorIndexSearch) captureSize() {
 	host, device := s.Algo.GetIndexSize()
 	s.hostBytes.Store(host)
 	s.deviceBytes.Store(device)
+	if placed, ok := s.Algo.(devicePlacement); ok {
+		if perCard := placed.DeviceResidency(); len(perCard) > 0 {
+			s.devicePerCard.Store(perCard)
+		}
+	}
+}
+
+// deviceResidency returns this entry's bytes per GPU, or nil when the algorithm does not know
+// its placement. Read from the atomic, never from the algorithm, which a concurrent eviction
+// may be tearing down.
+func (s *VectorIndexSearch) deviceResidency() map[int]int64 {
+	perCard, _ := s.devicePerCard.Load().(map[int]int64)
+	return perCard
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {

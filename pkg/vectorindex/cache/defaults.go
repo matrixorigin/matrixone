@@ -55,26 +55,45 @@ func automaticHostLimit(total, cgroup uint64) (int64, error) {
 // enforce skips it. A GPU that exists but cannot be queried IS an error, for the same reason
 // automaticHostLimit refuses to guess.
 func automaticDeviceCapacity(countDevices func() (int, error), totalMem func(int) (uint64, error)) (int64, error) {
+	perCard, err := automaticDeviceCapacityPerCard(countDevices, totalMem)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, share := range perCard {
+		total += min(share, maxRepresentableBudget-total)
+	}
+	if len(perCard) == 0 {
+		return 0, nil
+	}
+	return max(total, 1), nil
+}
+
+// automaticDeviceCapacityPerCard is the derived budget for EACH GPU.
+//
+// Per card, not just summed, because that is the shape placement has: a SINGLE_GPU index lives
+// on one device, so what bounds it is that device's memory, and the other cards' free VRAM is
+// irrelevant to whether it fits.
+func automaticDeviceCapacityPerCard(countDevices func() (int, error), totalMem func(int) (uint64, error)) (map[int]int64, error) {
 	count, err := countDevices()
 	if err != nil {
-		return 0, moerr.NewInternalErrorNoCtxf("cannot size the GPU index cache: counting "+
+		return nil, moerr.NewInternalErrorNoCtxf("cannot size the GPU index cache: counting "+
 			"devices failed (%v); set max_gpu_index_cache_size explicitly", err)
 	}
 	if count <= 0 {
-		return 0, nil
+		return nil, nil
 	}
-	var total uint64
+	perCard := make(map[int]int64, count)
 	for device := 0; device < count; device++ {
 		n, err := totalMem(device)
 		if err != nil || n == 0 {
-			return 0, moerr.NewInternalErrorNoCtxf("cannot size the GPU index cache: device %d "+
+			return nil, moerr.NewInternalErrorNoCtxf("cannot size the GPU index cache: device %d "+
 				"reports no capacity (%v); set max_gpu_index_cache_size explicitly", device, err)
 		}
-		// Saturate before summing physical devices, not query simulation aliases.
 		share := n / 100 * automaticCachePercent
-		total += min(share, uint64(maxRepresentableBudget)-total)
+		perCard[device] = int64(min(share, uint64(maxRepresentableBudget)))
 	}
-	return int64(max(total, 1)), nil
+	return perCard, nil
 }
 
 // defaultLimits is the automatic budget for this machine, with the two arenas'
@@ -98,7 +117,21 @@ func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
 		device, derr := automaticDeviceLimit()
 		g.defaultLimit.device = device
 		g.defaultLimitDeviceErr = derr
+		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
 		g.defaultLimitDeviceReady = true
 	}
 	return g.defaultLimit, g.defaultLimitHostErr, g.defaultLimitDeviceErr
+}
+
+// devicePerCardCaps is the derived budget for each GPU, or nil when there is none to derive.
+// Per card because that is the shape placement has; see enforceDevicePlacement.
+func (g *VectorIndexGovernor) devicePerCardCaps() map[int]int64 {
+	g.defaultLimitMu.Lock()
+	defer g.defaultLimitMu.Unlock()
+	if !g.defaultLimitDeviceReady {
+		g.defaultLimit.device, g.defaultLimitDeviceErr = automaticDeviceLimit()
+		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
+		g.defaultLimitDeviceReady = true
+	}
+	return g.defaultLimitPerCard
 }

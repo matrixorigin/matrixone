@@ -19,6 +19,8 @@ package cagra
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,4 +68,29 @@ func TestGetIndexSizeEmptyIsZero(t *testing.T) {
 	host, device := s.GetIndexSize()
 	require.EqualValues(t, 0, host)
 	require.EqualValues(t, 0, device)
+}
+
+// The cache bounds the GPU an index actually occupies, so the index has to say which one. A
+// SINGLE_GPU index lives on devices[0] alone: reporting its bytes spread across every card would
+// let the governor believe a full card has room.
+func TestDeviceResidencyReportsPlacementNotTheSum(t *testing.T) {
+	s := &CagraSearch[float32, float32]{Devices: []int{0, 1}}
+	s.Idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
+	s.Indexes = []*CagraModel[float32, float32]{
+		{DeviceComponentBytes: map[string]int64{"index.bin": 4 << 30}},
+	}
+
+	perCard := s.DeviceResidency()
+	require.Equal(t, int64(4<<30), perCard[0], "a SINGLE_GPU index is all on devices[0]")
+	require.Zero(t, perCard[1], "and nothing on the card it does not use")
+
+	_, device := s.GetIndexSize()
+	require.Equal(t, device, perCard[0]+perCard[1],
+		"the per-card breakdown must account for exactly what the aggregate reports")
+}
+
+// With no devices there is no placement to report, and the cache falls back to the aggregate.
+func TestDeviceResidencyEmptyWithoutDevices(t *testing.T) {
+	s := &CagraSearch[float32, float32]{}
+	require.Nil(t, s.DeviceResidency())
 }

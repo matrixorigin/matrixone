@@ -214,6 +214,9 @@ type VectorIndexGovernor struct {
 	defaultLimitHostErr     error
 	defaultLimitDeviceErr   error
 	defaultLimitDeviceReady bool
+	// defaultLimitPerCard is the derived budget for EACH GPU, keyed by device. Placement is
+	// per card, so the bound has to be too; see enforceDevicePlacement.
+	defaultLimitPerCard map[int]int64
 }
 
 // arena names the two budgets, kept apart because RAM and VRAM are not interchangeable.
@@ -258,12 +261,15 @@ type arrival struct {
 	seq     uint64
 	account uint32
 	size    caps
+	// perCard is size.device by GPU, so an arrival ahead in line is counted on the card it
+	// will actually occupy rather than against every card at once.
+	perCard map[int]int64
 }
 
 // reserve records an arrival and returns the release to call once it is resident or has failed.
 // Release is idempotent.
-func (g *VectorIndexGovernor) reserve(key string, account uint32, size caps) (*arrival, func()) {
-	a := &arrival{seq: g.arrivalSeq.Add(1), account: account, size: size}
+func (g *VectorIndexGovernor) reserve(key string, account uint32, size caps, perCard map[int]int64) (*arrival, func()) {
+	a := &arrival{seq: g.arrivalSeq.Add(1), account: account, size: size, perCard: perCard}
 	g.inflight.Store(key, a)
 	return a, func() {
 		g.inflight.CompareAndDelete(key, a)
@@ -297,6 +303,18 @@ type resident struct {
 	account  uint32
 	expireAt int64
 	size     usage
+	// perCard is size.device broken down by GPU, when the algorithm knows its placement.
+	// nil means the entry is only accounted in aggregate.
+	perCard map[int]int64
+}
+
+// deviceBytesOn reports what this resident holds on one GPU. An entry with no placement is
+// counted in full: not knowing where its bytes are is not a reason to assume they are elsewhere.
+func (r resident) deviceBytesOn(device int) int64 {
+	if r.perCard == nil {
+		return r.size.device
+	}
+	return r.perCard[device]
 }
 
 // makeRoom reclaims for an index that is measured but NOT yet resident, between its Preload and
@@ -344,7 +362,7 @@ func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, 
 	incoming := caps{host: host, device: device}
 	// Claim a place in line BEFORE reclaiming, so a load that starts while this one is still
 	// evicting cannot read the arena as empty and slip past the sole-occupant bypass.
-	self, release := g.reserve(key, account, incoming)
+	self, release := g.reserve(key, account, incoming, entry.deviceResidency())
 	// Tell the algorithm what is already promised, so its own load-time memory gate does not
 	// hand the same free bytes to two loads at once. Done here, between Preload and Load,
 	// because that is where the arrival's place in line is known.
@@ -363,6 +381,12 @@ func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, 
 	// The check is deliberately AFTER the reclaim: a cache merely full of cold entries admits
 	// the newcomer normally. Only genuine overload -- nothing idle left to give -- refuses.
 	if over := g.overBudget(account, tenant, sys, key, incoming, self); over != nil {
+		release()
+		return nil, over
+	}
+	// And the same question per GPU. The arena check above is an aggregate across every card,
+	// which a SINGLE_GPU index pinned to devices[0] can satisfy while that one card is full.
+	if over := g.enforceDevicePlacement(entry.deviceResidency(), key, self); over != nil {
 		release()
 		return nil, over
 	}
@@ -425,6 +449,107 @@ func (g *VectorIndexGovernor) overBudget(account uint32, tenant, sys caps, key s
 		}
 	}
 	return nil
+}
+
+// enforceDevicePlacement makes room on the GPUs an arrival will actually occupy, and reports
+// whether it still does not fit.
+//
+// The aggregate device budget cannot do this job. With two 8 GiB cards the derived aggregate is
+// 14.4 GiB, so an idle 5 GiB entry on GPU0 plus a 5 GiB arrival for GPU0 is comfortably under it
+// and the governor evicts nothing -- and then the algorithm's own free-VRAM gate refuses the
+// load, because GPU0 does not have 5 GiB and GPU1's idle capacity is no help to a SINGLE_GPU
+// index pinned to devices[0]. Evicting the idle GPU0 entry would have admitted it.
+//
+// So residency, victims and the refusal are all per card here. Entries whose algorithm does not
+// publish a placement are counted in full on every card they might be on, which is the
+// conservative reading.
+func (g *VectorIndexGovernor) enforceDevicePlacement(incoming map[int]int64, protect string, self *arrival) error {
+	if len(incoming) == 0 {
+		return nil
+	}
+	caps := g.devicePerCardCaps()
+	if len(caps) == 0 {
+		return nil // no derived per-card capacity (no GPU, or an unqueryable one)
+	}
+
+	for device, want := range incoming {
+		if want <= 0 {
+			continue
+		}
+		limit, known := caps[device]
+		if !known || limit <= 0 {
+			continue
+		}
+		list, _, _, perDevice := g.snapshotResidentsByDevice(protect)
+		used := perDevice[device]
+		if used+want <= limit {
+			continue
+		}
+
+		// Coldest first, and only entries that actually hold bytes on THIS card: evicting an
+		// index resident on another GPU frees nothing here.
+		sort.Slice(list, func(i, j int) bool { return list[i].expireAt < list[j].expireAt })
+		// Reclaim against the limit REDUCED by what is about to arrive, so the room freed is
+		// room the arrival can actually occupy -- the same shape as the arena pass, which
+		// enforces against tenant.less(incoming).
+		used -= g.reclaimDevice(list, device, limit-want, used)
+
+		if used+want <= limit {
+			continue
+		}
+		// Sole occupant of this card: nothing to protect, so nothing to refuse for -- the same
+		// rule the arena-wide check applies.
+		if used == 0 && g.pendingAheadOnDevice(self, device) == 0 {
+			continue
+		}
+		return moerr.NewInternalErrorNoCtxf(
+			"index cache is full: loading %q needs %d more bytes on GPU %d, which already holds "+
+				"%d of its %d byte budget and has nothing idle left to reclaim -- retry, or raise "+
+				"%s",
+			protect, want, device, used, limit, maxGpuIndexCacheSizeVar)
+	}
+	return nil
+}
+
+// reclaimDevice evicts idle entries holding bytes on one card until it is under its limit.
+func (g *VectorIndexGovernor) reclaimDevice(list []resident, device int, limit, used int64) int64 {
+	var freed int64
+	for _, r := range list {
+		if used <= limit {
+			return freed
+		}
+		held := r.deviceBytesOn(device)
+		if held <= 0 {
+			continue
+		}
+		if !g.cache.evictIdleEntry(r.key, r.entry, fmt.Sprintf("gpu%d_cache_size_limit", device)) {
+			continue
+		}
+		used -= held
+		freed += held
+		g.evictions.Add(1)
+		g.evictedBytes.Add(held)
+		logutil.Debugf("index cache governor: evicted %q to free %d bytes on GPU %d (limit %d)",
+			r.key, held, device, limit)
+	}
+	return freed
+}
+
+// pendingAheadOnDevice sums what arrivals ahead of this one have promised on one card.
+func (g *VectorIndexGovernor) pendingAheadOnDevice(self *arrival, device int) int64 {
+	if self == nil {
+		return 0
+	}
+	var total int64
+	g.inflight.Range(func(_, value any) bool {
+		other, ok := value.(*arrival)
+		if !ok || other == self || other.seq >= self.seq {
+			return true
+		}
+		total += other.perCard[device]
+		return true
+	})
+	return total
 }
 
 // chargeAndEnforce records what a freshly loaded entry costs, then brings the cache back under
@@ -666,7 +791,21 @@ func (g *VectorIndexGovernor) sysCacheLimit(sqlproc *sqlexec.SqlProcess) caps {
 // mid-load or already claimed for eviction are skipped: they hold no charged bytes yet, or
 // their bytes are already on their way back.
 func (g *VectorIndexGovernor) snapshotResidents(protect string) (list []resident, perAccount map[uint32]usage, total usage) {
+	list, perAccount, total, _ = g.snapshotResidentsByDevice(protect)
+	return list, perAccount, total
+}
+
+// snapshotResidentsByDevice is snapshotResidents plus what each GPU is holding.
+//
+// Placement is what a device load must fit into, not the sum: a SINGLE_GPU index occupies
+// devices[0] alone, so an aggregate spanning every card can be under budget while the one card
+// the arrival needs is full -- and the governor would then evict nothing while the algorithm's
+// own free-VRAM gate refuses the load.
+func (g *VectorIndexGovernor) snapshotResidentsByDevice(protect string) (
+	list []resident, perAccount map[uint32]usage, total usage, perDevice map[int]int64,
+) {
 	perAccount = make(map[uint32]usage)
+	perDevice = make(map[int]int64)
 	g.cache.IndexMap.Range(func(key, value any) bool {
 		k, ok := key.(string)
 		if !ok {
@@ -680,6 +819,10 @@ func (g *VectorIndexGovernor) snapshotResidents(protect string) (list []resident
 		if size.host == 0 && size.device == 0 {
 			return true
 		}
+		perCard := entry.deviceResidency()
+		for device, n := range perCard {
+			perDevice[device] += n
+		}
 		account := entry.accountID.Load()
 		acc := perAccount[account]
 		acc.host += size.host
@@ -689,11 +832,11 @@ func (g *VectorIndexGovernor) snapshotResidents(protect string) (list []resident
 		total.device += size.device
 		if k != protect {
 			list = append(list, resident{key: k, entry: entry, account: account,
-				expireAt: entry.ExpireAt.Load(), size: size})
+				expireAt: entry.ExpireAt.Load(), size: size, perCard: perCard})
 		}
 		return true
 	})
-	return list, perAccount, total
+	return list, perAccount, total, perDevice
 }
 
 // enforce evicts coldest-first until the charging account is under its own cap and the CN is

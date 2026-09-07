@@ -711,3 +711,31 @@ func (s *IvfpqSearch[B, Q]) Destroy() {
 func (s *IvfpqSearch[B, Q]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }
+
+// DeviceResidency reports this index's device bytes BY CARD, so the cache can bound the GPU it
+// actually occupies rather than a sum across every card. A SINGLE_GPU index lives on devices[0]
+// alone; sharded components land on the card their rank names. Implements the cache's
+// devicePlacement interface.
+func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
+	if len(s.Devices) == 0 {
+		return nil
+	}
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx != nil && len(idx.DeviceComponentBytes) > 0 {
+			comps = append(comps, idx.DeviceComponentBytes)
+		}
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	perCard := memory.PerDeviceDemand(participants, comps)
+
+	// The overflow buffer lives with the index, on its first participating card.
+	if overflow := s.overflowDeviceBytes(); overflow > 0 && len(participants) > 0 {
+		if perCard == nil {
+			perCard = make(map[int]int64, 1)
+		}
+		perCard[participants[0]] += overflow
+	}
+	return perCard
+}
