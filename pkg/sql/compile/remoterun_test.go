@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -199,6 +200,58 @@ func Test_refactorScope(t *testing.T) {
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, vm.GetLeafOpParent(nil, rs.RootOp).GetOperatorBase().Idx, -1)
+}
+
+func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
+	for _, ordered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordered=%t", ordered), func(t *testing.T) {
+			c := newMergeTopFallbackTestCompile(t)
+			defer c.proc.Free()
+			limitExpr := plan.MakePlan2Uint64ConstExprWithType(20_000)
+			orderBy := []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+			}}}
+			localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy)
+			localTop.OrderedOutput = ordered
+			localTop.AppendChild(table_scan.NewArgument())
+			source := &Scope{
+				Magic: Remote, NodeInfo: engine.Node{Mcpu: 4},
+				Proc: c.proc.NewNoContextChildProc(0), RootOp: localTop,
+			}
+			defer source.release()
+			data, err := encodeRemoteScope(source, c.proc)
+			require.NoError(t, err)
+			decoded, err := decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
+			writeBack := appendWriteBackOperator(c, decoded)
+			defer writeBack.release()
+			decoded.Proc.BuildPipelineContext(c.proc.Ctx)
+			defer decoded.Proc.Cancel(nil)
+			reg := writeBack.Proc.Reg.MergeReceivers[0]
+			require.Equal(t, ordered, reg.OrderedStream)
+			gather, workers := newParallelScope(decoded)
+			require.Len(t, workers, 4)
+			if ordered {
+				require.Equal(t, 1, reg.NilBatchCnt)
+				require.Equal(t, Merge, gather.Magic)
+				out, ok := gather.RootOp.(*connector.Connector)
+				require.True(t, ok)
+				require.Same(t, reg, out.Reg)
+				merged, ok := out.GetChildren(0).(*mergetop.MergeTop)
+				require.True(t, ok)
+				require.True(t, merged.OrderedStreams)
+				for i, worker := range workers {
+					workerOut := worker.RootOp.(*connector.Connector)
+					require.NotSame(t, reg, workerOut.Reg)
+					require.Same(t, gather.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+					require.True(t, workerOut.Reg.OrderedStream)
+				}
+			} else {
+				require.Equal(t, Normal, gather.Magic)
+			}
+		})
+	}
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
@@ -531,6 +584,44 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
+	t.Run("TopOrderedOutput", func(t *testing.T) {
+		original := top.NewArgument().
+			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
+			WithFs([]*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			}}).
+			WithOrderedOutput()
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredTop, ok := restored.(*top.Top)
+		require.True(t, ok)
+		require.True(t, restoredTop.OrderedOutput)
+		require.Equal(t, original.Limit, restoredTop.Limit)
+		require.Equal(t, original.Fs, restoredTop.Fs)
+	})
+
+	t.Run("MergeTopOrderedStreams", func(t *testing.T) {
+		original := mergetop.NewArgument().
+			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
+			WithFs([]*planpb.OrderBySpec{{
+				Expr: &planpb.Expr{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			}}).
+			WithOrderedStreams()
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredMergeTop, ok := restored.(*mergetop.MergeTop)
+		require.True(t, ok)
+		require.True(t, restoredMergeTop.OrderedStreams)
+		require.Equal(t, original.Limit, restoredMergeTop.Limit)
+		require.Equal(t, original.Fs, restoredMergeTop.Fs)
+	})
+
 	t.Run("GroupMetadata", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}
@@ -616,6 +707,132 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+}
+
+func TestRemoteRunOrderedPipelineEdgeRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	scope := &Scope{
+		Magic:  Remote,
+		Proc:   proc.NewNoContextChildProc(2),
+		RootOp: mergetop.NewArgument().WithOrderedStreams(),
+	}
+	scope.Proc.Reg.MergeReceivers[0].ResetForReuse(1, 1)
+	scope.Proc.Reg.MergeReceivers[0].OrderedStream = true
+	scope.Proc.Reg.MergeReceivers[1].ResetForReuse(3, 2)
+
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	wire := new(pipeline.Pipeline)
+	require.NoError(t, wire.Unmarshal(data))
+	require.Equal(t, []bool{true}, wire.OrderedStream,
+		"trailing unordered receivers should retain the legacy zero-value wire representation")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "requires MORPC protocol version 53")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 53")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	restored, err := decodeScope(data, proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		restored.release()
+		scope.release()
+		proc.Free()
+	})
+
+	require.Len(t, restored.Proc.Reg.MergeReceivers, 2)
+	require.True(t, restored.Proc.Reg.MergeReceivers[0].OrderedStream)
+	require.False(t, restored.Proc.Reg.MergeReceivers[1].OrderedStream)
+	require.Equal(t, 1, cap(restored.Proc.Reg.MergeReceivers[0].Ch2))
+	require.Equal(t, 1, restored.Proc.Reg.MergeReceivers[0].NilBatchCnt)
+	require.Equal(t, 3, cap(restored.Proc.Reg.MergeReceivers[1].Ch2))
+	require.Equal(t, 2, restored.Proc.Reg.MergeReceivers[1].NilBatchCnt)
+	restoredTop, ok := restored.RootOp.(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, restoredTop.OrderedStreams)
+}
+
+func TestRemoteRunOrderedMergeTopHierarchyRoundTrip(t *testing.T) {
+	nodes := engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 2},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 2},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	limitExpr := plan.MakePlan2Uint64ConstExprWithType(20_000)
+	orderBy := []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
+	}}}
+	node := &planpb.Node{Limit: limitExpr, OrderBy: orderBy}
+	inputs := []*Scope{
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+		newRemoteMergeInputForTest(c, nodes[1], 0),
+	}
+	inputs[0].NodeInfo.Mcpu = 2
+	for _, input := range inputs {
+		input.setRootOperator(top.NewArgument().
+			WithLimit(limitExpr).
+			WithFs(orderBy).
+			WithOrderedOutput())
+	}
+	group := c.newMergeTopScopeByCN(node, limitExpr, inputs, nodes[1])
+
+	data, err := encodeRemoteScope(group, c.proc)
+	require.NoError(t, err)
+	restored, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		restored.release()
+		group.release()
+		c.proc.Free()
+	})
+
+	require.Len(t, restored.PreScopes, 2)
+	require.Len(t, restored.Proc.Reg.MergeReceivers, 2)
+	restoredTop, ok := restored.RootOp.(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, restoredTop.OrderedStreams)
+	for i, input := range restored.PreScopes {
+		out, ok := input.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		require.Same(t, restored.Proc.Reg.MergeReceivers[i], out.Reg)
+		require.True(t, out.Reg.OrderedStream)
+		localTop, ok := out.GetOperatorBase().GetChildren(0).(*top.Top)
+		require.True(t, ok)
+		require.True(t, localTop.OrderedOutput)
+	}
+
+	restored.PreScopes[0].Proc.Ctx = context.Background()
+	ordered, workers := newParallelScope(restored.PreScopes[0])
+	require.Equal(t, Merge, ordered.Magic)
+	require.True(t, ordered.ConcurrentPreScopes)
+	require.Len(t, workers, 2)
+	orderedOut, ok := ordered.RootOp.(*connector.Connector)
+	require.True(t, ok)
+	gatherTop, ok := orderedOut.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, gatherTop.OrderedStreams)
 }
 
 func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {

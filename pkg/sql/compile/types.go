@@ -199,6 +199,10 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
+	// scope trees whose bounded receiver channels would deadlock under the TP
+	// query's sequential fast path.
+	ConcurrentPreScopes bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
