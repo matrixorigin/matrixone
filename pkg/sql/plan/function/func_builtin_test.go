@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2409,42 +2410,37 @@ func Test_BuiltIn_Math(t *testing.T) {
 	}
 }
 
-func TestBuiltInExpAndCotInvalidResultsReturnNull(t *testing.T) {
+func TestBuiltInExpAndCotOutOfRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
-		name   string
-		input  FunctionTestInput
-		values []float64
-		nulls  []bool
-		fn     fEvalFn
+		name  string
+		input FunctionTestInput
+		fn    fEvalFn
+		want  string
 	}{
 		{
-			name:   "exp isolates overflow at the finite boundary",
-			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
-			values: []float64{1, math.Exp(709), 0, 0, math.E},
-			nulls:  []bool{false, false, true, false, false},
-			fn:     builtInExp,
+			name:  "exp errors after finite values",
+			input: NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
+			fn:    builtInExp,
+			want:  "exp(710)",
 		},
 		{
-			name:   "constant exp overflow fills the batch with null",
-			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710, 710}, nil),
-			values: []float64{0, 0, 0},
-			nulls:  []bool{true, true, true},
-			fn:     builtInExp,
+			name:  "constant exp overflow errors",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
+			fn:    builtInExp,
+			want:  "exp(710)",
 		},
 		{
-			name:   "cot isolates positive and negative zero",
-			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{-1, math.Copysign(0, -1), 0, 1}, nil),
-			values: []float64{math.Tan(math.Pi/2 + 1), 0, 0, math.Tan(math.Pi/2 - 1)},
-			nulls:  []bool{false, true, true, false},
-			fn:     builtInCot,
+			name:  "cot errors for negative zero",
+			input: NewFunctionTestInput(types.T_float64.ToType(), []float64{-1, math.Copysign(0, -1), 1}, nil),
+			fn:    builtInCot,
+			want:  "cot(0)",
 		},
 		{
-			name:   "constant cot zero fills the batch with null",
-			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0, 0}, nil),
-			values: []float64{0, 0, 0},
-			nulls:  []bool{true, true, true},
-			fn:     builtInCot,
+			name:  "constant cot zero errors",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+			fn:    builtInCot,
+			want:  "cot(0)",
 		},
 	}
 
@@ -2453,11 +2449,14 @@ func TestBuiltInExpAndCotInvalidResultsReturnNull(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{tc.input},
-				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
 				tc.fn,
 			)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, info)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			require.ErrorContains(t, err, tc.want)
 		})
 	}
 }
@@ -2506,6 +2505,35 @@ func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 			value, isNull := resultParam.GetValue(1)
 			require.False(t, isNull)
 			require.InDelta(t, tc.value, value, 1e-15)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    fEvalFn
+	}{
+		{
+			name:  "exp skips constant overflow when all rows are masked",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
+			fn:    builtInExp,
+		},
+		{
+			name:  "cot skips constant zero when all rows are masked",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+			fn:    builtInCot,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+				tc.fn,
+			)
+			tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }

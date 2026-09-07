@@ -5419,42 +5419,32 @@ func TestPower(t *testing.T) {
 	}
 }
 
-func TestPowerInvalidResultsReturnNull(t *testing.T) {
+func TestPowerOutOfRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name      string
 		bases     FunctionTestInput
 		exponents FunctionTestInput
-		values    []float64
-		nulls     []bool
 	}{
 		{
-			name:      "vector inputs isolate invalid rows",
-			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 0, 10, -2, 4}, nil),
-			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, -1, 400, 3, 0.5}, nil),
-			values:    []float64{8, 0, 0, 0, -8, 2},
-			nulls:     []bool{false, true, true, true, false, false},
+			name:      "vector input errors after valid row",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
 		},
 		{
-			name:      "constant base with vector exponents",
-			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2, -2}, nil),
-			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 2, 3}, nil),
-			values:    []float64{0, 4, -8},
-			nulls:     []bool{true, false, false},
+			name:      "constant base with vector exponent errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
 		},
 		{
-			name:      "vector bases with constant exponent",
-			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 2, -2}, nil),
-			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-1, -1, -1}, nil),
-			values:    []float64{0, 0.5, -0.5},
-			nulls:     []bool{true, false, false},
+			name:      "vector base with constant exponent errors",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-1, -1}, nil),
 		},
 		{
-			name:      "constant invalid result fills the batch with null",
-			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2, -2}, nil),
-			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5, 0.5}, nil),
-			values:    []float64{0, 0, 0},
-			nulls:     []bool{true, true, true},
+			name:      "constant invalid result errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
 		},
 	}
 
@@ -5463,12 +5453,15 @@ func TestPowerInvalidResultsReturnNull(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{tc.bases, tc.exponents},
-				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
 				Power,
 			)
 
-			succeed, info := tcc.Run()
-			require.True(t, succeed, info)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			require.ErrorContains(t, err, "DOUBLE value is out of range")
 		})
 	}
 }
@@ -5500,6 +5493,19 @@ func TestPowerRespectsSelectList(t *testing.T) {
 	value, isNull := resultParam.GetValue(1)
 	require.False(t, isNull)
 	require.Equal(t, float64(8), value)
+
+	tcc = NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+		Power,
+	)
+	tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 // TRUNCATE
