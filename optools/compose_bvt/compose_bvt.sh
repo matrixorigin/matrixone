@@ -17,12 +17,7 @@ function compose_bvt() {
 
     cd ${MO_WORKSPACE}
 
-    # Arrow LOAD is disabled in the shared launch profile. The BVT alone uses
-    # this overlay to opt every participating CN into its test rollout.
-    docker compose \
-        -f etc/launch-tae-compose/compose.yaml \
-        -f optools/compose_bvt/arrow-load.override.yaml \
-        --profile "${COMPOSE_LAUNCH}" up -d --build
+    docker compose -f etc/launch-tae-compose/compose.yaml --profile "${COMPOSE_LAUNCH}" up -d --build
     docker build -t matrixorigin/compose-tester:local -f optools/compose_bvt/Dockerfile.tester .
     docker run -it --name compose-tester --privileged --network launch-tae-compose_monet -v ${MO_WORKSPACE}/docker-compose-log:/test --rm matrixorigin/compose-tester:local
     exit 0
