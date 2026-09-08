@@ -1565,6 +1565,10 @@ message RuntimeFilterSpec {
   // exactly one row; multiple rows must fail open so the SINGLE operator can
   // enforce cardinality at its original logical scope.
   bool scalar_predicate = 11;
+  // A required runtime filter is part of query semantics, not an optional
+  // probe-side acceleration. Consumers must reject PASS instead of executing
+  // a bounded operation without this input.
+  bool must_apply = 12;
 }
 
 message IdList {

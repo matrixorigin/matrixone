@@ -316,6 +316,12 @@ func TestStorageTopKEligibility(t *testing.T) {
 	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
 	sqlproc.IvfMembershipFilter = []byte{1}
 	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	sqlproc.IvfMembershipFilterRequired = true
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true),
+		"required membership must be applied before bounded Top-K")
+	sqlproc.IvfMembershipFilterRequired = false
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true),
+		"optional membership retains the storage Top-K path")
 	sqlproc.IvfHasMembershipFilter = false
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_INCLUSIVE,
@@ -2333,6 +2339,11 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
 	require.ErrorContains(t, err, "missing source or index metadata")
+	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{},
+	}, searchplugin.Request{MembershipFilterRequired: true})
+	require.ErrorContains(t, err, "required membership filter is unavailable")
 	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},
