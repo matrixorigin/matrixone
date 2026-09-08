@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -343,7 +344,8 @@ func TestS3FSSharedDecodeEligibility(t *testing.T) {
 		{"stream", func(v *IOVector) { var closer io.ReadCloser; v.Entries[0].ReadCloserForRead = &closer }},
 		{"writer", func(v *IOVector) { v.Entries[0].WriterForRead = io.Discard }},
 		{"no converter", func(v *IOVector) { v.Entries[0].ToCacheData = nil }},
-		{"multiple entries", func(v *IOVector) { v.Entries = append(v.Entries, v.Entries[0]) }},
+		{"multiple marked entries", func(v *IOVector) { v.Entries = append(v.Entries, v.Entries[0]) }},
+		{"already done", func(v *IOVector) { v.Entries[0].done = true }},
 		{"custom cache", func(v *IOVector) { v.Caches = []IOVectorCache{nil} }},
 		{"skip memory writes", func(v *IOVector) { v.Policy = SkipMemoryCacheWrites }},
 		{"skip memory reads", func(v *IOVector) { v.Policy = SkipMemoryCacheReads }},
@@ -359,6 +361,238 @@ func TestS3FSSharedDecodeEligibility(t *testing.T) {
 			requireDecodeDrained(t, r)
 		})
 	}
+}
+
+// The same three-column request exercises each helper that copies IOEntry
+// values. Hold the first result to make overlap deterministic without sleeps.
+func TestS3FSSelectedDecodeReadPaths(t *testing.T) {
+	for _, path := range []string{"range", "stream", "individual"} {
+		t.Run(path, func(t *testing.T) {
+			ctx := t.Context()
+			fs := newSelectedDecodeFS(t, path == "stream")
+			pinned := fs.AllocateCacheData(ctx, 128<<10)
+			defer pinned.Release()
+			for selected := range 3 {
+				t.Run(string(rune('0'+selected)), func(t *testing.T) {
+					if path == "stream" {
+						require.NoError(t, fs.diskCache.DeletePaths(ctx, []string{"columns"}))
+					}
+					var calls [3]int
+					makeVector := func() IOVector {
+						v := selectedDecodeVector(selected)
+						if path == "stream" {
+							v.Policy = 0
+						}
+						for i := range v.Entries {
+							v.Entries[i].ToCacheData = func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
+								calls[i]++
+								return a.CopyToCacheData(ctx, data), nil
+							}
+						}
+						return v
+					}
+					read := func(v *IOVector) {
+						original := reflect.ValueOf(v.Entries[selected].ToCacheData).Pointer()
+						if path == "individual" {
+							finish, err := fs.prepareSharedDecode(v)
+							require.NoError(t, err)
+							require.NotNil(t, finish)
+							err = fs.readEntriesIndividually(ctx, v)
+							finish()
+							require.NoError(t, err)
+						} else {
+							if path == "stream" {
+								require.True(t, fs.shouldStreamFullObjectToDiskCache(v))
+							}
+							require.NoError(t, fs.Read(ctx, v))
+						}
+						require.Equal(t, original, reflect.ValueOf(v.Entries[selected].ToCacheData).Pointer())
+					}
+					first, second := makeVector(), makeVector()
+					defer first.ReleaseReadResultOnError()
+					defer second.ReleaseReadResultOnError()
+					read(&first)
+					read(&second)
+					owner := first.Entries[selected].CachedData
+					for i := range first.Entries {
+						require.Equal(t, []byte("abcdefghi")[3*i:3*i+3], second.Entries[i].CachedData.Bytes())
+						if i == selected {
+							require.Equal(t, 1, calls[i])
+							require.Same(t, owner, second.Entries[i].CachedData)
+							require.NotNil(t, second.Entries[i].decodeLease)
+						} else {
+							require.Equal(t, 2, calls[i])
+							require.NotSame(t, first.Entries[i].CachedData, second.Entries[i].CachedData)
+							require.Nil(t, second.Entries[i].decodeLease)
+						}
+					}
+					first.ReleaseReadResultOnError()
+					require.Equal(t, []byte("abcdefghi")[3*selected:3*selected+3], owner.Bytes())
+					second.ReleaseReadResultOnError()
+					require.Zero(t, owner.(*Bytes).refs.Load())
+					requireDecodeDrained(t, fs.decodedReads)
+				})
+			}
+		})
+	}
+}
+
+func newSelectedDecodeFS(t *testing.T, disk bool) *S3FS {
+	t.Helper()
+	config := CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 << 10)}
+	if disk {
+		config.DiskPath = ptrTo(t.TempDir())
+		config.DiskCapacity = ptrTo[toml.ByteSize](1 << 20)
+	}
+	fs, err := NewS3FS(t.Context(), ObjectStorageArguments{Name: "selected-decode", Endpoint: "disk", Bucket: t.TempDir()}, config, nil, false, false)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	require.NoError(t, fs.Write(t.Context(), IOVector{FilePath: "columns", Policy: SkipAllCache,
+		Entries: []IOEntry{{Size: 9, Data: []byte("abcdefghi")}}}))
+	return fs
+}
+
+func selectedDecodeVector(selected int) IOVector {
+	v := IOVector{FilePath: "columns", Policy: SkipFullFilePreloads, Entries: make([]IOEntry, 3)}
+	for i := range v.Entries {
+		v.Entries[i] = IOEntry{Offset: int64(3 * i), Size: 3, CachedDataSize: 3, ToCacheData: CacheOriginalData}
+		if i == selected {
+			v.Entries[i].DecodeSharing = DecodeSharing{Codec: "test-copy"}
+		}
+	}
+	return v
+}
+
+func TestS3FSSelectedDecodeMemoryHits(t *testing.T) {
+	fs := newSelectedDecodeFS(t, false)
+	for _, hot := range [][]int{{0}, {1}, {0, 1, 2}} {
+		fs.FlushCache(t.Context())
+		prime := selectedDecodeVector(-1)
+		entries := make([]IOEntry, 0, len(hot))
+		for _, i := range hot {
+			entries = append(entries, prime.Entries[i])
+		}
+		prime.Entries = entries
+		t.Cleanup(prime.ReleaseReadResultOnError)
+		require.NoError(t, fs.Read(t.Context(), &prime))
+		v := selectedDecodeVector(1)
+		t.Cleanup(v.ReleaseReadResultOnError)
+		require.NoError(t, fs.Read(t.Context(), &v))
+		for j, i := range hot {
+			require.Same(t, prime.Entries[j].CachedData, v.Entries[i].CachedData)
+			require.Nil(t, v.Entries[i].decodeLease, "memory hits never join a generation")
+		}
+		if len(hot) == 1 && hot[0] == 0 {
+			require.NotNil(t, v.Entries[1].decodeLease, "a sibling hit must not disable the selected miss")
+		}
+		prime.ReleaseReadResultOnError()
+		v.ReleaseReadResultOnError()
+		requireDecodeDrained(t, fs.decodedReads)
+	}
+}
+
+type failingDecodeCache struct {
+	fscache.DataCache
+	calls int
+}
+
+func (f *failingDecodeCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
+	f.calls++
+	return false, errors.New("injected cache update failure")
+}
+
+func TestS3FSSelectedDecodeFailureIsolation(t *testing.T) {
+	fs := newSelectedDecodeFS(t, false)
+	pinned := fs.AllocateCacheData(t.Context(), 128<<10)
+	defer pinned.Release()
+	first := selectedDecodeVector(1)
+	defer first.ReleaseReadResultOnError()
+	require.NoError(t, fs.Read(t.Context(), &first))
+	owner := first.Entries[1].CachedData
+	for _, failed := range []int{0, 2} {
+		v := selectedDecodeVector(1)
+		t.Cleanup(v.ReleaseReadResultOnError)
+		v.Entries[failed].ToCacheData = func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+			return nil, errors.New("injected sibling failure")
+		}
+		require.ErrorContains(t, fs.Read(t.Context(), &v), "sibling failure")
+		if failed == 0 {
+			require.Nil(t, v.Entries[1].decodeLease)
+		} else {
+			require.Same(t, owner, v.Entries[1].CachedData)
+			require.NotNil(t, v.Entries[1].decodeLease)
+		}
+		v.ReleaseReadResultOnError()
+		require.Zero(t, fs.decodedReads.reads)
+		require.Equal(t, []byte("def"), owner.Bytes())
+	}
+	first.ReleaseReadResultOnError()
+	requireDecodeDrained(t, fs.decodedReads)
+
+	// Fail an admission-enabled deferred update after the target has decoded.
+	// S3FS currently keeps memory-cache update errors local; they must not
+	// invalidate the caller's data or detach its generation ticket.
+	fs = newSelectedDecodeFS(t, false)
+	failedCache := &failingDecodeCache{DataCache: fs.memCache.cache}
+	fs.memCache.cache = failedCache
+	v := selectedDecodeVector(1)
+	defer v.ReleaseReadResultOnError()
+	require.NoError(t, fs.Read(t.Context(), &v))
+	require.Equal(t, 1, failedCache.calls)
+	require.NotNil(t, v.Entries[1].decodeLease)
+	v.ReleaseReadResultOnError()
+	require.Zero(t, fs.decodedReads.reads)
+	requireDecodeDrained(t, fs.decodedReads)
+}
+
+func TestS3FSSelectedDecodeCloseDuringSibling(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	fs := newSelectedDecodeFS(t, false)
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	unblockSibling := sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(unblockSibling)
+	v := selectedDecodeVector(1)
+	v.Entries[2].ToCacheData = func(ctx context.Context, r io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
+		close(entered)
+		select {
+		case <-unblock:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return CacheOriginalData(ctx, r, data, a)
+	}
+	var readErr error
+	done := make(chan struct{})
+	go func() { readErr = fs.Read(ctx, &v); close(done) }()
+	t.Cleanup(func() {
+		unblockSibling()
+		<-done
+		v.ReleaseReadResultOnError()
+	})
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("sibling conversion did not start")
+	}
+	// Close must neither wait for the sibling nor retire the read's allocator.
+	closed := make(chan struct{})
+	go func() { fs.Close(ctx); close(closed) }()
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		t.Fatal("close waited for sibling conversion")
+	}
+	require.False(t, fs.memCache.closed.Load())
+	unblockSibling()
+	<-done
+	require.NoError(t, readErr)
+	require.True(t, fs.memCache.closed.Load())
+	require.Equal(t, []byte("def"), v.Entries[1].CachedData.Bytes())
+	require.NotNil(t, v.Entries[1].decodeLease)
+	v.ReleaseReadResultOnError()
+	requireDecodeDrained(t, fs.decodedReads)
 }
 
 func TestS3FSSharedDecodeDiskHits(t *testing.T) {
