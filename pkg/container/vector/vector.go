@@ -4559,10 +4559,27 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		v.HasNull() && dataLength%types.VarlenaSize == 0 {
 		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
 		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
-			for index, descriptor := range descriptors {
-				if v.IsNull(uint64(index)) && !descriptor.IsSmall() {
-					normalizeNullVarlen = true
-					break
+			if v.nsp.HasBorrowedValidity() {
+				// Keep the borrowed validity view read-only. Its legacy bitmap
+				// materialization is an admitted COW boundary, not part of this
+				// read-only marshal check.
+				for index, descriptor := range descriptors {
+					if v.IsNull(uint64(index)) && !descriptor.IsSmall() {
+						normalizeNullVarlen = true
+						break
+					}
+				}
+			} else {
+				iterator := v.nsp.GetBitmap().IteratorValue()
+				for iterator.HasNext() {
+					row := iterator.Next()
+					if row >= uint64(len(descriptors)) {
+						break
+					}
+					if !descriptors[row].IsSmall() {
+						normalizeNullVarlen = true
+						break
+					}
 				}
 			}
 		}
@@ -4591,9 +4608,20 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 			(*types.Varlena)(unsafe.Pointer(&normalizedVarlenData[0])),
 			len(descriptors),
 		)
-		for index := range normalizedDescriptors {
-			if v.IsNull(uint64(index)) {
-				normalizedDescriptors[index] = types.Varlena{}
+		if v.nsp.HasBorrowedValidity() {
+			for index := range normalizedDescriptors {
+				if v.IsNull(uint64(index)) {
+					normalizedDescriptors[index] = types.Varlena{}
+				}
+			}
+		} else {
+			iterator := v.nsp.GetBitmap().IteratorValue()
+			for iterator.HasNext() {
+				row := iterator.Next()
+				if row >= uint64(len(normalizedDescriptors)) {
+					break
+				}
+				normalizedDescriptors[row] = types.Varlena{}
 			}
 		}
 	}
