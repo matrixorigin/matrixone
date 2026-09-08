@@ -722,6 +722,40 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
 		return false, nil, nil, err
 	}
+	if stmt.RowAlias != nil {
+		if stmt.Rows == nil {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "INSERT row alias has no input rows")
+		}
+		values, ok := stmt.Rows.Select.(*tree.ValuesClause)
+		if !ok {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"INSERT row aliases are supported only for VALUES or SET")
+		}
+		if values.HasRowWord {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"VALUES ROW(...) does not support an INSERT row alias")
+		}
+		targetDBName := string(stmt.TargetDatabaseName)
+		if targetDBName == "" {
+			targetDBName = tableObjRef.SchemaName
+		}
+		targetTableName := string(stmt.TargetTableName)
+		if targetTableName == "" {
+			targetTableName = tableDef.Name
+		}
+		if _, err = validateInsertRowAlias(
+			builder.GetContext(), stmt.RowAlias, insertColumns, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
+		if err = validateOndupUpdateTargets(
+			builder.GetContext(), stmt.OnDuplicateUpdate, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
+	}
 	if stmt.Columns != nil {
 		syntaxHasColumnNames = true
 	}
@@ -755,7 +789,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate, stmt.RowAlias)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -985,7 +1019,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
-	if len(stmt.OnDuplicateUpdate) > 0 {
+	if len(stmt.OnDuplicateUpdate) > 0 && stmt.RowAlias == nil {
 		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 		if isIgnore {
 			stmt.OnDuplicateUpdate = nil
@@ -1925,6 +1959,7 @@ func buildValueScan(
 	updateColumns []string,
 	colToIdx map[string]int,
 	OnDuplicateUpdate tree.UpdateExprs,
+	rowAlias *tree.AliasClause,
 ) error {
 	var err error
 
@@ -2053,6 +2088,22 @@ func buildValueScan(
 	onUpdateExprs := make([]*plan.Expr, 0)
 	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
 		for _, expr := range OnDuplicateUpdate {
+			if expr == nil || len(expr.Names) == 0 || expr.Names[0] == nil {
+				continue
+			}
+			if rowAlias != nil {
+				if _, ok := colToIdx[expr.Names[0].ColName()]; !ok {
+					return moerr.NewBadFieldErrorf(builder.GetContext(),
+						"invalid input: column '%s' does not exist", expr.Names[0].ColNameOrigin())
+				}
+				for _, offset := range collectParamExprOffsets(expr.Expr) {
+					onUpdateExprs = append(onUpdateExprs, &plan.Expr{
+						Typ:  constTextType,
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(offset)}},
+					})
+				}
+				continue
+			}
 			var updateExpr *plan.Expr
 			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {

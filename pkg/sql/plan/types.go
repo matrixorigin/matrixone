@@ -1114,6 +1114,7 @@ type OndupUpdateBinder struct {
 	scanTag             int32
 	selectTag           int32
 	tableDef            *plan.TableDef
+	rowAlias            *insertRowAliasBinding
 	targetDBName        string
 	targetTableName     string
 	lowerCaseTableNames int64

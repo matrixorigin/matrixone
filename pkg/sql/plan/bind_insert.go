@@ -112,6 +112,42 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
 		return 0, err
 	}
+	var rowAliasBinding *insertRowAliasBinding
+	if stmt.RowAlias != nil {
+		if stmt.Rows == nil {
+			return 0, moerr.NewInvalidInput(builder.GetContext(), "INSERT row alias has no input rows")
+		}
+		values, ok := stmt.Rows.Select.(*tree.ValuesClause)
+		if !ok {
+			return 0, moerr.NewInvalidInput(builder.GetContext(),
+				"INSERT row aliases are supported only for VALUES or SET")
+		}
+		if values.HasRowWord {
+			return 0, moerr.NewInvalidInput(builder.GetContext(),
+				"VALUES ROW(...) does not support an INSERT row alias")
+		}
+		// Validate against the original INSERT column order. Generated columns
+		// written as DEFAULT are removed from the executable source later, but
+		// their names still occupy an alias position and are remapped by target
+		// identity after the final projection is built.
+		insertColumns, aliasErr := builder.getInsertColsForRowAlias(stmt.Columns, tableDef)
+		if aliasErr != nil {
+			return 0, aliasErr
+		}
+		rowAliasBinding, aliasErr = validateInsertRowAlias(
+			builder.GetContext(), stmt.RowAlias, insertColumns, tableDef,
+			targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+		)
+		if aliasErr != nil {
+			return 0, aliasErr
+		}
+		if aliasErr = validateOndupUpdateTargets(
+			builder.GetContext(), stmt.OnDuplicateUpdate, tableDef,
+			targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+		); aliasErr != nil {
+			return 0, aliasErr
+		}
+	}
 	if stmt.HasReturning() {
 		if err := validateReturningTarget(builder, tableDef, dmlCtx.objRefs[0]); err != nil {
 			return 0, err
@@ -124,13 +160,18 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	if rowAliasBinding != nil {
+		if err = rowAliasBinding.remapIncomingPositions(builder.GetContext(), tableDef, colName2Idx); err != nil {
+			return 0, err
+		}
+	}
 
 	// The irregular-index maintenance source is set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert, where the resolved conflict
 	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
 	// shares accepted rows after arbitration; ODKU shares the post-merge final
 	// image plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn, rowAliasBinding)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -2548,7 +2589,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	astUpdateExprs tree.UpdateExprs,
 	irregularIndexes []*plan.IndexDef,
 	autoIncrementGeneratedColumn int32,
+	rowAliases ...*insertRowAliasBinding,
 ) (int32, error) {
+	var rowAlias *insertRowAliasBinding
+	if len(rowAliases) > 0 {
+		rowAlias = rowAliases[0]
+	}
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
 	isFakePK := pkName == catalog.FakePrimaryKeyColName
@@ -2618,8 +2664,51 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// statement still carries the update clause's parameter markers, which
 		// the modern plan would drop (parameters are collected from the bound
 		// plan tree). Defer this degenerate corner to the legacy planner, which
-		// keeps the parameters and inserts the row. Signalled distinctly so only
-		// this case (not real PK/unique-key ODKU) is allowed to fall back.
+		// keeps the parameters and inserts the row. Row aliases still have to be
+		// fully name/type checked before the fallback discards the update clause.
+		if rowAlias != nil {
+			if err := validateOndupUpdateTargets(
+				builder.GetContext(), astUpdateExprs, tableDef,
+				dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+			); err != nil {
+				return 0, err
+			}
+			binder := NewOndupUpdateBinder(
+				builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef,
+				dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+				rowAlias,
+			)
+			previousBinder := bindCtx.binder
+			bindCtx.binder = binder
+			defer func() { bindCtx.binder = previousBinder }()
+			for _, astUpdateExpr := range astUpdateExprs {
+				colIdx, ok := lookupInsertTableColumn(tableDef, astUpdateExpr.Names[0].ColName(), builder.compCtx.GetLowerCaseTableNames())
+				if !ok {
+					return 0, moerr.NewBadFieldErrorf(builder.GetContext(),
+						"invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
+				}
+				colDef := tableDef.Cols[colIdx]
+				if _, ok := astUpdateExpr.Expr.(*tree.DefaultVal); ok {
+					if colDef.GeneratedCol != nil {
+						continue
+					}
+					if colDef.Typ.AutoIncr {
+						return 0, moerr.NewUnsupportedDML(builder.GetContext(), "auto_increment default value")
+					}
+					continue
+				}
+				if colDef.GeneratedCol != nil {
+					return 0, moerr.NewInvalidInputf(builder.GetContext(),
+						"the value specified for generated column '%s' in table '%s' is not allowed",
+						colDef.Name, tableDef.Name)
+				}
+				if _, err := binder.BindAssignmentExpr(astUpdateExpr.Expr, colDef.Typ); err != nil {
+					return 0, err
+				}
+			}
+		}
+		// Signalled distinctly so only this case (not real PK/unique-key ODKU)
+		// is allowed to fall back.
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), noPkOnDupUpdateCause)
 	} else {
 		onDupAction = plan.Node_UPDATE
@@ -2627,11 +2716,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		binder := NewOndupUpdateBinder(
 			builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef,
 			dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+			rowAlias,
 		)
+		var previousBinder Binder
+		if rowAlias != nil {
+			previousBinder = bindCtx.binder
+			bindCtx.binder = binder
+			defer func() {
+				bindCtx.binder = previousBinder
+			}()
+		}
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
-			colIdx, ok := tableDef.Name2ColIndex[colName]
+			colIdx, ok := lookupInsertTableColumn(tableDef, colName, builder.compCtx.GetLowerCaseTableNames())
 			if !ok {
 				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
 			}
@@ -2685,6 +2783,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[colDef.Name] = updateExpr
 			updateColIdxList = append(updateColIdxList, colIdx)
 			updateColExprList = append(updateColExprList, updateExpr)
+		}
+		if rowAlias != nil {
+			bindCtx.binder = previousBinder
 		}
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
@@ -4378,6 +4479,36 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	return insertColNames, nil
 }
 
+// getInsertColsForRowAlias resolves the source column identities before
+// generated-column DEFAULT trimming. The row alias is attached to the source
+// syntax, so an explicitly listed generated column must retain its position
+// until the final incoming projection is available for identity-based remap.
+func (builder *QueryBuilder) getInsertColsForRowAlias(astCols tree.IdentifierList, tableDef *TableDef) ([]string, error) {
+	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
+		return nil, err
+	}
+
+	if astCols == nil {
+		columns := make([]string, 0, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			if col != nil && !col.Hidden && col.GeneratedCol == nil {
+				columns = append(columns, col.Name)
+			}
+		}
+		return columns, nil
+	}
+
+	columns := make([]string, 0, len(astCols))
+	for _, column := range astCols {
+		idx, ok := lookupInsertTableColumn(tableDef, string(column), builder.compCtx.GetLowerCaseTableNames())
+		if !ok {
+			return nil, moerr.NewBadField(builder.GetContext(), string(column), tableDef.Name)
+		}
+		columns = append(columns, tableDef.Cols[idx].Name)
+	}
+	return columns, nil
+}
+
 func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.IdentifierList) error {
 	seen := make(map[string]struct{}, len(astCols))
 	for _, column := range astCols {
@@ -4406,8 +4537,8 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	// Find positions of generated columns in the explicit column list
 	genPositions := make(map[int]bool)
 	for i, col := range astCols {
-		colName := strings.ToLower(string(col))
-		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+		colName := string(col)
+		if idx, ok := lookupInsertTableColumn(tableDef, colName, builder.compCtx.GetLowerCaseTableNames()); ok {
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 			}
