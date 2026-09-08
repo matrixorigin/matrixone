@@ -4610,6 +4610,22 @@ func initSubStrIndexTestCase() []tcTemp {
 	}
 }
 
+func TestGetCountFloatRounding(t *testing.T) {
+	tests := []struct {
+		value float64
+		want  int64
+	}{
+		{1.4, 1},
+		{1.5, 2},
+		{1.9, 2},
+		{-1.5, -2},
+		{-2.5, -3},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.want, getCount(types.T_float64.ToType(), tt.value))
+	}
+}
+
 func TestSubStrIndex(t *testing.T) {
 	testCases := initSubStrIndexTestCase()
 
