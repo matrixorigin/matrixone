@@ -13064,8 +13064,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return fixedBinaryResultType(16)
 				},
@@ -13074,8 +13074,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_char},
+				overloadId: 1,
+				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return fixedBinaryResultType(16)
 				},
@@ -13084,8 +13084,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_text},
+				overloadId: 2,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return fixedBinaryResultType(16)
 				},
@@ -13105,8 +13105,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varbinary},
+				overloadId: 0,
+				args:       []types.T{types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13115,8 +13115,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_binary},
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13125,8 +13125,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_blob},
+				overloadId: 2,
+				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13146,8 +13146,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -13156,8 +13156,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_char},
+				overloadId: 1,
+				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -13166,8 +13166,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_text},
+				overloadId: 2,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -13187,8 +13187,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_uint64},
+				overloadId: 0,
+				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13197,8 +13197,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_uint32},
+				overloadId: 1,
+				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13207,8 +13207,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_int64},
+				overloadId: 2,
+				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13217,8 +13217,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      3,
-				args:            []types.T{types.T_int32},
+				overloadId: 3,
+				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -13257,8 +13257,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13267,8 +13267,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_char},
+				overloadId: 1,
+				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13277,8 +13277,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_text},
+				overloadId: 2,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13298,8 +13298,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar},
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13308,8 +13308,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_char},
+				overloadId: 1,
+				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13318,8 +13318,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_text},
+				overloadId: 2,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13339,8 +13339,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varbinary},
+				overloadId: 0,
+				args:       []types.T{types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13349,8 +13349,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_binary},
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13359,8 +13359,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_blob},
+				overloadId: 2,
+				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13380,8 +13380,8 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:      0,
-				args:            []types.T{types.T_varbinary},
+				overloadId: 0,
+				args:       []types.T{types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13390,8 +13390,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      1,
-				args:            []types.T{types.T_binary},
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -13400,8 +13400,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId:      2,
-				args:            []types.T{types.T_blob},
+				overloadId: 2,
+				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
