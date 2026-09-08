@@ -11,7 +11,7 @@ truncate table temp_truncate_test;  -- 失败
 no such table unnormal_db.temp_truncate_test
 delete from temp_truncate_test;
 select * from temp_truncate_test;  -- 应该返回空结果
-➤ id[4,32,0]  ¦  data[12,-1,0]
+➤ id[4,32,0]  ¦  data[12,50,0]
 drop table temp_truncate_test;
 create table parent_table (
 id int primary key,
@@ -280,7 +280,7 @@ drop database unnormal_db;
 drop database temporary_table_limitation;
 drop database temp_db;
 show databases;
-➤ Database[12,-1,0]  𝄀
+➤ Database[12,5000,0]  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
 mo_debug  𝄀
