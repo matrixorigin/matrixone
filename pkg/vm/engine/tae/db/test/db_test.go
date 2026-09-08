@@ -9049,6 +9049,14 @@ func TestIscpMeta(t *testing.T) {
 	}
 
 	// Helper function to append ISCP records
+	jobSpec, err := types.ParseStringToByteJson(`{"type":"backup","interval":"1h"}`)
+	require.NoError(t, err)
+	jobStatus, err := types.ParseStringToByteJson(`{"status":"running"}`)
+	require.NoError(t, err)
+	jobSpecBytes, err := types.EncodeJson(jobSpec)
+	require.NoError(t, err)
+	jobStatusBytes, err := types.EncodeJson(jobStatus)
+	require.NoError(t, err)
 	appendIscpRecord := func(accountID uint32, tableID uint64, jobName string, jobID uint64, watermark string, isDropped bool) {
 		opt := containers.Options{}
 		opt.Capacity = 0
@@ -9063,15 +9071,15 @@ func TestIscpMeta(t *testing.T) {
 		data := containers.BuildBatch(attrs, vecTypes, opt)
 		defer data.Close()
 
-		data.Vecs[0].Append(accountID, false)                                   // account_id
-		data.Vecs[1].Append(tableID, false)                                     // table_id
-		data.Vecs[2].Append([]byte(jobName), false)                             // job_name
-		data.Vecs[3].Append(jobID, false)                                       // job_id
-		data.Vecs[4].Append([]byte(`{"type":"backup","interval":"1h"}`), false) // job_spec
-		data.Vecs[5].Append(uint8(1), false)                                    // job_state (active)
-		data.Vecs[6].Append([]byte(watermark), false)                           // watermark
-		data.Vecs[7].Append([]byte(`{"status":"running"}`), false)              // job_status
-		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false)         // create_at
+		data.Vecs[0].Append(accountID, false)                           // account_id
+		data.Vecs[1].Append(tableID, false)                             // table_id
+		data.Vecs[2].Append([]byte(jobName), false)                     // job_name
+		data.Vecs[3].Append(jobID, false)                               // job_id
+		data.Vecs[4].Append(jobSpecBytes, false)           // job_spec
+		data.Vecs[5].Append(uint8(1), false)                            // job_state (active)
+		data.Vecs[6].Append([]byte(watermark), false)                   // watermark
+		data.Vecs[7].Append(jobStatusBytes, false)         // job_status
+		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false) // create_at
 
 		if isDropped {
 			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)

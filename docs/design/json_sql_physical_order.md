@@ -1,11 +1,11 @@
 # JSON SQL order and persisted physical order
 
-Version: 2 (admission implemented for review; independent design approval pending)
+Version: 3 (bounded admission implemented for review; independent design approval pending)
 
 Owner: issue [#28039](https://github.com/matrixorigin/matrixone/issues/28039).
 Implementation: [PR #28086](https://github.com/matrixorigin/matrixone/pull/28086).
 Admission baseline: `19d8c39598f4db81c69d005be2c9718866ff7c2c`.
-The version-2 admission implementation is in the same change as this document.
+The version-3 admission resource correction is in the same change as this document.
 Pre-change reference: `6e5f82f568b1ec3e013e8d4ab9031b2360300b84`.
 
 This is a distinct design-review phase. It does not approve the existing
@@ -197,16 +197,22 @@ is preferable to executing a comparator with violated preconditions.
 
 ## 6. Cost and failure behavior
 
-Let B be the expanded document bytes visited, N the selected row count, D
-nesting depth, and P the compared prefix. Admission walks every descendant once
-per input write/decode and adds no payload copy beyond the destination's
-ownership requirement. It shares the existing recursive structural validator,
-whose stack usage follows D. This change does not introduce a new universal
-depth limit: the general ByteJSON parser permits deeper values than the bounded
-JSON merge/document APIs. Depth/resource policy is not strengthened by this
-admission correction, and overlapping encoded child ranges may increase work
-relative to serialized size. These limits apply to public validation already;
-the benchmark reports actual input-admission cost rather than claiming it free.
+Let B be the serialized document bytes, N the selected row count, and P the
+compared prefix. Admission shares a work budget of B across descendant visits.
+Each visited container table, object key and scalar payload consumes its encoded
+size before further traversal or scalar validation. A container does not charge
+its complete subtree again: canonical non-overlapping children remain valid.
+Aliased child offsets cannot amplify work beyond B; insufficient budget rejects
+the document before publication. This adds no heap allocation or payload copy.
+
+The recursive validator also rejects more than 100 nested containers before
+descending, matching the bounded JSON document APIs. Unlike the previous
+validator, it does not admit arbitrarily deep binary documents. This is an
+explicit admission-policy tightening for retained/raw input, not a claim that
+the general text parser always enforced the same depth. Valid controls at 100
+levels and rejection at 101 are tested. Stack use is bounded by 100 and visited
+structural/payload work by B; scalar validators retain their payload-dependent
+cost. The public validator and checked vector admission use this same policy.
 
 After admission, cross-rank literal/array comparisons are O(1) per selected row;
 same-rank comparison is proportional to P. Exact decimal and legacy binary

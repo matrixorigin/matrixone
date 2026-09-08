@@ -39,6 +39,9 @@ const (
 	valTypeSize  = 1
 	valEntrySize = 5
 	numberSize   = 8
+
+	// Match the document nesting policy without importing container packages.
+	maxContainerDepth = 100
 )
 
 // UvarintPayload accepts the exact, shortest uvarint-prefixed payload.
@@ -53,8 +56,16 @@ func UvarintPayload(data []byte) ([]byte, bool) {
 
 // Container validates the bounds and every descendant of one binary JSON
 // array or object. Scalar semantics stay with the caller through validScalar.
+// Charge each visited table, key and scalar against the serialized byte size.
+// This permits canonical nested encodings without charging a child's payload
+// twice, while rejecting alias expansion before it exceeds linear input work.
 func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
-	if tp != typeArray && tp != typeObject || len(data) < headerSize {
+	remaining := uint64(len(data))
+	return container(tp, data, validScalar, 1, &remaining)
+}
+
+func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining *uint64) bool {
+	if depth > maxContainerDepth || tp != typeArray && tp != typeObject || len(data) < headerSize {
 		return false
 	}
 	count := uint64(binary.LittleEndian.Uint32(data))
@@ -69,6 +80,9 @@ func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 	if minimumSize > documentSize || documentSize != uint64(len(data)) {
 		return false
 	}
+	if !charge(remaining, minimumSize) {
+		return false
+	}
 
 	valueTableStart := uint64(headerSize) + keyTableSize
 	payloadStart := valueTableStart + count*uint64(valEntrySize)
@@ -78,6 +92,9 @@ func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 			keyOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset:]))
 			keyLength := uint64(binary.LittleEndian.Uint16(data[entryOffset+keyOriginOff:]))
 			if keyOffset < payloadStart || keyOffset > documentSize || keyLength > documentSize-keyOffset {
+				return false
+			}
+			if !charge(remaining, keyLength) {
 				return false
 			}
 		}
@@ -101,13 +118,21 @@ func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 			return false
 		}
 		if childType == typeArray || childType == typeObject {
-			if !Container(childType, childData, validScalar) {
+			if !container(childType, childData, validScalar, depth+1, remaining) {
 				return false
 			}
-		} else if !validScalar(childType, childData) {
+		} else if !charge(remaining, uint64(len(childData))) || !validScalar(childType, childData) {
 			return false
 		}
 	}
+	return true
+}
+
+func charge(remaining *uint64, size uint64) bool {
+	if size > *remaining {
+		return false
+	}
+	*remaining -= size
 	return true
 }
 

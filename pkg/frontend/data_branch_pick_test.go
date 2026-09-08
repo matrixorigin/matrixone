@@ -1449,7 +1449,11 @@ func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
 	srcVec := vector.NewVec(types.T_json.ToType())
 	defer srcVec.Free(mp)
 
-	require.NoError(t, vector.AppendBytes(srcVec, []byte(`{"k":1}`), false, mp))
+	jsonValue, err := types.ParseStringToByteJson(`{"k":1}`)
+	require.NoError(t, err)
+	jsonBytes, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(srcVec, jsonBytes, false, mp))
 
 	coerced, owned, err := coercePickKeyVectorToType(nil, srcVec, types.T_int32.ToType(), mp)
 	require.Error(t, err)
@@ -2091,7 +2095,11 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 			name: "unsupported json",
 			typ:  types.T_json.ToType(),
 			append: func(vec *vector.Vector) {
-				require.NoError(t, vector.AppendBytes(vec, []byte(`{"k":1}`), false, mp))
+				value, err := types.ParseStringToByteJson(`{"k":1}`)
+				require.NoError(t, err)
+				encoded, err := types.EncodeJson(value)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
 			},
 			wantErr: "not supported",
 		},

@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -39,6 +40,7 @@ func TestJSONRawAdmissionRejectsMalformedBeforePublication(t *testing.T) {
 	bad := jsonAdmissionValue(t, `[0,0]`)
 	bad[1+8+5] = 0xfd
 	inputs := map[string][]byte{"late child": bad, "short integer": {bytejson.TpCodeInt64, 1}, "empty": {}, "oversized literal": {bytejson.TpCodeLiteral, bytejson.LiteralNull, 0xff}, "nonminimal string": {bytejson.TpCodeString, 0x80, 0}, "empty decimal": {bytejson.TpCodeDecimal, 0}}
+	inputs["aliased descendants"] = nestedJSONAdmissionValue(t, true)
 	for name, raw := range inputs {
 		t.Run(name, func(t *testing.T) {
 			for _, operation := range []string{"constant", "append", "bulk", "list", "string list", "replace", "set constant", "set encoded constant", "set typed constant", "writer", "bytejson", "encoder"} {
@@ -98,6 +100,26 @@ func TestJSONRawAdmissionRejectsMalformedBeforePublication(t *testing.T) {
 	}
 }
 
+// Model a corrupt wire/storage document, not an encoding produced by SQL.
+func nestedJSONAdmissionValue(t *testing.T, alias bool) []byte {
+	t.Helper()
+	child := jsonAdmissionValue(t, `[null,null]`)[1:]
+	for i := 0; i < 18; i++ {
+		parent := make([]byte, 18+len(child))
+		binary.LittleEndian.PutUint32(parent, 2)
+		binary.LittleEndian.PutUint32(parent[4:], uint32(len(parent)))
+		parent[8], parent[13] = bytejson.TpCodeArray, bytejson.TpCodeArray
+		binary.LittleEndian.PutUint32(parent[9:], 18)
+		binary.LittleEndian.PutUint32(parent[14:], 18)
+		if !alias {
+			parent[13], parent[14] = bytejson.TpCodeLiteral, bytejson.LiteralNull
+		}
+		copy(parent[18:], child)
+		child = parent
+	}
+	return append([]byte{bytejson.TpCodeArray}, child...)
+}
+
 type invalidAdmissionEncoder struct{ raw []byte }
 
 func (e invalidAdmissionEncoder) TypeCode() byte {
@@ -120,13 +142,27 @@ func (e invalidAdmissionEncoder) EncodeDataInto(dst []byte) (int, error) {
 }
 
 func TestJSONCheckedDecodeRejectsMalformedPayload(t *testing.T) {
+	t.Run("late child", func(t *testing.T) {
+		good := jsonAdmissionValue(t, `[0,0]`)
+		bad := bytes.Clone(good)
+		bad[1+8+5] = 0xfd
+		testJSONCheckedDecodeRejectsPayload(t, good, bad)
+	})
+	t.Run("aliased descendants", func(t *testing.T) {
+		testJSONCheckedDecodeRejectsPayload(t, nestedJSONAdmissionValue(t, false), nestedJSONAdmissionValue(t, true))
+	})
+}
+
+func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
+	t.Helper()
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_json.ToType())
 	defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
-	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `[0,0]`), false, mp))
+	require.Equal(t, len(good), len(bad))
+	require.NoError(t, AppendBytes(source, good, false, mp))
 	// Simulate damaged storage after valid admission. Do not use an unchecked
 	// constructor as evidence that ordinary SQL creates malformed JSON.
-	source.GetBytesAt(0)[1+8+5] = 0xfd
+	copy(source.GetBytesAt(0), bad)
 	binary, err := source.MarshalBinary()
 	require.NoError(t, err)
 	var legacy bytes.Buffer

@@ -1914,11 +1914,15 @@ func TestFunctionExpressionExecutorShrinkingSelectList(t *testing.T) {
 func TestFunctionExpressionExecutorSelectedRowsPreservesJSONComparisonIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	jsonValue, err := types.ParseStringToByteJson(`1`)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
 
 	input := vector.NewVec(types.T_json.ToType())
 	defer input.Free(proc.Mp())
 	for range 3 {
-		require.NoError(t, vector.AppendBytes(input, []byte{1}, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input, encoded, false, proc.Mp()))
 	}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = input
@@ -1936,7 +1940,7 @@ func TestFunctionExpressionExecutorSelectedRowsPreservesJSONComparisonIdentity(t
 	) error {
 		output := vector.MustFunctionResult[types.Varlena](result)
 		for range length {
-			if err := output.AppendBytes([]byte{1}, false); err != nil {
+			if err := output.AppendBytes(encoded, false); err != nil {
 				return err
 			}
 			output.GetResultVector().SetPrepareParamKind(vector.PrepareParamInteger)
