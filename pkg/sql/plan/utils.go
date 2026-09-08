@@ -4662,6 +4662,21 @@ func collectPreparedJSONComparisonParamPositions(
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		functionName := impl.F.GetFunc().GetObjName()
+		// Constructor value arguments also consume concrete prepared metadata.
+		// Do not mark OBJECT keys, modifier documents or paths: their legacy
+		// string conversion is a separate contract from JSON scalar values.
+		if positions != nil {
+			for i, arg := range impl.F.Args {
+				valueArg := functionName == "json_array" ||
+					(functionName == "json_object" && i%2 == 1) ||
+					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace") && i >= 2 && i%2 == 0)
+				if valueArg {
+					if param := arg.GetP(); param != nil {
+						positions[param.Pos] = struct{}{}
+					}
+				}
+			}
+		}
 		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
 			if positions != nil {
 				if param := impl.F.Args[0].GetP(); param != nil {

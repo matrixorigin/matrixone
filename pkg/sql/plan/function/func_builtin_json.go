@@ -2234,8 +2234,11 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		switch v.GetType().Oid {
 		case types.T_char, types.T_varchar, types.T_text:
 			kind := v.GetPrepareParamKindAt(row)
-			if kind != vector.PrepareParamNone {
-				return preparedTextToJSONValue(ctx, string(v.GetBytesAt(row)), kind)
+			paramType := v.GetPrepareParamType()
+			binaryString := v.GetIsBinaryStringAt(row)
+			if kind != vector.PrepareParamNone || paramType != types.T_any || binaryString {
+				return PreparedJSONScalarValue(ctx, v.GetBytesAt(row), kind,
+					paramType, binaryString, protocolVersion)
 			}
 		}
 	}
@@ -2445,6 +2448,17 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 ) (any, error) {
 	typ := v.GetType()
 	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		// Prepared key text keeps the previous kind-only conversion. Concrete
+		// scalar and binary sidecars belong to values, not member names.
+		if kind := v.GetPrepareParamKindAt(row); kind != vector.PrepareParamNone {
+			ctx := context.Background()
+			if proc != nil {
+				ctx = proc.Ctx
+			}
+			return preparedTextToJSONValue(ctx, string(v.GetBytesAt(row)), kind)
+		}
+		return string(v.GetBytesAt(row)), nil
 	case types.T_time:
 		return newTypedByteJson(bytejson.TpCodeTime,
 			vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(typ.Scale)), nil

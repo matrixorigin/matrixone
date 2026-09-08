@@ -492,6 +492,43 @@ func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
 	}
 }
 
+func TestJsonConstructorPreparedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name        string
+		typ         types.T
+		binary      bool
+		kind        vector.PrepareParamKind
+		input, want string
+	}{
+		{"binary", types.T_binary, true, vector.PrepareParamNone, "ab", `"base64:type254:YWI="`},
+		{"varbinary", types.T_varbinary, true, vector.PrepareParamNone, "ab", `"base64:type15:YWI="`},
+		{"blob", types.T_blob, true, vector.PrepareParamNone, "ab", `"base64:type252:YWI="`},
+		{"float32", types.T_float32, false, vector.PrepareParamFloat, "0.1", "0.10000000149011612"},
+		{"kind_only", types.T_any, false, vector.PrepareParamInteger, "42", "42"},
+		{"text", types.T_any, false, vector.PrepareParamNone, "ab", `"ab"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(types.T_text.ToType())
+			defer v.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
+			v.SetPrepareParamType(tc.typ)
+			v.SetPrepareParamKind(tc.kind)
+			v.SetIsBinaryString(tc.binary)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, defines.MORPCVersion52)
+			require.NoError(t, err)
+			got, err := bytejson.CreateByteJSON(value)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String())
+			if tc.binary {
+				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), v, 0, defines.MORPCVersion51)
+				require.NoError(t, err)
+				require.Equal(t, tc.input, key)
+			}
+		})
+	}
+}
+
 func TestJsonObjectBitKeyPreservesLegacyNameAndTaggedValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := runJsonFunctionWithSelectList(t, proc,

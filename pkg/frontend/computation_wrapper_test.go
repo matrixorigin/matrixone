@@ -4613,6 +4613,57 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)"} {
+		t.Run(constructor, func(t *testing.T) {
+			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
+				t.Run(fmt.Sprint(version), func(t *testing.T) {
+					rt := moruntime.ServiceRuntime("")
+					old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+					defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+					ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 180, "select "+constructor)
+					defer prepared.Close()
+					setSessionAlloc("", NewLeakCheckAllocator())
+					ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+					require.NoError(t, err)
+					defer ioses.Close()
+					proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+					proto.SetSession(ses)
+					for _, value := range []string{"ab", "cd", "ab"} {
+						require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepared,
+							buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, value), 0))
+						_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+						if owned && stmt != nil {
+							defer stmt.Free()
+						}
+						require.NoError(t, err)
+						query := runtimePlan.GetQuery()
+						expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+						executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
+						require.NoError(t, err)
+						result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+						if version == defines.MORPCVersion51 {
+							require.ErrorContains(t, err, "MORPC protocol version 52")
+						} else {
+							require.NoError(t, err)
+							want := "[\"base64:type252:YWI=\"]"
+							if value == "cd" {
+								want = "[\"base64:type252:Y2Q=\"]"
+							}
+							if constructor != "json_array(?)" {
+								want = "{\"k\": " + want[1:len(want)-1] + "}"
+							}
+							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())
+						}
+						executor.Free()
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 117, "select ? member of ('[18446744073709551615]')")
