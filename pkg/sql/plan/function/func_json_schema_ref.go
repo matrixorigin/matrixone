@@ -562,7 +562,7 @@ func mysqlEffectiveSchemaChildren(pointer string, object map[string]any) []mysql
 			})
 		}
 	}
-	for _, key := range []string{"properties", "patternProperties", "definitions"} {
+	for _, key := range []string{"properties", "patternProperties"} {
 		pushNamed(key)
 	}
 	if dependencies, ok := object["dependencies"].(map[string]any); ok {

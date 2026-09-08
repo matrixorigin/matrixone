@@ -1090,6 +1090,32 @@ func TestJsonSchemaRepeatedReferenceExpansionBudgetAndCancellation(t *testing.T)
 	require.Greater(t, cancelDuringPreflight.calls, cancelDuringPreflight.cancelAfter)
 }
 
+func TestJsonSchemaUnusedDefinitionsDoNotConsumeExpansionBudget(t *testing.T) {
+	definitions := make(map[string]any, 18)
+	definitions["d0"] = map[string]any{"type": "integer"}
+	for i := 1; i < 18; i++ {
+		previous := fmt.Sprintf("#/definitions/d%d", i-1)
+		definitions[fmt.Sprintf("d%d", i)] = map[string]any{
+			"allOf": []any{
+				map[string]any{"$ref": previous},
+				map[string]any{"$ref": previous},
+			},
+		}
+	}
+	schemaBytes, err := json.Marshal(map[string]any{
+		"type":        "integer",
+		"definitions": definitions,
+	})
+	require.NoError(t, err)
+	schema, err := types.ParseSliceToByteJson(schemaBytes)
+	require.NoError(t, err)
+	compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+	require.NoError(t, err)
+	result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+	require.NoError(t, err)
+	require.True(t, result.Valid())
+}
+
 func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 	tests := []struct {
 		name   string
