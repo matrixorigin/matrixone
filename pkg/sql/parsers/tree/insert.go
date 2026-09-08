@@ -34,7 +34,11 @@ type Insert struct {
 	// Ignore keeps INSERT's error-conversion policy independent from the
 	// duplicate-key action.  In particular, INSERT IGNORE ... ON DUPLICATE KEY
 	// UPDATE must still carry the ordered UPDATE expressions.
-	Ignore            bool
+	Ignore bool
+	// RowAlias is the optional MySQL INSERT VALUES/SET row alias. It is kept
+	// on INSERT rather than registering the alias as a catalog/table binding so
+	// the planner can install it only in the ON DUPLICATE KEY UPDATE scope.
+	RowAlias          *AliasClause
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
 	IsRestore         bool
@@ -86,6 +90,10 @@ func (node *Insert) Format(ctx *FmtCtx) {
 	if node.Rows != nil {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
+	}
+	if node.RowAlias != nil {
+		ctx.WriteString(" as ")
+		node.RowAlias.Format(ctx)
 	}
 	updates := node.GetOnDuplicateUpdate()
 	if len(updates) > 0 {
