@@ -566,7 +566,7 @@ var (
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
 		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
-		"'NONE' AS `CHECK_OPTION`," +
+		"cast('NONE' as varchar(9)) AS `CHECK_OPTION`," +
 		"'YES' AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
