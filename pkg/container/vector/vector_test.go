@@ -2606,6 +2606,50 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	}
 }
 
+func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	values := [][]byte{
+		[]byte("ordinary inline"),
+		[]byte("ordinary long value that exceeds inline storage"),
+		[]byte("second ordinary long value that exceeds inline storage"),
+	}
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+
+	plan, err := vec.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, plan.canonicalVarlen,
+		"an ordinary owned append-built vector should retain bulk serialization")
+	require.Equal(t, uint32(vec.Length()*vec.GetType().TypeSize()+len(vec.GetArea())),
+		plan.dataLength+plan.areaLength)
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	decoded := NewVecFromReuse()
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, values[0], decoded.GetBytesAt(0))
+	require.Equal(t, values[1], decoded.GetBytesAt(1))
+	require.Equal(t, values[2], decoded.GetBytesAt(2))
+
+	window, err := vec.Window(2, 3)
+	require.NoError(t, err)
+	windowPlan, err := window.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.True(t, windowPlan.canonicalVarlen,
+		"a window retaining a larger source area must use canonical serialization")
+	windowEncoded, err := window.MarshalBinary()
+	require.NoError(t, err)
+	windowDecoded := NewVecFromReuse()
+	require.NoError(t, windowDecoded.UnmarshalBinary(windowEncoded))
+	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
+
+	windowDecoded.Free(nil)
+	window.Free(nil)
+	decoded.Free(nil)
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())

@@ -4501,7 +4501,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		dataLength = 0
 	}
 	areaLength := uint64(len(v.area))
-	canonicalVarlen := isVarlenaMarshalType(v.typ.Oid) && dataLength > 0
+	canonicalVarlen := v.requiresCanonicalVarlenMarshal(dataLength)
 	if dataLength > uint64(len(v.data)) {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
 			"vector data is shorter than its marshal length",
@@ -4590,6 +4590,20 @@ func isVarlenaMarshalType(oid types.T) bool {
 	default:
 		return false
 	}
+}
+
+// requiresCanonicalVarlenMarshal keeps the original bulk wire image for an
+// ordinary owned vector whose area layout has already been proven safe. A
+// borrowed/aliased area, a window retaining a larger source area, or NULL rows
+// still takes the canonical path so offsets, payload reachability, and stale
+// NULL descriptors are validated and normalized before they are written.
+func (v *Vector) requiresCanonicalVarlenMarshal(dataLength uint64) bool {
+	if !isVarlenaMarshalType(v.typ.Oid) || dataLength == 0 {
+		return false
+	}
+	return v.HasNull() ||
+		v.AreaBackingKind() != OwnedMPoolUnique ||
+		!v.VarlenaAreaIsDisjoint()
 }
 
 func (v *Vector) MarshalBinarySize() (int, error) {
