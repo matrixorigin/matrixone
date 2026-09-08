@@ -2253,7 +2253,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
 		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
-			{Tag: 9, UseMembershipFilter: true},
+			{Tag: 9, UseMembershipFilter: true, MustApply: true},
 		}
 		op.IndexReaderParam = &planpb.IndexReaderParam{
 			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),

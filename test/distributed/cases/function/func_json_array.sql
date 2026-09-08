@@ -31,7 +31,7 @@ drop table jat_enum;
 -- binary types
 select json_array(cast('hello' as binary(10)), cast('world' as varbinary));
 select json_array(cast(null as binary), cast(null as varbinary));
-select json_array(cast('\0\x01\x02\xFF' as varbinary));
+select json_array(cast(x'000102ff' as varbinary));
 
 -- test with full table
 set time_zone = '+08:00';
@@ -131,6 +131,21 @@ select id, json_array(uid) from jat;
 select id, json_array(id, js) from jat;
 select id, json_array(null, js) from jat;
 select id, json_array(vf32, vf64) from jat;
+
+-- MySQL-compatible typed values retain their JSON representation.
+select json_type(json_extract(json_array(cast('2024' as year)), '$[0]')), json_contains(json_array(cast('2024' as year)), '2024'), json_contains(json_array(cast('2024' as year)), '"2024"');
+select json_unquote(json_extract(json_array(cast('04:05:06' as time(0)), cast('04:05:06.123456' as time(6))), '$[0]')), json_unquote(json_extract(json_array(cast('04:05:06' as time(0)), cast('04:05:06.123456' as time(6))), '$[1]'));
+select json_array(st_geomfromtext('POINT(1 2)')) = json_array(convert(st_geomfromtext('POINT(1 2)'), json));
+set time_zone = '+00:00';
+select json_unquote(json_extract(json_array(ts), '$[0]')) from jat where id = 1;
+set time_zone = '+08:00';
+select json_unquote(json_extract(json_array(ts), '$[0]')) from jat where id = 1;
+
+set @json_array_blob = x'00ff';
+set @json_array_bit = 10;
+prepare json_array_typed from 'select json_array(cast(? as blob), cast(? as bit(4)))';
+execute json_array_typed using @json_array_blob, @json_array_bit;
+deallocate prepare json_array_typed;
 
 -- all types combined
 select id, json_array(id, b, bi, f, d, d64, d128, d256, c1, vc, t, bin, vbin, bitcol, td, tt, tdt, ts, yr, uid, js, vf32, vf64) from jat;
