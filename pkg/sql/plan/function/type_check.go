@@ -170,9 +170,19 @@ const (
 
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
+// the original overload slice avoids planner-time allocations for matchers
+// that need to reserve a dedicated string overload.
+func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded int) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
+		if i == excluded {
+			continue
+		}
 		if len(ov.args) != len(inputs) {
 			continue
 		}
@@ -213,6 +223,35 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+// binTypeMatch keeps numeric inputs on their existing typed overloads and
+// routes MySQL string domains through the prefix-aware string executor. An
+// unresolved parameter is cast to VARCHAR so each execution can retain the
+// normal NULL and runtime string conversion behavior.
+func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 || len(overloads) == 0 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	stringOverload := -1
+	for i, ov := range overloads {
+		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
+			if stringOverload == -1 {
+				stringOverload = i
+			}
+		}
+	}
+	if stringOverload == -1 {
+		return fixedTypeMatch(overloads, inputs)
+	}
+	if inputs[0].Oid == types.T_any {
+		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
+	}
+	if inputs[0].Oid.IsMySQLString() {
+		return newCheckResultWithSuccess(stringOverload)
+	}
+
+	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
 }
 
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
