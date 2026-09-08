@@ -412,7 +412,7 @@ func TestTailFrameRowCarriesTheFramesChecksum(t *testing.T) {
 			meta += s
 		}
 	}
-	require.Contains(t, meta, "crc32:feedface",
-		"the row records the frame's own CRC, labelled so it is not mistaken for the base rows' md5")
+	require.Contains(t, meta, "feedface",
+		"the row records the frame's own CRC, read back from the footer it was sealed with")
 	require.Contains(t, meta, "'cdc_tail:3'")
 }

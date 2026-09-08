@@ -509,26 +509,28 @@ func SimulateDevices(devices []int, n int64) []int {
 
 // CdcChunkSetChecksum renders the checksum recorded on a CDC tail frame's metadata row.
 //
-// A flush spans as many chunks as its records need, and the row describes all of them, so the
-// value is self-describing about what it covers:
+// A flush spans as many chunks as its records need and the row describes all of them, so:
 //
-//	crc32:<hex>     one chunk — the CRC32 that chunk was sealed with, comparable directly
-//	crc32set:<hex>  several — the CRC32 over their CRCs, in chunk order, which changes if any
-//	                chunk's content or their order does
-//	(empty)         nothing to describe
+//	one chunk  -- that chunk's own CRC32, the value in its footer
+//	several    -- the CRC32 over their CRC32s in chunk order, which changes if any chunk's
+//	              content changes, if one goes missing, or if they come back reordered
+//	none       -- empty
 //
-// The prefix matters because the base sub-index rows put an MD5 in this same column. One column
-// carrying two algorithms is only safe if a reader can tell which one it is holding.
+// Plain hex, no algorithm tag. A reader reaches this column through the row's index_id -- the
+// tail rows are keyed cdc_tail:<n> and readMetadata selects by exact id -- so it already knows
+// which kind of row it holds, and how many chunks the frame has, which is what selects between
+// the two rules above. (The base sub-index rows carry an MD5 here; at 32 hex against 8 there is
+// nothing to confuse even by eye.)
 func CdcChunkSetChecksum(sums []uint32) string {
 	switch len(sums) {
 	case 0:
 		return ""
 	case 1:
-		return fmt.Sprintf("crc32:%08x", sums[0])
+		return fmt.Sprintf("%08x", sums[0])
 	}
 	buf := make([]byte, 4*len(sums))
 	for i, s := range sums {
 		binary.LittleEndian.PutUint32(buf[i*4:], s)
 	}
-	return fmt.Sprintf("crc32set:%08x", crc32.ChecksumIEEE(buf))
+	return fmt.Sprintf("%08x", crc32.ChecksumIEEE(buf))
 }
