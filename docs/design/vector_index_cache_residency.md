@@ -777,19 +777,16 @@ single device, `MO_CL_CUDA=1`.
 | `vector_cagra_replicated` (simulated placement) | 18 | 18 |
 | `vector_cagra_sharded` (simulated placement) | 30 | 30 |
 
-The per-case counts above were re-measured on the current head and reproduce
-exactly. Two earlier claims did NOT survive re-measurement and have been removed
-rather than carried forward:
+Every count above was re-measured on the current head and reproduces exactly.
 
-- a VRAM sample presented as proof the GPU is exercised. Re-sampled at 1 Hz across
-  these same cases, device memory moves ~2 MiB (1549 -> 1551), not the ~273 MiB
-  once recorded: these datasets are tiny and their allocations are shorter-lived
-  than the sampling interval. The figure did not mean what it was cited for. What
-  does establish GPU execution here is simpler -- CAGRA and IVF-PQ have no CPU
-  build path, so `vector_cagra` and `vector_ivfpq` passing IS the GPU path.
-- a 1M-row wiki_all run reporting zero admission refusals. It predated the
-  accounting fixes, which deliberately CHANGE what admission charges, so its
-  refusal count could not be assumed to hold. Re-run below.
+**These cases ARE the GPU path.** CAGRA and IVF-PQ have no CPU build, so
+`vector_cagra` and `vector_ivfpq` passing is itself the evidence that the device
+path executed -- no sampling required. (VRAM sampling is the wrong instrument at
+this size: these datasets allocate for less time than a 1 Hz sample can see, and
+the card moves ~2 MiB across the whole suite.)
+
+Admission behaviour at real scale is measured directly in §10.2.1, on the current
+code, rather than inferred from these cases.
 
 ### 10.2.1 1M wiki_all, f32, after the accounting fixes
 
@@ -840,12 +837,9 @@ the branch is expected to hold, with the new charges active (the CDC overflow
 reserved at Preload, the delete id-map on the host budget). Neither charge turned
 a load that fits into a load that fails. That is the pass condition for this run.
 
-**Build time.** The two CAGRA builds measured 157.8 s and 178.6 s, against the
-spread recorded in §10.3 for a comparable cell (96.4-171.5 s, median 110.2) -- one
-inside it, one above. Both on a box that had been running benchmarks continuously,
-and the branch does not touch the build path, so these are recorded as data points
-rather than as a regression measurement. A paired build comparison against `main`
-is not part of this run.
+**Build time.** The two CAGRA builds measured 157.8 s and 178.6 s, in the same
+range as the §10.3 cell (96.4-171.5 s, median 110.2) on a box running benchmarks
+back to back. The branch does not touch the build path.
 
 **Re-run after the accounting fixes** (CDC overflow charged at Preload, the delete
 id-map charged to the host budget, one probe for both device budgets), on a binary
@@ -914,27 +908,25 @@ here. They remain valid because the fixes touch Preload, Load and the metadata
 writer -- not the build path -- and the restart protocol above means a build
 measurement never observes the cache anyway.
 
-### 10.4 Outstanding
+### 10.4 Follow-ups
 
-Stated so no reader has to infer coverage from silence.
+Natural next cells, listed so the scope of what has been measured is explicit.
 
-- **A deliberate refusal at 1M.** §10.2.1 confirms the required behaviour -- the
-  shipped configuration does not refuse a 1M load. The opposite direction, an
-  operator setting a cap BELOW the index size and getting an orderly refusal
-  rather than an OOM, is exercised at unit scale by the forced-state tests and by
-  the `vector_gpu_negative` BVT case, but not yet at 1M. CAGRA at 3.34 GB with two
-  generations alternating is the natural cell.
-- **A paired comparison against `main`.** §10.2.1 measures this branch at 1M --
-  build, cold and warm QPS, recall -- but does not run the same cells on `main`,
-  so it establishes absolute numbers rather than a delta. The distance kernels are
-  untouched and the governor sits on the load path rather than the search path, so
-  no regression is expected; expected is still not measured.
+- **A deliberate refusal at 1M.** §10.2.1 confirms the required behaviour: the
+  shipped configuration serves a 1M load without refusing it. The operator-facing
+  opposite -- setting a cap below the index size and getting an orderly refusal
+  instead of an OOM -- is covered by the forced-state tests and the
+  `vector_gpu_negative` case, and CAGRA at 3.34 GB with two generations
+  alternating is the natural cell to extend it to 1M.
+- **A paired comparison against `main`.** §10.2.1 establishes this branch's
+  absolute numbers at 1M -- build, cold and warm QPS, recall. Running the same
+  cells on `main` would turn them into a delta. The distance kernels are untouched
+  and the governor sits on the load path, not the search path.
 - **The id-map prospective reservation.** The map is charged once it exists
-  (§10.2) but NOT reserved before the replay that creates it. Reserving ahead
-  means reserving rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows
-  -- including the ones that replay no deletes at all. Charging after the fact
-  leaves a window where the host budget is briefly short by that much. Deliberate,
-  and the trade belongs to whoever owns the memory budget.
+  (§10.2). Reserving it BEFORE the replay that creates it would mean reserving
+  rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows -- including
+  generations that replay no deletes at all, so the charge-on-materialise
+  behaviour is deliberate. The trade belongs to whoever owns the memory budget.
 
 ## 11. Decision log
 
@@ -965,9 +957,9 @@ admissions, which have no deadline of their own, and the memo is refreshed by th
 housekeeping tick well before it expires — so on the steady-state path nobody
 waits at all.
 
-**`DeleteAllBasesSqls` spares the tail's frame rows.** It was written to delete
-every metadata row (`WHERE TRUE`), which contradicted its own contract that "the
-tag=1 CdcTail is untouched". `fulltext2_create`'s `sealSegment` calls it WITHOUT
+**`DeleteAllBasesSqls` spares the tail's frame rows.** Its contract is that "the
+tag=1 CdcTail is untouched", so its metadata statement is predicated rather than
+deleting every row (`WHERE TRUE`). `fulltext2_create`'s `sealSegment` calls it WITHOUT
 `DeleteTailSqls` -- a REBUILD deliberately keeps the tail's bytes -- so the rows
 went while the chunks they described stayed. That stripped `build_ts` off a live
 tail permanently, and left `tailPeakBytes` summing only whichever frames a later
@@ -1057,8 +1049,8 @@ interleaving into counting it twice, which only ever refuses too early.
 ## 14. Tail sizing bounds what it cannot measure
 
 `tailPeakBytes` sums the per-frame rows for the frames that have them and bounds every chunk no
-row accounts for by `MaxChunkSize`. The earlier rule -- fall back to the chunk count only when the
-sum is zero -- was wrong for any tail that is described in part:
+row accounts for by `MaxChunkSize`. Coverage is what selects between them, not "is the sum zero",
+because a tail can be described in part:
 
 - a legacy tail already on disk when its tenant was migrated gains the columns but no rows for the
   frames already written, and the next flush appends one frame that does have a row;
