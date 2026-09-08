@@ -30,7 +30,7 @@ func TestReadFilterExactUnsortedMembership(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	values := [][]byte{
-		[]byte("z"), nil, []byte("key-00007"), []byte{0, 255, 0},
+		[]byte("z"), nil, []byte("key-00007"), {0, 255, 0},
 		bytes.Repeat([]byte("long"), 12), []byte("key-00000"),
 		[]byte("missing"), []byte("key-00007"), {},
 	}
