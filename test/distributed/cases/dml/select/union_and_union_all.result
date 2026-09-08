@@ -681,3 +681,160 @@ FROM (SELECT 1 AS n) t
 WHERE status = 'FAIL'
 AND check_id <> 'excluded';
 check_id    status    should_block
+DROP TABLE IF EXISTS union_signed_unsigned_28233;
+CREATE TABLE union_signed_unsigned_28233 (
+id INT PRIMARY KEY,
+s BIGINT,
+u BIGINT UNSIGNED
+);
+INSERT INTO union_signed_unsigned_28233 VALUES
+(1, -1, 18446744073709551615),
+(2, NULL, 18446744073709551614),
+(3, 9223372036854775807, 9223372036854775808),
+(4, 0, 0),
+(5, -9223372036854775808, 0),
+(6, 0, 1);
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+UNION ALL
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+null
+-9223372036854775808
+-1
+0
+0
+0
+0
+1
+9223372036854775807
+9223372036854775808
+18446744073709551614
+18446744073709551615
+SELECT v FROM (
+SELECT u AS v FROM union_signed_unsigned_28233
+UNION ALL
+SELECT s FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+null
+-9223372036854775808
+-1
+0
+0
+0
+0
+1
+9223372036854775807
+9223372036854775808
+18446744073709551614
+18446744073709551615
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+UNION
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+null
+-9223372036854775808
+-1
+0
+1
+9223372036854775807
+9223372036854775808
+18446744073709551614
+18446744073709551615
+SELECT MIN(v), MAX(v), COUNT(DISTINCT v) FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+UNION ALL
+SELECT u FROM union_signed_unsigned_28233
+) q;
+min(v)    max(v)    count(distinct v)
+-9223372036854775808    18446744073709551615    8
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+INTERSECT
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+0
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+INTERSECT ALL
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+0
+0
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+EXCEPT
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+null
+-9223372036854775808
+-1
+9223372036854775807
+SELECT v FROM (
+SELECT s AS v FROM union_signed_unsigned_28233
+MINUS
+SELECT u FROM union_signed_unsigned_28233
+) q ORDER BY v;
+v
+null
+-9223372036854775808
+-1
+9223372036854775807
+SELECT COALESCE(s, u) AS v FROM union_signed_unsigned_28233 ORDER BY id;
+v
+-1
+18446744073709551614
+9223372036854775807
+0
+-9223372036854775808
+0
+SELECT COALESCE(u, s) AS v FROM union_signed_unsigned_28233 ORDER BY id;
+v
+18446744073709551615
+18446744073709551614
+9223372036854775808
+0
+0
+1
+DROP TABLE IF EXISTS union_signed_unsigned_28233_ctas;
+CREATE TABLE union_signed_unsigned_28233_ctas AS
+SELECT s AS v FROM union_signed_unsigned_28233 WHERE id = 1
+UNION ALL
+SELECT u FROM union_signed_unsigned_28233 WHERE id = 1;
+SELECT column_name, column_type, is_nullable, numeric_precision, numeric_scale
+FROM information_schema.columns
+WHERE table_schema = database()
+  AND table_name = 'union_signed_unsigned_28233_ctas'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0  𝄀
+SELECT v FROM union_signed_unsigned_28233_ctas ORDER BY v;
+v
+-1
+18446744073709551615
+SELECT CAST(18446744073709551615 AS SIGNED);
+Data truncation: data out of range: data type int64, value '18446744073709551615'
+DROP TABLE IF EXISTS union_signed_unsigned_28233_empty;
+CREATE TABLE union_signed_unsigned_28233_empty AS
+SELECT s AS v FROM union_signed_unsigned_28233 WHERE 1 = 0
+UNION ALL
+SELECT u FROM union_signed_unsigned_28233 WHERE 1 = 0;
+SELECT column_name, column_type, is_nullable, numeric_precision, numeric_scale
+FROM information_schema.columns
+WHERE table_schema = database()
+  AND table_name = 'union_signed_unsigned_28233_empty'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0  𝄀
+SELECT v FROM union_signed_unsigned_28233_empty;
+v
+DROP TABLE union_signed_unsigned_28233_empty;
+DROP TABLE union_signed_unsigned_28233_ctas;
+DROP TABLE union_signed_unsigned_28233;
