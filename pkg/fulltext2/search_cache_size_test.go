@@ -225,16 +225,20 @@ func TestTailPeakBytesReadsTheFrameRows(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 
-	var seen string
+	var seen []string
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		seen = sql
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4096, 0)}}, nil
+		seen = append(seen, sql)
+		if strings.Contains(sql, "COUNT(*)") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
+		}
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4096, 1)}}, nil
 	})
 	got, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
-	require.Equal(t, int64(4096*tailLoadPeakFactor), got)
-	require.Contains(t, seen, TailFrameMetaPrefix)
-	require.NotContains(t, seen, "LENGTH(",
+	require.Equal(t, int64(4096*tailLoadPeakFactor), got,
+		"every chunk is covered by a frame row, so the exact sum stands on its own")
+	require.Contains(t, strings.Join(seen, " "), TailFrameMetaPrefix)
+	require.NotContains(t, strings.Join(seen, " "), "LENGTH(",
 		"LENGTH over a blob column makes the scan read every byte of the tail")
 }
 
@@ -248,9 +252,8 @@ func TestTailBudgetSubtractsWhatIsAlreadyPromised(t *testing.T) {
 	// One tail stores 192 KiB, so its peak is 576 KiB. Give the machine room for one, not two.
 	const stored = 192 << 10
 	need := int64(stored * tailLoadPeakFactor)
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, stored, 0)}}, nil
-	})
+	// One frame row covering the single stored chunk: fully accounted for.
+	tailStub(t, mp, stored, 3, 3)
 
 	origTotal, origGo := memTotalFn, memGolangFn
 	t.Cleanup(func() { memTotalFn, memGolangFn = origTotal, origGo })
@@ -273,20 +276,84 @@ func TestTailPeakBytesFallsBackWhenAFrameHasNoRow(t *testing.T) {
 	cfg := testStorageCfg()
 
 	const chunks = 4
-	var sawCount bool
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		if strings.Contains(sql, "COUNT(*)") {
-			sawCount = true
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, chunks, 0)}}, nil
-		}
-		// No frame rows: the legacy shape.
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
-	})
+	tailStub(t, mp, 0, 0, chunks) // no frame rows at all: the legacy shape
 
 	got, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
-	require.True(t, sawCount, "it must fall back rather than report no tail")
 	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize*tailLoadPeakFactor), got,
 		"bounded from above by the chunk cap, which is the safe direction")
 	require.Positive(t, got)
+}
+
+// The state a migration leaves behind: a tail whose chunks were already on disk when the tenant
+// was widened keeps no frame rows, and the next flush appends ONE frame that does have one. The
+// sum is now positive, so a "fall back only when there are no rows" rule stops falling back and
+// charges the whole tail at the size of its newest frame. LoadTailSegments still loads all of it.
+func TestTailPeakBytesBoundsTheChunksNoFrameRowCovers(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	// 1600 legacy chunks nothing accounts for, plus one new 1 MiB frame that does.
+	const newFrameBytes = 1 << 20
+	const newFrameChunks = newFrameBytes / vectorindex.MaxChunkSize
+	const legacyChunks = 1600
+	tailStub(t, mp, newFrameBytes, newFrameChunks, legacyChunks+newFrameChunks)
+
+	got, err := tailPeakBytes(sp, cfg)
+	require.NoError(t, err)
+
+	want := int64(newFrameBytes+legacyChunks*vectorindex.MaxChunkSize) * tailLoadPeakFactor
+	require.Equal(t, want, got,
+		"the covered frame counts exactly and the rest is bounded by the chunk cap")
+	require.Greater(t, got, int64(newFrameBytes)*tailLoadPeakFactor*50,
+		"a 100 MiB tail must not be charged as the 1 MiB frame that happens to carry a row")
+}
+
+// The same hole from the other producer: a transient shape-probe failure writes one flush's
+// chunks with no row, leaving a gap in the MIDDLE of an otherwise described tail.
+func TestTailPeakBytesBoundsAMissingMiddleFrame(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	const covered = 10
+	const missing = 7
+	tailStub(t, mp, covered*vectorindex.MaxChunkSize, covered, covered+missing)
+
+	got, err := tailPeakBytes(sp, cfg)
+	require.NoError(t, err)
+	require.Equal(t, int64((covered+missing)*vectorindex.MaxChunkSize*tailLoadPeakFactor), got)
+}
+
+// Controls: no tail at all charges nothing, and rows outliving their chunks are not negative.
+func TestTailPeakBytesEdges(t *testing.T) {
+	cfg := testStorageCfg()
+
+	t.Run("empty", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		tailStub(t, mp, 0, 0, 0)
+		got, err := tailPeakBytes(sp, cfg)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("rows outliving their chunks", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		tailStub(t, mp, 4096, 9, 2) // more covered chunks than stored
+		got, err := tailPeakBytes(sp, cfg)
+		require.NoError(t, err)
+		require.Equal(t, int64(4096*tailLoadPeakFactor), got,
+			"never negative, and the sum already overstates the tail")
+	})
+}
+
+// tailStub answers the two questions tailPeakBytes asks: what the frame rows account for
+// (bytes, and the chunks those bytes occupy), and how many chunks are actually stored.
+func tailStub(t *testing.T, mp *mpool.MPool, storedBytes, coveredChunks, totalChunks int64) {
+	t.Helper()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, totalChunks, 0)}}, nil
+		}
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, storedBytes, coveredChunks)}}, nil
+	})
 }

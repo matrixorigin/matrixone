@@ -264,10 +264,14 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 		// also what makes it safe to write. A row without build_ts is still a row, and an
 		// un-upgraded CN reads this table with SELECT * and treats every row as a sub-index --
 		// it would try to load 'cdc_tail:N' as one and find no tar. The v4_0_7 migration that
-		// widens the table cannot start until every service reports this code's protocol, so a
-		// widened table means no such reader is left.
-		provenance := sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
-			catalog.Ivfpq_TblCol_Metadata_Build_Ts)
+		// widens the table cannot start until every service reports this code's protocol.
+		// The table's shape decides whether naming build_ts works; the deployment's rollout
+		// gate decides whether a 'cdc_tail:N' row can meet a CN that would read it as a base
+		// sub-index. A wide table no longer implies the second -- once activated, CREATE INDEX
+		// produces one too -- so both are required.
+		provenance := sqlexec.ClusterHasIndexProvenance(sqlproc) &&
+			sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+				catalog.Ivfpq_TblCol_Metadata_Build_Ts)
 		if provenance {
 			sqls = append(sqls, catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
 				[]string{catalog.IndexMetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",

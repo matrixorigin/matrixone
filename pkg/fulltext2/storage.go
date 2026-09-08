@@ -295,6 +295,13 @@ func tailFrameMetaSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkI
 	// service reports the protocol carrying this code (RequiredProtocolVersion). So a widened
 	// table means no un-upgraded reader is left, and skipping the row until then costs only
 	// provenance: tailPeakBytes falls back to bounding the tail by its chunk count.
+	// TWO conditions, because they answer two different questions. The table's shape decides
+	// whether naming build_ts works at all; the deployment's rollout gate decides whether a row
+	// keyed 'cdc_tail:N' can be seen by a CN that would read it as a base sub-index. A wide table
+	// no longer implies the second: once activated, CREATE INDEX also produces one.
+	if !sqlexec.ClusterHasIndexProvenance(sqlproc) {
+		return nil
+	}
 	provenance := sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
 		catalog.FullText2Index_TblCol_Metadata_Build_Ts)
 	if !provenance {
@@ -698,41 +705,84 @@ var (
 // never leaves disk. That is what makes this figure cheap enough to take in Preload, where
 // admission needs it, instead of only at load time where it is too late to serialize anything.
 func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	// EXACT, from the per-frame rows: each frame recorded its own byte length when it was
-	// written, in the same transaction as its chunks. Cheap -- it reads metadata rows, not the
-	// blob column, which SUM(LENGTH(data)) would have made the scan read in full.
-	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s WHERE %s LIKE %s",
+	stored, coveredChunks, err := tailFrameCoverage(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+	totalChunks, err := tailChunkCount(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+
+	// COVERAGE, not "are there any rows". A tail can be described by frame rows in part and by
+	// nothing at all in the rest, and summing only the rows then reports the covered part as the
+	// whole. Two ways in, neither exotic: a legacy tail that already had chunks when its tenant
+	// was migrated gains the columns but no rows for the frames already on disk, and the next
+	// flush appends ONE frame that does have a row; or a shape probe fails transiently and one
+	// flush in the middle writes its chunks without rows. A 100 MiB tail plus a new 1 MiB frame
+	// would be charged as 1 MiB -- and LoadTailSegments still loads all 101 MiB.
+	//
+	// So: the frames that DID record their size are counted exactly, and every chunk no frame
+	// row accounts for is bounded by the cap it was written under. Exact where it can be, an
+	// upper bound where it cannot, and never a figure below what the load will hold.
+	uncovered := totalChunks - coveredChunks
+	if uncovered < 0 {
+		// More rows than chunks: rows outliving their bytes. Nothing to bound, and the sum
+		// already overstates the tail, which is the safe direction.
+		uncovered = 0
+	}
+	bytes := stored
+	if uncovered > 0 {
+		if uncovered > (math.MaxInt64-bytes)/int64(vectorindex.MaxChunkSize) {
+			return math.MaxInt64, nil
+		}
+		bytes += uncovered * int64(vectorindex.MaxChunkSize)
+	}
+	if bytes <= 0 {
+		return 0, nil
+	}
+	// Saturate rather than wrap: a corrupt total would otherwise go negative, compare below
+	// the budget, and admit the load the check exists to refuse.
+	if bytes > math.MaxInt64/tailLoadPeakFactor {
+		return math.MaxInt64, nil
+	}
+	return bytes * tailLoadPeakFactor, nil
+}
+
+// tailFrameCoverage returns the bytes the frame rows account for and how many chunks those bytes
+// occupy. A frame of n bytes was written as ceil(n / MaxChunkSize) chunks, contiguously, so the
+// chunk count is what makes the rows comparable with the chunks actually stored.
+func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, chunks int64, err error) {
+	sql := fmt.Sprintf(
+		"SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED) "+
+			"FROM %s WHERE %s LIKE %s",
 		catalog.FullText2Index_TblCol_Metadata_Filesize,
+		catalog.FullText2Index_TblCol_Metadata_Filesize,
+		vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%"))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	stored := resultScalarInt64(res)
-	res.Close()
-
-	if stored <= 0 {
-		// A tail written BEFORE frame rows existed, or by a CN whose metadata table was still
-		// the narrow shape, has chunks but no rows to sum. Reading 0 there would report "no
-		// tail" and hand the OOM guard nothing to refuse with, on exactly the clusters that
-		// carry the largest un-compacted tails. Fall back to bounding it by the chunk count:
-		// every chunk is written at <= MaxChunkSize, so count x MaxChunkSize is an upper bound,
-		// which is the direction a budget wants.
-		return tailPeakBytesFromChunks(sqlproc, cfg)
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) < 2 {
+			continue
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0),
+			vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0), nil
 	}
-	// Saturate rather than wrap: a corrupt total would otherwise go negative, compare below
-	// the budget, and admit the load the check exists to refuse.
-	if stored > math.MaxInt64/tailLoadPeakFactor {
-		return math.MaxInt64, nil
-	}
-	return stored * tailLoadPeakFactor, nil
+	return 0, 0, nil
 }
 
-// g_tailPeakBytesFromChunks bounds the tail by counting its chunk rows, for tails that predate
-// the per-frame metadata rows. COUNT(*) references only the predicate columns, so the blob is
-// not read.
-func tailPeakBytesFromChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+// tailChunkCount counts the tag=1 chunks actually stored.
+//
+// The obvious query for the size, SUM(LENGTH(data)), is not obvious at all: data is a blob, so
+// evaluating LENGTH makes the scan project that column and read the ENTIRE tail off storage -- a
+// gigabyte read to answer "how big is it". COUNT(*) references only the predicate columns, so the
+// blob never leaves disk.
+func tailChunkCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 	sql := fmt.Sprintf("SELECT CAST(COUNT(*) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
@@ -742,16 +792,7 @@ func tailPeakBytesFromChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int6
 		return 0, err
 	}
 	defer res.Close()
-
-	chunks := resultScalarInt64(res)
-	if chunks <= 0 {
-		return 0, nil
-	}
-	const perChunk = int64(vectorindex.MaxChunkSize) * tailLoadPeakFactor
-	if chunks > math.MaxInt64/perChunk {
-		return math.MaxInt64, nil
-	}
-	return chunks * perChunk, nil
+	return resultScalarInt64(res), nil
 }
 
 // checkTailLoadBudget refuses a tail that cannot fit in the memory left for it.

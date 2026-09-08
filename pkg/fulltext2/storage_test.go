@@ -23,8 +23,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -124,7 +126,8 @@ func TestTailFramesInsertSqls(t *testing.T) {
 	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
 
 	startChunk := int64(7)
-	sqls, next := TailFramesInsertSqlsAt(nil, cfg, startChunk, frames, 0)
+	sp, _ := mockSqlProc(t)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, startChunk, frames, 0)
 
 	// Chunk rows AND the per-frame metadata rows, each batched at maxInsertTuples per
 	// statement: 3 of each, never one statement per frame.
@@ -307,7 +310,8 @@ func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
 	cfg.MetadataTable = "__meta_tailframes_refer"
 	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
 	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
-	sqls, next := TailFramesInsertSqlsAt(nil, cfg, start, frames, 4242)
+	sp, _ := mockSqlProc(t)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, start, frames, 4242)
 
 	var meta string
 	for _, s := range sqls {
@@ -344,4 +348,48 @@ func TestTailFrameRowsAreWithheldFromALegacyTable(t *testing.T) {
 	require.Empty(t, meta, "no metadata row at all until the table carries the columns")
 	require.NotEmpty(t, sqls, "the chunks themselves are still written")
 	require.Equal(t, int64(2), next, "and the chunk id still advances past the frame")
+}
+
+// The tail frame rows are withheld while ANY un-upgraded CN could still be serving this index,
+// separately from whether the table happens to carry the columns. An old CN reads the metadata
+// table with SELECT * and would take 'cdc_tail:1' for a base sub-index and try to load it as one.
+//
+// A widened table used to stand as proof that no such reader was left, because only the gated
+// v4_0_7 migration could widen it. That stopped being true once CREATE INDEX could produce a wide
+// table too, so the deployment is asked directly.
+func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_mixed_version"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable) // the table IS wide
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+
+	sp, _ := mockSqlProc(t)
+	rt := moruntime.ServiceRuntime(sp.Proc.GetService())
+	require.NotNil(t, rt)
+	prev, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, prev) })
+
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57-1)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Empty(t, meta, "an old CN could still read this row as a base sub-index")
+	require.NotEmpty(t, sqls, "the frame's bytes are still written")
+	require.Equal(t, int64(2), next)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	sqls, _ = TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
+	meta = ""
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Contains(t, meta, "'cdc_tail:1'", "once nobody can misread it, the row is written")
+	require.Contains(t, meta, "4242")
 }

@@ -203,8 +203,12 @@ type VectorIndexGovernor struct {
 	lastEvictLog [2]atomic.Int64
 
 	// Loads that have passed admission but are not resident yet. See arrival.
+	//
+	// arrivalMu makes taking a sequence number and publishing the arrival one step, so an
+	// arrival can never be in line without the arrivals behind it seeing it. See reserve.
 	inflight   sync.Map // key -> *arrival
 	arrivalSeq atomic.Uint64
+	arrivalMu  sync.Mutex
 
 	// The automatic per-arena budget. Host capacity is refreshed on every sizing pass so a live
 	// cgroup downsize is enforced without restarting the CN. Device probing remains lazy because
@@ -268,9 +272,24 @@ type arrival struct {
 
 // reserve records an arrival and returns the release to call once it is resident or has failed.
 // Release is idempotent.
+//
+// Taking the number and publishing it must be ONE step. pendingAhead counts only arrivals with a
+// LOWER seq, so an arrival that has taken its number but not yet published is invisible to
+// everyone -- including the arrivals behind it, which is exactly who must see it. Split in two,
+// this schedule seats both of two loads that fit one at a time:
+//
+//	A takes seq=1 and stalls before publishing
+//	B takes seq=2, publishes, sees nothing ahead, is admitted
+//	A publishes, ignores B for being behind it, is admitted too
+//
+// Under the lock, taking a LATER number proves every EARLIER one is already published, so the
+// arrival behind always sees the arrival in front. The lock covers two map operations and never
+// spans reclaim, Preload/Load, a Destroy or a search.
 func (g *VectorIndexGovernor) reserve(key string, account uint32, size caps, perCard map[int]int64) (*arrival, func()) {
+	g.arrivalMu.Lock()
 	a := &arrival{seq: g.arrivalSeq.Add(1), account: account, size: size, perCard: perCard}
 	g.inflight.Store(key, a)
+	g.arrivalMu.Unlock()
 	return a, func() {
 		g.inflight.CompareAndDelete(key, a)
 	}
@@ -410,11 +429,18 @@ func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, 
 // moment it outgrew a number derived from the machine, which is a capacity limit dressed up as
 // a cache policy.
 func (g *VectorIndexGovernor) overBudget(account uint32, tenant, sys caps, key string, incoming caps, self *arrival) error {
+	// PENDING IS READ FIRST, and the order is load-bearing. A finishing load becomes resident
+	// and only then drops its reservation (Load publishes STATUS_LOADED before the deferred
+	// release runs). Reading residents first would let a load that completes between the two
+	// reads be missed by both -- absent from the residents that were snapshotted before it
+	// finished, and absent from the reservations that were read after it let go -- so its bytes
+	// would be free for the taking twice. Reading pending first turns that same interleaving
+	// into counting it TWICE, which only ever refuses too early.
+	pendingAcct, pendingTotal := g.pendingAhead(self)
 	_, perAccount, total := g.snapshotResidents(key)
 	// Arrivals ahead in line hold room that is spoken for but not yet occupied; counting them
 	// is what stops N concurrent cold misses from each admitting against an empty arena.
 	if self != nil {
-		pendingAcct, pendingTotal := g.pendingAhead(self)
 		for acct, u := range pendingAcct {
 			cur := perAccount[acct]
 			cur.host += u.host

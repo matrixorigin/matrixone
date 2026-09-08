@@ -31,6 +31,8 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // init wires the two planplugin helper vars the BuildSecondaryIndexDefs
@@ -60,6 +62,11 @@ func init() {
 type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
+
+// GetProcess hands back a test process on the default service runtime, which carries
+// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
+func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }

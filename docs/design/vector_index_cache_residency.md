@@ -826,3 +826,91 @@ frame rows always go together. `CagraModel.ToDeleteSql` / `IvfpqModel.ToDeleteSq
 would match `index_id = 'cdc_tail'` exactly and miss the `cdc_tail:N` rows, but
 neither is reachable -- `hnsw` is the only caller of that method, and hnsw writes
 no frame rows.
+
+## 12. Rollout gates: two questions, two mechanisms
+
+The provenance columns are gated twice, because two different things can go wrong and neither
+check answers the other's question.
+
+| Question | Scope | Mechanism | Gates |
+|---|---|---|---|
+| Is any un-upgraded CN still out there? | deployment | `MOProtocolVersion >= MORPCVersion57` | CREATE-time schema width, CDC tail row emission, the v4_0_7 migration |
+| Does THIS table carry the columns now? | one table | `sqlexec.HasProvenanceColumns` probe | whether a writer NAMES them |
+
+**Why CREATE needs the deployment gate.** The migration's `RequiredProtocolVersion` only covers
+tables that already exist. `CREATE INDEX` is the other producer of a wide table, and during a
+rolling upgrade a new CN would otherwise create one that an old CN is still serving. The old
+vector writers are POSITIONAL --
+
+```sql
+INSERT INTO meta VALUES ('id', 'chk', ts, size)
+```
+
+-- so four values meet six columns and the statement fails on arity. A column `DEFAULT` cannot
+repair that: the value count is rejected before any default is consulted. So below the gate the
+metadata table is born in the legacy shape, and the tenant's migration widens it later.
+
+fulltext2 is exempt and stays wide at CREATE: its writer already named its columns before this
+change, so an extra defaulted column is invisible to it.
+
+**Why emission needs it too.** A CDC tail frame row is keyed `cdc_tail:<n>` in the same table as
+the base sub-indexes. An un-upgraded CN reads that table with `SELECT *` and would take the row
+for a base segment and try to load it. The table's own shape used to prove no such reader was
+left -- only the gated migration could widen it -- and CREATE-time widening breaks that
+inference, so emission now asks the deployment directly, in addition to the shape probe.
+
+**Consequence, accepted.** An index created while the rollout is in progress gets a legacy-shape
+metadata table, and the tenant migration will not revisit it if it has already run. That index
+carries no provenance until something widens it. This is the documented degraded mode -- `nrow`
+and `build_ts` absent read as the `0` "unknown" sentinel, sizing falls back to the chunk bound,
+and no correctness property depends on them -- so it is preferred over the alternative, which is
+a rebuild on an old CN failing outright.
+
+**Rollback.** `MOProtocolVersion` is lowered again for a rollback, so it is read live at each
+decision rather than memoized. A table widened before a rollback still exists, and the positional
+writer on a rolled-back CN would still fail against it; the gate cannot undo that, only avoid
+adding to it. The shape probe's memo is positive-only for the same reason -- it records what a
+table IS, not what the deployment allows.
+
+## 13. Admission is linearized
+
+Two ordering rules make the byte budget an actual bound rather than an approximation.
+
+**Taking a place in line and publishing it are one step.** `pendingAhead` counts only arrivals
+with a LOWER sequence number, so an arrival that has taken its number but not yet published is
+invisible to precisely the arrivals that must see it. Split in two, this schedule seats both of
+two loads that fit one at a time:
+
+```
+A takes seq=1, stalls before publishing
+B takes seq=2, publishes, sees an empty line, is admitted
+A publishes, ignores B for being behind it, is admitted too
+```
+
+Under `arrivalMu`, taking a later number proves every earlier one is already published. The lock
+covers two map operations and never spans reclaim, Preload/Load, a Destroy, or a search.
+
+**Pending is read before residents.** A finishing load becomes resident and only then drops its
+reservation (`Load` publishes `STATUS_LOADED`; the deferred `release` runs after it returns).
+Reading residents first would let a load that completes between the two reads be missed by both --
+absent from the residents snapshotted before it finished, absent from the reservations read after
+it let go -- so its bytes would be handed out twice. Reading pending first turns that same
+interleaving into counting it twice, which only ever refuses too early.
+
+## 14. Tail sizing bounds what it cannot measure
+
+`tailPeakBytes` sums the per-frame rows for the frames that have them and bounds every chunk no
+row accounts for by `MaxChunkSize`. The earlier rule -- fall back to the chunk count only when the
+sum is zero -- was wrong for any tail that is described in part:
+
+- a legacy tail already on disk when its tenant was migrated gains the columns but no rows for the
+  frames already written, and the next flush appends one frame that does have a row;
+- a transient shape-probe failure writes one flush's chunks without their rows, leaving a gap in
+  the middle.
+
+In both, the sum becomes positive, the fallback stops firing, and the whole tail is charged at the
+size of the frames that happen to carry rows -- a 100 MiB tail plus a new 1 MiB frame charged as
+1 MiB, while `LoadTailSegments` still loads all 101 MiB. Coverage is now compared directly: the
+frame rows report the chunks their bytes occupy (`ceil(filesize / MaxChunkSize)`), and the
+difference from the stored chunk count is bounded at the cap each chunk was written under. Exact
+where it can be, an upper bound where it cannot, never below what the load will hold.

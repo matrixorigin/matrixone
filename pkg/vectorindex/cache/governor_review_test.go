@@ -1245,3 +1245,42 @@ func TestTenantWithResidencyIsStillBounded(t *testing.T) {
 	loadRefused(t, c, sp, "__mo_index_secondary_second9", 200, 0)
 	require.True(t, isResident(c, busy), "the busy incumbent is what the refusal protects")
 }
+
+// Taking a place in line and publishing it are one step. pendingAhead counts only LOWER seq
+// numbers, so an arrival holding a number it has not published yet is invisible to the arrivals
+// behind it -- the ones whose whole job is to see it. Split in two, two loads that fit one at a
+// time are both seated: the second takes its number, sees an empty line, and is admitted, then
+// the first publishes and ignores the second for being behind it.
+//
+// The property that forbids that schedule: taking a LATER number proves every EARLIER arrival is
+// already published. So the arrival holding seq k must see exactly the k-1 ahead of it, no matter
+// how the goroutines interleave.
+func TestReserveIsVisibleToEveryArrivalBehindIt(t *testing.T) {
+	c := &VectorIndexCache{}
+	g := c.gov()
+
+	const arrivals = 8
+	var wg sync.WaitGroup
+	seen := make([]int, arrivals) // indexed by seq-1: how many were ahead when it looked
+	start := make(chan struct{})
+
+	for i := 0; i < arrivals; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			self, _ := g.reserve(fmt.Sprintf("k%d", i), 0, caps{host: 1}, nil)
+			// Nobody releases, so everything ahead of this arrival is still in line.
+			_, ahead := g.pendingAhead(self)
+			seen[self.seq-1] = int(ahead.host)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for seq := 1; seq <= arrivals; seq++ {
+		require.Equal(t, seq-1, seen[seq-1],
+			"the arrival holding seq %d must see all %d arrivals ahead of it; seeing fewer means "+
+				"one was in line but unpublished, and two loads can be seated against one budget", seq, seq-1)
+	}
+}
