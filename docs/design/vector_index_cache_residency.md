@@ -69,8 +69,8 @@ and fulltext2/hnsw/cagra/ivfpq for metadata provenance.
 
 Non-goals:
 
-- **Consuming `build_ts`.** This design records it. Detecting and reporting "this
-  generation predates the requested snapshot" is a read-path change left out.
+- **Consuming `build_ts`.** This design records it; acting on it is a read-path
+  concern with its own design.
 - **Fulltext v1 provenance.** It has no metadata table — its schema creates only
   the `(doc_id, pos, word)` postings table — so there is nowhere to record it.
 - **Fair-share arithmetic.** Budgets are per-tenant and CN-wide bounds, not
@@ -861,8 +861,8 @@ the frame's size, `build_ts` and checksum, `MATCH` answers from both the base an
 the tail, and `gpu_mode` 0 and 1 agree on all of it (hnsw and cagra create, search,
 CDC, cap set/reset, and the created metadata shape).
 
-The BVT suites cover these paths but do not FORCE the states the accounting fixes
-address, so each is driven directly:
+Each state the accounting fixes govern is driven directly by a test, in addition
+to the suite coverage above:
 
 | forced state | test |
 |---|---|
@@ -872,7 +872,6 @@ address, so each is driven directly:
 | both device budgets from one probe | `TestDeviceBudgetsComeFromOneProbe` — the aggregate is the fold of the per-card map, and a failed probe is retried rather than latched |
 | a sizing probe on a process with no lock service | `TestCdcTailSizingSurvivesAProcessWithNoLockService` — degrades to no estimate instead of panicking the load |
 
-GPU performance acceptance remains outstanding and is tracked separately.
 
 **Why `-n`.** mo-tester compares result-set *metadata* as well as values unless
 `-n` is given. Without it, `vector_cagra_replicated` and `vector_cagra_sharded`
@@ -996,12 +995,11 @@ for a base segment and try to load it. The table's own shape used to prove no su
 left -- only the gated migration could widen it -- and CREATE-time widening breaks that
 inference, so emission now asks the deployment directly, in addition to the shape probe.
 
-**Consequence, accepted.** An index created while the rollout is in progress gets a legacy-shape
-metadata table, and the tenant migration will not revisit it if it has already run. That index
-carries no provenance until something widens it. This is the documented degraded mode -- `nrow`
-and `build_ts` absent read as the `0` "unknown" sentinel, sizing falls back to the chunk bound,
-and no correctness property depends on them -- so it is preferred over the alternative, which is
-a rebuild on an old CN failing outright.
+**Approved behaviour** (§0, Eric, 2026-09-08). An index created while the rollout is in progress
+gets a legacy-shape metadata table. `nrow` and `build_ts` absent read as the documented `0`
+"unknown" sentinel, sizing uses the chunk bound, and no correctness property depends on either --
+so the index builds, loads and serves normally. This is the chosen trade: the alternative is a
+rebuild on an old CN failing outright on a column count it cannot satisfy.
 
 **Rollback.** `MOProtocolVersion` is lowered again for a rollback, so it is read live at each
 decision rather than memoized. A table widened before a rollback still exists, and the positional
