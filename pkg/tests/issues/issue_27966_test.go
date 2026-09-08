@@ -218,15 +218,8 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 
 	capQuery := `select /* issue27966_worker_cap */ id
 		from t order by l2_distance(embedding, '[0,0,0,0]') limit 4`
-	rows, err := conn.QueryContext(ctx, capQuery)
+	ids, err := queryIssue27966IDs(ctx, conn, capQuery)
 	require.NoError(t, err)
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		require.NoError(t, rows.Scan(&id))
-		ids = append(ids, id)
-	}
-	require.NoError(t, errors.Join(rows.Err(), rows.Close()))
 	require.Equal(t, []int64{1, 2, 3, 4}, ids)
 
 	observations.Lock()
@@ -257,12 +250,7 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 	invalidateAfterOuter.Store(true)
 	strictQuery := `select /* issue27966_strict_boundary */ id
 		from t order by l2_distance(embedding, '[0,0,0,0]') limit 4`
-	strictRows, strictErr := conn.QueryContext(ctx, strictQuery)
-	if strictRows != nil {
-		for strictRows.Next() {
-		}
-		strictErr = errors.Join(strictErr, strictRows.Err(), strictRows.Close())
-	}
+	strictErr := drainIssue27966Query(ctx, conn, strictQuery)
 	invalidateAfterOuter.Store(false)
 	require.True(t, invalidated.Load(), "the outer frontend placement must run before the pool is invalidated")
 	invalidationErr.Lock()
@@ -298,6 +286,37 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 	require.Equal(t, schedule.WorkerSetMax, nestedFailure.WorkerSetMode)
 	require.Equal(t, 2, nestedFailure.MaxWorkers)
 	require.Empty(t, nestedFailure.SelectedWorkers)
+}
+
+func queryIssue27966IDs(ctx context.Context, conn *sql.Conn, statement string) (ids []int64, err error) {
+	rows, err := conn.QueryContext(ctx, statement)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, rows.Close())
+	}()
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func drainIssue27966Query(ctx context.Context, conn *sql.Conn, statement string) (err error) {
+	rows, err := conn.QueryContext(ctx, statement)
+	if rows == nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, rows.Close())
+	}()
+	for rows.Next() {
+	}
+	return errors.Join(err, rows.Err())
 }
 
 func execIssue27966SQL(t *testing.T, ctx context.Context, conn *sql.Conn, statement string) {
