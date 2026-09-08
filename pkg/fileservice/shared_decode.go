@@ -325,15 +325,30 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 // the enclosing read's deferred cache updates and transfers the ticket to the
 // final entry (which helper reads may have replaced).
 func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
-	if s.decodedReads == nil || len(vector.Entries) != 1 || len(vector.Caches) != 0 || vector.Policy.Any(SkipMemoryCache) {
+	if s.decodedReads == nil || len(vector.Caches) != 0 || vector.Policy.Any(SkipMemoryCache) {
 		return nil, nil
 	}
-	entry := &vector.Entries[0]
+	index := -1
+	for i := range vector.Entries {
+		if vector.Entries[i].DecodeSharing.Codec == "" {
+			continue
+		}
+		// One selected entry per request. Do not grow per-entry wrapper state
+		// or silently choose a winner when a caller marks multiple columns.
+		if index >= 0 {
+			return nil, nil
+		}
+		index = i
+	}
+	if index < 0 {
+		return nil, nil
+	}
+	entry := &vector.Entries[index]
 	sharing := entry.DecodeSharing
-	if sharing.Codec == "" || len(sharing.Codec) > 64 || len(vector.FilePath) > 4096 ||
+	if len(sharing.Codec) > 64 || len(vector.FilePath) > 4096 ||
 		entry.Offset < 0 || entry.Size <= 0 || entry.CachedDataSize <= 0 || entry.CachedDataSize > int64(^uint(0)>>1) ||
 		entry.ToCacheData == nil || entry.WriterForRead != nil || entry.ReadCloserForRead != nil || entry.ReaderForWrite != nil ||
-		entry.Data != nil || entry.CachedData != nil || entry.decodeLease != nil {
+		entry.done || entry.Data != nil || entry.CachedData != nil || entry.decodeLease != nil {
 		return nil, nil
 	}
 	path, err := parseFilePathAtService(vector.FilePath, s.name)
@@ -356,7 +371,7 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 		return result, err
 	}
 	return func() {
-		entry := &vector.Entries[0]
+		entry := &vector.Entries[index]
 		entry.ToCacheData = original
 		if entry.CachedData != nil {
 			entry.decodeLease = lease
