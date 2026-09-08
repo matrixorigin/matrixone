@@ -859,11 +859,25 @@ func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
 
 func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T) {
 	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{uint32(types.RuntimeStringText)})
-	require.ErrorContains(t, err, "protocol version 53")
+	require.ErrorContains(t, err, "protocol version 57")
 	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{3})
 	require.ErrorContains(t, err, "invalid runtime string domain")
 	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 2, []uint32{uint32(types.RuntimeStringText)})
 	require.ErrorContains(t, err, "metadata length")
+}
+
+func TestBuildProcessInfoSerializesUniformRuntimeBinaryDomain(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("b"), false, proc.Mp()))
+	require.NoError(t, params.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Equal(t, []uint32{2, 2}, info.PrepareParams.RuntimeStringDomains)
 }
 
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {

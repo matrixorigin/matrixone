@@ -586,26 +586,54 @@ func bitCountFromMysqlIntegerString(s string) (uint64, error) {
 		return 0, nil
 	}
 
-	if strings.HasPrefix(s, "-") {
-		val, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			if errors.Is(err, strconv.ErrRange) {
-				return bitCountFromUint64(minInt64BitPattern), nil
-			}
-			return 0, err
-		}
-		return bitCountFromUint64(uint64(val)), nil
+	negative := false
+	start := 0
+	switch s[0] {
+	case '-':
+		negative = true
+		start = 1
+	case '+':
+		start = 1
 	}
 
-	s = strings.TrimPrefix(s, "+")
-	val, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		if errors.Is(err, strconv.ErrRange) {
-			return bitCountFromUint64(math.MaxUint64), nil
+	// MySQL converts a nonbinary string to an integer by consuming the leading
+	// decimal digit run. It returns zero for a string with no digits rather than
+	// surfacing the parser's syntax error (for example, 'abc' or '+x').
+	var magnitude uint64
+	hasDigits := false
+	overflow := false
+	for ; start < len(s); start++ {
+		c := s[start]
+		if c < '0' || c > '9' {
+			break
 		}
-		return 0, err
+		hasDigits = true
+		digit := uint64(c - '0')
+		if magnitude > (math.MaxUint64-digit)/10 {
+			overflow = true
+			// Keep scanning only to consume the same prefix. The result is already
+			// known to be saturated, so avoid wrapping the accumulator.
+			continue
+		}
+		if !overflow {
+			magnitude = magnitude*10 + digit
+		}
 	}
-	return bitCountFromUint64(val), nil
+	if !hasDigits {
+		return 0, nil
+	}
+	if negative {
+		// String-to-integer conversion saturates negative overflow at the
+		// signed BIGINT minimum, whose two's-complement pattern has one bit.
+		if overflow || magnitude >= uint64(math.MaxInt64)+1 {
+			return bitCountFromUint64(minInt64BitPattern), nil
+		}
+		return bitCountFromUint64(uint64(-int64(magnitude))), nil
+	}
+	if overflow {
+		return bitCountFromUint64(math.MaxUint64), nil
+	}
+	return bitCountFromUint64(magnitude), nil
 }
 
 func bitCountFromDecimalIntegerString(s string) (uint64, error) {
@@ -740,10 +768,38 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if ivecs[0].GetIsBin() {
-		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	if !perRow {
+		if uniformBinary {
+			return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+		}
+		return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
 	}
-	return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+	param := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[uint64](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		value, null := param.GetStrValue(row)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var count uint64
+		var err error
+		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+			count = bitCountFromBinaryString(value)
+		} else {
+			count, err = bitCountFromNonBinaryString(value)
+		}
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(count, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

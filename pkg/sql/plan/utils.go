@@ -1179,6 +1179,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
+		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
 	}
 }
 
@@ -6003,6 +6004,8 @@ func replaceParamValsWithSelection(
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
+		stringDomainType := types.Type{}
+		hasStringDomainType := false
 		numericPrefixSource := false
 		retainParamRef := false
 		runtimeStringDomain := types.RuntimeStringInherit
@@ -6017,13 +6020,18 @@ func replaceParamValsWithSelection(
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
 			runtimeStringDomain = param.RuntimeStringDomain
-			if !param.IsBinaryProtocol && param.HasSourceType &&
-				types.StaticStringDomain(param.SourceType) != types.StringDomainNone {
-				// SQL EXECUTE USING owns an assignment-time string type. Rebind
-				// domain-sensitive functions with that type instead of flattening a
-				// BINARY/VARBINARY/BLOB variable into the TEXT transport vector.
-				runtimeType = param.SourceType
-				hasRuntimeType = true
+			// Materialize only a non-NULL binary string domain. NULL retains the
+			// prepared marker type, while text sources keep the TEXT transport type.
+			if param.Value != nil {
+				switch {
+				case param.HasSourceType &&
+					types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
+					stringDomainType = param.SourceType
+					hasStringDomainType = true
+				case param.IsBinaryString || param.RuntimeStringDomain == types.RuntimeStringBinary:
+					stringDomainType = types.T_varbinary.ToType()
+					hasStringDomainType = true
+				}
 			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
@@ -6043,6 +6051,8 @@ func replaceParamValsWithSelection(
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
+		} else if hasStringDomainType {
+			paramType = makePlan2Type(&stringDomainType)
 		}
 		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
 		directRuntimeResult = directRuntimeResult && hasRuntimeType

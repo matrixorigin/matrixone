@@ -2176,7 +2176,7 @@ func validateRemoteODKUAffectedRowsProtocol(proc *process.Process, required bool
 	}
 	if proc == nil || !supportsRemoteODKUAffectedRows(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"ODKU logical affected-row metadata requires MORPC protocol version 53",
+			"ODKU logical affected-row metadata requires MORPC protocol version 50",
 		)
 	}
 	return nil

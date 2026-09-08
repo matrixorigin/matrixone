@@ -88,7 +88,7 @@ func (proc *Process) BuildProcessInfo(
 		vec := proc.GetPrepareParams()
 		if vec != nil {
 			var runtimeStringDomains []uint32
-			if vec.HasBinaryStringRows() {
+			if vec.HasBinaryStringMetadata() {
 				runtimeStringDomains = make([]uint32, vec.Length())
 				for i := range runtimeStringDomains {
 					runtimeStringDomains[i] = uint32(vec.GetRuntimeStringDomainAt(i))
