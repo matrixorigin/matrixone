@@ -132,6 +132,42 @@ func TestColumnCacheSessionSeriesAmortizesAllocation(t *testing.T) {
 	})
 }
 
+func TestColumnCacheManualValuesAdvanceOnlyPositiveSequence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		manual    int64
+		increment uint64
+		offset    uint64
+		first     int64
+	}{
+		{"negative", -1, 1, 1, 1},
+		{"minimum_signed", math.MinInt64, 1, 1, 1},
+		{"explicit_zero", 0, 1, 1, 1},
+		{"positive_control", 5, 1, 1, 6},
+		{"negative_session_series", -1, 3, 2, 2},
+		{"positive_session_series", 5, 3, 2, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runColumnCacheTests(t, 200, 1, func(ctx context.Context, c *columnCache) {
+				mp := mpool.MustNewZero()
+				input := vector.NewVec(types.T_int64.ToType())
+				defer input.Free(mp)
+				for i, v := range []int64{tc.manual, 0, 100, 0} {
+					require.NoError(t, vector.AppendFixed(input, v, i == 1 || i == 3, mp))
+				}
+				ctx = WithAutoIncrementOptions(ctx, tc.increment, tc.offset)
+				first, err := c.insertAutoValues(ctx, 0, input, 4, nil)
+				require.NoError(t, err)
+				require.Equal(t, uint64(tc.first), first)
+				require.Equal(t, []int64{tc.manual, tc.first, 100, 101},
+					vector.MustFixedColNoTypeCheck[int64](input))
+				input.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		})
+	}
+}
+
 func BenchmarkColumnCacheStatementSeries(b *testing.B) {
 	for _, increment := range []uint64{1, 3, 64} {
 		b.Run(fmt.Sprintf("increment_%d", increment), func(b *testing.B) {

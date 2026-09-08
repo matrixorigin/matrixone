@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -95,6 +96,17 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.ctr.acceptedIters = make([]hashmap.Iterator, keyCount)
 		preInsertUnique.ctr.acceptedKeyVecs = make([][]*vector.Vector, keyCount)
 		for i := range keyCount {
+			preInsertUnique.ctr.acceptedKeyVecs[i] = make([]*vector.Vector, 1)
+			if preInsertUnique.PreInsertCtx.AutoIncrementReorder &&
+				i == int(preInsertUnique.PreInsertCtx.AutoIncrementKeyIndex) {
+				accepted := &hashtable.Int64HashMap{}
+				if err := accepted.InitWithAllocation(proc.Mp(), preInsertUnique.hashAllocation); err != nil {
+					preInsertUnique.freeAcceptedState(proc)
+					return err
+				}
+				preInsertUnique.ctr.acceptedAutoIncrementValues = accepted
+				continue
+			}
 			accepted, err := hashmap.NewStrHashMapWithAllocation(
 				false, proc.Mp(), preInsertUnique.hashAllocation)
 			if err != nil {
@@ -103,7 +115,6 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 			}
 			preInsertUnique.ctr.acceptedMaps[i] = accepted
 			preInsertUnique.ctr.acceptedIters[i] = accepted.NewIterator()
-			preInsertUnique.ctr.acceptedKeyVecs[i] = make([]*vector.Vector, 1)
 		}
 		if odkuArbitration {
 			preInsertUnique.ctr.acceptedRows = make([]*vector.Vector, keyCount)
@@ -372,7 +383,6 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup output width")
 	}
 	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector
-	var assignedCandidates map[int]*autoIncrementCandidate
 	autoOutputColumn := -1
 	if autoIncrementReorder {
 		autoColumn := int(ctx.AutoIncrementColumn)
@@ -390,10 +400,6 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		if autoIncrementGeneratedVec.GetType().Oid != types.T_bool {
 			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "INSERT IGNORE auto-increment provenance is not boolean")
 		}
-		if preInsertUnique.ctr.acceptedAutoIncrementValues == nil {
-			preInsertUnique.ctr.acceptedAutoIncrementValues = make(map[uint64]struct{})
-		}
-		assignedCandidates = make(map[int]*autoIncrementCandidate)
 	}
 	for i := range keyColumns {
 		if keyColumns[i] < 0 || int(keyColumns[i]) >= len(inputBat.Vecs) ||
@@ -405,10 +411,14 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		preInsertUnique.ctr.acceptedKeyVecs[i][0] = inputBat.Vecs[keyColumns[i]]
 	}
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.CleanOnlyData()
+	}
 
 	sels := vector.GetSels()
 	defer vector.PutSels(sels)
 	sels = sels[:0]
+	var firstGenerated uint64
 	for row := 0; row < inputBat.RowCount(); row++ {
 		generated := false
 		var autoValue uint64
@@ -432,7 +442,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		for keyIdx, conflictPos := range conflictColumns {
 			conflictVec := inputBat.Vecs[conflictPos]
 			conflictRow := vectorRowIndex(conflictVec, row)
-			if !conflictVec.GetNulls().Contains(uint64(conflictRow)) &&
+			if !conflictVec.IsNull(uint64(conflictRow)) &&
 				vector.GetFixedAtNoTypeCheck[bool](conflictVec, conflictRow) {
 				if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
 					primaryKeyConflict = true
@@ -441,21 +451,16 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				break
 			}
 			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
-			keyRow := vectorRowIndex(keyVec, row)
-			if keyVec.GetNulls().Contains(uint64(keyRow)) {
+			if keyVec.IsNull(uint64(vectorRowIndex(keyVec, row))) {
 				continue
 			}
 			if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
-				if _, exists := preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue]; exists {
-					// The input candidate may differ from the final value of a
-					// previously accepted row after ordered reuse.  Enforce the
-					// primary-key postcondition against final values.
+				if preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
 					accepted = false
 					break
 				}
-				// acceptedIters contains input candidates for the old path. It
-				// cannot be consulted for this primary key because ordered
-				// assignment may replace a candidate with an earlier final key.
+				// Ordered assignment can publish a retained candidate instead
+				// of this input key. Only final keys belong to the PK set.
 				continue
 			}
 			vals, zvals, err := preInsertUnique.ctr.acceptedIters[keyIdx].Find(
@@ -470,12 +475,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		if !accepted {
 			if autoIncrementReorder && generated && !primaryKeyConflict {
-				// A row rejected by a secondary unique key did not publish a
-				// primary key. Its allocator candidate remains available to the
-				// next accepted generated row, preserving input order across
-				// PRE_INSERT_UK batches. Candidates rejected by the primary-key
-				// join, or already represented by a final key, remain unusable.
-				if _, alreadyFinal := preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue]; !alreadyFinal {
+				if !preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
 					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
 						return vm.CancelResult, err
 					}
@@ -484,18 +484,15 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			continue
 		}
 
-		// Commit every key only after the complete row has passed.  This is the
-		// ownership boundary that prevents a row rejected by one constraint from
-		// reserving another key for later rows.
+		// Publish all constraint ownership only after the complete row passes.
+		// On a capacity error the statement fails, and Reset/Free releases even
+		// a partially inserted key set; no partial output batch is returned.
 		for keyIdx := range keyColumns {
 			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
-			keyRow := vectorRowIndex(keyVec, row)
-			if keyVec.GetNulls().Contains(uint64(keyRow)) {
+			if keyVec.IsNull(uint64(vectorRowIndex(keyVec, row))) {
 				continue
 			}
 			if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
-				// The primary-key state is the final-value map for ordered
-				// assignment; acceptedIters retains only input candidates.
 				continue
 			}
 			isNew, err := preInsertUnique.ctr.acceptedIters[keyIdx].DetectDup(
@@ -509,10 +506,9 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			}
 		}
 		if autoIncrementReorder {
+			preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
+			output := preInsertUnique.ctr.buf.Vecs[autoOutputColumn]
 			if generated {
-				// Assign at the acceptance boundary, before a later input row is
-				// considered. This preserves input-order ownership even when the
-				// candidate was retained from a preceding input batch.
 				if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
 					return vm.CancelResult, err
 				}
@@ -524,71 +520,119 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 					return vm.CancelResult, moerr.NewInternalError(proc.Ctx,
 						"INSERT IGNORE accepted generated row has no reusable auto-increment candidate")
 				}
-				assignedCandidates[row] = candidate
-				preInsertUnique.ctr.acceptedAutoIncrementValues[candidate.value] = struct{}{}
+				autoValue = candidate.value
+				if err := appendAutoIncrementValue(proc, output, candidate.typ, autoValue); err != nil {
+					return vm.CancelResult, err
+				}
+				if firstGenerated == 0 || autoValue < firstGenerated {
+					firstGenerated = autoValue
+				}
 			} else {
 				if explicitAdvancesSequence {
 					if err := preInsertUnique.ctr.autoIncrementCandidates.discardThrough(autoValue); err != nil {
 						return vm.CancelResult, err
 					}
 				}
-				preInsertUnique.ctr.acceptedAutoIncrementValues[autoValue] = struct{}{}
+				if err := output.UnionOne(autoIncrementVec, int64(vectorRowIndex(autoIncrementVec, row)), proc.Mp()); err != nil {
+					return vm.CancelResult, err
+				}
+			}
+			if err := preInsertUnique.recordAcceptedAutoIncrementValue(autoValue); err != nil {
+				return vm.CancelResult, err
 			}
 		}
 		sels = append(sels, int64(row))
 	}
-
+	if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
+		return vm.CancelResult, err
+	}
 	if len(sels) == 0 {
-		if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
-			return vm.CancelResult, err
-		}
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
-	if preInsertUnique.ctr.buf == nil {
-		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns)
-		if len(inputBat.Attrs) >= outputColumns {
-			preInsertUnique.ctr.buf.SetAttributes(inputBat.Attrs[:outputColumns])
-		}
-		for i, vec := range inputBat.Vecs[:outputColumns] {
-			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType())
-		}
-	} else {
-		preInsertUnique.ctr.buf.CleanOnlyData()
-	}
-	if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
-		return vm.CancelResult, err
-	}
+	preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
 	if autoIncrementReorder {
-		if len(assignedCandidates) > 0 {
-			autoIncrementOutput := vector.NewVec(*autoIncrementVec.GetType())
-			for _, selected := range sels {
-				row := int(selected)
-				candidate, ok := assignedCandidates[row]
-				if ok {
-					if err := appendAutoIncrementValue(
-						proc, autoIncrementOutput, candidate.typ, candidate.value); err != nil {
-						autoIncrementOutput.Free(proc.Mp())
-						return vm.CancelResult, err
-					}
-				} else if err := autoIncrementOutput.UnionOne(
-					autoIncrementVec, int64(vectorRowIndex(autoIncrementVec, row)), proc.Mp()); err != nil {
-					autoIncrementOutput.Free(proc.Mp())
-					return vm.CancelResult, err
-				}
+		// The final PK was constructed once, in accepted-row order. Never copy
+		// provisional PKs or retain per-row candidate objects for a second pass.
+		for i, vec := range preInsertUnique.ctr.buf.Vecs {
+			if i == autoOutputColumn {
+				continue
 			}
-			preInsertUnique.ctr.buf.Vecs[autoOutputColumn].Free(proc.Mp())
-			preInsertUnique.ctr.buf.Vecs[autoOutputColumn] = autoIncrementOutput
-			for _, candidate := range assignedCandidates {
-				proc.SetStatementLastInsertIDIfEarlier(candidate.value)
+			if err := vec.Union(inputBat.Vecs[i], sels, proc.Mp()); err != nil {
+				return vm.CancelResult, err
 			}
 		}
-		if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
-			return vm.CancelResult, err
+		preInsertUnique.ctr.buf.SetRowCount(len(sels))
+		// Publish only after the complete output batch has been built, and
+		// update the shared statement coordinator once rather than once per row.
+		if firstGenerated != 0 {
+			proc.SetStatementLastInsertIDIfEarlier(firstGenerated)
 		}
+	} else if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
+		return vm.CancelResult, err
 	}
 	result.Batch = preInsertUnique.ctr.buf
 	return result, nil
+}
+
+func (preInsertUnique *PreInsertUnique) initInsertIgnoreOutput(input *batch.Batch, columns int) {
+	if preInsertUnique.ctr.buf != nil {
+		return
+	}
+	preInsertUnique.ctr.buf = batch.NewWithSize(columns)
+	if len(input.Attrs) >= columns {
+		preInsertUnique.ctr.buf.SetAttributes(input.Attrs[:columns])
+	}
+	for i, vec := range input.Vecs[:columns] {
+		preInsertUnique.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+	}
+}
+
+func (preInsertUnique *PreInsertUnique) hasAcceptedAutoIncrementValue(value uint64) bool {
+	ctr := &preInsertUnique.ctr
+	if value == 0 {
+		return ctr.acceptedAutoIncrementZero
+	}
+	ctr.autoIncrementHash[0] = autoIncrementKeyIdentity(value)
+	// The bijection below maps only zero to zero, so this is always the
+	// table's prehashed path. No raw-key buffer, vector codec, or CPU-specific
+	// hash is needed. Zero is represented separately because this batch API
+	// interprets a leading zero as a request to hash raw keys.
+	ctr.acceptedAutoIncrementValues.FindBatch(1, ctr.autoIncrementHash[:],
+		nil, ctr.autoIncrementGroup[:])
+	return ctr.autoIncrementGroup[0] != 0
+}
+
+func (preInsertUnique *PreInsertUnique) recordAcceptedAutoIncrementValue(value uint64) error {
+	ctr := &preInsertUnique.ctr
+	if value == 0 {
+		if ctr.acceptedAutoIncrementZero {
+			return moerr.NewInternalErrorNoCtx("INSERT IGNORE final primary-key set changed during row commit")
+		}
+		ctr.acceptedAutoIncrementZero = true
+		return nil
+	}
+	ctr.autoIncrementHash[0] = autoIncrementKeyIdentity(value)
+	before := ctr.acceptedAutoIncrementValues.Cardinality()
+	if err := ctr.acceptedAutoIncrementValues.InsertBatch(1, ctr.autoIncrementHash[:],
+		nil, ctr.autoIncrementGroup[:]); err != nil {
+		return err
+	}
+	if ctr.autoIncrementGroup[0] <= before {
+		return moerr.NewInternalErrorNoCtx("INSERT IGNORE final primary-key set changed during row commit")
+	}
+	return nil
+}
+
+// autoIncrementKeyIdentity is a permutation, not a lossy hash: right-xor-shift
+// is invertible and multiplication by an odd number is invertible modulo 2^64.
+// The same inexpensive mixer is used for ASOF table slots. It spreads both
+// sequential IDs and session strides while retaining exact integer equality
+// on every supported CPU, including the general hash table's software fallback.
+func autoIncrementKeyIdentity(value uint64) uint64 {
+	value ^= value >> 33
+	value *= 0xff51afd7ed558ccd
+	return value ^ (value >> 33)
 }
 
 type autoIncrementCandidate struct {
@@ -707,11 +751,12 @@ type autoIncrementCandidateStream struct {
 	hasLowerBound bool
 }
 
-func (stream *autoIncrementCandidateStream) reset() {
+func (stream *autoIncrementCandidateStream) reset(mp *mpool.MPool) {
+	mpool.FreeSlice(mp, stream.runs)
 	*stream = autoIncrementCandidateStream{}
 }
 
-func (stream *autoIncrementCandidateStream) append(typ types.Type, value uint64) error {
+func (stream *autoIncrementCandidateStream) append(typ types.Type, value uint64, mp *mpool.MPool) error {
 	if stream.hasLowerBound && value <= stream.lowerBound {
 		return nil
 	}
@@ -722,6 +767,14 @@ func (stream *autoIncrementCandidateStream) append(typ types.Type, value uint64)
 		return moerr.NewInvalidInputNoCtx("auto-increment candidate type changed within INSERT IGNORE")
 	}
 
+	// Reuse an exhausted buffer without resetting its statement type/fence.
+	// In the all-accepted path this keeps one run rather than allocating one
+	// run per row only to discard the whole slice at the end of every batch.
+	if stream.runIndex == len(stream.runs) {
+		stream.runs = stream.runs[:0]
+		stream.runIndex = 0
+		stream.runOffset = 0
+	}
 	// Do not extend a run that has already been fully consumed. The next
 	// candidate must remain visible to popAutoIncrementCandidate, even when
 	// the previous accepted row consumed the stream's tail.
@@ -739,6 +792,18 @@ func (stream *autoIncrementCandidateStream) append(typ types.Type, value uint64)
 			return nil
 		}
 	}
+	if len(stream.runs) == cap(stream.runs) {
+		// Runs contain only scalars. Keep their backing storage at its original
+		// base address, charge growth before replacing it, and release it once
+		// at statement Reset/Free. Fragmentation must not bypass the pool limit.
+		grown, err := mpool.MakeSlice[autoIncrementCandidateRun](max(8, 2*cap(stream.runs)), mp, true)
+		if err != nil {
+			return err
+		}
+		copy(grown, stream.runs)
+		mpool.FreeSlice(mp, stream.runs)
+		stream.runs = grown[:len(stream.runs)]
+	}
 	stream.runs = append(stream.runs, autoIncrementCandidateRun{start: value, count: 1})
 	return nil
 }
@@ -755,7 +820,7 @@ func (stream *autoIncrementCandidateStream) discardThrough(value uint64) error {
 		stream.hasLowerBound = true
 	}
 	if stream.runIndex >= len(stream.runs) {
-		stream.runs = nil
+		stream.runs = stream.runs[:0]
 		stream.runIndex = 0
 		stream.runOffset = 0
 		return nil
@@ -772,7 +837,7 @@ func (stream *autoIncrementCandidateStream) discardThrough(value uint64) error {
 		first.count -= stream.runOffset
 		remaining[0] = first
 	}
-	filtered := remaining[:0]
+	filtered := stream.runs[:0]
 	for _, run := range remaining {
 		if run.count == 0 {
 			continue
@@ -787,10 +852,11 @@ func (stream *autoIncrementCandidateStream) discardThrough(value uint64) error {
 			filtered = append(filtered, run)
 			continue
 		}
-		skip := (value-run.start)/run.step + 1
-		if skip >= run.count {
+		skip := (value - run.start) / run.step
+		if skip >= run.count-1 {
 			continue
 		}
+		skip++
 		start, err := stream.valueAt(run, skip)
 		if err != nil {
 			return err
@@ -801,7 +867,7 @@ func (stream *autoIncrementCandidateStream) discardThrough(value uint64) error {
 			count: run.count - skip,
 		})
 	}
-	stream.runs = append([]autoIncrementCandidateRun(nil), filtered...)
+	stream.runs = filtered
 	stream.runIndex = 0
 	stream.runOffset = 0
 	return nil
@@ -826,28 +892,28 @@ func (preInsertUnique *PreInsertUnique) appendAutoIncrementCandidate(
 	if err != nil {
 		return err
 	}
-	return preInsertUnique.ctr.autoIncrementCandidates.append(*source.GetType(), value)
+	return preInsertUnique.ctr.autoIncrementCandidates.append(*source.GetType(), value, proc.Mp())
 }
 
-func (preInsertUnique *PreInsertUnique) popAutoIncrementCandidate() (*autoIncrementCandidate, bool, error) {
+func (preInsertUnique *PreInsertUnique) popAutoIncrementCandidate() (autoIncrementCandidate, bool, error) {
 	queue := &preInsertUnique.ctr.autoIncrementCandidates
 	for queue.runIndex < len(queue.runs) {
 		run := queue.runs[queue.runIndex]
 		value, err := queue.valueAt(run, queue.runOffset)
 		if err != nil {
-			return nil, false, err
+			return autoIncrementCandidate{}, false, err
 		}
 		queue.runOffset++
 		if queue.runOffset == run.count {
 			queue.runIndex++
 			queue.runOffset = 0
 		}
-		if _, blocked := preInsertUnique.ctr.acceptedAutoIncrementValues[value]; blocked {
+		if preInsertUnique.hasAcceptedAutoIncrementValue(value) {
 			continue
 		}
-		return &autoIncrementCandidate{typ: queue.typ, value: value}, true, nil
+		return autoIncrementCandidate{typ: queue.typ, value: value}, true, nil
 	}
-	return nil, false, nil
+	return autoIncrementCandidate{}, false, nil
 }
 
 func (preInsertUnique *PreInsertUnique) compactAutoIncrementCandidates(proc *process.Process) error {
@@ -858,7 +924,7 @@ func (preInsertUnique *PreInsertUnique) compactAutoIncrementCandidates(proc *pro
 	if queue.runIndex >= len(queue.runs) {
 		// Buffer exhaustion is not a new statement. Keep the accepted explicit
 		// key fence and type contract across subsequent batches until Reset/Free.
-		queue.runs = nil
+		queue.runs = queue.runs[:0]
 		queue.runIndex = 0
 		queue.runOffset = 0
 		return nil
@@ -877,7 +943,8 @@ func (preInsertUnique *PreInsertUnique) compactAutoIncrementCandidates(proc *pro
 		first.count -= queue.runOffset
 		remaining[0] = first
 	}
-	queue.runs = append([]autoIncrementCandidateRun(nil), remaining...)
+	copy(queue.runs, remaining)
+	queue.runs = queue.runs[:len(remaining)]
 	queue.runIndex = 0
 	queue.runOffset = 0
 	return nil

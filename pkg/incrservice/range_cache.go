@@ -97,6 +97,23 @@ func (r *ranges) nextFor(options AutoIncrementOptions) uint64 {
 }
 
 func nextValueInRange(from, to, step, increment, offset uint64) (uint64, uint64, bool) {
+	if step == 1 {
+		// Production ranges are unit-step spans. Align directly to the session
+		// residue; solving a modular inverse for every row is unnecessary. Keep
+		// the congruence solver below for existing non-unit table metadata.
+		residue, target := from%increment, offset%increment
+		var delta uint64
+		if target >= residue {
+			delta = target - residue
+		} else {
+			delta = increment - (residue - target)
+		}
+		value, overflow := addUint64(from, delta)
+		if overflow || value >= to {
+			return 0, 0, false
+		}
+		return value, increment, true
+	}
 	// Solve step*k = offset-from (mod increment).  A solution exists only
 	// when the gcd divides the right-hand side.  The first solution is enough
 	// because all later solutions are separated by increment/gcd steps.

@@ -23,6 +23,30 @@ id    val
 1    1
 2    2
 drop table auto_increment_zero;
+drop table if exists auto_increment_signed_manual;
+create table auto_increment_signed_manual(id bigint auto_increment primary key, u int unique);
+insert into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+id	u
+-1	10
+1	20
+100	30
+101	40
+select last_insert_id();
+last_insert_id()
+1
+truncate table auto_increment_signed_manual;
+insert ignore into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+id	u
+-1	10
+1	20
+100	30
+101	40
+select last_insert_id();
+last_insert_id()
+1
+drop table auto_increment_signed_manual;
 Drop table if exists auto_increment02;
 Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
 Insert into auto_increment02 values();

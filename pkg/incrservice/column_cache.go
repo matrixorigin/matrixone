@@ -725,7 +725,10 @@ func insertAutoValues[T constraints.Integer](
 		func(i int) bool {
 			filter := autoCount < rows &&
 				!nulls.Contains(vec.GetNulls(), uint64(i))
-			if filter && skipped != nil {
+			// Only positive explicit values advance the positive sequence. A
+			// signed negative converted to uint64 would discard every skipped
+			// range, including candidates preceding a later positive manual ID.
+			if filter && skipped != nil && vs[i] > 0 {
 				skipped.updateTo(uint64(vs[i]))
 			}
 			return filter

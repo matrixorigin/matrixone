@@ -15,12 +15,51 @@
 package incrservice
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNextValueInRangeAgainstEnumeration(t *testing.T) {
+	check := func(from, to, step, increment, offset uint64) {
+		t.Helper()
+		var want uint64
+		var found bool
+		for v := from; v < to; {
+			if v >= offset && (v-offset)%increment == 0 {
+				want, found = v, true
+				break
+			}
+			if v > math.MaxUint64-step {
+				break
+			}
+			v += step
+		}
+		value, _, ok := nextValueInRange(from, to, step, increment, offset)
+		if ok != found || ok && value != want {
+			t.Fatalf("range=[%d,%d) step=%d series=%d/%d: got (%d,%t), want (%d,%t)",
+				from, to, step, increment, offset, value, ok, want, found)
+		}
+	}
+	for from := uint64(1); from <= 12; from++ {
+		for step := uint64(1); step <= 4; step++ {
+			for increment := uint64(1); increment <= 9; increment++ {
+				for offset := uint64(1); offset <= increment; offset++ {
+					check(from, 24, step, increment, offset)
+					check(from, from, step, increment, offset)
+				}
+			}
+		}
+	}
+	for _, increment := range []uint64{3, 64, 65535} {
+		for _, offset := range []uint64{1, 2, increment} {
+			check(math.MaxUint64-8, math.MaxUint64, 1, increment, offset)
+		}
+	}
+}
 
 func TestRangeCount(t *testing.T) {
 	r := &ranges{step: 1, values: []uint64{1, 2, 2, 3, 3, 4}}

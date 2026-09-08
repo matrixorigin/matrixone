@@ -111,6 +111,30 @@ func TestIssue28349AutoIncrementPublicPaths(t *testing.T) {
 			"INSERT IGNORE must publish the first accepted generated candidate")
 		exec(t, "drop table ai_ignore")
 
+		t.Run("negative_manual_before_future_positive", func(t *testing.T) {
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, err := conn.ExecContext(cleanupCtx, "set auto_increment_increment = 1")
+				require.NoError(t, err)
+			}()
+			for _, increment := range []int{1, 3} {
+				exec(t, fmt.Sprintf("set auto_increment_increment = %d", increment))
+				for _, verb := range []string{"insert", "insert ignore"} {
+					exec(t, "create table ai_signed(id bigint auto_increment primary key, uk int unique)")
+					exec(t, verb+" into ai_signed values(-1,10),(NULL,20),(100,30),(NULL,40)")
+					last := int64(101)
+					if increment == 3 {
+						last = 103
+					}
+					require.Equal(t, [][]int64{{-1, 10}, {1, 20}, {100, 30}, {last, 40}},
+						queryInt64Rows(t, "select id,uk from ai_signed order by uk", 2))
+					require.Equal(t, int64(1), queryInt64(t, "select last_insert_id()"))
+					exec(t, "drop table ai_signed")
+				}
+			}
+		})
+
 		for _, tc := range []struct {
 			name, definition, rows string
 		}{

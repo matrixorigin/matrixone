@@ -560,20 +560,22 @@ func TestInsertIgnoreReorderDoesNotAdvancePastNegativeExplicitKeyAcrossBatches(t
 }
 
 func TestAutoIncrementCandidateStreamDiscardThroughKeepsHigherCandidates(t *testing.T) {
+	proc := testutil.NewProc(t)
 	stream := autoIncrementCandidateStream{}
-	require.NoError(t, stream.append(types.T_int32.ToType(), 2))
-	require.NoError(t, stream.append(types.T_int32.ToType(), 5))
-	require.NoError(t, stream.append(types.T_int32.ToType(), 8))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 2, proc.Mp()))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 5, proc.Mp()))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 8, proc.Mp()))
 	require.NoError(t, stream.discardThrough(5))
 
-	arg := &PreInsertUnique{}
+	arg := newInsertIgnoreAutoIncrementArgument()
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
 	arg.ctr.autoIncrementCandidates = stream
-	arg.ctr.acceptedAutoIncrementValues = make(map[uint64]struct{})
 	candidate, ok, err := arg.popAutoIncrementCandidate()
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(8), candidate.value)
-	require.NoError(t, arg.ctr.autoIncrementCandidates.append(types.T_int32.ToType(), 4))
+	require.NoError(t, arg.ctr.autoIncrementCandidates.append(types.T_int32.ToType(), 4, proc.Mp()))
 	candidate, ok, err = arg.popAutoIncrementCandidate()
 	require.NoError(t, err)
 	require.False(t, ok, "a later batch must not reintroduce a candidate below the bound")
@@ -689,20 +691,22 @@ func TestAutoIncrementCandidateStreamCompressesArithmeticRuns(t *testing.T) {
 func TestAutoIncrementCandidateCompactionRetainsStatementState(t *testing.T) {
 	proc := testutil.NewProc(t)
 	arg := newInsertIgnoreAutoIncrementArgument()
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
 	stream := &arg.ctr.autoIncrementCandidates
 	require.NoError(t, stream.discardThrough(10))
-	require.NoError(t, stream.append(types.T_int32.ToType(), 11))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 11, proc.Mp()))
 	_, ok, err := arg.popAutoIncrementCandidate()
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NoError(t, arg.compactAutoIncrementCandidates(proc))
-	require.NoError(t, stream.append(types.T_int32.ToType(), 9))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 9, proc.Mp()))
 	_, ok, err = arg.popAutoIncrementCandidate()
 	require.NoError(t, err)
 	require.False(t, ok, "compaction must not reintroduce a fenced candidate")
-	require.Error(t, stream.append(types.T_int64.ToType(), 12))
-	stream.reset()
-	require.NoError(t, stream.append(types.T_int64.ToType(), 9))
+	require.Error(t, stream.append(types.T_int64.ToType(), 12, proc.Mp()))
+	stream.reset(proc.Mp())
+	require.NoError(t, stream.append(types.T_int64.ToType(), 9, proc.Mp()))
 	_, ok, err = arg.popAutoIncrementCandidate()
 	require.NoError(t, err)
 	require.True(t, ok, "only statement reset clears the fence and type")

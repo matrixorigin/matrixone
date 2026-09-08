@@ -21,6 +21,19 @@ insert into auto_increment_zero values (0,1),(0,2);
 select * from auto_increment_zero order by id;
 drop table auto_increment_zero;
 
+-- A negative explicit ID must not discard low candidates before a later
+-- positive explicit ID, in either ordinary INSERT or ordered INSERT IGNORE.
+drop table if exists auto_increment_signed_manual;
+create table auto_increment_signed_manual(id bigint auto_increment primary key, u int unique);
+insert into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+select last_insert_id();
+truncate table auto_increment_signed_manual;
+insert ignore into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+select last_insert_id();
+drop table auto_increment_signed_manual;
+
 
 -- auto_increment > 0
 Drop table if exists auto_increment02;

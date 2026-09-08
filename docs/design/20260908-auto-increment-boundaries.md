@@ -2,6 +2,12 @@
 
 ## Scope and decision
 
+Latest follow-up: budgeted arbitration and allocation cost, based on reviewed
+head `a669b5819c04d2f1273b188de6219336e910da07`. The new evidence and an unresolved
+eager-allocation limitation are recorded at the end of this document. Earlier
+results below describe their named revisions, not a claim that every behavior
+in the module is now MySQL-compatible.
+
 Follow-up to PR #28349 at `e798daaeb94b`. This is a focused correction of
 existing planner/allocator contracts, not a new allocation service or wire format.
 
@@ -186,3 +192,157 @@ Default-path allocation frequency and zero per-row heap allocations are unchange
 
 No full SCA/CI wait, mixed-version topology, or TPCC benchmark was performed for
 this follow-up. No new wire fields, catalog representation, or native code changed.
+
+## Follow-up: bounded arbitration, exact key identity, and hot-path cost
+
+The module-level review found that accepted keys and rejected candidates have
+different growth shapes. Compressing the latter does not bound the former.
+With nullable secondary UKs, the final-PK Go map was the only input-sized set;
+it bypassed the query mpool even though Reset eventually made it collectible.
+This was an admission failure, not a post-statement leak.
+
+### Ownership and publication
+
+| Layer | Contract | Implementation / terminal owner |
+|---|---|---|
+| Session and plan | Provenance and session series stay statement-scoped | Existing frontend snapshot, codec/version gate and eligibility guards; unchanged in this follow-up |
+| Table reservation | Disjoint ranges; only positive manual IDs advance the positive cursor | Fix signed-negative-to-uint64 conversion before `skipped.updateTo`; retain allocator locks, callbacks, epochs and bounded retry policy |
+| Ordered arbitration | All constraints agree before accepting a row; equality uses final PKs | Replace the unaccounted Go map with the existing mpool-backed numeric table; secondary UK ownership remains unchanged |
+| Retained candidates | Capacity admitted before growth; no interior allocation pointer is freed | Off-heap scalar runs, in-place compaction, retained original base pointer; Reset/Free releases the allocation and statement fence |
+| Output and result | Borrowed input is immutable; final PK built once; incomplete output never escapes | Reuse off-heap output vectors, append the final PK directly, copy selected non-PK columns once, publish first generated ID once after the complete batch succeeds |
+| Base and indexes | Every consumer sees the same accepted row image | Existing post-arbitration SINK and cleanup protocol; no new source evaluation or fanout |
+
+The integer table stores the supplied 64-bit identity rather than a separate
+raw key. Therefore the arbiter supplies an invertible xor-shift/odd-multiply
+permutation (the same inexpensive mixer used by ASOF slots), not a potentially
+lossy software hash. This preserves exact signed/unsigned integer identity on
+all supported CPUs and spreads session strides. Only zero maps to zero; explicit
+zero is kept in one scalar flag because the batch API reserves a leading zero
+for automatic raw-key hashing. Reset clears both owners. No common hash-table
+API or CPU-specific implementation is changed.
+
+Const NULL vectors must be tested with `Vector.IsNull`, not only the null bitmap:
+constant NULL is a separate representation. NULL secondary keys never acquire
+uniqueness ownership, for both ordinary and ordered IGNORE arbitration.
+
+### Unhappy-path audit and decisions
+
+| Audit | Closure and evidence |
+|---|---|
+| Q1: allocation ownership | Prepare failure frees partial tables; Call failure returns no batch; Reset/Free clears tables, zero-key state and candidate storage. Output buffers retain capacity only until reuse/Free. Tests assert pool usage returns to zero and a new statement accepts old keys again. |
+| Q2: waits and cancellation | The arbiter stays serialized and adds no wait, lock, channel, RPC, goroutine or logging. The allocator's existing cancellation/retirement graph is unchanged. Race, cancellation-to-Reset, multi-batch and real SQL tests complete; this is not a universal no-hang guarantee. |
+| Q3: retained growth | Accepted PKs, fragmented candidate runs and output vector data now enter mpool admission. Growth can return the normal capacity error before publication. Hash resize temporarily needs old plus new capacity; rejecting that peak is intentional. Memory remains proportional to accepted distinct keys and fragmented runs, not constant. |
+| Publication failure | Failure after PK construction but during payload allocation leaves the input and statement result unchanged. The incomplete batch stays private and cleanup permits reuse. |
+| Compatibility | No new protocol/catalog/native/config contract. ODKU allocation-account activation and non-reordering semantics are unchanged; IGNORE output data now also obeys the existing pool cap. |
+
+Decision log:
+
+- Reuse the existing numeric owner instead of adding a bespoke set or accounting
+  only the logical Go-map payload; actual capacity and resize peak must be admitted.
+- Return candidates by value and construct the final PK directly. Do not replace
+  one per-row map with another retained per-row object buffer.
+- Unit-step ranges align directly to the requested residue. Preserve the existing
+  congruence solver for non-unit metadata and checked uint64 bounds. No allocation
+  or allocator request is added by this arithmetic fast path.
+- Do not claim SQL throughput from allocator-request counts or Go `B/op` alone.
+  Go allocation volume and admitted live native capacity are different metrics.
+- The rejected-positive-explicit-ID limitation below remains open. The negative
+  manual-ID fix does not solve it, and passing budget/index tests does not prove
+  general acceptance-aware allocation.
+
+### Regression and performance evidence
+
+Environment: Go 1.26.4, darwin/arm64, verified same-source CPU CGo artifacts,
+`GOWORK=off -mod=readonly` through the repository wrapper. Baseline is `a669b581`;
+the PR base/merge-base is `0b195e4f5a23c06a40552a8db3e7fdf182979a3a` (main).
+
+- Unfixed regressions: the nullable-UK final-key budget, fragmented-candidate
+  budget and Const NULL cases failed for the intended missing-admission/NULL
+  semantics; negative/manual sequence controls exposed the uint64 conversion.
+- Added coverage: all eight integer types, explicit zero, signed minima/unsigned
+  maxima, wide/strided exact-key identity, empty/exhausted stream, in-place
+  compaction after partial consumption, capacity failures at Prepare/growth/output,
+  cancellation cleanup and reuse. Assertions use rows/types, typed capacity errors,
+  unchanged borrowed input, result publication and final zero pool usage.
+- Full normal incrservice, preinsertunique, preinsert, plan and process passed.
+  Final numeric-identity coverage rerun passed: preinsertunique **85.4%**, up from
+  **72.7%** at the baseline. Incrservice coverage is **79.3%**, from **79.2%**.
+- Full final-code race: incrservice **6.215s**, preinsertunique **2.049s**,
+  preinsert **1.992s**. Named concurrent-session test: measured T=0.04s, B=30s,
+  capped N=100, passed in one process. No sleep-based regression was added.
+- Real two-CN public fixture passed (**13.51s** test): existing index/rollback/
+  prepared/multi-batch oracles plus ordinary INSERT and INSERT IGNORE with
+  negative manual IDs preceding a later positive ID, at increments 1 and 3.
+  The subtest restores the session setting with an independent cleanup context.
+- Normal mo-tester comparison on that test-owned instance passed twice:
+  `auto_increment.sql` **508/508** each, with no ignored/abnormal statements,
+  no golden generation and table cleanup asserted between passes. Local BVT
+  uses CN0; the public fixture separately uses CN1. Local harness/configuration
+  is not delivered. Full compose/SCA/TPCC and mixed-version topology were not run.
+
+Benchmark command for both revisions: `GOMAXPROCS=2 mo-cgo-test -p=1 -run '^$'
+-bench '^BenchmarkInsertIgnoreAutoIncrementArbiter$' -benchtime=300ms -count=3`.
+One operation includes Prepare, 32 batches of 1,024 input rows, and Free; source
+construction is excluded. Medians below are per statement. Native pool peak is
+also reported so moving ownership out of the Go heap is visible.
+
+| Workload | Go bytes before -> after | Go allocations before -> after | Pool live peak before -> after |
+|---|---:|---:|---:|
+| All accepted, distinct UK | 9,093,593 -> 795,697 | 34,685 -> 268 | 3,178,496 -> 3,678,400 |
+| All accepted, NULL UK | 9,093,612 -> 795,712 | 34,679 -> 262 | 65,536 -> 1,614,016 |
+| Duplicate dense (2,048 accepted) | 388,532 -> 21,349 | 2,695 -> 100 | 229,376 -> 230,080 |
+| Explicit/generated mix | 6,601,405 -> 795,692 | 50,525 -> 268 | 3,178,496 -> 3,678,400 |
+
+The final paired samples' elapsed medians were respectively 11.30 -> 7.95ms,
+5.81 -> 3.63ms, 3.79 -> 3.56ms and 12.26 -> 7.91ms. Earlier samples were noisy
+and the shared machine had 6.6-7.5GiB swap in use and unrelated VM/build work.
+Allocation reductions are the robust result; these timings do **not** establish
+a production latency/throughput guarantee or prove absence of a regression.
+The separate unit-step helper benchmark remains allocation-free and removes the
+per-row modular inverse; non-unit controls and an independent enumeration oracle
+cover the preserved path.
+
+## Open limitation: a rejected positive explicit ID advances eager allocation
+
+Status: **not fixed by this follow-up**. Independently reproduced at the exact
+main base and reviewed head, with MySQL 8.0.44 as a control:
+
+```sql
+CREATE TABLE t(id TINYINT AUTO_INCREMENT PRIMARY KEY, uk INT UNIQUE, v INT);
+INSERT INTO t(uk,v) VALUES(10,0);
+INSERT IGNORE INTO t(id,uk,v)
+VALUES(NULL,20,1),(127,10,2),(NULL,30,3);
+SELECT id,uk,v FROM t ORDER BY v;
+```
+
+MySQL retains `(1,10,0),(2,20,1),(3,30,3)`. Both MO revisions return error 1690
+for tinyint 128 and retain only the seed. With BIGINT/100, the last accepted ID
+is 101 instead of 3. This is an intra-statement semantic difference, not a demand
+for globally gapless IDs. The negative-ID conversion fixed above is a distinct
+bug with a different witness.
+
+Root boundary: `PRE_INSERT` scans explicit positives, advances the range/cache,
+and materializes/range-checks generated values before PK/UK acceptance. The
+downstream arbiter cannot recover discarded lower reservations or an upstream
+overflow. Its current candidate reuse is safe only for candidates already checked
+and locked by the existing pipeline.
+
+The next implementation needs an acceptance-aware statement cursor over
+non-rollbackable, table-owned reservations. Final-key assignment, accepted PK/UK
+ownership and validation/locking must agree before emitting the row to the shared
+index SINK. This is a proposed direction, **not an implemented or validated new
+protocol**. Its acceptance matrix must include:
+
+- ignored versus accepted explicit high IDs, both before/after generated rows;
+- cross-row PK/UK conflicts where a rejected row must not reserve a different UK;
+- tinyint/uint64 exhaustion, negative/zero controls and session strides;
+- stale cached ranges, concurrent explicit writers on another CN, lock-triggered
+  statement retry, cancellation, rollback and prepared/multi-batch reuse;
+- exact base/index identity and allocator requests per block, with no per-row
+  SQL or RPC fallback added merely to make the small example pass.
+
+Do not roll back a shared allocator, swallow overflow, manufacture unprobed IDs
+after dedup, or independently pre-dedup UKs and forget later PK rejection. Those
+shortcuts change other rows' acceptance or bypass existing concurrency protection.
+Closing this inherited allocation boundary requires a coordinated change beyond
+the budget/negative-ID corrections above; it must not be reported as completed.
