@@ -22,6 +22,10 @@ x-mo-common: &mo-common
       - ../../docker-compose-log:/log
       - ../../coverage:/coverage
     restart: on-failure
+    # mo-service starts conntrack collection on Linux; joining its netlink
+    # groups requires NET_ADMIN in the compose containers.
+    cap_add:
+      - NET_ADMIN
     tty: true
 
 
