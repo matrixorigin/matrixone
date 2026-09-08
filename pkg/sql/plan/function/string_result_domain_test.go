@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -139,6 +140,119 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 }
 
+func TestBoundedBuiltinRegistryCoversEveryChangedOverload(t *testing.T) {
+	ctx := context.Background()
+	resolve := func(t *testing.T, name string, args []types.Type) types.Type {
+		t.Helper()
+		resolved, err := GetFunctionByName(ctx, name, args)
+		require.NoError(t, err, "%s(%v)", name, args)
+		result := resolved.GetReturnType()
+		require.NotEqual(t, types.T_any, result.Oid, "%s(%v) returned ANY", name, args)
+		return result
+	}
+
+	convInputs := []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(),
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.T_float32.ToType(), types.T_float64.ToType(),
+	}
+	for overloadID, input := range convInputs {
+		t.Run("conv/"+input.Oid.String(), func(t *testing.T) {
+			args := []types.Type{input, types.T_int64.ToType(), types.T_int64.ToType()}
+			resolved, err := GetFunctionByNameWithOverload(ctx, "conv", args, int32(overloadID))
+			require.NoError(t, err, "conv overload %d (%v)", overloadID, args)
+			result := resolved.GetReturnType()
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(65), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+	} {
+		t.Run("compress/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "compress", []types.Type{input})
+			require.Contains(t, []types.T{types.T_varbinary, types.T_blob}, result.Oid)
+		})
+		t.Run("uncompressed_length/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "uncompressed_length", []types.Type{input})
+			require.Equal(t, types.T_int32, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+	} {
+		for _, arity := range []int{2, 3} {
+			name := input.Oid.String() + "/" + strconv.Itoa(arity)
+			t.Run("aes_encrypt/"+name, func(t *testing.T) {
+				args := []types.Type{input, types.T_varchar.ToType()}
+				if arity == 3 {
+					args = append(args, types.T_varchar.ToType())
+				}
+				result := resolve(t, "aes_encrypt", args)
+				require.Contains(t, []types.T{types.T_varbinary, types.T_blob}, result.Oid)
+			})
+		}
+	}
+
+	for _, input := range []types.Type{
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_float32.ToType(), types.T_float64.ToType(),
+	} {
+		t.Run("bin/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "bin", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(),
+		types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float32.ToType(), types.T_float64.ToType(),
+		types.T_array_float32.ToType(), types.T_array_float64.ToType(),
+	} {
+		t.Run("hex/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "hex", []types.Type{input})
+			require.Contains(t, []types.T{types.T_varchar, types.T_text}, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{types.T_varchar.ToType(), types.T_text.ToType(), types.T_blob.ToType()} {
+		t.Run("md5/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "md5", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(32), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{types.T_varbinary.ToType(), types.T_binary.ToType(), types.T_blob.ToType()} {
+		t.Run("inet6_ntoa/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "inet6_ntoa", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(39), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_int64.ToType(), types.T_int32.ToType(),
+	} {
+		t.Run("inet_ntoa/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "inet_ntoa", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(31), result.Width)
+		})
+	}
+
+	result := resolve(t, "sha2", []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
+	require.Equal(t, types.T_varchar, result.Oid)
+	require.Equal(t, int32(128), result.Width)
+	result = resolve(t, "sha1", []types.Type{types.T_varchar.ToType()})
+	require.Equal(t, types.T_varchar, result.Oid)
+	require.Equal(t, int32(40), result.Width)
+}
+
 func TestBoundedBuiltinResultBoundsFailClosed(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -161,7 +275,12 @@ func TestBoundedBuiltinResultBoundsFailClosed(t *testing.T) {
 	require.Equal(t, uint64(32), aesPaddedResultBound(stringResultBound{bytes: 17}).bytes)
 	require.Equal(t, uint64(4), roundedUpHalfStringResultBound(stringResultBound{bytes: 7}).bytes)
 	require.True(t, compressResultBound(unknownStringResultBound()).unknown)
+	require.True(t, roundedUpHalfStringResultBound(unknownStringResultBound()).unknown)
 	require.True(t, aesPaddedResultBound(stringResultBound{bytes: math.MaxUint64}).unknown)
+	require.Equal(t, types.T_text, stringHexReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, unhexReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, compressReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, aesEncryptReturnType(nil).Oid)
 }
 
 func TestStringTypeBoundClassification(t *testing.T) {
