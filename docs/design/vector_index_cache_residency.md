@@ -908,26 +908,6 @@ here. They remain valid because the fixes touch Preload, Load and the metadata
 writer -- not the build path -- and the restart protocol above means a build
 measurement never observes the cache anyway.
 
-### 10.4 Follow-ups
-
-Natural next cells, listed so the scope of what has been measured is explicit.
-
-- **A deliberate refusal at 1M.** §10.2.1 confirms the required behaviour: the
-  shipped configuration serves a 1M load without refusing it. The operator-facing
-  opposite -- setting a cap below the index size and getting an orderly refusal
-  instead of an OOM -- is covered by the forced-state tests and the
-  `vector_gpu_negative` case, and CAGRA at 3.34 GB with two generations
-  alternating is the natural cell to extend it to 1M.
-- **A paired comparison against `main`.** §10.2.1 establishes this branch's
-  absolute numbers at 1M -- build, cold and warm QPS, recall. Running the same
-  cells on `main` would turn them into a delta. The distance kernels are untouched
-  and the governor sits on the load path, not the search path.
-- **The id-map prospective reservation.** The map is charged once it exists
-  (§10.2). Reserving it BEFORE the replay that creates it would mean reserving
-  rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows -- including
-  generations that replay no deletes at all, so the charge-on-materialise
-  behaviour is deliberate. The trade belongs to whoever owns the memory budget.
-
 ## 11. Decision log
 
 Items raised by the self-review gate and deliberately not changed. Each is
@@ -956,6 +936,14 @@ thundering herd from issuing N identical queries. The blocked callers are cache
 admissions, which have no deadline of their own, and the memo is refreshed by the
 housekeeping tick well before it expires — so on the steady-state path nobody
 waits at all.
+
+**The delete id-map is charged when it materialises, not reserved ahead of it.**
+The first replayed delete builds `id_to_index_` for every row of the index and it
+stays resident for the index's life, so it is added to `HostComponentBytes` at
+that point (`memory.HostIDMapBytesPerRow`). Reserving it BEFORE the replay would
+mean reserving rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows --
+including the generations that replay no deletes at all and never build the map.
+Charging on materialise is deliberate.
 
 **`DeleteAllBasesSqls` spares the tail's frame rows.** Its contract is that "the
 tag=1 CdcTail is untouched", so its metadata statement is predicated rather than
