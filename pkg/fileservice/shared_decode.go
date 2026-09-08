@@ -29,7 +29,8 @@ import (
 
 // DecodeSharing opts a scoped reader into sharing immutable conversion results.
 // Codec and Parameters must identify all conversion/validation semantics. The
-// caller must release the complete IOVector before any decoded view escapes.
+// caller must consume every borrowed decoded view before releasing the complete
+// IOVector; only owned results may escape that scope.
 // A zero descriptor is ignored. Only write-once, non-reused paths are eligible.
 type DecodeSharing struct {
 	Codec      string

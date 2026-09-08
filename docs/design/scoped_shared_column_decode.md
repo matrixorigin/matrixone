@@ -224,17 +224,19 @@ indexes or a claim about the incident-scale dataset.
 
 | SQL, concurrency 100 (mean of two runs per mode) | Sharing off | Sharing on |
 |---|---:|---:|
-| 32 MiB cache: decodes/query | 7.94 | 6.36 |
-| 32 MiB cache: decoded backing bytes/query | 129.4 MB | 103.3 MB |
-| 32 MiB cache: CPU/query | 144.0 ms | 114.9 ms |
-| 32 MiB cache: QPS | 205.6 | 258.0 |
-| 32 MiB cache: p95 / p99 | 647 / 730 ms | 558 / 659 ms |
+| 32 MiB cache: decodes/query | 7.93 | 6.45 |
+| 32 MiB cache: decoded backing bytes/query | 129.2 MB | 104.8 MB |
+| 32 MiB cache: CPU/query | 147.1 ms | 122.2 ms |
+| 32 MiB cache: QPS | 201.1 | 242.3 |
+| 32 MiB cache: p95 / p99 | 655 / 769 ms | 567 / 658 ms |
 | 256 MiB cache: decodes/query | 0 | 0 |
 | 256 MiB cache: CPU/query | 6.80 ms | 6.89 ms |
 | 256 MiB cache: QPS | 4,340 | 4,290 |
 
-These measurements used main `c51bb4ed86` plus this implementation. The large
-cache's short high-QPS samples have noisy tails (p95 78/96 ms, p99 142/133 ms);
+The pressure measurement was repeated after merging main `f8a690cb21`, including
+its vector-membership planner changes, and is reported above. The microbenchmarks
+and large-cache control used main `c51bb4ed86` plus the same sharing mechanism.
+The large cache's short high-QPS samples have noisy tails (p95 78/96 ms, p99 142/133 ms);
 they are not a tail-latency improvement claim. Sequential queries decoded eight
 columns in both modes under pressure and zero with the large cache, as expected.
 All compared rows and distances matched. Profiles, raw measurements and the
