@@ -137,8 +137,9 @@ func TestBuildSQLJSONPlanUsesBoundTableAlias(t *testing.T) {
 			ProjectList: []*plan.Expr{{
 				Typ: plan.Type{Id: int32(types.T_int32)},
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					ColPos: 0,
-					Name:   "alias.id",
+					ColPos:  0,
+					Name:    "alias.id",
+					TblName: "source",
 				}},
 			}},
 		}},
