@@ -120,6 +120,35 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	assertAttempts(t, counter, arguments, 3)
 }
 
+func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
+	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(t.TempDir(), "ut.json")
+	report := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=2s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster2","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=500ms status=ready\n"}`,
+		`{"Action":"output","Package":"example/issues","Test":"TestIssue","Output":"    MO_UT_SETUP fixture=issue26875 phase=database-create duration=100ms status=error\n"}`,
+		"not json",
+	}, "\n")
+	if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := exec.Command("python3", scriptPath, reportPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("summarize setup timing: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "fixture=shared-cluster phase=cluster-start count=2 total=2.50s max=2.00s") {
+		t.Fatalf("missing cumulative setup summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
+		t.Fatalf("missing setup error summary: %s", text)
+	}
+}
+
 func writeScopeFixture(t *testing.T, root, name, contents string) {
 	t.Helper()
 
