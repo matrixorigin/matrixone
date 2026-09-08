@@ -10518,7 +10518,7 @@ create_table_stmt:
         t.IfNotExists = $4
         t.Table = *$5
         t.Defs = $7
-        t.CTASConflict = $10
+        t.CTASConflict = $9
         t.AsSource = $11
         $$ = t
     }

@@ -27131,7 +27131,7 @@ yydefault:
 			t.IfNotExists = yyDollar[4].ifNotExistsUnion()
 			t.Table = *yyDollar[5].tableNameUnion()
 			t.Defs = yyDollar[7].tableDefsUnion()
-			t.CTASConflict = yyDollar[10].str
+			t.CTASConflict = yyDollar[9].str
 			t.AsSource = yyDollar[11].selectUnion()
 			yyLOCAL = t
 		}
