@@ -1008,8 +1008,12 @@ func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	execCtx.persistentDropTableTargets = tree.TableNames{
 		tree.NewTableName(tree.Identifier("next"), tree.ObjectNamePrefix{}, nil),
 	}
+	execCtx.effectiveTxnStatement = &tree.TruncateTable{}
+	execCtx.implicitCommitBefore = true
 	execCtx.beginStatementGeneration(&UserInput{})
 	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.effectiveTxnStatement)
+	require.False(t, execCtx.implicitCommitBefore)
 	require.Nil(t, execCtx.persistentDropTableTargets)
 }
 
@@ -4929,6 +4933,8 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
@@ -4971,6 +4977,15 @@ func Test_statement_type(t *testing.T) {
 				activeTxnAtStart:      true,
 			},
 		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.TruncateTable{},
+			txnOpt: FeTxnOption{
+				implicitCommitBefore: true,
+			},
+		}), convey.ShouldBeTrue)
+		txnOpt := FeTxnOption{implicitCommitBefore: true}
+		txnOpt.Close()
+		convey.So(txnOpt.implicitCommitBefore, convey.ShouldBeFalse)
 		mixedSet := &tree.SetVar{Assignments: []*tree.VarAssignmentExpr{
 			{
 				System:   true,
