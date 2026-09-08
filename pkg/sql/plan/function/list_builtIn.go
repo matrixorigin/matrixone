@@ -4189,6 +4189,46 @@ var supportedStringBuiltIns = []FuncNew{
 					return SubStringWith2Args
 				},
 			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_binary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith2Args
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith2Args
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_binary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_binary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith3Args
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith3Args
+				},
+			},
 		},
 	},
 
@@ -13027,7 +13067,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -13039,7 +13079,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -13051,7 +13091,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -15207,7 +15247,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUUIDToBin
