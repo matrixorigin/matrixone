@@ -1247,9 +1247,11 @@ func estimateIntervalSelectivity(
 	}
 	if hasLower && lower < minValue {
 		lower = minValue
+		lowerInclusive = true
 	}
 	if hasUpper && upper > maxValue {
 		upper = maxValue
+		upperInclusive = true
 	}
 	if (hasLower && (lower > maxValue || lower == maxValue && !lowerInclusive)) ||
 		(hasUpper && (upper < minValue || upper == minValue && !upperInclusive)) ||

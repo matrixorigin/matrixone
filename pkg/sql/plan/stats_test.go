@@ -586,6 +586,70 @@ func TestEstimateAndSelectivityNormalizesSameColumnRanges(t *testing.T) {
 		(45.0-0.09+1)/(99.99-0.09),
 	)
 	require.InDelta(t, wantIndependent, estimateExprSelectivity(independent, builder, stats), 1e-12)
+
+	// Moving an out-of-domain endpoint to the observed boundary must preserve
+	// the fact that the boundary value satisfies the original predicate.
+	stats.MinValMap["price"] = 10
+	stats.MaxValMap["price"] = 10
+	redundantLowerBounds := and(decimalRange(0, ">", 100), decimalRange(0, ">", 200))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantLowerBounds, builder, stats))
+	redundantUpperBounds := and(decimalRange(0, "<", 2000), decimalRange(0, "<", 3000))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantUpperBounds, builder, stats))
+}
+
+func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
+	const emptySelectivity = 0.00000001
+	tests := []struct {
+		name                     string
+		lower, upper             float64
+		hasLower, lowerInclusive bool
+		hasUpper, upperInclusive bool
+		want                     float64
+	}{
+		{
+			name:  "exclusive lower below singleton domain",
+			lower: 1, hasLower: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive upper above singleton domain",
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive bounds outside singleton domain",
+			lower: 1, hasLower: true,
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive lower at singleton boundary",
+			lower: 10, hasLower: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "exclusive upper at singleton boundary",
+			upper: 10, hasUpper: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "inclusive singleton",
+			lower: 10, hasLower: true, lowerInclusive: true,
+			upper: 10, hasUpper: true, upperInclusive: true,
+			want: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := estimateIntervalSelectivity(
+				10, 10,
+				test.lower, test.hasLower, test.lowerInclusive,
+				test.upper, test.hasUpper, test.upperInclusive,
+			)
+			require.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
