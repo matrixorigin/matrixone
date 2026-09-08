@@ -335,6 +335,10 @@ type Compile struct {
 	planGenerationRebuilt bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
+	// sequenceState is the frontend-visible sequence state captured at the
+	// beginning of this statement. It is restored before a retry generation so
+	// a failed attempt cannot publish stale CURRVAL/LASTVAL values.
+	sequenceState sequenceStatementState
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 

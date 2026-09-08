@@ -410,7 +410,7 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: UUID_TO_BIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireRet: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
 		},
 		{
 			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
@@ -1187,6 +1187,9 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "power domain or overflow", fid: POW, argCount: 2},
+		{name: "exponential overflow", fid: EXP, argCount: 1},
+		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},

@@ -165,18 +165,20 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:                DeepCopyObjectRef(ctx.Ref),
-		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:         ctx.HasAutoCol,
-		ColOffset:          ctx.ColOffset,
-		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:        ctx.IsOldUpdate,
-		IsNewUpdate:        ctx.IsNewUpdate,
-		HasTargetSelector:  ctx.HasTargetSelector,
-		TargetRowNumberCol: ctx.TargetRowNumberCol,
-		TargetActiveCol:    ctx.TargetActiveCol,
-		TargetRowIdCol:     ctx.TargetRowIdCol,
+		Ref:                          DeepCopyObjectRef(ctx.Ref),
+		TableDef:                     DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:                   ctx.HasAutoCol,
+		ColOffset:                    ctx.ColOffset,
+		CompPkeyExpr:                 DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:                DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:                  ctx.IsOldUpdate,
+		IsNewUpdate:                  ctx.IsNewUpdate,
+		HasTargetSelector:            ctx.HasTargetSelector,
+		TargetRowNumberCol:           ctx.TargetRowNumberCol,
+		TargetActiveCol:              ctx.TargetActiveCol,
+		TargetRowIdCol:               ctx.TargetRowIdCol,
+		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
+		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
 	}
 
 	return newCtx
@@ -187,16 +189,21 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:                slices.Clone(ctx.Columns),
-		PkColumn:               ctx.PkColumn,
-		PkType:                 ctx.PkType,
-		UkType:                 ctx.UkType,
-		InsertIgnoreMultiDedup: ctx.InsertIgnoreMultiDedup,
-		KeyColumns:             slices.Clone(ctx.KeyColumns),
-		ConflictColumns:        slices.Clone(ctx.ConflictColumns),
-		OutputColumns:          ctx.OutputColumns,
-		OdkuTargetArbitration:  ctx.OdkuTargetArbitration,
-		TargetColumns:          slices.Clone(ctx.TargetColumns),
+		Columns:                      slices.Clone(ctx.Columns),
+		PkColumn:                     ctx.PkColumn,
+		PkType:                       ctx.PkType,
+		UkType:                       ctx.UkType,
+		InsertIgnoreMultiDedup:       ctx.InsertIgnoreMultiDedup,
+		KeyColumns:                   slices.Clone(ctx.KeyColumns),
+		ConflictColumns:              slices.Clone(ctx.ConflictColumns),
+		OutputColumns:                ctx.OutputColumns,
+		OdkuTargetArbitration:        ctx.OdkuTargetArbitration,
+		TargetColumns:                slices.Clone(ctx.TargetColumns),
+		AutoIncrementReorder:         ctx.AutoIncrementReorder,
+		AutoIncrementColumn:          ctx.AutoIncrementColumn,
+		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
+		AutoIncrementKeyIndex:        ctx.AutoIncrementKeyIndex,
+		AutoIncrementOutputColumn:    ctx.AutoIncrementOutputColumn,
 	}
 
 	return newCtx
@@ -1088,6 +1095,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		KeyEncoding:         rf.KeyEncoding,
 		ProbeType:           DeepCopyType(rf.ProbeType),
 		ScalarPredicate:     rf.ScalarPredicate,
+		MustApply:           rf.MustApply,
 		KeyComponentProbeTypes: slices.Clone(
 			rf.KeyComponentProbeTypes,
 		),

@@ -980,12 +980,36 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	})
 
 	autoPreInsert := &preinsert.PreInsert{HasAutoCol: true}
+	orderedPreInsert := &preinsert.PreInsert{
+		HasAutoCol:                  true,
+		TrackAutoIncrementGenerated: true,
+	}
+	orderedPreInsertUnique := &preinsertunique.PreInsertUnique{
+		PreInsertCtx: &planpb.PreInsertUkCtx{AutoIncrementReorder: true},
+	}
 	ordinaryPreInsert := &preinsert.PreInsert{}
 	autoPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
 			Op:        int32(vm.PreInsert),
 			PreInsert: &pipeline.PreInsert{HasAutoCol: true},
 		}},
+	}}}
+	orderedPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{
+			{
+				Op: int32(vm.PreInsert),
+				PreInsert: &pipeline.PreInsert{
+					HasAutoCol:                  true,
+					TrackAutoIncrementGenerated: true,
+				},
+			},
+			{
+				Op: int32(vm.PreInsertUnique),
+				PreInsertUnique: &pipeline.PreInsertUnique{
+					PreInsertUkCtx: &planpb.PreInsertUkCtx{AutoIncrementReorder: true},
+				},
+			},
+		},
 	}}}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
@@ -1011,6 +1035,35 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	decoded, err := decodeScope(encodedPipeline, proc, true, nil)
 	require.NoError(t, err)
 	decoded.release()
+
+	proc.Base.SessionInfo.AutoIncrementIncrement = 3
+	proc.Base.SessionInfo.AutoIncrementOffset = 2
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	_, _, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline),
+		"requires MORPC protocol version 56")
+
+	// New wire metadata is not optional merely because the session happens to
+	// use the default 1/1 series. An older receiver would silently drop these
+	// fields and execute the old, incorrect positional semantics.
+	proc.Base.SessionInfo.AutoIncrementIncrement = 1
+	proc.Base.SessionInfo.AutoIncrementOffset = 1
+	_, _, err = convertToPipelineInstruction(orderedPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
+	_, _, err = convertToPipelineInstruction(orderedPreInsertUnique, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 56")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, orderedPipeline),
+		"requires MORPC protocol version 56")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
+	_, instruction, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.HasAutoCol)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
@@ -2200,7 +2253,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
 		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
-			{Tag: 9, UseMembershipFilter: true},
+			{Tag: 9, UseMembershipFilter: true, MustApply: true},
 		}
 		op.IndexReaderParam = &planpb.IndexReaderParam{
 			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),
@@ -2937,66 +2990,84 @@ func Test_GetProcByUuid_WaitsPastFormerAdmissionLimitForRegistration(t *testing.
 }
 
 func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testing.T) {
-	server := colexec.NewServer("")
-	uid := uuid.Must(uuid.NewV7())
-	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
-	dispatchCtx, cancelDispatch := context.WithCancelCause(context.Background())
-	dispatchProc := &process.Process{
-		Ctx:    dispatchCtx,
-		Cancel: cancelDispatch,
-	}
-	notifyCh := make(process.RemotePipelineInformationChannel, 1)
-	require.NoError(t, server.PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
-	t.Cleanup(func() {
-		server.RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
-	})
+	for _, stopBeforeCancel := range []bool{false, true} {
+		t.Run(fmt.Sprint("stop_before_cancel_", stopBeforeCancel), func(t *testing.T) {
 
-	ctrl := gomock.NewController(t)
-	session := mock_morpc.NewMockClientSession(ctrl)
-	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
-	receiver := &messageReceiverOnServer{
-		messageCtx:      messageCtx,
-		connectionCtx:   context.Background(),
-		messageId:       7,
-		messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
-		messageUuid:     uid,
-		clientSession:   session,
-		colexecServer:   server,
-		streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
-	}
+			server := colexec.NewServer("")
+			uid := uuid.Must(uuid.NewV7())
+			messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+			defer cancelMessage(context.Canceled)
+			dispatchCtx, cancelDispatch := context.WithCancelCause(context.Background())
+			defer cancelDispatch(context.Canceled)
+			dispatchProc := &process.Process{
+				Ctx:    dispatchCtx,
+				Cancel: cancelDispatch,
+			}
+			notifyCh := make(process.RemotePipelineInformationChannel, 1)
+			require.NoError(t, server.PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+			t.Cleanup(func() {
+				server.RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
+			})
 
-	done := make(chan error, 1)
-	go func() {
-		done <- handlePipelineMessage(receiver)
-	}()
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
+			receiver := &messageReceiverOnServer{
+				messageCtx:      messageCtx,
+				connectionCtx:   context.Background(),
+				messageId:       7,
+				messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
+				messageUuid:     uid,
+				clientSession:   session,
+				colexecServer:   server,
+				streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
+			}
 
-	var attached *process.WrapCs
-	select {
-	case attached = <-notifyCh:
-		require.NotNil(t, attached)
-		require.Equal(t, uid, attached.Uid)
-		require.Equal(t, uint32(2), attached.BatchCredits)
-		require.Equal(t, uint64(1024), attached.ByteCredits)
-		require.NotNil(t, attached.ReserveBatch)
-		require.NotNil(t, attached.RollbackBatch)
-		seq, err := attached.ReserveBatch(context.Background(), 10)
-		require.NoError(t, err)
-		require.Equal(t, uint64(1), seq)
-		attached.RollbackBatch(seq)
-	case <-time.After(time.Second):
-		t.Fatal("prepare-done notify did not attach to the published receiver")
-	}
+			done := make(chan error, 1)
+			handlerDone := make(chan struct{})
+			go func() {
+				defer close(handlerDone)
+				done <- handlePipelineMessage(receiver)
+			}()
 
-	cancelCause := moerr.NewInternalErrorNoCtx("notify message canceled after attach")
-	cancelMessage(cancelCause)
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, cancelCause)
-	case <-time.After(time.Second):
-		t.Fatal("prepare-done notify did not stop after message cancellation")
+			defer func() { cancelMessage(context.Canceled); <-handlerDone }()
+			var attached *process.WrapCs
+			select {
+			case attached = <-notifyCh:
+				require.NotNil(t, attached)
+				require.Equal(t, uid, attached.Uid)
+				require.Equal(t, uint32(2), attached.BatchCredits)
+				require.Equal(t, uint64(1024), attached.ByteCredits)
+				require.NotNil(t, attached.ReserveBatch)
+				require.NotNil(t, attached.RollbackBatch)
+				seq, err := attached.ReserveBatch(context.Background(), 10)
+				require.NoError(t, err)
+				require.Equal(t, uint64(1), seq)
+				attached.RollbackBatch(seq)
+			case <-time.After(time.Second):
+				t.Fatal("prepare-done notify did not attach to the published receiver")
+			}
+
+			require.NotNil(t, attached.ReceiverStopped)
+			require.False(t, attached.ReceiverStopped())
+			if stopBeforeCancel {
+				receiver.streamLifecycle.batchFlow.stop(context.Canceled)
+				require.True(t, attached.ReceiverStopped())
+			}
+			cancelCause := moerr.NewInternalErrorNoCtx("notify message canceled after attach")
+			cancelMessage(cancelCause)
+			require.False(t, attached.ReceiverStopped())
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, cancelCause)
+			case <-time.After(time.Second):
+				t.Fatal("prepare-done notify did not stop after message cancellation")
+			}
+			require.ErrorIs(t, context.Cause(dispatchCtx), cancelCause)
+			server.RemoveRelatedPipeline(session, receiver.messageId)
+
+		})
 	}
-	require.ErrorIs(t, context.Cause(dispatchCtx), cancelCause)
-	server.RemoveRelatedPipeline(session, receiver.messageId)
 }
 
 func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *testing.T) {

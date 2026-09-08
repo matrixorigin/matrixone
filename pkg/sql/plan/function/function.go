@@ -239,6 +239,9 @@ func getFunctionByName(
 	case failedAggParametersWrong:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("aggregate function %s", name), args)
 
+	case failedBitwiseAggregateOperandsSize:
+		err = moerr.NewInvalidBitwiseAggregateOperandsSize(ctx)
+
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
@@ -426,6 +429,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
+		POW, EXP, COT,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, ELT, UNHEX, MAKEDATE,
@@ -725,11 +729,12 @@ func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
 type overloadCheckSituation int
 
 const (
-	succeedMatched                overloadCheckSituation = 0
-	succeedWithCast               overloadCheckSituation = -1
-	failedFunctionParametersWrong overloadCheckSituation = -2
-	failedAggParametersWrong      overloadCheckSituation = -3
-	failedTooManyFunctionMatched  overloadCheckSituation = -4
+	succeedMatched                     overloadCheckSituation = 0
+	succeedWithCast                    overloadCheckSituation = -1
+	failedFunctionParametersWrong      overloadCheckSituation = -2
+	failedAggParametersWrong           overloadCheckSituation = -3
+	failedTooManyFunctionMatched       overloadCheckSituation = -4
+	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
 
 type checkResult struct {

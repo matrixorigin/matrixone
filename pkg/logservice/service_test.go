@@ -149,10 +149,16 @@ func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
 
 func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	fs := vfs.NewStrictMem()
+	genCfg := newTestServiceConfigGenerator(fs)
+	var cfg Config
+	generate := func() Config {
+		cfg = genCfg()
+		return cfg
+	}
+	defer vfs.ReportLeakedFD(fs, t)
 
-	service, err := NewService(cfg, newFS(), nil)
+	service, err := NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	members := map[uint64]dragonboat.Target{1: service.ID()}
 	require.NoError(t, service.store.startReplica(1, 1, members, false))
@@ -168,13 +174,13 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	}
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
 	md.Shards = md.Shards[:1]
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	require.NoError(t, service.Close())
 }

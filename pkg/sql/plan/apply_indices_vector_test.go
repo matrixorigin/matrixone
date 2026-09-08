@@ -167,9 +167,12 @@ func TestVectorRewritesRejectMissingResultPagination(t *testing.T) {
 
 func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
 	ctx := &vectorSortContext{
-		limit:        makePlan2Uint64ConstExprWithType(3),
-		resultLimit:  makePlan2Uint64ConstExprWithType(2),
-		resultOffset: makePlan2Uint64ConstExprWithType(1),
+		limit:            makePlan2Uint64ConstExprWithType(3),
+		resultLimit:      makePlan2Uint64ConstExprWithType(2),
+		resultOffset:     makePlan2Uint64ConstExprWithType(1),
+		providerNodeID:   -1,
+		membershipNodeID: 17,
+		hasMembership:    true,
 	}
 
 	pluginCtx, _ := toPlanplugin(ctx, nil)
@@ -179,6 +182,9 @@ func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
 	require.Equal(t, uint64(3), roundTrip.limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(2), limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(1), offset.GetLit().GetU64Val())
+	require.Equal(t, int32(-1), roundTrip.providerNodeID)
+	require.Equal(t, int32(17), roundTrip.membershipNodeID)
+	require.True(t, roundTrip.hasMembership)
 }
 
 func TestValidateVectorIndexSortRewrite(t *testing.T) {

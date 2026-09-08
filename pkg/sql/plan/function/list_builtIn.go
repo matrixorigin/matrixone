@@ -16,6 +16,8 @@ package function
 
 import (
 	"fmt"
+	"math"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,6 +28,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func jsonQuoteTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_any {
+		// T_any does not carry enough identity to distinguish a prepared marker
+		// from a SQL NULL. The binder resolves those expressions with explicit
+		// metadata-only lookup types before they reach the function registry.
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return stringDomainFixedTypeMatch(overloads, inputs)
+}
+
+func jsonQuoteReturnType(parameters []types.Type) types.Type {
+	if len(parameters) != 1 {
+		result := types.T_text.ToType()
+		result.Width = types.MaxLongTextLen
+		result.Charset = types.CharsetUTF8MB4Bin
+		return result
+	}
+
+	bound := declaredTextCharacterBound(parameters[0])
+	bound = addStringResultBounds(multiplyStringResultBound(bound, 6), stringResultBound{bytes: 2})
+	if bound.unknown {
+		result := types.T_text.ToType()
+		result.Width = types.MaxLongTextLen
+		result.Charset = types.CharsetUTF8MB4Bin
+		return result
+	}
+	if bound.bytes <= uint64(types.MaxVarcharLen) {
+		return types.NewWithCharset(types.T_varchar, int32(bound.bytes), 0, types.CharsetUTF8MB4Bin)
+	}
+
+	if bound.bytes > math.MaxUint64/utf8.UTFMax {
+		bound.bytes = uint64(types.MaxLongTextLen)
+	} else {
+		bound.bytes *= utf8.UTFMax
+	}
+	protocolBytes := bound.bytes
+	if protocolBytes > uint64(types.MaxLongTextLen) {
+		protocolBytes = uint64(types.MaxLongTextLen)
+	}
+	return types.NewWithCharset(types.T_text, int32(protocolBytes), 0, types.CharsetUTF8MB4Bin)
+}
 
 func jsonConstructorSupportsType(oid types.T) bool {
 	switch oid {
@@ -1331,15 +1375,13 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: JSON_QUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonQuoteTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_json.ToType()
-				},
+				retType:    jsonQuoteReturnType,
 				newOp: func() executeLogicOfOverload {
 					return JsonQuote
 				},
@@ -4187,6 +4229,46 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith2Args
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_binary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith2Args
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith2Args
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_binary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_binary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith3Args
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubStringBinaryWith3Args
 				},
 			},
 		},
@@ -12936,6 +13018,12 @@ var supportedOthersBuiltIns = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
 				newOp:      func() executeLogicOfOverload { return ToInterval },
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
 		},
 	},
 
@@ -13021,7 +13109,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -13033,7 +13121,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -13045,7 +13133,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Inet6Aton
@@ -15201,7 +15289,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varbinary.ToType()
+					return fixedBinaryResultType(16)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUUIDToBin
