@@ -106,6 +106,10 @@ select json_schema_valid('{"$ref":"#/definitions/safe","definitions":{"safe":{"t
 select json_schema_valid('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"$id":"#/definitions/safe","type":"string"}]}]}', '"wrong-target"');
 select json_schema_validation_report('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":{"$id":"#/definitions/safe","type":"string"}}', '1');
 select json_schema_validation_report('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"id":"#/definitions/safe","type":"string"}]}]}', '"wrong-target"');
+select json_schema_valid('{"$ref":"#/$defs/safe","$defs":{"id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '1');
+select json_schema_valid('{"$ref":"#/$defs/safe","$defs":{"$id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '1');
+select json_schema_validation_report('{"$ref":"#/$defs/safe","$defs":{"id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '"wrong-target"');
+select json_schema_validation_report('{"$ref":"#/$defs/safe","$defs":{"$id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '"wrong-target"');
 select json_schema_valid('{"$ref":"https://example.invalid/schema"}', '1');
 select json_schema_valid('{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}', '1');
 

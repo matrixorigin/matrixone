@@ -1263,6 +1263,22 @@ func TestJsonSchemaIDAliasesInUnknownValuesCannotRebindLocalReferences(t *testin
 			name:   "nested array dollar id",
 			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"$id":"#/definitions/safe","type":"string"}]}]}`,
 		},
+		{
+			name:   "named defs container id",
+			schema: `{"$ref":"#/$defs/safe","$defs":{"id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}`,
+		},
+		{
+			name:   "named defs container dollar id",
+			schema: `{"$ref":"#/$defs/safe","$defs":{"$id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}`,
+		},
+		{
+			name:   "defs array id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"$defs":[{"id":"#/definitions/safe","type":"string"}]}`,
+		},
+		{
+			name:   "defs array dollar id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"$defs":[{"$id":"#/definitions/safe","type":"string"}]}`,
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

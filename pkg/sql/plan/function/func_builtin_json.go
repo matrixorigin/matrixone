@@ -3251,7 +3251,9 @@ func normalizeMySQLDraft4Schema(schema any) {
 // normalizeMySQLDraft4SchemaAliases mirrors gojsonschema's schema-pool walk.
 // The loader registers id/$id in arbitrary schema-valued maps and arrays, not
 // only in recognized Draft 4 keyword positions. Keep literal const/enum data
-// and named property/dependency/definition keys out of that walk.
+// and property/dependency names out of that walk. For definitions/$defs,
+// preserve named schema containers while removing string members that the
+// loader would interpret as aliases.
 func normalizeMySQLDraft4SchemaAliases(value any) {
 	switch value := value.(type) {
 	case []any:
@@ -3265,7 +3267,7 @@ func normalizeMySQLDraft4SchemaAliases(value any) {
 			switch key {
 			case "const", "enum":
 				continue
-			case "properties", "patternProperties", "dependencies", "definitions", "$defs":
+			case "properties", "patternProperties", "dependencies":
 				named, ok := child.(map[string]any)
 				if !ok {
 					continue
@@ -3274,6 +3276,26 @@ func normalizeMySQLDraft4SchemaAliases(value any) {
 					normalizeMySQLDraft4SchemaAliases(schema)
 				}
 				continue
+			case "definitions", "$defs":
+				normalizeMySQLDraft4NamedSchemaAliases(child)
+				continue
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4NamedSchemaAliases(value any) {
+	switch named := value.(type) {
+	case []any:
+		normalizeMySQLDraft4SchemaAliases(named)
+	case map[string]any:
+		for key, child := range named {
+			if key == "id" || key == "$id" {
+				if _, ok := child.(string); ok {
+					delete(named, key)
+					continue
+				}
 			}
 			normalizeMySQLDraft4SchemaAliases(child)
 		}
