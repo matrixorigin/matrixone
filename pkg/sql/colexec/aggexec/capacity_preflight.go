@@ -1078,7 +1078,11 @@ func (ae *aggExec) preflightFixedDistinctBatchFillArgs(
 		if err != nil {
 			return err
 		}
-		if batch.seenOrInsert(group, value) || state.distinctIndex.lookup(y, value) {
+		duplicate, err := batch.seenOrInsert(group, value)
+		if err != nil {
+			return err
+		}
+		if duplicate || state.distinctIndex.lookup(y, value) {
 			continue
 		}
 		if err := plan.add(x); err != nil {

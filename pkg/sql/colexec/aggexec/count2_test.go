@@ -535,6 +535,38 @@ func TestCountDistinctBatchDeduplicatesWithinUnit(t *testing.T) {
 	results[0].Free(mp)
 }
 
+func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const rows = AggBatchSize + 17
+	values := make([]int32, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int32(i % (hashmap.UnitLimit*2 + 1))
+		groups[i] = 1
+	}
+	vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int32.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+	require.True(t, exec.state[0].distinctFixedDeferred)
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t,
+		int64(hashmap.UnitLimit*2+1),
+		vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+	for _, result := range results {
+		result.Free(mp)
+	}
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctFixedIndexBatchAndMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeExec := func() *countColumnExec {

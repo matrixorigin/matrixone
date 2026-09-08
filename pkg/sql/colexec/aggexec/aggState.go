@@ -22,6 +22,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2259,10 +2260,14 @@ func (ae *aggExec) batchFillFixedDistinctArgs(
 		if err != nil {
 			return err
 		}
-		if batch.seenOrInsert(group, value) {
+		duplicate, err := batch.seenOrInsert(group, value)
+		if err != nil {
+			return err
+		}
+		if duplicate {
 			continue
 		}
-		duplicate, err := state.distinctIndex.prepare(
+		duplicate, err = state.distinctIndex.prepare(
 			ae.mp, state.allocation, y, value)
 		if err != nil {
 			return err
@@ -2283,6 +2288,23 @@ func (ae *aggExec) batchFillFixedDistinctArgs(
 }
 
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
+	// DISTINCT admission tables are bounded to one hashmap work unit.  BatchFill
+	// is also used directly by BulkFill and a few aggregate tests with a full
+	// vector, so preserve that API by processing large inputs as independent
+	// work units.  The resident index still supplies cross-unit deduplication.
+	if distinct && len(groups) > hashmap.UnitLimit {
+		for start := 0; start < len(groups); start += hashmap.UnitLimit {
+			end := start + hashmap.UnitLimit
+			if end > len(groups) {
+				end = len(groups)
+			}
+			if err := ae.batchFillArgs(
+				offset+start, groups[start:end], vectors, distinct); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if distinct && len(vectors) == 1 {
 		if width := ae.fixedDistinctBatchWidth(groups, vectors[0]); width > 0 {
 			return ae.batchFillFixedDistinctArgs(

@@ -77,20 +77,27 @@ func (batch *distinctFixedBatch) reset() {
 	}
 }
 
-func (batch *distinctFixedBatch) seenOrInsert(group uint64, value uint64) bool {
+func (batch *distinctFixedBatch) seenOrInsert(group uint64, value uint64) (bool, error) {
+	if batch == nil {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
 	const mask = distinctArgumentBatchSlots - 1
 	hash := distinctFixedHash(group, value)
-	for slot := int(hash & mask); ; slot = (slot + 1) & mask {
+	for probes, slot := 0, int(hash&mask); probes < len(batch.groups); probes, slot = probes+1, (slot+1)&mask {
 		storedGroup := batch.groups[slot]
 		if storedGroup == distinctFixedBatchEmptyGroup {
 			batch.groups[slot] = group
 			batch.values[slot] = value
-			return false
+			return false, nil
 		}
 		if storedGroup == group && batch.values[slot] == value {
-			return true
+			return true, nil
 		}
 	}
+	// The caller normally limits a work unit to hashmap.UnitLimit, leaving at
+	// least half of this table empty. Return a controlled error if that
+	// contract is violated instead of spinning forever on a full table.
+	return false, mpool.ErrAllocationAccountInvariant
 }
 
 func distinctFixedIndexWidth(

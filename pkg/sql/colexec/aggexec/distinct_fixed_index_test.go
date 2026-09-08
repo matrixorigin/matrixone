@@ -132,3 +132,15 @@ func TestDistinctFixedIndexProbeStopsOnFullMalformedTable(t *testing.T) {
 	require.False(t, index.lookup(0, 99))
 	require.ErrorIs(t, index.insert(0, 99), mpool.ErrAllocationAccountInvariant)
 }
+
+func TestDistinctFixedBatchProbeStopsOnFullTable(t *testing.T) {
+	var batch distinctFixedBatch
+	batch.reset()
+	for i := range batch.groups {
+		batch.groups[i] = uint64(i)
+		batch.values[i] = uint64(i)
+	}
+
+	_, err := batch.seenOrInsert(1, ^uint64(0))
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+}
