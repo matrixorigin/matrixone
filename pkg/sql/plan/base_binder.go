@@ -5324,15 +5324,31 @@ func bindFuncExprImplByPlanExpr(
 	var argsCastType []types.Type
 
 	// get function definition
+	lookupTypes := argsType
+	if name == "json_quote" && len(args) == 1 {
+		switch {
+		case args[0].GetP() != nil:
+			// PREPARE metadata uses MySQL's maximum VARCHAR character bound. This
+			// synthetic lookup type must not become an execution cast: the direct
+			// ParamRef lets execute-time rebinding consume the complete value.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)}
+		case isNullExpr(args[0]):
+			// A static NULL has zero input characters, so JSON_QUOTE adds only the
+			// two framing quotes to its nullable result bound.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, 0, 0, types.CharsetUTF8)}
+		}
+	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
 	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(
-			ctx, name, argsType, stringDomainModes)
+			ctx, name, lookupTypes, stringDomainModes)
 	} else {
-		fGet, err = function.GetFunctionByName(ctx, name, argsType)
+		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
 	if err != nil {
 		if name == "between" {
@@ -7864,7 +7880,10 @@ func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, e
 		return nil, err
 	}
 	quoted.Typ.NotNullable = expr.Typ.NotNullable
-	return quoted, nil
+	return makePlan2CastExpr(ctx, quoted, plan.Type{
+		Id:          int32(types.T_json),
+		NotNullable: expr.Typ.NotNullable,
+	})
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
