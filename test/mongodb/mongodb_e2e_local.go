@@ -202,6 +202,11 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		return err
 	}
 	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+filterQuery+"' and measurement > 0", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-filter-residual")
+	if err := expectScalar(ctx, db,
 		"select __mo_query from mongodb_ci.events where __mo_query = '"+filterQuery+"'", filterQuery); err != nil {
 		return err
 	}
