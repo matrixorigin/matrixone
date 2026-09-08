@@ -2978,3 +2978,54 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
+	tests := []struct {
+		name         string
+		plannedID    uint64
+		relationName string
+		relationID   uint64
+		tempTables   map[string]string
+	}{
+		{
+			name:         "missing alias cannot fall through to permanent table",
+			plannedID:    2,
+			relationName: "t",
+			relationID:   1,
+			tempTables:   map[string]string{},
+		},
+		{
+			name:         "recreated temporary relation retries",
+			plannedID:    1,
+			relationName: "physical_t",
+			relationID:   2,
+			tempTables:   map[string]string{"test.t": "physical_t"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels[tt.relationName] = &stubRelation{name: tt.relationName, tableID: tt.relationID}
+			eng.dbs["test"] = db
+
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			proc.Session = &trackingTempTableSession{tables: tt.tempTables}
+			c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+					Database: "test",
+					Table:    "t",
+					TableId:  tt.plannedID,
+				}},
+			}}}}
+			err := s.TruncateTable(c)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			require.Contains(t, db.rels, tt.relationName)
+		})
+	}
+}

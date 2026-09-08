@@ -668,7 +668,7 @@ func TestBuildDropViewRejectsBaseTableWithoutIfExists(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadView), err)
 }
 
-func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
+func TestBuildTruncateTemporaryTable(t *testing.T) {
 	for _, prepare := range []bool{false, true} {
 		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table nation", 1)
@@ -678,9 +678,12 @@ func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
 			ctx := NewMockCompilerContext(false)
 			ctx.tables["nation"].IsTemporary = true
 
-			_, err = BuildPlan(ctx, stmt, prepare)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
-			require.Equal(t, "no such table tpch.nation", err.Error())
+			p, err := BuildPlan(ctx, stmt, prepare)
+			require.NoError(t, err)
+			truncate := p.GetDdl().GetTruncateTable()
+			require.Equal(t, "tpch", truncate.GetDatabase())
+			require.Equal(t, "nation", truncate.GetTable())
+			require.Equal(t, ctx.tables["nation"].TblId, truncate.GetTableId())
 		})
 	}
 }
