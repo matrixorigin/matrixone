@@ -501,3 +501,43 @@ func TestStatementDigestTextPreservesBackgroundSQLModeSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestStatementDigestSQLModeResolutionBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		frontend   bool
+		snapshot   string
+		value      interface{}
+		err        error
+		noResolver bool
+		want       string
+	}{
+		{name: "remote snapshot", snapshot: "ANSI_QUOTES", noResolver: true, want: "ANSI_QUOTES"},
+		{name: "background backslash mode", snapshot: "NO_BACKSLASH_ESCAPES", value: "", want: "NO_BACKSLASH_ESCAPES"},
+		{name: "combined modes", snapshot: "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", value: "", want: "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"},
+		{name: "captured explicit empty", snapshot: process.EmptySqlModeSentinel, value: "", want: ""},
+		{name: "resolver explicit empty", snapshot: "ANSI_QUOTES", value: process.EmptySqlModeSentinel, want: ""},
+		{name: "nonempty resolver wins", snapshot: "ANSI_QUOTES", value: "NO_BACKSLASH_ESCAPES", want: "NO_BACKSLASH_ESCAPES"},
+		{name: "resolver error", snapshot: "ANSI_QUOTES", err: fmt.Errorf("unavailable"), want: "ANSI_QUOTES"},
+		{name: "wrong resolver type", snapshot: "ANSI_QUOTES", value: 42, want: "ANSI_QUOTES"},
+		{name: "nil resolver value", snapshot: "ANSI_QUOTES", want: "ANSI_QUOTES"},
+		{name: "empty snapshot", value: "", want: ""},
+		{name: "frontend clear", frontend: true, snapshot: "ANSI_QUOTES", value: "", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.IsFrontend = test.frontend
+			proc.GetSessionInfo().SqlMode = test.snapshot
+			proc.SetResolveVariableFunc(nil)
+			if !test.noResolver {
+				proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", name)
+					require.True(t, system)
+					require.False(t, global)
+					return test.value, test.err
+				})
+			}
+			require.Equal(t, test.want, statementDigestSQLMode(proc))
+		})
+	}
+}
