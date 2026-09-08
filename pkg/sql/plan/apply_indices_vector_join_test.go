@@ -427,11 +427,88 @@ func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
 	require.NotNil(t, vectorScan)
 	require.True(t, reachable[vectorScan.NodeId])
 	require.Len(t, vectorScan.RuntimeFilterProbeList, 1)
+	require.True(t, vectorScan.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, vectorScan.RuntimeFilterProbeList[0].MustApply)
 	buildCount := 0
 	for nodeID := range reachable {
-		buildCount += len(tc.builder.qry.Nodes[nodeID].RuntimeFilterBuildList)
+		for _, spec := range tc.builder.qry.Nodes[nodeID].RuntimeFilterBuildList {
+			buildCount++
+			require.True(t, spec.UseMembershipFilter)
+			require.True(t, spec.MustApply)
+		}
 	}
 	require.Equal(t, 1, buildCount)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_SemiMembershipRemapsCoveringIndexColumns(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	mainScan := tc.builder.qry.Nodes[tc.mainScanNodeID]
+	varcharType := plan.Type{Id: int32(types.T_varchar)}
+	mainScan.TableDef.Cols = append(mainScan.TableDef.Cols,
+		&plan.ColDef{Name: "category", Typ: varcharType},
+		&plan.ColDef{Name: "document_id", Typ: varcharType})
+	mainScan.TableDef.Name2ColIndex["category"] = 2
+	mainScan.TableDef.Name2ColIndex["document_id"] = 3
+	const indexTable = "__mo_index_category_document"
+	mainScan.TableDef.Indexes = append(mainScan.TableDef.Indexes, &plan.IndexDef{
+		IndexName:      "idx_category_document",
+		IndexAlgo:      "btree",
+		IndexTableName: indexTable,
+		TableExist:     true,
+		Parts:          []string{"category", "document_id", catalog.CreateAlias("id")},
+	})
+	mainScan.FilterList = []*plan.Expr{
+		newVectorJoinConstEqFilter(mainScan.BindingTags[0], 2, "category", varcharType),
+	}
+	membershipNode := tc.builder.qry.Nodes[tc.builder.qry.Nodes[tc.projNode.Children[0]].Children[0]]
+	providerScan := tc.builder.qry.Nodes[tc.providerNodeID]
+	membershipNode.OnList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{
+				newVectorJoinColExpr(mainScan.BindingTags[0], 3, "document_id", varcharType),
+				newVectorJoinColExpr(providerScan.BindingTags[0], 0, "id", varcharType),
+			},
+		}},
+	}}
+	mockCtx := tc.builder.compCtx.(*customMockCompilerContext)
+	mockCtx.tables[indexTable] = &plan.TableDef{
+		Name: indexTable,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: varcharType},
+			{Name: catalog.IndexTablePrimaryColName, Typ: varcharType},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: "db", ObjName: indexTable}
+
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+	pluginCtx, pluginIndex := toPlanplugin(vecCtx, newVectorJoinIvfIndex())
+	_, applied, err := tc.builder.ApplyIndicesForSortUsingIvfflat(
+		pluginCtx, pluginIndex, tc.projNodeID, planplugin.ApplyForSortOpts{
+			ColRefCnt: map[[2]int32]int{},
+			IdxColMap: map[[2]int32]*plan.Expr{},
+		})
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	producer := findReachableSemiJoinWithRight(tc.builder.qry, tc.projNodeID, tc.providerNodeID)
+	require.NotNil(t, producer)
+	indexedInput := tc.builder.qry.Nodes[producer.Children[0]]
+	require.Equal(t, plan.Node_TABLE_SCAN, indexedInput.NodeType)
+	require.Equal(t, "idx_category_document", indexedInput.IndexScanInfo.IndexName)
+	availableTags := tc.builder.collectBindingTags(producer)
+	for _, expr := range producer.OnList {
+		require.True(t, exprRefsOnlyAvailableTags(expr, availableTags),
+			"membership expression must reference the optimized input's actual output")
+	}
+	leftKey := producer.OnList[0].GetF().Args[0]
+	require.NotNil(t, leftKey.GetF(), "document_id must be remapped to the composite index expression")
 }
 
 func TestApplyLogicalVectorIndexForSortContext_SemiMembershipUsesIvf(t *testing.T) {
@@ -469,6 +546,30 @@ func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsNonIvfIndex(t *t
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes = newVectorJoinTableDef(true, false).Indexes
 	require.Nil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode))
+}
+
+func exprRefsOnlyAvailableTags(expr *plan.Expr, available map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+	if col := expr.GetCol(); col != nil {
+		return available[col.RelPos]
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if !exprRefsOnlyAvailableTags(arg, available) {
+				return false
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if !exprRefsOnlyAvailableTags(item, available) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func findReachableSemiJoinWithRight(query *plan.Query, rootID, rightID int32) *plan.Node {

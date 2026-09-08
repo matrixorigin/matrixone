@@ -80,24 +80,28 @@ v01  ¦  cat1  ¦  5.0  𝄀
 v02  ¦  cat1  ¦  4.5
 create table ivf_semi_chunks (
 id int primary key,
+category varchar(64) not null,
 document_id varchar(64) not null,
 embedding vecf32(2)
 );
 insert into ivf_semi_chunks values
-(1, 'ineligible', '[0.0,0.0]'),
-(2, 'ineligible', '[0.1,0.1]'),
-(3, 'ineligible', '[0.2,0.2]'),
-(4, 'eligible',   '[1.0,1.0]'),
-(5, 'eligible',   '[2.0,2.0]');
+(1, 'cat1', 'ineligible', '[0.0,0.0]'),
+(2, 'cat1', 'ineligible', '[0.1,0.1]'),
+(3, 'cat1', 'ineligible', '[0.2,0.2]'),
+(4, 'cat1', 'eligible',   '[1.0,1.0]'),
+(5, 'cat1', 'eligible',   '[2.0,2.0]');
 create table ivf_semi_filters (document_id varchar(64));
 insert into ivf_semi_filters values ('eligible'), ('eligible'), (null);
+create index idx_semi_category on ivf_semi_chunks(category);
 create index idx_semi using ivfflat on ivf_semi_chunks(embedding) lists=1 op_type 'vector_l2_ops';
 explain select c.id from ivf_semi_chunks c
-where c.document_id in (select f.document_id from ivf_semi_filters f)
+where c.category = 'cat1'
+and c.document_id in (select f.document_id from ivf_semi_filters f)
 and l2_distance(c.embedding, '[0.0,0.0]') <= 10
 order by l2_distance(c.embedding, '[0.0,0.0]')
 limit 1 by rank with option 'mode=pre';
 -- @regex("Vector Index Scan", true)
+-- @regex("Index Table Scan.*idx_semi_category", true)
 ➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -105,24 +109,44 @@ Project  𝄀
         Limit: 1  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (c.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on ivf_membership.ivf_semi_chunks  𝄀
-                    Runtime Filter Probe: c.id  𝄀
+              Join Cond: (__mo_index_pri_col = #[1,0])  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (__mo_index_pri_col = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Index Table Scan on ivf_semi_chunks.idx_semi_category [ForceOneCN]  𝄀
+                          Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'cat1')  𝄀
+                          Runtime Filter Probe: __mo_index_pri_col  𝄀
+                    ->  Index Table Scan on ivf_semi_chunks.idx_semi_category [ForceOneCN]  𝄀
+                          Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
               ->  Join  𝄀
                     Join Type: SEMI  𝄀
                     Join Cond: (#[0,0] = ivf_semi_chunks.id)  𝄀
-                    Runtime Filter Build: #[17,0]  𝄀
+                    Runtime Filter Build: #[18,0]  𝄀
                     ->  Vector Index Scan on idx_semi [l2_distance]  𝄀
                           Runtime Filter Probe: #[15,0]  𝄀
                           Vector Index: idx_semi, Metric: l2_distance, Candidate Limit: 1, NProbe: 5  𝄀
                     ->  Join  𝄀
                           Join Type: SEMI  𝄀
                           Join Cond: (ivf_semi_chunks.document_id = f.document_id)  𝄀
-                          ->  Table Scan on ivf_membership.ivf_semi_chunks  𝄀
+                          ->  Join  𝄀
+                                Join Type: INDEX  𝄀
+                                Join Cond: (ivf_semi_chunks.id = __mo_index_pri_col)  𝄀
+                                ->  Join  𝄀
+                                      Join Type: INDEX  𝄀
+                                      Join Cond: (ivf_semi_chunks.id = __mo_index_pri_col)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on ivf_membership.ivf_semi_chunks [ForceOneCN]  𝄀
+                                            Filter Cond: (ivf_semi_chunks.category = 'cat1')  𝄀
+                                            Runtime Filter Probe: ivf_semi_chunks.id  𝄀
+                                      ->  Index Table Scan on ivf_semi_chunks.idx_semi_category [ForceOneCN]  𝄀
+                                            Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                                ->  Index Table Scan on ivf_semi_chunks.idx_semi_category  𝄀
+                                      Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
                           ->  Table Scan on ivf_membership.ivf_semi_filters
 select c.id from ivf_semi_chunks c
-where c.document_id in (select f.document_id from ivf_semi_filters f)
+where c.category = 'cat1'
+and c.document_id in (select f.document_id from ivf_semi_filters f)
 and l2_distance(c.embedding, '[0.0,0.0]') <= 10
 order by l2_distance(c.embedding, '[0.0,0.0]')
 limit 1 by rank with option 'mode=pre';
