@@ -8111,7 +8111,7 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 // Reads the first 4 bytes (little-endian) from the compressed string
 func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[int32](result)
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -8138,7 +8138,7 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 		}
 
 		originalLen := binary.LittleEndian.Uint32(data[0:4]) & mysqlCompressedLengthMask
-		if err := rs.Append(int64(originalLen), false); err != nil {
+		if err := rs.Append(int32(originalLen), false); err != nil {
 			return err
 		}
 	}

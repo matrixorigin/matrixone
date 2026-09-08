@@ -99,132 +99,159 @@ func vectorTopDistOf[T types.ArrayElement](numVec []byte, m metric.MetricType) (
 	}, nil
 }
 
-// TopNVector computes the vector-index TopN result without taking ownership of
-// vecCol. Callers must keep vecCol's backing storage alive for this call.
-func TopNVector(
-	ctx context.Context,
-	selectRows []int64,
-	vecCol *vector.Vector,
-	orderByLimit *IndexReaderTopOp,
-) ([]int64, []float64, error) {
-	if vecCol == nil || orderByLimit == nil {
-		return nil, nil, moerr.NewInvalidInputNoCtx("nil vector topn input")
-	}
-	if selectRows == nil {
-		selectRows = make([]int64, vecCol.Length())
-		for i := range selectRows {
-			selectRows[i] = int64(i)
-		}
-	}
+// vectorTopAccumulator owns one column's bounded candidate state. Its distance
+// heap remains reader-wide, while result rows/ordinals are block-global.
+type vectorTopAccumulator struct {
+	order       *IndexReaderTopOp
+	limit       int
+	distOf      func([]byte) (float64, error)
+	rangeActive bool
+	emptyRange  bool
+	results     vectorTopResultHeap
+}
 
-	topLimit, err := vectorTopLimit(ctx, orderByLimit.Limit)
+func newVectorTopAccumulator(ctx context.Context, order *IndexReaderTopOp, candidates int) (vectorTopAccumulator, error) {
+	a := vectorTopAccumulator{order: order}
+	if order == nil {
+		return a, moerr.NewInvalidInputNoCtx("nil vector topn input")
+	}
+	var err error
+	a.limit, err = vectorTopLimit(ctx, order.Limit)
 	if err != nil {
-		return nil, nil, err
+		return a, err
 	}
-	// Keep row/distance pairs in a second bounded heap. DistHeap contains only
-	// distances because it is shared by block reads; recording every accepted
-	// candidate here would grow to O(N) for descending input.
-	searchResults := make(vectorTopResultHeap, 0, min(len(selectRows), topLimit))
-	nullsBm := vecCol.GetNulls()
-	rangeActive := orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED ||
-		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED
-	if orderByLimit.LowerBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(orderByLimit.LowerBound) ||
-		orderByLimit.UpperBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(orderByLimit.UpperBound) {
-		orderByLimit.DistHeap = orderByLimit.DistHeap[:0]
-		return []int64{}, []float64{}, nil
+	a.rangeActive = order.LowerBoundType != plan.BoundType_UNBOUNDED ||
+		order.UpperBoundType != plan.BoundType_UNBOUNDED
+	if order.LowerBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(order.LowerBound) ||
+		order.UpperBoundType != plan.BoundType_UNBOUNDED && math.IsNaN(order.UpperBound) {
+		order.DistHeap = order.DistHeap[:0]
+		a.emptyRange = true
+		return a, nil
 	}
-
-	var distOf func(colBytes []byte) (float64, error)
-	switch orderByLimit.Typ {
+	switch order.Typ {
 	case types.T_array_float32:
-		distOf, err = vectorTopDistOf[float32](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[float32](order.NumVec, order.MetricType)
 	case types.T_array_float64:
-		distOf, err = vectorTopDistOf[float64](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[float64](order.NumVec, order.MetricType)
 	case types.T_array_bf16:
-		distOf, err = vectorTopDistOf[types.BF16](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[types.BF16](order.NumVec, order.MetricType)
 	case types.T_array_float16:
-		distOf, err = vectorTopDistOf[types.Float16](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[types.Float16](order.NumVec, order.MetricType)
 	case types.T_array_int8:
-		distOf, err = vectorTopDistOf[int8](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[int8](order.NumVec, order.MetricType)
 	case types.T_array_uint8:
-		distOf, err = vectorTopDistOf[uint8](orderByLimit.NumVec, orderByLimit.MetricType)
+		a.distOf, err = vectorTopDistOf[uint8](order.NumVec, order.MetricType)
 	default:
-		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf(
-			"only support float32/float64/bf16/float16/int8/uint8 type for topn: %s",
-			orderByLimit.Typ,
-		))
+		err = moerr.NewInternalErrorf(ctx, "only support float32/float64/bf16/float16/int8/uint8 type for topn: %s", order.Typ)
 	}
 	if err != nil {
-		return nil, nil, err
+		return a, err
 	}
+	a.results = make(vectorTopResultHeap, 0, min(candidates, a.limit))
+	return a, nil
+}
 
-	for ordinal, row := range selectRows {
-		// Do not compact selectRows in place: callers may still need the physical
-		// row mapping after TopN returns.
-		if row < 0 || row >= int64(vecCol.Length()) || nullsBm.Contains(uint64(row)) {
+// consume borrows one vector. Non-nil selections contain block-global rows;
+// ordinalBase is their starting position in the original selection. A nil
+// selection visits all local rows without allocating an all-row index slice.
+func (a *vectorTopAccumulator) consume(ctx context.Context, vec *vector.Vector, rowBase int64, selected []int64, ordinalBase int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a.emptyRange {
+		return nil
+	}
+	order := a.order
+	count := vec.Length()
+	if selected != nil {
+		count = len(selected)
+	}
+	nulls := vec.GetNulls()
+	for i := 0; i < count; i++ {
+		localRow := int64(i)
+		row := rowBase + localRow
+		if selected != nil {
+			row = selected[i]
+			localRow = row - rowBase
+		}
+		if localRow < 0 || localRow >= int64(vec.Length()) || nulls.Contains(uint64(localRow)) {
 			continue
 		}
-		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
+		dist, err := a.distOf(vec.GetBytesAt(int(localRow)))
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
-		if rangeActive && math.IsNaN(dist64) {
+		if a.rangeActive && math.IsNaN(dist) {
 			continue
 		}
-
-		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 < orderByLimit.LowerBound {
+		if order.LowerBoundType == plan.BoundType_INCLUSIVE {
+			if dist < order.LowerBound {
 				continue
 			}
-		} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 <= orderByLimit.LowerBound {
-				continue
-			}
-		}
-		if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 > orderByLimit.UpperBound {
-				continue
-			}
-		} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 >= orderByLimit.UpperBound {
+		} else if order.LowerBoundType == plan.BoundType_EXCLUSIVE {
+			if dist <= order.LowerBound {
 				continue
 			}
 		}
-
-		if len(orderByLimit.DistHeap) >= topLimit {
-			if dist64 < orderByLimit.DistHeap[0] {
-				orderByLimit.DistHeap[0] = dist64
-				heap.Fix(&orderByLimit.DistHeap, 0)
+		if order.UpperBoundType == plan.BoundType_INCLUSIVE {
+			if dist > order.UpperBound {
+				continue
+			}
+		} else if order.UpperBoundType == plan.BoundType_EXCLUSIVE {
+			if dist >= order.UpperBound {
+				continue
+			}
+		}
+		if len(order.DistHeap) >= a.limit {
+			if dist < order.DistHeap[0] {
+				order.DistHeap[0] = dist
+				heap.Fix(&order.DistHeap, 0)
 			} else {
 				continue
 			}
 		} else {
-			heap.Push(&orderByLimit.DistHeap, dist64)
+			heap.Push(&order.DistHeap, dist)
 		}
-
-		retainVectorTopResult(&searchResults, topLimit, vectorTopResult{
-			row: row, distance: dist64, ordinal: ordinal,
+		retainVectorTopResult(&a.results, a.limit, vectorTopResult{
+			row: row, distance: dist, ordinal: ordinalBase + i,
 		})
 	}
+	return nil
+}
 
-	if len(orderByLimit.DistHeap) == 0 {
+func (a *vectorTopAccumulator) finish() ([]int64, []float64, error) {
+	if len(a.order.DistHeap) == 0 {
 		return []int64{}, []float64{}, nil
 	}
-	cutoff := orderByLimit.DistHeap[0]
-	searchResults = slices.DeleteFunc(searchResults, func(res vectorTopResult) bool {
-		return res.distance > cutoff
-	})
-	slices.SortFunc(searchResults, func(left, right vectorTopResult) int {
-		return left.ordinal - right.ordinal
-	})
-
-	sels := make([]int64, len(searchResults))
-	dists := make([]float64, len(searchResults))
-	for i, res := range searchResults {
-		sels[i] = res.row
-		dists[i] = res.distance
+	cutoff := a.order.DistHeap[0]
+	a.results = slices.DeleteFunc(a.results, func(res vectorTopResult) bool { return res.distance > cutoff })
+	slices.SortFunc(a.results, func(left, right vectorTopResult) int { return left.ordinal - right.ordinal })
+	rows := make([]int64, len(a.results))
+	distances := make([]float64, len(a.results))
+	for i, res := range a.results {
+		rows[i], distances[i] = res.row, res.distance
 	}
-	return sels, dists, nil
+	return rows, distances, nil
+}
+
+// TopNVector computes the vector-index TopN result without taking ownership of
+// vecCol. Callers must keep vecCol's backing storage alive for this call.
+func TopNVector(ctx context.Context, selectRows []int64, vecCol *vector.Vector, orderByLimit *IndexReaderTopOp) ([]int64, []float64, error) {
+	if vecCol == nil || orderByLimit == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx("nil vector topn input")
+	}
+	count := vecCol.Length()
+	if selectRows != nil {
+		count = len(selectRows)
+	}
+	acc, err := newVectorTopAccumulator(ctx, orderByLimit, count)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = acc.consume(ctx, vecCol, 0, selectRows, 0); err != nil {
+		return nil, nil, err
+	}
+	return acc.finish()
 }
 
 // SearchCachedVectorTopN computes TopN while the caller-held IOEntry cache
