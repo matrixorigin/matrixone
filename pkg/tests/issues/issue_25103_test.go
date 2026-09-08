@@ -47,8 +47,11 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 
 		dbName := testutils.GetDatabaseName(t)
 		schemaName := strings.ToLower(dbName)
+		decoyDBName := dbName + "_decoy"
 		execSQLRequire(t, ctx, db, "create database `"+dbName+"`")
 		defer execSQLMaybe(t, ctx, db, "drop database if exists `"+dbName+"`")
+		execSQLRequire(t, ctx, db, "create database `"+decoyDBName+"`")
+		defer execSQLMaybe(t, ctx, db, "drop database if exists `"+decoyDBName+"`")
 
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.parent (id int primary key)")
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.child ("+
@@ -59,6 +62,13 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 			"c_year year, "+
 			"c_time time(6), c_datetime datetime(3), c_timestamp timestamp(6), "+
 			"constraint fk_parent foreign key (pid) references `"+dbName+"`.parent(id))")
+		// A same-named foreign key in a different schema exposes an omitted
+		// CONSTRAINT_SCHEMA in metadata joins.
+		execSQLRequire(t, ctx, db, "create table `"+decoyDBName+"`.parent "+
+			"(id int, constraint uk_parent unique (id))")
+		execSQLRequire(t, ctx, db, "create table `"+decoyDBName+"`.child "+
+			"(id int primary key, pid int, constraint fk_parent foreign key (pid) "+
+			"references `"+decoyDBName+"`.parent(id) on delete cascade)")
 		// Scientific literals and their function results use the ordinary
 		// FLOAT/DOUBLE type shape (width 0, scale 0), not FLOAT(M,D).
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.derived_float as "+
@@ -160,5 +170,31 @@ where B.constraint_type = 'FOREIGN KEY'
 		require.Equal(t, int64(1), ordinalPosition)
 		require.Equal(t, "fk_parent", constraintName)
 		require.Equal(t, "PRIMARY", uniqueConstraintName)
+
+		// Exercise a metadata join that omits CONSTRAINT_SCHEMA and assert that
+		// the target schema has one imported key rather than duplicated rows.
+		metadataRows, err := db.QueryContext(ctx, `
+select distinct A.referenced_table_schema, A.referenced_table_name,
+       A.referenced_column_name, A.table_schema, A.table_name,
+       A.column_name, A.ordinal_position, A.constraint_name,
+       R.unique_constraint_name, R.update_rule, R.delete_rule
+from information_schema.key_column_usage A
+join information_schema.table_constraints B
+  using (constraint_name, table_name)
+join information_schema.referential_constraints R
+  on R.constraint_name = B.constraint_name
+ and R.table_name = B.table_name
+ and R.constraint_schema = B.table_schema
+where B.constraint_type = 'FOREIGN KEY'
+  and A.table_schema = ? and A.table_name = ?
+  and A.referenced_table_schema is not null`, schemaName, "child")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, metadataRows.Close()) }()
+		metadataRowCount := 0
+		for metadataRows.Next() {
+			metadataRowCount++
+		}
+		require.NoError(t, metadataRows.Err())
+		require.Equal(t, 1, metadataRowCount)
 	})
 }
