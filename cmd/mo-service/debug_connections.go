@@ -29,10 +29,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func init() {
-	startConnectionTracking()
-}
-
 const (
 	connsThreshold = 1024
 )
