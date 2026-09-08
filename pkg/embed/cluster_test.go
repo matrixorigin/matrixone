@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -810,7 +811,7 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 	require.Equal(t, int32(1), tnFS.closeCount.Load())
 }
 
-func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
+func TestClusterCloseStopsAtServiceError(t *testing.T) {
 	first := &closeTrackingService{}
 	secondErr := errors.New("close second")
 	second := &closeTrackingService{closeErr: secondErr}
@@ -831,7 +832,10 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 
 	err = c.Close()
 	require.ErrorIs(t, err, secondErr)
-	require.Equal(t, int32(1), first.closeCount.Load())
+	// Services are ordered [dependency, dependent] and closed in reverse.
+	// If the dependent close fails, the dependency must remain available for
+	// accepted handlers and recovery.
+	require.Equal(t, int32(0), first.closeCount.Load())
 	require.Equal(t, int32(1), second.closeCount.Load())
 	require.Equal(t, stopped, c.state)
 	require.NotNil(t, c.testAdmission)
@@ -840,6 +844,84 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(1), first.closeCount.Load())
 	require.Equal(t, int32(2), second.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+}
+
+func TestOperatorClosePreservesDependenciesAfterServiceDrainFailure(t *testing.T) {
+	closeErr := rpc.ErrTxnDrainTimeout
+	svc := &closeTrackingService{closeErr: closeErr}
+	fs := &closeTrackingFileService{}
+	stop := stopper.NewStopper("operator-close-drain")
+	taskStopped := make(chan struct{})
+	require.NoError(t, stop.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		close(taskStopped)
+	}))
+
+	op := &operator{state: started}
+	op.reset.svc = svc
+	op.reset.stopper = stop
+	op.reset.fs = fs
+
+	require.ErrorIs(t, op.Close(), closeErr)
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.Equal(t, int32(0), fs.closeCount.Load())
+	require.True(t, op.needsCleanup())
+	select {
+	case <-taskStopped:
+		t.Fatal("operator stopper closed after service drain failure")
+	default:
+	}
+
+	svc.closeErr = nil
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.False(t, op.needsCleanup())
+	select {
+	case <-taskStopped:
+	case <-time.After(time.Second):
+		t.Fatal("operator stopper was not closed after successful retry")
+	}
+}
+
+func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
+	logService := &closeTrackingService{}
+	logFS := &closeTrackingFileService{}
+	logOp := &operator{state: started}
+	logOp.reset.svc = logService
+	logOp.reset.fs = logFS
+
+	tnService := &closeTrackingService{closeErr: rpc.ErrTxnDrainTimeout}
+	tnFS := &closeTrackingFileService{}
+	tnOp := &operator{state: started}
+	tnOp.reset.svc = tnService
+	tnOp.reset.fs = tnFS
+
+	c := &cluster{
+		state:    started,
+		services: []*operator{logOp, tnOp},
+	}
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.AllowConcurrent,
+	)
+	require.NoError(t, err)
+	c.testAdmission = admission
+
+	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
+	require.Equal(t, int32(0), logService.closeCount.Load())
+	require.Equal(t, int32(0), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnService.closeCount.Load())
+	require.Equal(t, int32(0), tnFS.closeCount.Load())
+	require.True(t, tnOp.needsCleanup())
+	require.NotNil(t, c.testAdmission)
+
+	tnService.closeErr = nil
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(2), tnService.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
 	require.Nil(t, c.testAdmission)
 }
 
