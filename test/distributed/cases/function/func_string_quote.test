@@ -20,6 +20,15 @@ SELECT HEX(QUOTE(CONCAT('a', CHAR(26), 'b'))) AS ctrl_z;
 SELECT QUOTE(NULL) AS null_input;
 SELECT HEX(QUOTE(NULL)) AS null_input_hex;
 
+# The NULL result is four bytes even for a zero-width nullable source. Keep
+# this CTAS boundary explicit so inferred metadata cannot understate the value.
+CREATE TABLE quote_zero_src(s VARCHAR(0));
+INSERT INTO quote_zero_src VALUES (NULL);
+CREATE TABLE quote_zero_dst AS SELECT QUOTE(s) AS q FROM quote_zero_src;
+SELECT q, OCTET_LENGTH(q) AS q_bytes FROM quote_zero_dst;
+DROP TABLE quote_zero_dst;
+DROP TABLE quote_zero_src;
+
 # Table usage
 CREATE TABLE t1(str VARCHAR(50));
 INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path'), (NULL);
