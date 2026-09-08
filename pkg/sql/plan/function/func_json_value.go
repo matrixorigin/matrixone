@@ -97,10 +97,7 @@ func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
 	if err := value.Unmarshal(data); err != nil {
 		return bytejson.Null, err
 	}
-	// Unmarshal intentionally remains a zero-copy storage decoder. MarshalJSON
-	// walks every offset and validates the shape while preserving the same
-	// representation for execution.
-	if _, err := value.MarshalJSON(); err != nil {
+	if err := bytejson.ValidateStoredJSONDocument(value); err != nil {
 		return bytejson.Null, err
 	}
 	return value, nil
@@ -223,10 +220,11 @@ func jsonValueExtract(
 		var decodeErr error
 		value, decodeErr = decodeJSONValueStored(doc)
 		if decodeErr != nil {
-			return jsonValueExtracted{state: jsonValueSourceParseError, path: pathString, err: decodeErr}
-		}
-		if err := bytejson.ValidateJSONDocumentDepth(value); err != nil {
-			return jsonValueExtracted{state: jsonValueHardError, path: pathString, err: err}
+			state := jsonValueSourceParseError
+			if bytejson.IsJSONDocumentDepthError(decodeErr) {
+				state = jsonValueHardError
+			}
+			return jsonValueExtracted{state: state, path: pathString, err: decodeErr}
 		}
 	} else {
 		value, err = types.ParseSliceToByteJsonWithDepthLimit(doc, bytejson.JSONDocumentMaxNestingDepth)
@@ -709,7 +707,7 @@ func parseJSONValueFloat32(e jsonValueExtracted, _ types.Type) (float32, error) 
 		return 0, err
 	}
 	v, err := strconv.ParseFloat(s, 32)
-	if err != nil || math.IsInf(v, 0) {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, moerr.NewOutOfRangeNoCtxf("FLOAT", "JSON_VALUE value %q", s)
 	}
 	return float32(v), nil
@@ -721,7 +719,7 @@ func parseJSONValueFloat64(e jsonValueExtracted, _ types.Type) (float64, error) 
 		return 0, err
 	}
 	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsInf(v, 0) {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, moerr.NewOutOfRangeNoCtxf("DOUBLE", "JSON_VALUE value %q", s)
 	}
 	return v, nil
