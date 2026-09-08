@@ -116,3 +116,54 @@ hooks must not enter the final diff. No dataset download or remote dispatch.
 Merge newest authoritative main immediately before each push to `aunjgr`. Keep
 implementation content in the PR's commit-message section and measurements in
 its validation section.
+
+## Implementation evidence
+
+The reader and shared accumulator are implemented without changes to FileService,
+the encoding, writer rollout or native allocator. Whole-vector and chunked reads
+use the same ranking loop. The permanent small fixtures persist valid tiny chunks
+through ObjectWriter metadata, without changing production chunk-size constants.
+
+| Change closure | Risk | Evidence |
+|---|---|---|
+| Incremental ranking | R3: hot path, cross-chunk reader heap | Golden cross-chunk ties/displacement/selections/ranges, all six vector kinds, existing TopN tests; 64 deterministic cases compared bit-for-bit with the exact main ranking function. |
+| Chunk read/ownership | R3: scoped shared data, errors and Close | Whole-cache/legacy controls, directory/payload/row/type corruption, partial errors, cancellation, >4 GiB absolute offsets, skipped corrupt payload, concurrent different queries and Close; one outstanding read at a time and sharing reservations drained. |
+| ioutil and block-reader consumers | R2: unchanged owned result interface | ObjectIO/ioutil and persisted block-reader suites, including existing tombstone/residual-filter mapping cases. |
+| SQL contract | R2: unchanged consumer behavior | Existing vector_ivf_topk_consumers BVT passed twice, 58/58 statements per run, with database teardown checked after each run. No expected results regenerated. |
+
+Normal package and race checks cover ObjectIO, ObjectIO/ioutil and blockio.
+The sharing/Close test was measured at 0.04 seconds under race, then passed 100
+repetitions in one process. Production SIMD-mode package checks are also run.
+The BVT service was test-owned and stopped after validation. The tester's result
+path parser cannot handle dots in parent directory names, so the unchanged
+case/result pair was staged in a dot-free temporary path for comparison.
+
+Five-run benchmark medians, Linux amd64, Go 1.26.4, GOAMD64=v3,
+GOEXPERIMENT=simd, main `4b43f8c99b` versus the candidate:
+
+| Workload | Main elapsed / CPU per read | Candidate elapsed / CPU per read |
+|---|---:|---:|
+| Whole decoded-cache hit | 333.9 / 347.8 us | 308.9 / 308.5 us |
+| Legacy LZ4 under cache pressure | 649.0 / 650.5 us | 615.1 / 614.0 us |
+| Four chunks, all rows, disk cache warm | 5.923 / 17.965 ms | 1.234 / 1.242 ms |
+| Four chunks, selection in one chunk | 5.584 / 17.201 ms | 0.392 / 0.397 ms |
+| Four chunks, local backing store without disk cache | 6.524 / 19.620 ms | 2.397 / 5.642 ms |
+
+The fixture is 4,096 synthetic 768-dimensional vectors, split into four existing-
+format chunks with both LZ4 and uncompressed payloads. The 8 MiB memory-cache
+budget is pinned in pressure cases; the hot-cache control uses 64 MiB. Setup is
+outside timed loops. CPU includes the process's GC work, so it can exceed elapsed
+time. These are scoped ObjectIO measurements, not SQL QPS or Wiki-10M results.
+
+For the all-row pressure case, Go allocation volume fell from 61.4 MB/read to
+14.8 KB/read. The largest returned decoded allocation fell from 16 MiB to 4 MiB;
+this is not a claim that total process RSS equals those amounts. Requested data
+was essentially unchanged, but FileService.Read calls increased from one to six
+(two directory reads and four chunks). Those counters describe logical calls,
+not network requests; no remote-storage latency result is claimed. Both control
+medians meet the no-greater-than-5% regression gate.
+
+The main control used the unchanged whole-column read/converter and a temporary
+copy of main's exact TopNVector function; shared helpers/native dependencies
+were unchanged. That temporary control also supplied the differential oracle.
+It was archived outside the repository and removed before final validation.
