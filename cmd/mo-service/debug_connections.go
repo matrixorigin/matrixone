@@ -37,6 +37,15 @@ var (
 	conntrackReportInterval = time.Second * 5
 )
 
+type conntrackClient interface {
+	Close() error
+	Listen(chan<- conntrack.Event, uint8, []netfilter.NetlinkGroup) (chan error, error)
+}
+
+var dialConntrack = func() (conntrackClient, error) {
+	return conntrack.Dial(nil)
+}
+
 func startConnectionTracking() (err error) {
 	defer func() {
 		if err != nil {
@@ -44,7 +53,7 @@ func startConnectionTracking() (err error) {
 		}
 	}()
 
-	c, err := conntrack.Dial(nil)
+	c, err := dialConntrack()
 	if err != nil {
 		return err
 	}
