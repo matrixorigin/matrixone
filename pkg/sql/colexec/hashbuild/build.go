@@ -1459,6 +1459,17 @@ func (hashBuild *HashBuild) fallbackOptionalRuntimeFilter(
 	if kind == runtimefilter.OptionalFallbackNone {
 		return false
 	}
+	if spec.MustApply {
+		// Publish a terminal message so the probe side cannot remain blocked, but
+		// preserve the admission/allocation error: a required semantic input must
+		// never be converted into a successful optional PASS fallback.
+		*runtimeFilter = message.RuntimeFilterMessage{
+			Tag: spec.Tag,
+			Typ: message.RuntimeFilter_PASS,
+		}
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return false
+	}
 
 	if hashBuild.OpAnalyzer != nil {
 		stats := hashBuild.OpAnalyzer.GetOpStats()

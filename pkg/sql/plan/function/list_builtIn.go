@@ -12976,6 +12976,12 @@ var supportedOthersBuiltIns = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
 				newOp:      func() executeLogicOfOverload { return ToInterval },
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
 		},
 	},
 

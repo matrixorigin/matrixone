@@ -33,7 +33,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
-// the MySQL `REPLACE ... TABLE tbl` source form.
+// MySQL TABLE query terms and their REPLACE source form.
 func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
     return &tree.SelectClause{
         Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
@@ -721,7 +721,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens perform_select replace_table_source
+%type <select> select_stmt select_no_parens perform_select table_stmt
 %type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
@@ -5939,20 +5939,6 @@ replace_data:
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   replace_table_source
-    {
-        $$ = &tree.Replace{
-            Rows: $1,
-        }
-    }
-|   '(' insert_column_list ')' replace_table_source
-    {
-        $$ = &tree.Replace{
-            Columns: $2.Identifiers,
-            ColumnNames: $2.Names,
-            Rows: $4,
-        }
-    }
 |   select_stmt
     {
         $$ = &tree.Replace{
@@ -6005,14 +5991,6 @@ replace_data:
 			IsSetFormat: true,
 		}
 	}
-
-replace_table_source:
-    TABLE table_name order_by_opt query_limit_opt
-    {
-        // MySQL treats TABLE as a query source, so ORDER BY and pagination
-        // belong to the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
-        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
-    }
 
 insert_stmt:
     insert_no_with_stmt
@@ -6715,8 +6693,30 @@ force_quote_list:
         $$ = append($1, $3.Compare())
     }
 
+// MySQL permits TABLE as a top-level query statement. Keep it separate from
+// simple_select so TABLE query terms can be composed with UNION without
+// introducing reduce/reduce conflicts.
+table_stmt:
+    table_query_expr order_by_opt query_limit_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: tree.SelectIntoExportOr($1, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+
 select_stmt:
     select_no_parens
+|   table_stmt
+    {
+        $$ = $1
+    }
 |   select_with_parens
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
@@ -7315,8 +7315,9 @@ simple_select:
     {
         $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
     }
-// TABLE is a query term in MySQL. Keep it separate from replace_table_source,
-// and preserve top-level VALUES as the existing ValuesStatement AST.
+// TABLE is a query term in MySQL. Keep it separate from the ordinary
+// simple-select path, and preserve top-level VALUES as the existing
+// ValuesStatement AST.
 table_query_subquery:
     '(' table_query_expr order_by_opt query_limit_opt ')'
     {
