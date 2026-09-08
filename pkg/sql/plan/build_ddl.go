@@ -4769,13 +4769,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
-		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
-		// not supported for temporary tables. Reject the visible temporary table
-		// here so execution can never fall through to the hidden permanent table.
-		if tableDef.GetIsTemporary() {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-		}
-
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
