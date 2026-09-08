@@ -71,7 +71,7 @@ func NewCDCStatementBuilder(
 		maxSQLSize: maxSQLSize,
 	}
 	qualifiedTable := quoteSQLIdentifier(dbName) + "." + quoteSQLIdentifier(tableName)
-	var insertColNames []string
+	insertColNames := make([]string, 0, len(tableDef.Cols))
 
 	// Extract column types (excluding internal columns)
 	for i, col := range tableDef.Cols {
@@ -152,7 +152,7 @@ func quoteSQLIdentifier(raw string) string {
 }
 
 func buildUpsertSuffix(colNames []string) []byte {
-	var suffix []byte
+	suffix := make([]byte, 0, 32*len(colNames)+len(" ON DUPLICATE KEY UPDATE ")+1)
 	suffix = append(suffix, " ON DUPLICATE KEY UPDATE "...)
 	for i, name := range colNames {
 		if i > 0 {
