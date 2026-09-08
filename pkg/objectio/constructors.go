@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -544,7 +545,35 @@ func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int6
 		if sorted {
 			return vector.VarlenBinarySearchOffsetByValFactory(t.values)(source)
 		}
-		return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+		const linearKeys = 8
+		if len(t.values) <= linearKeys {
+			return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+		}
+		// Only the needles are sorted. In particular, tombstone PK columns
+		// follow rowid order and cannot be binary-searched. Reuse the already
+		// owned/sorted needles instead of doing rows*keys comparisons or
+		// allocating another lookup structure for every block. Keep a short
+		// linear prefix so frequently matching early keys retain the old
+		// constant-time best case instead of paying log(keys) for every row.
+		col, area := vector.MustVarlenaRawData(source)
+		var rows []int64
+		for row := 0; row < source.Length(); row++ {
+			value := col[row].GetByteSlice(area)
+			found := false
+			for _, needle := range t.values[:linearKeys] {
+				if bytes.Equal(needle, value) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				_, found = slices.BinarySearchFunc(t.values[linearKeys:], value, bytes.Compare)
+			}
+			if found {
+				rows = append(rows, int64(row))
+			}
+		}
+		return rows
 	case readFilterSearchPrefix:
 		if len(t.values) == 0 {
 			return nil
