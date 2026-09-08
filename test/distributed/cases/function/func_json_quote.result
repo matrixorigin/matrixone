@@ -23,7 +23,7 @@ invalid input: binary data not supported by json_quote
 select json_quote(cast(x'ff' as varbinary(1)));
 invalid input: binary data not supported by json_quote
 select json_quote(cast(null as binary));
-➤ json_quote(cast(null as binary))[12,65535,0]  𝄀
+➤ json_quote(cast(null as binary))[-1,536870911,0]  𝄀
 null
 create table t1 (a varchar(10));
 insert into t1 values ('a'), ('a"'), ('a"b'), (null);
@@ -64,7 +64,7 @@ select json_quote('abc') = '"abc"', json_quote('abc') = 'abc';
 ➤ json_quote(abc) = "abc"[-7,1,0]  ¦  json_quote(abc) = abc[-7,1,0]  𝄀
 1  ¦  0
 select json_unquote(json_quote('a"b\\c'));
-➤ json_unquote(json_quote(a"b\\c))[12,65535,0]  𝄀
+➤ json_unquote(json_quote(a"b\\c))[12,32,0]  𝄀
 a"b\c
 prepare json_quote_stmt from 'select json_quote(?)';
 set @json_quote_value = 'a"b';
