@@ -200,7 +200,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
-	shareableIterations := make([]*IterationContext, 0, len(candidates))
+	shareableIterations := make(map[bool][]*IterationContext, 2)
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
@@ -226,9 +226,13 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if sinker.stage == JobStage_Init {
 			share = false
 		}
+		// A shared stream has one physical batch layout. MV needs retained RowID
+		// for historical deletes; index consumers expect the legacy PK-first
+		// layout. Sharing only compatible jobs avoids copying/projecting batches.
+		retainRowID := sinker.consumerType == ConsumerType_MaterializedView
 		foundIteration := false
 		if share {
-			for _, iter := range shareableIterations {
+			for _, iter := range shareableIterations[retainRowID] {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
 					if sourceTablesUnionSize(iter.sourceTables, sinker.sourceTables) > MaxSourceTables {
 						// Keep the jobs in separate iterations.  Sharing an iteration
@@ -269,7 +273,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			}
 			iterations = append(iterations, iter)
 			if sinker.stage != JobStage_Init {
-				shareableIterations = append(shareableIterations, iter)
+				shareableIterations[retainRowID] = append(shareableIterations[retainRowID], iter)
 			}
 			if from.LT(&minFromTS) {
 				minFromTS = from

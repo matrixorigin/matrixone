@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,9 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -390,6 +393,57 @@ func TestRunIterationRestoresAttrsWithRetainedRowID(t *testing.T) {
 	require.Equal(t, []string{
 		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,
 	}, consumer.attrs)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestLegacyIterationPreservesDistinctPrimaryKeysWithoutAttrs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	// Persisted change batches may omit Attrs. Equal final-column values in one
+	// commit must not deduplicate rows with different primary keys.
+	bat := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_int64.ToType(), mp, false, []int64{1, 2}),
+		testutil.NewVector(2, types.T_array_float32.ToType(), mp, false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+		testutil.NewVector(2, types.T_int32.ToType(), mp, false, []int32{9, 9}),
+		testutil.NewVector(2, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(100, 0), types.BuildTS(100, 0)}),
+	}, nil)
+	def := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	def.Cols = append(def.Cols, &planpb.ColDef{Name: catalog.Row_ID, Typ: planpb.Type{Id: int32(types.T_Rowid)}})
+	consumer, err := NewConsumer("test-cn", nil, nil, def, newTestJobID(), newTestIvfConsumerInfo())
+	require.NoError(t, err)
+	var writes []string
+	sqlStub := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if strings.HasPrefix(sql, "REPLACE INTO") {
+			writes = append(writes, sql)
+		}
+		return executor.Result{AffectedRows: 1}, nil
+	})
+	defer sqlStub.Reset()
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
+	sent := false
+	changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		if sent {
+			return nil, nil, engine.ChangesHandle_Tail_done, nil
+		}
+		sent = true
+		return bat, nil, engine.ChangesHandle_Tail_done, nil
+	}}
+	packer := types.NewPacker()
+	defer packer.Close()
+	status := &JobStatus{}
+	tsIdx, pkIdx := resolveSingleSourceInsertIndexes(def, false)
+	runISCPTaskIterationConsumers(
+		context.Background(), nil, testIterationContext(), []iterationSourceChanges{{changes: changes}},
+		[]Consumer{consumer}, []*JobStatus{status}, def, ISCPDataType_Tail,
+		packer, mp, tsIdx, pkIdx, 1, 0, false, nil,
+	)
+	require.Zero(t, status.ErrorCode, status.ErrorMsg)
+	require.Len(t, writes, 1)
+	// Check the actual IVF writer output across collection, fanout and consumer
+	// row conversion: both independent source keys and their vectors survive.
+	require.Contains(t, writes[0], "ROW(1,CAST('[0.1, 0.2]' as VECF32(2)))")
+	require.Contains(t, writes[0], "ROW(2,CAST('[0.3, 0.4]' as VECF32(2)))")
 	require.Zero(t, mp.CurrNB())
 }
 

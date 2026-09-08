@@ -716,10 +716,10 @@ func runISCPTaskIterationConsumers(
 			if err == nil && retainRowID && insertData != nil && streamDef != nil {
 				err = ensureISCPInsertBatchAttrs(insertData, streamDef, retainRowID)
 			}
-			if err == nil && insertData != nil && streamDef != nil {
+			if err == nil && retainRowID && insertData != nil && streamDef != nil {
 				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, retainRowID)
 			}
-			if err == nil && deleteData != nil && streamDef != nil {
+			if err == nil && retainRowID && deleteData != nil && streamDef != nil {
 				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, streamDef, false, retainRowID)
 			}
 			// injection is for ut

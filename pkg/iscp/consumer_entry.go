@@ -75,10 +75,7 @@ func NewJobEntryWithStatus(
 		stage:              stage,
 		dropAt:             dropAt,
 		currentLSN:         currentLSN,
-		// Only the trigger spec is retained, so the consumer class is recorded
-		// here: it selects the watermark flush threshold below, and it is the
-		// one thing about the consumer this entry still needs to know.
-		isIndexJob: jobSpec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync),
+		consumerType:       ConsumerType(jobSpec.ConsumerInfo.ConsumerType),
 	}
 	return jobEntry
 }
@@ -93,6 +90,7 @@ func (jobEntry *JobEntry) update(
 ) error {
 	applyMetadata := func() {
 		jobEntry.jobSpec = &jobSpec.TriggerSpec
+		jobEntry.consumerType = ConsumerType(jobSpec.ConsumerInfo.ConsumerType)
 		jobEntry.sourceTables = append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...)
 		jobEntry.dropAt = dropAt
 	}
@@ -219,7 +217,7 @@ func (jobEntry *JobEntry) UpdateWatermark(
 // whether the index may back a mandatory filter, so a stale persisted value
 // costs query plans, not just restart work.
 func (jobEntry *JobEntry) flushThreshold(general time.Duration) time.Duration {
-	if !jobEntry.isIndexJob || jobEntry.tableInfo == nil ||
+	if jobEntry.consumerType != ConsumerType_IndexSync || jobEntry.tableInfo == nil ||
 		jobEntry.tableInfo.exec == nil || jobEntry.tableInfo.exec.option == nil {
 		return general
 	}

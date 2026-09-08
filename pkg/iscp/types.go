@@ -221,9 +221,9 @@ type JobEntry struct {
 	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
-	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
-	// on IndexFlushWatermarkInterval rather than the general threshold.
-	isIndexJob bool
+	// consumerType selects both batch-layout compatibility and watermark flush
+	// policy; the trigger-only jobSpec does not retain the consumer projection.
+	consumerType ConsumerType
 }
 
 type JobKey struct {

@@ -665,6 +665,12 @@ func renameSrcTable(
 			}
 			jobSpec.ConsumerInfo.TableName = newTableName
 			jobSpec.ConsumerInfo.SrcTable.TableName = newTableName
+			for j := range jobSpec.ConsumerInfo.SrcTables {
+				source := &jobSpec.ConsumerInfo.SrcTables[j]
+				if source.TableID == tableID && (source.DBID == 0 || source.DBID == dbID) {
+					source.TableName = newTableName
+				}
+			}
 			var newJobSpecStr string
 			newJobSpecStr, err = MarshalJobSpec(jobSpec)
 			if err != nil {

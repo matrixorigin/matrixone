@@ -245,11 +245,15 @@ func RefreshMaterializedView(ctx context.Context, eng engine.Engine, service str
 			columns = append(columns, quoted)
 			selectColumns = append(selectColumns, quoted)
 		}
+		// CREATE VIEW's explicit column list renames outputs by position. Apply
+		// that same mapping to the derived refresh relation without rewriting
+		// aliases used by the original GROUP BY/HAVING or UNION branches.
+		refreshColumns := strings.Join(columns, ",")
 		if materializedViewDeltaCanUpsert(incrementalDesc) {
-			insertSQL = fmt.Sprintf("insert into %s (%s) select %s from (%s) as `__mo_mv_refresh`", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+			insertSQL = fmt.Sprintf("insert into %s (%s) select %s from (%s) as `__mo_mv_refresh` (%s)", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL, refreshColumns)
 		} else {
 			columns = append(columns, sqlquote.Ident(catalog.FakePrimaryKeyColName))
-			insertSQL = fmt.Sprintf("insert into %s (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+			insertSQL = fmt.Sprintf("insert into %s (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh` (%s)", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL, refreshColumns)
 		}
 	}
 	res, err = ExecWithResult(refreshCtx, insertSQL, service, txn)

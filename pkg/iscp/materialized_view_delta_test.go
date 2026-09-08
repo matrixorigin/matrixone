@@ -32,6 +32,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -335,6 +336,36 @@ func TestMaterializedViewDeltaDescriptionPredicates(t *testing.T) {
 		Branches: []incrementalBranch{{Description: desc}, {Description: desc}},
 	}
 	require.True(t, materializedViewDeltaCanUpsert(union))
+}
+
+func TestMaterializedViewDeltaTransportAvoidsUserSignColumns(t *testing.T) {
+	desc := &incrementalDescription{
+		SourceAlias: "e", SourceColumns: []string{"__mo_sign", "__MO_SIGN_1"},
+		Groups: []incrementalGroup{{Expression: "e.__mo_sign", OutputColumn: "g"}},
+		Aggregates: []incrementalAggregate{
+			{Kind: "sum", InputExpression: "e.__MO_SIGN_1", OutputColumn: "total"},
+			{Kind: "count_distinct", InputExpression: "e.__MO_SIGN_1", OutputColumn: "n", StateIndex: 1},
+		},
+	}
+	typ := types.T_int64.ToType()
+	rows := []materializedViewSignedRow{{
+		values: map[string]any{"__mo_sign": int64(7), "__mo_sign_1": int64(10)}, sign: -1,
+	}}
+	ctes := make([]string, 2)
+	var err error
+	ctes[0], err = materializedViewDeltaCTE(t.Context(), desc, []*types.Type{&typ, &typ}, rows)
+	require.NoError(t, err)
+	ctes[1], err = materializedViewDistinctDeltaCTE(t.Context(), desc, desc.Aggregates[1], []*types.Type{&typ, &typ}, rows)
+	require.NoError(t, err)
+	for i, table := range []string{"delta", "distinct_delta"} {
+		// Bind the complete generated query; parsing alone misses an ambiguous
+		// column even when every token and identifier is individually valid.
+		statement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctes[i]+" SELECT * FROM "+table, 1)
+		require.NoError(t, err)
+		_, err = planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+		statement.Free()
+		require.NoError(t, err, ctes[i])
+	}
 }
 
 func TestMaterializedViewDeltaSourceCTEValidation(t *testing.T) {

@@ -635,7 +635,7 @@ func recordMaterializedViewAffectedGroups(
 	for i := range desc.Groups {
 		groups[i] = desc.Groups[i].Expression
 	}
-	where := "__mo_sign < 0"
+	where := materializedViewDeltaSignColumn(desc) + " < 0"
 	if desc.Having != "" {
 		// HAVING can change visibility in either direction, so every affected
 		// group must be rebuilt at the iteration boundary.
@@ -682,8 +682,8 @@ func recomputeMaterializedViewAffectedGroups(
 		selected[i] = "r." + quoted[i]
 	}
 	insert := fmt.Sprintf(
-		"INSERT INTO %s (%s) SELECT %s FROM (%s) AS r JOIN %s AS s ON r.%s = s.group_key WHERE s.aggregate_index = 0",
-		target, strings.Join(quoted, ","), strings.Join(selected, ","), refreshSQL, state, sqlquote.Ident(desc.GroupKeyColumn))
+		"INSERT INTO %s (%s) SELECT %s FROM (%s) AS r (%s) JOIN %s AS s ON r.%s = s.group_key WHERE s.aggregate_index = 0",
+		target, strings.Join(quoted, ","), strings.Join(selected, ","), refreshSQL, strings.Join(quoted, ","), state, sqlquote.Ident(desc.GroupKeyColumn))
 	if err = execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
 		return err
 	}
@@ -711,12 +711,13 @@ func materializedViewDistinctDeltaCTE(
 	}
 	groupKey := materializedViewGroupKeySQL(desc, groups)
 	cte := fmt.Sprintf(
-		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, min(%s) AS value_value, sum(__mo_sign) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
+		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, min(%s) AS value_value, sum(%s) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
 		sourceCTE,
 		agg.StateIndex,
 		strings.Join(groupKey, ","),
 		agg.InputExpression,
 		agg.InputExpression,
+		materializedViewDeltaSignColumn(desc),
 		sqlquote.Ident(desc.SourceAlias),
 		where,
 		strings.Join(groups, ","),
@@ -885,27 +886,28 @@ func materializedViewDeltaCTE(
 		projection = append(projection, fmt.Sprintf("%s AS %s", group.Expression, materializedViewDeltaGroupAlias(i)))
 		groupBy = append(groupBy, group.Expression)
 	}
-	projection = append(projection, "sum(__mo_sign) AS __mo_row_delta")
+	signColumn := materializedViewDeltaSignColumn(desc)
+	projection = append(projection, "sum("+signColumn+") AS __mo_row_delta")
 	for i, agg := range desc.Aggregates {
 		countAlias := materializedViewDeltaCountAlias(i)
 		sumAlias := materializedViewDeltaSumAlias(i)
 		switch agg.Kind {
 		case "count_star":
-			projection = append(projection, fmt.Sprintf("sum(__mo_sign) AS %s", countAlias))
+			projection = append(projection, fmt.Sprintf("sum(%s) AS %s", signColumn, countAlias))
 		case "count_column":
-			projection = append(projection, fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+			projection = append(projection, fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE %s END) AS %s", agg.InputExpression, signColumn, countAlias))
 		case "sum":
 			projection = append(projection,
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE %s * (%s) END) AS %s", agg.InputExpression, signColumn, agg.InputExpression, sumAlias),
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE %s END) AS %s", agg.InputExpression, signColumn, countAlias))
 		case "avg":
 			projection = append(projection,
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE %s * (%s) END) AS %s", agg.InputExpression, signColumn, agg.InputExpression, sumAlias),
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE %s END) AS %s", agg.InputExpression, signColumn, countAlias))
 		case "min":
-			projection = append(projection, fmt.Sprintf("min(CASE WHEN __mo_sign > 0 THEN (%s) ELSE NULL END) AS %s", agg.InputExpression, sumAlias))
+			projection = append(projection, fmt.Sprintf("min(CASE WHEN %s > 0 THEN (%s) ELSE NULL END) AS %s", signColumn, agg.InputExpression, sumAlias))
 		case "max":
-			projection = append(projection, fmt.Sprintf("max(CASE WHEN __mo_sign > 0 THEN (%s) ELSE NULL END) AS %s", agg.InputExpression, sumAlias))
+			projection = append(projection, fmt.Sprintf("max(CASE WHEN %s > 0 THEN (%s) ELSE NULL END) AS %s", signColumn, agg.InputExpression, sumAlias))
 		case "count_distinct":
 			// Its value delta depends on the persisted old refcount, so it is
 			// computed by applyMaterializedViewDistinctDeltas.
@@ -921,6 +923,22 @@ func materializedViewDeltaCTE(
 		return "", errMaterializedViewDeltaSQLTooLarge
 	}
 	return cte, nil
+}
+
+// The transport sign shares a relation with legal user columns. Choose its
+// identifier against that relation's names rather than reserving a user spelling.
+func materializedViewDeltaSignColumn(desc *incrementalDescription) string {
+	used := make(map[string]struct{}, len(desc.SourceColumns))
+	for _, column := range desc.SourceColumns {
+		used[strings.ToLower(column)] = struct{}{}
+	}
+	name := "__mo_sign"
+	for i := 1; ; i++ {
+		if _, exists := used[name]; !exists {
+			return name
+		}
+		name = fmt.Sprintf("__mo_sign_%d", i)
+	}
 }
 
 func materializedViewDeltaSourceCTE(
@@ -967,7 +985,7 @@ func materializedViewDeltaSourceCTE(
 	for i, column := range desc.SourceColumns {
 		columns = append(columns, fmt.Sprintf("CAST(column_%d AS %s) AS %s", i, materializedViewDeltaSQLType(sourceTypes[i]), sqlquote.Ident(column)))
 	}
-	columns = append(columns, fmt.Sprintf("CAST(column_%d AS BIGINT) AS __mo_sign", len(desc.SourceColumns)))
+	columns = append(columns, fmt.Sprintf("CAST(column_%d AS BIGINT) AS %s", len(desc.SourceColumns), materializedViewDeltaSignColumn(desc)))
 
 	cte := fmt.Sprintf("src AS (SELECT %s FROM (VALUES %s) AS __mo_mv_values)", strings.Join(columns, ","), string(values))
 	if len(cte) > materializedViewDeltaMaxSQL {

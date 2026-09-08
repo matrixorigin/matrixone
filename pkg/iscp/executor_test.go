@@ -301,6 +301,31 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	require.Equal(t, []int8{JobStage_Running, JobStage_Running}, iters[0].stages)
 }
 
+func TestTableEntrySharesOnlyCompatibleBatchLayouts(t *testing.T) {
+	table := NewTableEntry(nil, 1, 2, 3, "db", "source")
+	kinds := []ConsumerType{ConsumerType_IndexSync, ConsumerType_MaterializedView,
+		ConsumerType_IndexSync, ConsumerType_MaterializedView}
+	for i, kind := range kinds {
+		name := fmt.Sprintf("job_%d", i)
+		spec := &JobSpec{
+			ConsumerInfo: ConsumerInfo{ConsumerType: int8(kind)},
+			TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
+		}
+		table.jobs[JobKey{JobName: name, JobID: uint64(i + 1)}] = NewJobEntry(
+			table, name, spec, uint64(i+1), types.BuildTS(10, 0), ISCPJobState_Completed, 0)
+	}
+	iterations, _ := table.getCandidate()
+	require.Len(t, iterations, 2)
+	for _, iter := range iterations {
+		require.Len(t, iter.jobNames, 2, "same-layout jobs should still share")
+		if iter.jobNames[0] == "job_0" || iter.jobNames[0] == "job_2" {
+			require.ElementsMatch(t, []string{"job_0", "job_2"}, iter.jobNames)
+		} else {
+			require.ElementsMatch(t, []string{"job_1", "job_3"}, iter.jobNames)
+		}
+	}
+}
+
 func TestTableEntryDoesNotShareIterationBeyondSourceLimit(t *testing.T) {
 	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
 	firstSources := make([]TableInfo, MaxSourceTables)

@@ -26,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -270,7 +273,11 @@ func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testi
 	for _, kind := range []ConsumerType{ConsumerType_IndexSync, ConsumerType_MaterializedView, ConsumerType_IndexSync} {
 		specs = append(specs, encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
 			ConsumerType: int8(kind), DBName: "db", TableName: "original",
-			SrcTable: TableInfo{TableID: 10, TableName: "source"},
+			SrcTable: TableInfo{DBID: 1, TableID: 10, TableName: "source"},
+			SrcTables: []TableInfo{
+				{DBID: 1, TableID: 10, TableName: "source"},
+				{DBID: 1, TableID: 20, TableName: "other"},
+			},
 		}}))
 	}
 	require.NoError(t, executor.AppendStringRows(rows, 2, specs))
@@ -287,7 +294,26 @@ func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testi
 	require.Len(t, updates, 2)
 	for i, name := range []string{"first", "last"} {
 		require.Contains(t, updates[i], "job_name = '"+name+"'")
-		require.Contains(t, updates[i], `"TableName":"renamed"`)
+		// Decode the persisted spec: a substring also passed when SrcTables
+		// silently retained the old name alongside the renamed legacy anchor.
+		statement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, updates[i], 1)
+		require.NoError(t, err)
+		update := statement.(*tree.Update)
+		encoded := update.Exprs[0].Expr.(*tree.NumVal).String()
+		require.NotEmpty(t, encoded, updates[i])
+		// A catalog JSON column stores ByteJson, not the SQL literal bytes.
+		jsonValue, err := types.ParseStringToByteJson(encoded)
+		require.NoError(t, err)
+		stored, err := types.EncodeJson(jsonValue)
+		require.NoError(t, err)
+		updated, err := UnmarshalJobSpec(stored)
+		statement.Free()
+		require.NoError(t, err)
+		require.Equal(t, "renamed", updated.SrcTable.TableName)
+		require.Equal(t, []TableInfo{
+			{DBID: 1, TableID: 10, TableName: "renamed"},
+			{DBID: 1, TableID: 20, TableName: "other"},
+		}, updated.SourceTableInfos())
 		require.NotContains(t, updates[i], "materialized_view_100")
 	}
 	require.Contains(t, updates[0], "job_id = 11")
