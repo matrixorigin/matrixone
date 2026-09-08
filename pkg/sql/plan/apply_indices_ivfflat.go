@@ -882,22 +882,27 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			secondScanNodeID = optimizedSecondScanID
 		}
 
+		// Otherwise the runtime filter will only see the truncated primary key set, causing data loss.
+		// Clear candidate limits only from the copied indexed-table side. A membership subquery may
+		// have its own semantic LIMIT/OFFSET, which must remain intact.
+		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
+
 		membershipProducerID := secondScanNodeID
 		if vecCtx.hasMembership {
-			membershipNode := builder.qry.Nodes[vecCtx.membershipNodeID]
-			if membershipNode.NodeType != plan.Node_JOIN || membershipNode.JoinType != plan.Node_SEMI ||
-				len(membershipNode.Children) != 2 || membershipNode.Children[0] != scanNode.NodeId {
+			originalMembershipNode := builder.qry.Nodes[vecCtx.membershipNodeID]
+			if originalMembershipNode.NodeType != plan.Node_JOIN || originalMembershipNode.JoinType != plan.Node_SEMI ||
+				len(originalMembershipNode.Children) != 2 || originalMembershipNode.Children[0] != scanNode.NodeId {
 				return nodeID, nil
 			}
+			membershipNode := DeepCopyNode(originalMembershipNode)
 			membershipNode.Children[0] = secondScanNodeID
+			membershipNode.Limit = nil
+			membershipNode.Offset = nil
 			for _, expr := range membershipNode.OnList {
 				replaceColRefTag(expr, oldTag, newTag)
 			}
-			membershipProducerID = membershipNode.NodeId
+			membershipProducerID = builder.appendNode(membershipNode, ctx)
 		}
-
-		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
-		clearLimitOffsetInSubtree(builder.qry, membershipProducerID)
 
 		// Add a PROJECT above the filtered relation to output only the primary key column.
 		secondProjectTag := builder.genNewBindTag()

@@ -303,10 +303,9 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 	}
 }
 
-// buildVectorSortContextThroughMembershipJoin recognizes the common
-// `eligible_table SEMI JOIN indexed_table` shape. The membership join is kept
-// as the row-fetch side of the rewritten plan, so eligibility is still applied
-// before the final Top-K rather than after it.
+// buildVectorSortContextThroughMembershipJoin recognizes an indexed table on
+// the left side of a SEMI JOIN. The rewrite uses a copy of that join to produce
+// an exact runtime membership filter before the vector candidate limit.
 func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
 	projNode, joinNode, childNode, sortNode *plan.Node, orderExpr *plan.Expr,
 ) *vectorSortContext {

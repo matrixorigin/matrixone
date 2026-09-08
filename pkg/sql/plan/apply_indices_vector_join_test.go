@@ -400,7 +400,11 @@ func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
-	membershipNodeID := vecCtx.membershipNodeID
+	originalMembershipNode := tc.builder.qry.Nodes[vecCtx.membershipNodeID]
+	originalMembershipLeftID := originalMembershipNode.Children[0]
+	membershipInput := tc.builder.qry.Nodes[originalMembershipNode.Children[1]]
+	membershipInput.Limit = makePlan2Uint64ConstExprWithType(2)
+	membershipInput.Offset = makePlan2Uint64ConstExprWithType(1)
 
 	pluginCtx, pluginIndex := toPlanplugin(vecCtx, newVectorJoinIvfIndex())
 	newNodeID, applied, err := tc.builder.ApplyIndicesForSortUsingIvfflat(pluginCtx, pluginIndex, tc.projNodeID, planplugin.ApplyForSortOpts{})
@@ -409,8 +413,16 @@ func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
 	require.Equal(t, tc.projNodeID, newNodeID)
 
 	reachable := reachableNodeIDsFrom(tc.builder.qry, tc.projNodeID)
-	require.True(t, reachable[membershipNodeID], "membership SEMI JOIN must remain reachable as the runtime-filter producer")
+	require.False(t, reachable[originalMembershipNode.NodeId], "the rewrite must use a copy so fallback keeps the original plan intact")
+	require.Equal(t, originalMembershipLeftID, originalMembershipNode.Children[0])
+	require.Equal(t, uint64(2), membershipInput.Limit.GetLit().GetU64Val(), "membership subquery LIMIT is semantic")
+	require.Equal(t, uint64(1), membershipInput.Offset.GetLit().GetU64Val(), "membership subquery OFFSET is semantic")
 	require.True(t, reachable[tc.mainScanNodeID], "the original scan must remain the row-fetch side")
+
+	membershipProducer := findReachableSemiJoinWithRight(tc.builder.qry, tc.projNodeID, tc.providerNodeID)
+	require.NotNil(t, membershipProducer, "a copied membership SEMI JOIN must feed the runtime-filter producer")
+	require.NotEqual(t, originalMembershipNode.NodeId, membershipProducer.NodeId)
+
 	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
 	require.NotNil(t, vectorScan)
 	require.True(t, reachable[vectorScan.NodeId])
@@ -434,7 +446,7 @@ func TestApplyLogicalVectorIndexForSortContext_SemiMembershipUsesIvf(t *testing.
 	require.Equal(t, tc.projNodeID, newNodeID)
 	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
 	require.NotNil(t, vectorScan)
-	require.True(t, reachableNodeIDsFrom(tc.builder.qry, tc.projNodeID)[vecCtx.membershipNodeID])
+	require.NotNil(t, findReachableSemiJoinWithRight(tc.builder.qry, tc.projNodeID, tc.providerNodeID))
 }
 
 func TestApplyVectorIndexForSortContext_SemiMembershipUsesIvfWithMixedIndexes(t *testing.T) {
@@ -450,14 +462,24 @@ func TestApplyVectorIndexForSortContext_SemiMembershipUsesIvfWithMixedIndexes(t 
 	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
 	require.NotNil(t, vectorScan)
 	require.Equal(t, catalog.MoIndexIvfFlatAlgo.ToString(), vectorScan.VectorIndexScan.Index.IndexAlgo)
-	reachable := reachableNodeIDsFrom(tc.builder.qry, tc.projNodeID)
-	require.True(t, reachable[vecCtx.membershipNodeID])
+	require.NotNil(t, findReachableSemiJoinWithRight(tc.builder.qry, tc.projNodeID, tc.providerNodeID))
 }
 
 func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsNonIvfIndex(t *testing.T) {
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes = newVectorJoinTableDef(true, false).Indexes
 	require.Nil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode))
+}
+
+func findReachableSemiJoinWithRight(query *plan.Query, rootID, rightID int32) *plan.Node {
+	for nodeID := range reachableNodeIDsFrom(query, rootID) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SEMI &&
+			len(node.Children) == 2 && node.Children[1] == rightID {
+			return node
+		}
+	}
+	return nil
 }
 
 func reachableNodeIDsFrom(query *plan.Query, rootID int32) map[int32]bool {
