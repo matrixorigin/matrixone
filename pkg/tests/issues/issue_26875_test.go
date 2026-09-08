@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
+const issue26875CaseTimeout = 5 * time.Minute
+
 func TestIssue26875ForeignKeyActions(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -52,24 +54,44 @@ func TestIssue26875ForeignKeyActions(t *testing.T) {
 		// The scenarios only use uniquely prefixed tables and do not change
 		// session or global settings, so sharing this database keeps them
 		// orthogonal while avoiding six repeated database/connection setups.
-		t.Run("TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren", func(t *testing.T) {
-			runIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t, ctx, conn, conn2)
-		})
-		t.Run("TestIssue26875MixedIndexedSetNullAndCascadeActions", func(t *testing.T) {
-			runIssue26875MixedIndexedSetNullAndCascadeActions(t, ctx, conn)
-		})
-		t.Run("TestIssue26875CombinedSetNullAndCascadeActions", func(t *testing.T) {
-			runIssue26875CombinedSetNullAndCascadeActions(t, ctx, conn)
-		})
-		t.Run("TestIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows", func(t *testing.T) {
-			runIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows(t, ctx, conn)
-		})
-		t.Run("TestIssue26875MultipleUniqueSetNullActionsTerminate", func(t *testing.T) {
-			runIssue26875MultipleUniqueSetNullActionsTerminate(t, ctx, conn)
-		})
-		t.Run("TestIssue26875MultilevelCascadeRemapClosure", func(t *testing.T) {
-			runIssue26875MultilevelCascadeRemapClosure(t, ctx, conn)
-		})
+		runIssue26875Case(t, ctx, "TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t, ctx, conn, conn2)
+			})
+		runIssue26875Case(t, ctx, "TestIssue26875MixedIndexedSetNullAndCascadeActions",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875MixedIndexedSetNullAndCascadeActions(t, ctx, conn)
+			})
+		runIssue26875Case(t, ctx, "TestIssue26875CombinedSetNullAndCascadeActions",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875CombinedSetNullAndCascadeActions(t, ctx, conn)
+			})
+		runIssue26875Case(t, ctx, "TestIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows(t, ctx, conn)
+			})
+		runIssue26875Case(t, ctx, "TestIssue26875MultipleUniqueSetNullActionsTerminate",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875MultipleUniqueSetNullActionsTerminate(t, ctx, conn)
+			})
+		runIssue26875Case(t, ctx, "TestIssue26875MultilevelCascadeRemapClosure",
+			func(t *testing.T, ctx context.Context) {
+				runIssue26875MultilevelCascadeRemapClosure(t, ctx, conn)
+			})
+	})
+}
+
+func runIssue26875Case(
+	t *testing.T,
+	parent context.Context,
+	name string,
+	fn func(*testing.T, context.Context),
+) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(parent, issue26875CaseTimeout)
+		defer cancel()
+		fn(t, ctx)
 	})
 }
 
