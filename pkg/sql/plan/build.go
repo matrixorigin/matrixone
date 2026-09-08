@@ -575,30 +575,55 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
-	if err := validateExplainJSONMode(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
 		return nil, err
 	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
 func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
-	if err := validateExplainJSONMode(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
+	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
 		return nil, err
 	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
-func validateExplainJSONMode(ctx context.Context, options []tree.OptionElem, mode string) error {
+func validateExplainOptions(ctx context.Context, options []tree.OptionElem, mode string) error {
+	seen := make(map[string]struct{}, len(options))
+	formatJSON := false
+	analyze := false
+	phyplan := false
+	check := false
 	for _, option := range options {
-		if !strings.EqualFold(option.Name, tree.FormatOption) {
-			continue
+		name := strings.ToLower(strings.TrimSpace(option.Name))
+		if _, exists := seen[name]; exists {
+			return moerr.NewInvalidInputf(ctx, "duplicate explain option '%s'", option.Name)
 		}
-		value := strings.Trim(strings.TrimSpace(option.Value), "'")
-		value = strings.Trim(value, string('"'))
-		value = strings.ToUpper(value)
-		if value == "JSON" {
-			return moerr.NewNotSupportedf(ctx, "EXPLAIN %s FORMAT=JSON is not supported", mode)
+		seen[name] = struct{}{}
+
+		value := strings.Trim(strings.TrimSpace(option.Value), "'\"")
+		switch name {
+		case tree.FormatOption:
+			formatJSON = strings.EqualFold(value, "JSON")
+		case tree.AnalyzeOption:
+			analyze = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.PhyPlanOption:
+			phyplan = strings.EqualFold(value, "NULL") || strings.EqualFold(value, "TRUE")
+		case tree.CheckOption:
+			check = true
 		}
+	}
+	if !formatJSON {
+		return nil
+	}
+	if mode == "ANALYZE" || analyze {
+		return moerr.NewNotSupported(ctx, "EXPLAIN ANALYZE FORMAT=JSON is not supported")
+	}
+	if mode == "PHYPLAN" || phyplan {
+		return moerr.NewNotSupported(ctx, "EXPLAIN PHYPLAN FORMAT=JSON is not supported")
+	}
+	if check {
+		return moerr.NewNotSupported(ctx, "EXPLAIN FORMAT=JSON does not support CHECK")
 	}
 	return nil
 }
@@ -670,6 +695,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		applySQLSelectLimit(stmt.Select, queryPlan)
 		return queryPlan, nil
 	case *tree.ExplainStmt:
+		if err := validateExplainOptions(ctx.GetContext(), stmt.Options, ""); err != nil {
+			return nil, err
+		}
 		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
