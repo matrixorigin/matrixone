@@ -1690,13 +1690,13 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
 		if runtimeCacheKey != "" && runtimeCacheKey == prepareStmt.runtimeSpecializationKey &&
-			prepareStmt.runtimePlan != nil && prepareStmt.runtimeCompile != nil {
+			prepareStmt.runtimePlan != nil {
 			runtimePlan = prepareStmt.runtimePlan
 			runtimePlanApplied = true
 			cachedRuntimeCompile = prepareStmt.runtimeCompile
 		}
 	}
-	if cachedRuntimeCompile == nil &&
+	if !runtimePlanApplied &&
 		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan ||
 			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
 		var laterRuntimeSpecialized bool
@@ -1746,10 +1746,11 @@ func initExecuteStmtParamWithResolverInSession(
 	retComp := prepareStmt.compile
 	if cachedRuntimeCompile != nil {
 		retComp = cachedRuntimeCompile
-	} else if runtimeSpecialized || prepareStmt.hasPaginationParams {
+	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
-		// values must be rebound for this execution.
+		// values must be rebound for this execution. An AP runtime cache hit
+		// reuses only the logical plan; its physical topology must be rebuilt.
 		retComp = nil
 	}
 	if executionSes.IsBackgroundSession() {

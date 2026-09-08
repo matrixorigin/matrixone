@@ -262,6 +262,11 @@ func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
 	}
 }
 
+func (receiver *messageReceiverOnServer) hasLiveReceiverStop() bool {
+	return receiver.connectionCtx.Err() == nil && receiver.messageCtx.Err() == nil &&
+		receiver.streamLifecycle.batchFlow.wasStoppedByReceiver()
+}
+
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
@@ -292,6 +297,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
 			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
+			infoToDispatchOperator.ReceiverStopped = receiver.hasLiveReceiverStop
 			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
 				return flow.reserve(ctx, receiver.connectionCtx, size)
 			}
