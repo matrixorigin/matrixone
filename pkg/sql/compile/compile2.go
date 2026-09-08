@@ -1028,6 +1028,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
 		return e
 	}
+	// Sequence functions update Process-local CURRVAL/LASTVAL state while the
+	// statement executes. Those values are published only after a successful
+	// statement, so restore the attempt-entry baseline before rebuilding the
+	// retry generation. Otherwise a rolled-back value can change LASTVAL or
+	// CURRVAL on the retry even when the retried plan never calls that sequence.
+	c.restoreSequenceStatementState()
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
