@@ -125,6 +125,7 @@ insert into json_order_peers values
   (1, convert('1.0', json)),
   (0, convert('2', json));
 select tie_no from json_order_peers order by j asc, tie_no asc;
+select tie_no, rank() over (order by j) as r, dense_rank() over (order by j) as d from json_order_peers order by tie_no;
 drop table json_order_values;
 drop table json_order_peers;
 

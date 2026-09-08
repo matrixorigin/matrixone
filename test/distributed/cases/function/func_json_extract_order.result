@@ -351,6 +351,11 @@ tie_no
 1
 2
 0
+select tie_no, rank() over (order by j) as r, dense_rank() over (order by j) as d from json_order_peers order by tie_no;
+tie_no    r    d
+0    3    2
+1    1    1
+2    1    1
 drop table json_order_values;
 drop table json_order_peers;
 drop database if exists test;

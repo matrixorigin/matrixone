@@ -94,6 +94,10 @@ func TestJSONRawAdmissionRejectsMalformedBeforePublication(t *testing.T) {
 					after, err := v.MarshalBinary()
 					require.NoError(t, err)
 					require.Equal(t, before, after, "failed admission must preserve visible state")
+					require.NoError(t, AppendBytes(v, good, false, mp), "failed admission must allow a subsequent valid append")
+					require.Equal(t, 2, v.Length())
+					require.Equal(t, good, v.GetBytesAt(0))
+					require.Equal(t, good, v.GetBytesAt(1))
 				})
 			}
 		})
@@ -169,6 +173,12 @@ func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
 	require.NoError(t, source.MarshalBinaryWithBufferV1(&legacy))
 	var selected bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&selected, []int32{0}))
+	copy(source.GetBytesAt(0), good)
+	validBinary, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var validLegacy, validSelected bytes.Buffer
+	require.NoError(t, source.MarshalBinaryWithBufferV1(&validLegacy))
+	require.NoError(t, source.MarshalSelectedRowsTo(&validSelected, []int32{0}))
 	for _, mode := range []string{"binary", "copy", "reader", "legacy", "selected", "raw copy"} {
 		t.Run(mode, func(t *testing.T) {
 			target := NewVec(types.T_json.ToType())
@@ -186,13 +196,38 @@ func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
 				err = target.UnmarshalSelectedRowsFrom(bytes.NewReader(selected.Bytes()), 1, mp)
 			case "raw copy":
 				var copied *Vector
+				copy(source.GetBytesAt(0), bad)
 				copied, err = NewVecWithDataCopy(*source.GetType(), source.Length(), source.GetData(), source.GetArea(), mp)
+				copy(source.GetBytesAt(0), good)
 				if copied != nil {
 					copied.Free(mp)
 				}
+				require.Nil(t, copied, "failed constructor must not return a published vector")
 			}
 			require.Error(t, err)
 			require.Zero(t, target.Length(), "decode error must not publish corrupted rows")
+			switch mode {
+			case "binary":
+				err = target.UnmarshalBinary(validBinary)
+			case "copy":
+				err = target.UnmarshalBinaryWithCopy(validBinary, mp)
+			case "reader":
+				err = target.UnmarshalWithReader(bytes.NewReader(validBinary), mp)
+			case "legacy":
+				err = target.UnmarshalBinaryV1(validLegacy.Bytes())
+			case "selected":
+				err = target.UnmarshalSelectedRowsFrom(bytes.NewReader(validSelected.Bytes()), 1, mp)
+			case "raw copy":
+				copied, copyErr := NewVecWithDataCopy(*source.GetType(), source.Length(), source.GetData(), source.GetArea(), mp)
+				require.NoError(t, copyErr)
+				defer copied.Free(mp)
+				require.Equal(t, 1, copied.Length())
+				require.Equal(t, good, copied.GetBytesAt(0))
+				return
+			}
+			require.NoError(t, err, "failed decode must allow retry with valid input")
+			require.Equal(t, 1, target.Length())
+			require.Equal(t, good, target.GetBytesAt(0))
 		})
 	}
 }
