@@ -28,25 +28,28 @@ import (
 )
 
 const mysqlJSONSchemaMaxDepth = 100
+const mysqlJSONSchemaMaxExpandedWork uint64 = 1 << 16
 
 const (
-	mysqlJSONSchemaExternalRefReason = "only local JSON Schema $ref values \"#\" and \"#/...\" are supported"
-	mysqlJSONSchemaRefStringReason   = "JSON Schema $ref must be a string"
-	mysqlJSONSchemaRefSyntaxReason   = "invalid local JSON Schema $ref"
-	mysqlJSONSchemaRefTargetReason   = "local JSON Schema $ref target does not exist"
-	mysqlJSONSchemaRefCycleReason    = "cyclic local JSON Schema $ref is not allowed"
-	mysqlJSONSchemaDepthReason       = "JSON Schema/JSON document nesting depth exceeds 100"
-	mysqlJSONSchemaExpansionReason   = "JSON Schema expansion depth exceeds 100"
+	mysqlJSONSchemaExternalRefReason   = "only local JSON Schema $ref values \"#\" and \"#/...\" are supported"
+	mysqlJSONSchemaRefStringReason     = "JSON Schema $ref must be a string"
+	mysqlJSONSchemaRefSyntaxReason     = "invalid local JSON Schema $ref"
+	mysqlJSONSchemaRefTargetReason     = "local JSON Schema $ref target does not exist"
+	mysqlJSONSchemaRefCycleReason      = "cyclic local JSON Schema $ref is not allowed"
+	mysqlJSONSchemaDepthReason         = "JSON Schema/JSON document nesting depth exceeds 100"
+	mysqlJSONSchemaExpansionReason     = "JSON Schema expansion depth exceeds 100"
+	mysqlJSONSchemaExpansionWorkReason = "JSON Schema reference expansion work exceeds 65536"
 )
 
 var (
-	errMySQLJSONSchemaExternalLoad error = mysqlJSONSchemaSentinel("external JSON Schema reference loading is disabled")
-	errMySQLJSONSchemaExternalRef  error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExternalRefReason)
-	errMySQLJSONSchemaRefSyntax    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefSyntaxReason)
-	errMySQLJSONSchemaRefTarget    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefTargetReason)
-	errMySQLJSONSchemaRefCycle     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefCycleReason)
-	errMySQLJSONSchemaDepth        error = mysqlJSONSchemaSentinel(mysqlJSONSchemaDepthReason)
-	errMySQLJSONSchemaExpansion    error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExpansionReason)
+	errMySQLJSONSchemaExternalLoad  error = mysqlJSONSchemaSentinel("external JSON Schema reference loading is disabled")
+	errMySQLJSONSchemaExternalRef   error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExternalRefReason)
+	errMySQLJSONSchemaRefSyntax     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefSyntaxReason)
+	errMySQLJSONSchemaRefTarget     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefTargetReason)
+	errMySQLJSONSchemaRefCycle      error = mysqlJSONSchemaSentinel(mysqlJSONSchemaRefCycleReason)
+	errMySQLJSONSchemaDepth         error = mysqlJSONSchemaSentinel(mysqlJSONSchemaDepthReason)
+	errMySQLJSONSchemaExpansion     error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExpansionReason)
+	errMySQLJSONSchemaExpansionWork error = mysqlJSONSchemaSentinel(mysqlJSONSchemaExpansionWorkReason)
 )
 
 type mysqlJSONSchemaSentinel string
@@ -87,10 +90,11 @@ func (l *mysqlDraft4DenyLoader) LoadJSON() (interface{}, error) {
 }
 
 type mysqlJSONSchemaNode struct {
-	value        any
-	containment  []string
-	edges        []string
-	baseExternal bool
+	value            any
+	containment      []string
+	edges            []string
+	refEdgePositions map[int]struct{}
+	baseExternal     bool
 }
 
 type mysqlJSONSchemaIndex struct {
@@ -104,6 +108,7 @@ type mysqlJSONSchemaIndex struct {
 
 type mysqlJSONSchemaRef struct {
 	target string
+	uri    string
 }
 
 type mysqlEffectiveSchemaPending struct {
@@ -152,7 +157,8 @@ func mysqlSchemaRefError(ctx context.Context, fnName string, err error) error {
 		return moerr.NewNotSupportedf(ctx, "%s: %s", fnName, err.Error())
 	case mysqlJSONSchemaRefStringReason, mysqlJSONSchemaRefSyntaxReason,
 		mysqlJSONSchemaRefTargetReason, mysqlJSONSchemaRefCycleReason,
-		mysqlJSONSchemaDepthReason, mysqlJSONSchemaExpansionReason:
+		mysqlJSONSchemaDepthReason, mysqlJSONSchemaExpansionReason,
+		mysqlJSONSchemaExpansionWorkReason:
 		return moerr.NewInvalidArg(ctx, fnName, err.Error())
 	default:
 		return moerr.NewInvalidArg(ctx, fnName, err.Error())
@@ -366,7 +372,7 @@ func mysqlScanSchemaStringRefs(ctx context.Context, index *mysqlJSONSchemaIndex)
 
 func mysqlResolveLocalSchemaRef(index *mysqlJSONSchemaIndex, raw string) (mysqlJSONSchemaRef, error) {
 	if raw == "#" {
-		return mysqlJSONSchemaRef{target: "#"}, nil
+		return mysqlJSONSchemaRef{target: "#", uri: "#"}, nil
 	}
 	if !strings.HasPrefix(raw, "#/") {
 		return mysqlJSONSchemaRef{}, errMySQLJSONSchemaExternalRef
@@ -413,7 +419,14 @@ func mysqlResolveLocalSchemaRef(index *mysqlJSONSchemaIndex, raw string) (mysqlJ
 			return mysqlJSONSchemaRef{}, errMySQLJSONSchemaRefTarget
 		}
 	}
-	return mysqlJSONSchemaRef{target: pointer}, nil
+	return mysqlJSONSchemaRef{target: pointer, uri: mysqlJSONSchemaRefURI(pointer)}, nil
+}
+
+func mysqlJSONSchemaRefURI(pointer string) string {
+	if pointer == "#" {
+		return "#"
+	}
+	return (&url.URL{Fragment: strings.TrimPrefix(pointer, "#")}).String()
 }
 
 func mysqlStrictPercentDecode(value string) (string, error) {
@@ -502,9 +515,15 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 			if index.nodes[item.pointer].baseExternal {
 				return nil, moerr.NewNotSupportedf(ctx, "%s: %s", fnName, mysqlJSONSchemaExternalRefReason)
 			}
-			object["$ref"] = ref.target
+			object["$ref"] = ref.uri
 			if target, ok := index.nodes[ref.target]; ok {
-				index.nodes[item.pointer].edges = append(index.nodes[item.pointer].edges, ref.target)
+				node := index.nodes[item.pointer]
+				edgeIndex := len(node.edges)
+				node.edges = append(node.edges, ref.target)
+				if node.refEdgePositions == nil {
+					node.refEdgePositions = make(map[int]struct{})
+				}
+				node.refEdgePositions[edgeIndex] = struct{}{}
 				index.edgeVisits++
 				index.refEdges++
 				effectiveTargets[ref.target] = struct{}{}
@@ -597,6 +616,7 @@ func mysqlEffectiveSchemaChildren(pointer string, object map[string]any) []mysql
 func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaIndex) error {
 	colors := make(map[string]uint8, len(index.nodes))
 	memo := make(map[string]int, len(index.nodes))
+	workMemo := make(map[string]uint64, len(index.nodes))
 	pointers := make([]string, 0, len(index.nodes))
 	for pointer := range index.nodes {
 		pointers = append(pointers, pointer)
@@ -607,9 +627,11 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 			continue
 		}
 		type frame struct {
-			pointer string
-			next    int
-			longest int
+			pointer      string
+			next         int
+			longest      int
+			expandedWork uint64
+			incomingRef  bool
 		}
 		stack := []frame{{pointer: start}}
 		colors[start] = 1
@@ -621,34 +643,57 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 			current := &stack[last]
 			edges := index.nodes[current.pointer].edges
 			if current.next < len(edges) {
-				target := edges[current.next]
+				edgeIndex := current.next
+				target := edges[edgeIndex]
 				current.next++
+				_, referenceEdge := index.nodes[current.pointer].refEdgePositions[edgeIndex]
 				switch colors[target] {
 				case 0:
 					colors[target] = 1
-					stack = append(stack, frame{pointer: target})
+					stack = append(stack, frame{pointer: target, incomingRef: referenceEdge})
 				case 1:
 					return errMySQLJSONSchemaRefCycle
 				case 2:
 					if candidate := memo[target] + 1; candidate > current.longest {
 						current.longest = candidate
 					}
+					work := workMemo[target]
+					if referenceEdge {
+						work = mysqlAddJSONSchemaExpansionWork(work, 1)
+					}
+					current.expandedWork = mysqlAddJSONSchemaExpansionWork(current.expandedWork, work)
 				}
 				continue
 			}
 			colors[current.pointer] = 2
 			memo[current.pointer] = current.longest
+			work := current.expandedWork
+			workMemo[current.pointer] = work
 			stack = stack[:last]
 			if len(stack) > 0 {
 				parent := &stack[len(stack)-1]
 				if candidate := current.longest + 1; candidate > parent.longest {
 					parent.longest = candidate
 				}
+				if current.incomingRef {
+					work = mysqlAddJSONSchemaExpansionWork(work, 1)
+				}
+				parent.expandedWork = mysqlAddJSONSchemaExpansionWork(parent.expandedWork, work)
 			}
 		}
 	}
 	if memo["#"]+1 > mysqlJSONSchemaMaxDepth {
 		return errMySQLJSONSchemaExpansion
 	}
+	if workMemo["#"] > mysqlJSONSchemaMaxExpandedWork {
+		return errMySQLJSONSchemaExpansionWork
+	}
 	return nil
+}
+
+func mysqlAddJSONSchemaExpansionWork(current, additional uint64) uint64 {
+	if current > mysqlJSONSchemaMaxExpandedWork || additional > mysqlJSONSchemaMaxExpandedWork-current {
+		return mysqlJSONSchemaMaxExpandedWork + 1
+	}
+	return current + additional
 }

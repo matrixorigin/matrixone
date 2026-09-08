@@ -965,6 +965,131 @@ func TestJsonSchemaLocalReferences(t *testing.T) {
 	}
 }
 
+func TestJsonSchemaLocalReferenceURIFragmentsThroughSQLFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		ref    string
+		key    string
+		doc    string
+		target map[string]any
+	}{
+		{
+			name:   "literal percent",
+			ref:    "#/definitions/a%25b",
+			key:    "a%b",
+			doc:    `{"value":1}`,
+			target: map[string]any{"type": "integer"},
+		},
+		{
+			name:   "percent-looking token",
+			ref:    "#/definitions/a%252Fb",
+			key:    "a%2Fb",
+			doc:    `{"value":1}`,
+			target: map[string]any{"type": "integer"},
+		},
+		{
+			name:   "encoded slash and tilde",
+			ref:    "#/definitions/a~1b~0c",
+			key:    "a/b~c",
+			doc:    `{"value":"ok"}`,
+			target: map[string]any{"type": "string"},
+		},
+		{
+			name:   "control character",
+			ref:    "#/definitions/a%00b",
+			key:    "a\x00b",
+			doc:    `{"value":"ok"}`,
+			target: map[string]any{"type": "string"},
+		},
+	}
+	for _, schemaCase := range tests {
+		t.Run(schemaCase.name, func(t *testing.T) {
+			schemaValue := map[string]any{
+				"properties":  map[string]any{"value": map[string]any{"$ref": schemaCase.ref}},
+				"definitions": map[string]any{schemaCase.key: schemaCase.target},
+			}
+			schemaBytes, err := json.Marshal(schemaValue)
+			require.NoError(t, err)
+			schemaText := string(schemaBytes)
+			for _, function := range []struct {
+				name string
+				ret  types.Type
+				fn   fEvalFn
+			}{
+				{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
+				{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+			} {
+				t.Run(function.name, func(t *testing.T) {
+					tc := tcTemp{
+						info: "json schema URI-fragment local refs through SQL function",
+						inputs: []FunctionTestInput{
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{schemaText}, []bool{false}),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{schemaCase.doc}, []bool{false}),
+						},
+					}
+					if function.name == "json_schema_valid" {
+						tc.expect = NewFunctionTestResult(function.ret, false, []bool{true}, []bool{false})
+					} else {
+						tc.expect = NewFunctionTestResult(function.ret, false,
+							[]string{mustJsonBinaryString(t, `{"valid":true}`)}, []bool{false})
+					}
+					fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, function.fn)
+					s, info := fcTC.Run()
+					require.True(t, s, info)
+				})
+			}
+		})
+	}
+}
+
+func repeatedJSONSchema(t *testing.T, depth int) string {
+	definitions := make(map[string]any, depth)
+	definitions["d0"] = map[string]any{"type": "integer"}
+	for i := 1; i < depth; i++ {
+		previous := fmt.Sprintf("#/definitions/d%d", i-1)
+		definitions[fmt.Sprintf("d%d", i)] = map[string]any{
+			"allOf": []any{
+				map[string]any{"$ref": previous},
+				map[string]any{"$ref": previous},
+			},
+		}
+	}
+	schemaBytes, err := json.Marshal(map[string]any{
+		"$ref":        fmt.Sprintf("#/definitions/d%d", depth-1),
+		"definitions": definitions,
+	})
+	require.NoError(t, err)
+	return string(schemaBytes)
+}
+
+func TestJsonSchemaRepeatedReferenceExpansionBudgetAndCancellation(t *testing.T) {
+	require.Equal(t, mysqlJSONSchemaMaxExpandedWork+1,
+		mysqlAddJSONSchemaExpansionWork(mysqlJSONSchemaMaxExpandedWork, 1))
+	require.Equal(t, mysqlJSONSchemaMaxExpandedWork+1,
+		mysqlAddJSONSchemaExpansionWork(mysqlJSONSchemaMaxExpandedWork-1, 2))
+
+	safeSchema, err := types.ParseStringToByteJson(repeatedJSONSchema(t, 4))
+	require.NoError(t, err)
+	compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", safeSchema)
+	require.NoError(t, err)
+	result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+	require.NoError(t, err)
+	require.True(t, result.Valid())
+
+	overBudgetSchema, err := types.ParseStringToByteJson(repeatedJSONSchema(t, 18))
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", overBudgetSchema)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+	require.Contains(t, err.Error(), mysqlJSONSchemaExpansionWorkReason)
+
+	cancelDuringPreflight := &cancelAfterErrContext{Context: context.Background(), cancelAfter: 12}
+	_, err = compileMySQLDraft4Schema(cancelDuringPreflight, "json_schema_valid", overBudgetSchema)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Greater(t, cancelDuringPreflight.calls, cancelDuringPreflight.cancelAfter)
+}
+
 func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1141,12 +1266,13 @@ func TestJsonSchemaExternalReferenceDoesNotPerformNetworkIO(t *testing.T) {
 
 type cancelAfterErrContext struct {
 	context.Context
-	calls int
+	calls       int
+	cancelAfter int
 }
 
 func (c *cancelAfterErrContext) Err() error {
 	c.calls++
-	if c.calls > 3 {
+	if c.calls > c.cancelAfter {
 		return context.Canceled
 	}
 	return nil
@@ -1181,7 +1307,7 @@ func TestJsonSchemaReferenceDepthAndCancellation(t *testing.T) {
 	for i := 0; i < 128; i++ {
 		manyProperties[fmt.Sprintf("p%d", i)] = map[string]any{"type": "integer"}
 	}
-	cancelDuringPreflight := &cancelAfterErrContext{Context: context.Background()}
+	cancelDuringPreflight := &cancelAfterErrContext{Context: context.Background(), cancelAfter: 3}
 	manySchemaBytes, marshalErr := json.Marshal(map[string]any{"properties": manyProperties})
 	require.NoError(t, marshalErr)
 	manySchema, parseErr := types.ParseSliceToByteJson(manySchemaBytes)
