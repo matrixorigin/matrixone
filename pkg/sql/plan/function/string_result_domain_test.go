@@ -49,6 +49,121 @@ func TestStringResultBoundArithmetic(t *testing.T) {
 		stringResultBound{bytes: math.MaxUint64}, stringResultBound{bytes: 1}).unknown)
 }
 
+func TestBoundedBuiltinReturnTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
+	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
+	assertType := func(t *testing.T, name string, inputs []types.Type, oid types.T, width int32, charset uint8) {
+		t.Helper()
+		resolved, err := GetFunctionByName(proc.Ctx, name, inputs)
+		require.NoError(t, err, "%s(%v)", name, inputs)
+		result := resolved.GetReturnType()
+		require.Equal(t, oid, result.Oid, "%s(%v)", name, inputs)
+		require.Equal(t, width, result.Width, "%s(%v)", name, inputs)
+		require.Equal(t, charset, result.Charset, "%s(%v)", name, inputs)
+	}
+
+	for _, oid := range []types.T{
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+	} {
+		t.Run("bin/"+oid.String(), func(t *testing.T) {
+			assertType(t, "bin", []types.Type{oid.ToType()}, types.T_varchar, 65, types.CharsetUTF8)
+		})
+	}
+
+	for _, input := range []types.Type{varchar(12), types.T_int64.ToType()} {
+		t.Run("conv/"+input.Oid.String(), func(t *testing.T) {
+			assertType(t, "conv", []types.Type{input, types.T_int64.ToType(), types.T_int64.ToType()}, types.T_varchar, 65, types.CharsetUTF8)
+		})
+	}
+
+	assertType(t, "inet_ntoa", []types.Type{types.T_uint64.ToType()}, types.T_varchar, 31, types.CharsetUTF8)
+	assertType(t, "inet6_ntoa", []types.Type{varbinary(16)}, types.T_varchar, 39, types.CharsetUTF8)
+	assertType(t, "inet6_aton", []types.Type{varchar(39)}, types.T_varbinary, 16, types.CharsetBinary)
+
+	for _, test := range []struct {
+		name      string
+		fn        string
+		input     types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "hex int", fn: "hex", input: types.T_int64.ToType(), wantOID: types.T_varchar, wantWidth: 16},
+		{name: "hex varchar", fn: "hex", input: varchar(12), wantOID: types.T_varchar, wantWidth: 96},
+		{name: "hex varbinary", fn: "hex", input: varbinary(12), wantOID: types.T_varchar, wantWidth: 24},
+		{name: "hex array", fn: "hex", input: types.T_array_float64.ToType(), wantOID: types.T_text, wantWidth: 0},
+		{name: "unhex varchar", fn: "unhex", input: varchar(2), wantOID: types.T_varbinary, wantWidth: 4},
+		{name: "unhex varbinary", fn: "unhex", input: varbinary(12), wantOID: types.T_varbinary, wantWidth: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertType(t, test.fn, []types.Type{test.input}, test.wantOID, test.wantWidth,
+				map[types.T]uint8{types.T_varchar: types.CharsetUTF8, types.T_text: types.CharsetUTF8, types.T_varbinary: types.CharsetBinary}[test.wantOID])
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		fn   string
+		args []types.Type
+		want int32
+	}{
+		{name: "md5", fn: "md5", args: []types.Type{types.T_blob.ToType()}, want: 32},
+		{name: "sha1", fn: "sha1", args: []types.Type{varchar(12)}, want: 40},
+		{name: "sha2", fn: "sha2", args: []types.Type{varchar(12), types.T_int64.ToType()}, want: 128},
+		{name: "compress varchar", fn: "compress", args: []types.Type{varchar(12)}, want: 68},
+		{name: "compress varbinary", fn: "compress", args: []types.Type{varbinary(12)}, want: 32},
+		{name: "aes encrypt varchar", fn: "aes_encrypt", args: []types.Type{varchar(12), varchar(3)}, want: 64},
+		{name: "aes encrypt varbinary", fn: "aes_encrypt", args: []types.Type{varbinary(12), varchar(3)}, want: 16},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, test.fn, test.args)
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			if test.fn == "md5" || test.fn == "sha1" || test.fn == "sha2" {
+				require.Equal(t, types.T_varchar, result.Oid)
+				require.Equal(t, types.CharsetUTF8, result.Charset)
+			} else {
+				require.Equal(t, types.T_varbinary, result.Oid)
+				require.Equal(t, types.CharsetBinary, result.Charset)
+			}
+			require.Equal(t, test.want, result.Width)
+		})
+	}
+
+	for _, fn := range []string{"uncompressed_length"} {
+		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int32, 0, types.CharsetLegacy)
+	}
+}
+
+func TestBoundedBuiltinResultBoundsFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		got  types.Type
+		want types.T
+	}{
+		{name: "compress blob", got: compressReturnType([]types.Type{types.T_blob.ToType()}), want: types.T_blob},
+		{name: "aes encrypt blob", got: aesEncryptReturnType([]types.Type{types.T_blob.ToType()}), want: types.T_blob},
+		{name: "unhex wide varchar", got: unhexReturnType([]types.Type{types.T_varchar.ToType()}), want: types.T_blob},
+		{name: "hex wide varchar", got: stringHexReturnType([]types.Type{types.T_varchar.ToType()}), want: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, test.got.Oid)
+		})
+	}
+
+	require.Equal(t, uint64(68), compressResultBound(stringResultBound{bytes: 48}).bytes)
+	require.Equal(t, uint64(16), aesPaddedResultBound(stringResultBound{bytes: 0}).bytes)
+	require.Equal(t, uint64(32), aesPaddedResultBound(stringResultBound{bytes: 16}).bytes)
+	require.Equal(t, uint64(32), aesPaddedResultBound(stringResultBound{bytes: 17}).bytes)
+	require.Equal(t, uint64(4), roundedUpHalfStringResultBound(stringResultBound{bytes: 7}).bytes)
+	require.True(t, compressResultBound(unknownStringResultBound()).unknown)
+	require.True(t, aesPaddedResultBound(stringResultBound{bytes: math.MaxUint64}).unknown)
+}
+
 func TestStringTypeBoundClassification(t *testing.T) {
 	boundedText := types.New(types.T_varchar, 7, 0)
 	boundedBinary := types.New(types.T_varbinary, 9, 0)
