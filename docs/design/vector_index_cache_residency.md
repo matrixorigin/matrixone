@@ -777,16 +777,20 @@ single device, `MO_CL_CUDA=1`.
 | `vector_cagra_replicated` (simulated placement) | 18 | 18 |
 | `vector_cagra_sharded` (simulated placement) | 30 | 30 |
 
-VRAM sampled across the run — a CPU fallback would be a flat line:
+The per-case counts above were re-measured on the current head and reproduce
+exactly. Two earlier claims did NOT survive re-measurement and have been removed
+rather than carried forward:
 
-```
-1051 MiB  baseline
-1180 MiB  three CAGRA indexes under the 1 MiB device cap
-1324 MiB  peak
-```
-
-A 1M-row wiki_all run (f32) loads and queries cagra, ivfpq and hnsw with **zero
-admission refusals**, and `build_ts`/`nrow` were read back from the live metadata.
+- a VRAM sample presented as proof the GPU is exercised. Re-sampled at 1 Hz across
+  these same cases, device memory moves ~2 MiB (1549 -> 1551), not the ~273 MiB
+  once recorded: these datasets are tiny and their allocations are shorter-lived
+  than the sampling interval. The figure did not mean what it was cited for. What
+  does establish GPU execution here is simpler -- CAGRA and IVF-PQ have no CPU
+  build path, so `vector_cagra` and `vector_ivfpq` passing IS the GPU path.
+- a 1M-row wiki_all run reporting zero admission refusals. It predates the
+  accounting fixes, which deliberately CHANGE what admission charges (the CDC
+  overflow is now reserved at Preload and the delete id-map is charged to the host
+  budget), so its refusal count cannot be assumed to still hold. See §10.4.
 
 **Re-run after the accounting fixes** (CDC overflow charged at Preload, the delete
 id-map charged to the host budget, one probe for both device budgets), on a binary
@@ -849,6 +853,32 @@ cache, its VRAM, the import's own footprint — comes off that sample. The four 
 above rotated into 1, 3, 2 and 4 sub-indexes respectively, and each one pays its
 own GPU build, save and tar. A single build sample on a warm CN measures the
 previous build.
+
+These build timings were taken before the accounting fixes and are NOT re-measured
+here. They remain valid because the fixes touch Preload, Load and the metadata
+writer -- not the build path -- and the restart protocol above means a build
+measurement never observes the cache anyway.
+
+### 10.4 Outstanding
+
+Stated so no reader has to infer coverage from silence.
+
+- **A 1M-scale run after the accounting fixes.** The earlier wiki_all figure
+  (zero admission refusals) predates them, and the fixes deliberately change what
+  admission charges -- a CDC-heavy 1M generation now reserves its overflow at
+  Preload, and any generation replaying a delete carries the id-map. The refusal
+  count at that scale is therefore unknown, not zero. The functional paths are
+  covered by §10.2 and the forced-state tests; what is missing is the scale.
+- **GPU performance acceptance.** No QPS or latency comparison against `main` has
+  been run for this branch. The distance kernels are untouched and the governor
+  sits on the load path rather than the search path, so no regression is expected
+  -- but expected is not measured.
+- **The id-map prospective reservation.** The map is charged once it exists
+  (§10.2) but NOT reserved before the replay that creates it. Reserving ahead
+  means reserving rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows
+  -- including the ones that replay no deletes at all. Charging after the fact
+  leaves a window where the host budget is briefly short by that much. Deliberate,
+  and the trade belongs to whoever owns the memory budget.
 
 ## 11. Decision log
 
