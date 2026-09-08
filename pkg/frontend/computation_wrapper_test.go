@@ -1013,12 +1013,14 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 	const maxUint64 = ^uint64(0)
 	for _, tc := range []struct {
-		name      string
-		query     string
-		peer      uint64
-		control   bool
-		floatPeer bool
-		nullPeer  bool
+		name                 string
+		query                string
+		peer                 uint64
+		peerSet              bool
+		control              bool
+		floatPeer            bool
+		nullPeer             bool
+		runtimeBoundOperator string
 	}{
 		{
 			name:  "addition",
@@ -1029,14 +1031,43 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			query: "select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned)",
 		},
 		{
-			name:  "bare_addition",
-			query: "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
-			peer:  1,
+			name:                 "bare_addition",
+			query:                "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
 		},
 		{
-			name:  "bare_multiplication",
-			query: "select (cast(? as unsigned) * ?) - cast(? as unsigned)",
-			peer:  2,
+			name:                 "bare_multiplication",
+			query:                "select (cast(? as unsigned) * ?) - cast(? as unsigned)",
+			peer:                 2,
+			runtimeBoundOperator: "*",
+		},
+		{
+			name:                 "bare_integer_division_negative_peer",
+			query:                "select (cast(? as unsigned) div ?) - cast(? as unsigned)",
+			peer:                 maxUint64,
+			runtimeBoundOperator: "div",
+		},
+		{
+			name:                 "bare_modulo_negative_peer",
+			query:                "select (cast(? as unsigned) % ?) is not null",
+			peer:                 maxUint64 - 1,
+			control:              true,
+			runtimeBoundOperator: "%",
+		},
+		{
+			name:                 "bare_integer_division_zero_peer",
+			query:                "select (cast(? as unsigned) div ?) is null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "div",
+		},
+		{
+			name:                 "bare_modulo_zero_peer",
+			query:                "select (cast(? as unsigned) % ?) is null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "%",
 		},
 		{name: "negative_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: maxUint64 - 1, control: true},
 		{name: "bare_both", query: "select (? + ?) - cast(? as unsigned)", peer: 1},
@@ -1069,29 +1100,26 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				packet[10] = 0x80
 				binary.LittleEndian.PutUint64(packet[11:], maxUint64)
 				binary.LittleEndian.PutUint64(packet[19:], maxUint64)
-				if tc.peer != 0 {
-					packet = make([]byte, 37)
+				if tc.peer != 0 || tc.peerSet {
+					paramCount := strings.Count(tc.query, "?")
+					require.True(t, paramCount == 2 || paramCount == 3)
+					packet = make([]byte, 7+2*paramCount+8*paramCount)
 					packet[6] = 1
 					packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
 					packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
-					packet[11], packet[12] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
-					binary.LittleEndian.PutUint64(packet[13:], maxUint64)
-					binary.LittleEndian.PutUint64(packet[21:], tc.peer)
-					binary.LittleEndian.PutUint64(packet[29:], maxUint64)
-					if tc.control {
-						packet = make([]byte, 27)
-						packet[6] = 1
-						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
-						packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
-						binary.LittleEndian.PutUint64(packet[11:], maxUint64)
-						binary.LittleEndian.PutUint64(packet[19:], tc.peer)
-						if tc.floatPeer {
-							packet[9] = byte(defines.MYSQL_TYPE_DOUBLE)
-						}
-						if tc.nullPeer {
-							packet[5] = 2
-							packet = packet[:19]
-						}
+					valueOffset := 7 + 2*paramCount
+					binary.LittleEndian.PutUint64(packet[valueOffset:], maxUint64)
+					binary.LittleEndian.PutUint64(packet[valueOffset+8:], tc.peer)
+					if paramCount == 3 {
+						packet[11], packet[12] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						binary.LittleEndian.PutUint64(packet[valueOffset+16:], maxUint64)
+					}
+					if tc.floatPeer {
+						packet[9] = byte(defines.MYSQL_TYPE_DOUBLE)
+					}
+					if tc.nullPeer {
+						packet[5] = 2
+						packet = packet[:valueOffset+8]
 					}
 				}
 				require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0))
@@ -1104,6 +1132,12 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				}
 				projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 				require.Len(t, projectNode.ProjectList, 1)
+				if tc.runtimeBoundOperator != "" {
+					require.True(t,
+						hasRuntimeArithmeticResultCast(projectNode.ProjectList[0], tc.runtimeBoundOperator, types.T_uint64),
+						"runtime plan must retain the inner unsigned %s boundary", tc.runtimeBoundOperator,
+					)
+				}
 				executor, err := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
 				require.NoError(t, err)
 				defer executor.Free()
@@ -1122,6 +1156,28 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			})
 		}
 	}
+}
+
+func hasRuntimeArithmeticResultCast(expr *plan.Expr, operator string, resultType types.T) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 &&
+		types.T(expr.Typ.Id) == resultType {
+		if inner := fn.Args[0].GetF(); inner != nil && inner.Func != nil && inner.Func.ObjName == operator {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasRuntimeArithmeticResultCast(arg, operator, resultType) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
