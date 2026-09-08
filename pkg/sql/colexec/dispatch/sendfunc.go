@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -164,7 +165,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			if remove {
 				ap.ctr.removeIdxReceiver(i)
 				if ap.ctr.remoteRegsCnt == 0 {
-					return true, nil
+					return ap.ctr.localRegsCnt == 0, nil
 				}
 				i--
 			}
@@ -471,6 +472,9 @@ func sendBatchToClientSession(
 	defer wcs.Unlock()
 
 	if wcs.ReceiverDone {
+		if retireStoppedReceiver(ctx, wcs) {
+			return true, nil
+		}
 		// Critical fix: distinguish between strict and tolerant modes
 		if failureMode == FailureModeStrict {
 			// Strict mode: receiver done indicates data loss
@@ -503,6 +507,10 @@ func sendBatchToClientSession(
 	if wcs.ReserveBatch != nil {
 		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
 		if err != nil {
+			if (errors.Is(err, context.Canceled) || moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)) &&
+				retireStoppedReceiver(ctx, wcs) {
+				return true, nil
+			}
 			return false, err
 		}
 		defer func() {
@@ -560,4 +568,19 @@ func sendBatchToClientSession(
 	}
 	batchSent = true
 	return false, nil
+}
+
+// Called with wcs locked, only on receiver retirement/error paths. StopSending
+// retires this subscription; the remote main pipeline still owns query errors.
+func retireStoppedReceiver(ctx context.Context, wcs *process.WrapCs) bool {
+	if ctx.Err() != nil || wcs.ReceiverStopped == nil || !wcs.ReceiverStopped() {
+		return false
+	}
+	// The caller removes this receiver, so Reset will no longer notify its
+	// registration handler. Complete that handler before dropping the entry.
+	select {
+	case wcs.Err <- nil:
+	default:
+	}
+	return true
 }

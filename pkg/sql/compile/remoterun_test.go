@@ -2990,66 +2990,84 @@ func Test_GetProcByUuid_WaitsPastFormerAdmissionLimitForRegistration(t *testing.
 }
 
 func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testing.T) {
-	server := colexec.NewServer("")
-	uid := uuid.Must(uuid.NewV7())
-	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
-	dispatchCtx, cancelDispatch := context.WithCancelCause(context.Background())
-	dispatchProc := &process.Process{
-		Ctx:    dispatchCtx,
-		Cancel: cancelDispatch,
-	}
-	notifyCh := make(process.RemotePipelineInformationChannel, 1)
-	require.NoError(t, server.PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
-	t.Cleanup(func() {
-		server.RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
-	})
+	for _, stopBeforeCancel := range []bool{false, true} {
+		t.Run(fmt.Sprint("stop_before_cancel_", stopBeforeCancel), func(t *testing.T) {
 
-	ctrl := gomock.NewController(t)
-	session := mock_morpc.NewMockClientSession(ctrl)
-	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
-	receiver := &messageReceiverOnServer{
-		messageCtx:      messageCtx,
-		connectionCtx:   context.Background(),
-		messageId:       7,
-		messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
-		messageUuid:     uid,
-		clientSession:   session,
-		colexecServer:   server,
-		streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
-	}
+			server := colexec.NewServer("")
+			uid := uuid.Must(uuid.NewV7())
+			messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+			defer cancelMessage(context.Canceled)
+			dispatchCtx, cancelDispatch := context.WithCancelCause(context.Background())
+			defer cancelDispatch(context.Canceled)
+			dispatchProc := &process.Process{
+				Ctx:    dispatchCtx,
+				Cancel: cancelDispatch,
+			}
+			notifyCh := make(process.RemotePipelineInformationChannel, 1)
+			require.NoError(t, server.PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+			t.Cleanup(func() {
+				server.RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
+			})
 
-	done := make(chan error, 1)
-	go func() {
-		done <- handlePipelineMessage(receiver)
-	}()
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
+			receiver := &messageReceiverOnServer{
+				messageCtx:      messageCtx,
+				connectionCtx:   context.Background(),
+				messageId:       7,
+				messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
+				messageUuid:     uid,
+				clientSession:   session,
+				colexecServer:   server,
+				streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
+			}
 
-	var attached *process.WrapCs
-	select {
-	case attached = <-notifyCh:
-		require.NotNil(t, attached)
-		require.Equal(t, uid, attached.Uid)
-		require.Equal(t, uint32(2), attached.BatchCredits)
-		require.Equal(t, uint64(1024), attached.ByteCredits)
-		require.NotNil(t, attached.ReserveBatch)
-		require.NotNil(t, attached.RollbackBatch)
-		seq, err := attached.ReserveBatch(context.Background(), 10)
-		require.NoError(t, err)
-		require.Equal(t, uint64(1), seq)
-		attached.RollbackBatch(seq)
-	case <-time.After(time.Second):
-		t.Fatal("prepare-done notify did not attach to the published receiver")
-	}
+			done := make(chan error, 1)
+			handlerDone := make(chan struct{})
+			go func() {
+				defer close(handlerDone)
+				done <- handlePipelineMessage(receiver)
+			}()
 
-	cancelCause := moerr.NewInternalErrorNoCtx("notify message canceled after attach")
-	cancelMessage(cancelCause)
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, cancelCause)
-	case <-time.After(time.Second):
-		t.Fatal("prepare-done notify did not stop after message cancellation")
+			defer func() { cancelMessage(context.Canceled); <-handlerDone }()
+			var attached *process.WrapCs
+			select {
+			case attached = <-notifyCh:
+				require.NotNil(t, attached)
+				require.Equal(t, uid, attached.Uid)
+				require.Equal(t, uint32(2), attached.BatchCredits)
+				require.Equal(t, uint64(1024), attached.ByteCredits)
+				require.NotNil(t, attached.ReserveBatch)
+				require.NotNil(t, attached.RollbackBatch)
+				seq, err := attached.ReserveBatch(context.Background(), 10)
+				require.NoError(t, err)
+				require.Equal(t, uint64(1), seq)
+				attached.RollbackBatch(seq)
+			case <-time.After(time.Second):
+				t.Fatal("prepare-done notify did not attach to the published receiver")
+			}
+
+			require.NotNil(t, attached.ReceiverStopped)
+			require.False(t, attached.ReceiverStopped())
+			if stopBeforeCancel {
+				receiver.streamLifecycle.batchFlow.stop(context.Canceled)
+				require.True(t, attached.ReceiverStopped())
+			}
+			cancelCause := moerr.NewInternalErrorNoCtx("notify message canceled after attach")
+			cancelMessage(cancelCause)
+			require.False(t, attached.ReceiverStopped())
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, cancelCause)
+			case <-time.After(time.Second):
+				t.Fatal("prepare-done notify did not stop after message cancellation")
+			}
+			require.ErrorIs(t, context.Cause(dispatchCtx), cancelCause)
+			server.RemoveRelatedPipeline(session, receiver.messageId)
+
+		})
 	}
-	require.ErrorIs(t, context.Cause(dispatchCtx), cancelCause)
-	server.RemoveRelatedPipeline(session, receiver.messageId)
 }
 
 func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *testing.T) {
