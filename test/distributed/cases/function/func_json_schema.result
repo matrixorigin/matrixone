@@ -246,3 +246,6 @@ invalid_local
 select json_schema_validation_report('{"$ref":"#/$defs/value","$defs":{"value":{"$ref":false,"type":"integer"}}}', '1') as report_local;
 report_local
 {"valid": true}
+select json_schema_valid('{"$ref":"#/definitions/d14","definitions":{"d0":{"type":"integer"},"d1":{"allOf":[{"$ref":"#/definitions/d0"},{"$ref":"#/definitions/d0"}]},"d2":{"allOf":[{"$ref":"#/definitions/d1"},{"$ref":"#/definitions/d1"}]},"d3":{"allOf":[{"$ref":"#/definitions/d2"},{"$ref":"#/definitions/d2"}]},"d4":{"allOf":[{"$ref":"#/definitions/d3"},{"$ref":"#/definitions/d3"}]},"d5":{"allOf":[{"$ref":"#/definitions/d4"},{"$ref":"#/definitions/d4"}]},"d6":{"allOf":[{"$ref":"#/definitions/d5"},{"$ref":"#/definitions/d5"}]},"d7":{"allOf":[{"$ref":"#/definitions/d6"},{"$ref":"#/definitions/d6"}]},"d8":{"allOf":[{"$ref":"#/definitions/d7"},{"$ref":"#/definitions/d7"}]},"d9":{"allOf":[{"$ref":"#/definitions/d8"},{"$ref":"#/definitions/d8"}]},"d10":{"allOf":[{"$ref":"#/definitions/d9"},{"$ref":"#/definitions/d9"}]},"d11":{"allOf":[{"$ref":"#/definitions/d10"},{"$ref":"#/definitions/d10"}]},"d12":{"allOf":[{"$ref":"#/definitions/d11"},{"$ref":"#/definitions/d11"}]},"d13":{"allOf":[{"$ref":"#/definitions/d12"},{"$ref":"#/definitions/d12"}]},"d14":{"allOf":[{"$ref":"#/definitions/d13"},{"$ref":"#/definitions/d13"}]}}}', '1') as reachable_budget;
+reachable_budget
+1

@@ -1116,6 +1116,27 @@ func TestJsonSchemaUnusedDefinitionsDoNotConsumeExpansionBudget(t *testing.T) {
 	require.True(t, result.Valid())
 }
 
+func TestJsonSchemaReachableReferenceBudgetIgnoresDefinitionContainment(t *testing.T) {
+	for _, depth := range []int{15, 16} {
+		t.Run(fmt.Sprintf("depth-%d-within-budget", depth), func(t *testing.T) {
+			schema, err := types.ParseStringToByteJson(repeatedJSONSchema(t, depth))
+			require.NoError(t, err)
+			compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+			require.NoError(t, err)
+			result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+			require.NoError(t, err)
+			require.True(t, result.Valid())
+		})
+	}
+
+	schema, err := types.ParseStringToByteJson(repeatedJSONSchema(t, 17))
+	require.NoError(t, err)
+	_, err = compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+	require.Contains(t, err.Error(), mysqlJSONSchemaExpansionWorkReason)
+}
+
 func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1375,6 +1396,10 @@ func TestJsonSchemaPreflightVisitCounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(index.nodes), index.nodeVisits)
 	require.Equal(t, 3, index.refOccurrences)
+	require.Len(t, index.nodes["#"].evaluationEdges, 2)
+	for _, edge := range index.nodes["#"].evaluationEdges {
+		require.NotContains(t, edge, "/definitions")
+	}
 	// Every containment edge is indexed once and each of the two effective
 	// refs adds exactly one expansion edge. The unknown ref is literal.
 	containmentEdges := 0

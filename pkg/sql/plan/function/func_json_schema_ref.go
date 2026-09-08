@@ -90,11 +90,13 @@ func (l *mysqlDraft4DenyLoader) LoadJSON() (interface{}, error) {
 }
 
 type mysqlJSONSchemaNode struct {
-	value            any
-	containment      []string
-	edges            []string
-	refEdgePositions map[int]struct{}
-	baseExternal     bool
+	value                      any
+	containment                []string
+	edges                      []string
+	refEdgePositions           map[int]struct{}
+	evaluationEdges            []string
+	evaluationRefEdgePositions map[int]struct{}
+	baseExternal               bool
 }
 
 type mysqlJSONSchemaIndex struct {
@@ -486,6 +488,16 @@ func mysqlValidJSONPointerArrayIndex(value string) bool {
 }
 
 func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mysqlJSONSchemaIndex, refs map[string]mysqlJSONSchemaRef) (map[string]struct{}, error) {
+	// The full-tree index is used for syntax and external-reference checks, but
+	// only schema positions reached by validation may contribute to expansion
+	// work. Keep the original containment/ref graph for the full-tree cycle and
+	// depth checks, and build a separate execution graph for work accounting so
+	// registry containers such as definitions do not become execution edges
+	// merely because they contain schemas.
+	for _, node := range index.nodes {
+		node.evaluationEdges = nil
+		node.evaluationRefEdgePositions = nil
+	}
 	stack := []mysqlEffectiveSchemaPending{{pointer: "#", value: index.nodes["#"].value}}
 	visited := make(map[string]struct{}, len(index.nodes))
 	effectiveTargets := make(map[string]struct{})
@@ -524,6 +536,12 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 					node.refEdgePositions = make(map[int]struct{})
 				}
 				node.refEdgePositions[edgeIndex] = struct{}{}
+				evaluationEdgeIndex := len(node.evaluationEdges)
+				node.evaluationEdges = append(node.evaluationEdges, ref.target)
+				if node.evaluationRefEdgePositions == nil {
+					node.evaluationRefEdgePositions = make(map[int]struct{})
+				}
+				node.evaluationRefEdgePositions[evaluationEdgeIndex] = struct{}{}
 				index.edgeVisits++
 				index.refEdges++
 				effectiveTargets[ref.target] = struct{}{}
@@ -539,7 +557,12 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 			}
 		}
 
-		stack = append(stack, mysqlEffectiveSchemaChildren(item.pointer, object)...)
+		children := mysqlEffectiveSchemaChildren(item.pointer, object)
+		node := index.nodes[item.pointer]
+		for _, child := range children {
+			node.evaluationEdges = append(node.evaluationEdges, child.pointer)
+		}
+		stack = append(stack, children...)
 	}
 	return effectiveTargets, nil
 }
@@ -616,7 +639,6 @@ func mysqlEffectiveSchemaChildren(pointer string, object map[string]any) []mysql
 func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaIndex) error {
 	colors := make(map[string]uint8, len(index.nodes))
 	memo := make(map[string]int, len(index.nodes))
-	workMemo := make(map[string]uint64, len(index.nodes))
 	pointers := make([]string, 0, len(index.nodes))
 	for pointer := range index.nodes {
 		pointers = append(pointers, pointer)
@@ -627,11 +649,9 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 			continue
 		}
 		type frame struct {
-			pointer      string
-			next         int
-			longest      int
-			expandedWork uint64
-			incomingRef  bool
+			pointer string
+			next    int
+			longest int
 		}
 		stack := []frame{{pointer: start}}
 		colors[start] = 1
@@ -646,44 +666,90 @@ func mysqlValidateSchemaRefGraph(ctx context.Context, index *mysqlJSONSchemaInde
 				edgeIndex := current.next
 				target := edges[edgeIndex]
 				current.next++
-				_, referenceEdge := index.nodes[current.pointer].refEdgePositions[edgeIndex]
 				switch colors[target] {
 				case 0:
 					colors[target] = 1
-					stack = append(stack, frame{pointer: target, incomingRef: referenceEdge})
+					stack = append(stack, frame{pointer: target})
 				case 1:
 					return errMySQLJSONSchemaRefCycle
 				case 2:
 					if candidate := memo[target] + 1; candidate > current.longest {
 						current.longest = candidate
 					}
-					work := workMemo[target]
-					if referenceEdge {
-						work = mysqlAddJSONSchemaExpansionWork(work, 1)
-					}
-					current.expandedWork = mysqlAddJSONSchemaExpansionWork(current.expandedWork, work)
 				}
 				continue
 			}
 			colors[current.pointer] = 2
 			memo[current.pointer] = current.longest
-			work := current.expandedWork
-			workMemo[current.pointer] = work
 			stack = stack[:last]
 			if len(stack) > 0 {
 				parent := &stack[len(stack)-1]
 				if candidate := current.longest + 1; candidate > parent.longest {
 					parent.longest = candidate
 				}
-				if current.incomingRef {
-					work = mysqlAddJSONSchemaExpansionWork(work, 1)
-				}
-				parent.expandedWork = mysqlAddJSONSchemaExpansionWork(parent.expandedWork, work)
 			}
 		}
 	}
 	if memo["#"]+1 > mysqlJSONSchemaMaxDepth {
 		return errMySQLJSONSchemaExpansion
+	}
+
+	root, ok := index.nodes["#"]
+	if !ok || len(root.evaluationEdges) == 0 {
+		return nil
+	}
+
+	// Expanded work follows only the schema positions that validation can
+	// reach. Repeated reference edges remain separate so an acyclic diamond is
+	// still rejected when its execution work exceeds the bounded budget.
+	workColors := make(map[string]uint8, len(index.nodes))
+	workMemo := make(map[string]uint64, len(index.nodes))
+	type workFrame struct {
+		pointer      string
+		next         int
+		expandedWork uint64
+		incomingRef  bool
+	}
+	workStack := []workFrame{{pointer: "#"}}
+	workColors["#"] = 1
+	for len(workStack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		last := len(workStack) - 1
+		current := &workStack[last]
+		edges := index.nodes[current.pointer].evaluationEdges
+		if current.next < len(edges) {
+			edgeIndex := current.next
+			target := edges[edgeIndex]
+			current.next++
+			_, referenceEdge := index.nodes[current.pointer].evaluationRefEdgePositions[edgeIndex]
+			switch workColors[target] {
+			case 0:
+				workColors[target] = 1
+				workStack = append(workStack, workFrame{pointer: target, incomingRef: referenceEdge})
+			case 1:
+				return errMySQLJSONSchemaRefCycle
+			case 2:
+				work := workMemo[target]
+				if referenceEdge {
+					work = mysqlAddJSONSchemaExpansionWork(work, 1)
+				}
+				current.expandedWork = mysqlAddJSONSchemaExpansionWork(current.expandedWork, work)
+			}
+			continue
+		}
+		workColors[current.pointer] = 2
+		work := current.expandedWork
+		workMemo[current.pointer] = work
+		workStack = workStack[:last]
+		if len(workStack) > 0 {
+			parent := &workStack[len(workStack)-1]
+			if current.incomingRef {
+				work = mysqlAddJSONSchemaExpansionWork(work, 1)
+			}
+			parent.expandedWork = mysqlAddJSONSchemaExpansionWork(parent.expandedWork, work)
+		}
 	}
 	if workMemo["#"] > mysqlJSONSchemaMaxExpandedWork {
 		return errMySQLJSONSchemaExpansionWork
