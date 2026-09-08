@@ -481,6 +481,11 @@ type BaseProcess struct {
 	userLevelLockOwner      string
 	userLevelLockConnID     uint64
 	userLevelLockGeneration string
+	// sequenceGate serializes the complete sequence metadata operation and
+	// session-state publication across all child processes sharing this Base.
+	// It is intentionally not part of SessionInfo: remote/rebuilt session state
+	// must not copy or replace a live synchronization object.
+	sequenceGate sequenceGate
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
