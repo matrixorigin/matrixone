@@ -253,6 +253,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
 	}
+	if err := validateFunctionalIndexMetadata(ctx, tableDef); err != nil {
+		return nil, err
+	}
 
 	if tableDef.IsTemporary {
 		tableDef = DeepCopyTableDef(tableDef, true)
@@ -732,6 +735,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
+	if err := validateFunctionalIndexMetadata(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {

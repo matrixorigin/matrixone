@@ -2414,6 +2414,9 @@ func (builder *QueryBuilder) applyFunctionalIndexEquality(nodeID int32, node *pl
 			if isRuntimeConstExpr(columnArg) || !isRuntimeConstExpr(constantArg) || !functionalExpressionMatches(generated, columnArg) {
 				continue
 			}
+			if err := validateFunctionalIndexExpression(context.Background(), columnArg, node.TableDef); err != nil {
+				continue
+			}
 			probe := DeepCopyExpr(filter)
 			probeFn := probe.GetF()
 			if probeFn == nil || len(probeFn.Args) != 2 {

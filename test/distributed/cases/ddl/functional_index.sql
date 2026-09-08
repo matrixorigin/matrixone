@@ -49,6 +49,35 @@ create table fi_unique (id int primary key, a int, unique key uq ((a + 1)));
 create table fi_composite (id int primary key, a int, b int, key bad ((a + 1), b));
 -- @regex("unsupported type", true)
 create table fi_json (id int primary key, doc json, key bad ((json_extract(doc, '$.sku'))));
+-- A session-dependent temporal cast is rejected before a hidden column or
+-- index row is published, for both a direct expression and a generated-column
+-- dependency.
+-- @regex("functional", true)
+create table fi_time_inline (id int primary key, ts timestamp, key bad ((cast(ts as char(19)))));
+select count(*) from mo_catalog.mo_tables where relname = 'fi_time_inline' and reldatabase = 'functional_index';
+-- @regex("functional", true)
+create table fi_time_inline_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual, key bad ((g)));
+select count(*) from mo_catalog.mo_tables where relname = 'fi_time_inline_dep' and reldatabase = 'functional_index';
+create table fi_time_create (id int primary key, ts timestamp);
+-- @regex("functional", true)
+create index bad_time_create on fi_time_create ((cast(ts as char(19))));
+select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_create' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
+create table fi_time_create_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
+-- @regex("functional", true)
+create index bad_time_create_dep on fi_time_create_dep ((g));
+select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_create_dep' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
+create table fi_time_alter (id int primary key, ts timestamp);
+-- @regex("functional", true)
+alter table fi_time_alter add index bad_time_alter ((cast(ts as char(19))));
+select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_alter' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
+create table fi_time_alter_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
+-- @regex("functional", true)
+alter table fi_time_alter_dep add index bad_time_alter_dep ((g));
+select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_alter_dep' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
 -- @regex("functional", true)
 create temporary table fi_temp (id int, a int, key bad ((a + 1)));
 

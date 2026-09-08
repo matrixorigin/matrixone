@@ -584,6 +584,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
 	}
+	if err := validateFunctionalIndexMetadata(ctx.GetContext(), tableDef); err != nil {
+		return err
+	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
 		return err

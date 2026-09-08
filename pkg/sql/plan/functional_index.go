@@ -28,11 +28,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const functionalIndexProtocolError = "functional indexes require all CNs to support protocol version 56"
+const functionalIndexProtocolError = "functional indexes require all CNs to support protocol version 57"
+
+type functionalIndexExprKind uint8
+
+const (
+	functionalIndexExprInvalid functionalIndexExprKind = iota
+	functionalIndexExprInteger
+	functionalIndexExprString
+	functionalIndexExprJSON
+)
+
+type functionalIndexExprVisit uint8
+
+const (
+	functionalIndexExprUnvisited functionalIndexExprVisit = iota
+	functionalIndexExprVisiting
+	functionalIndexExprDone
+)
+
+type functionalIndexExprValue struct {
+	kind functionalIndexExprKind
+	typ  Type
+}
 
 func hasFunctionalIndexKeyPart(parts []*tree.KeyPart) bool {
 	for _, part := range parts {
@@ -66,10 +89,403 @@ func requireFunctionalIndexProtocol(ctx context.Context, proc *process.Process) 
 	default:
 		ok = false
 	}
-	if !ok || version < defines.MORPCVersion56 {
+	if !ok || version < defines.MORPCVersion57 {
 		return moerr.NewNotSupported(ctx, functionalIndexProtocolError)
 	}
 	return nil
+}
+
+// validateFunctionalIndexExpression is the single semantic admission check for
+// persisted functional-index expressions. It intentionally reasons over the
+// resolved plan expression rather than the SQL spelling: implicit casts,
+// overload selection, assignment wrappers, and generated-column dependencies
+// are all part of the value that writers and readers will execute.
+func validateFunctionalIndexExpression(ctx context.Context, expr *plan.Expr, tableDef *TableDef) error {
+	if expr == nil || tableDef == nil {
+		return moerr.NewNotSupported(ctx, "functional index expression is not resolvable")
+	}
+	_, err := validateFunctionalIndexExpressionValue(ctx, expr, tableDef)
+	return err
+}
+
+func validateFunctionalIndexExpressionValue(
+	ctx context.Context,
+	expr *plan.Expr,
+	tableDef *TableDef,
+) (functionalIndexExprValue, error) {
+	if expr == nil || tableDef == nil {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression is not resolvable")
+	}
+	states := make(map[int32]functionalIndexExprVisit)
+	values := make(map[int32]functionalIndexExprValue)
+	return validateFunctionalIndexExprNode(ctx, expr, tableDef, states, values)
+}
+
+func validateFunctionalIndexExprNode(
+	ctx context.Context,
+	expr *plan.Expr,
+	tableDef *TableDef,
+	states map[int32]functionalIndexExprVisit,
+	values map[int32]functionalIndexExprValue,
+) (functionalIndexExprValue, error) {
+	if expr == nil {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression contains a nil node")
+	}
+
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col == nil || e.Col.ColPos < 0 || int(e.Col.ColPos) >= len(tableDef.Cols) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression references an invalid column")
+		}
+		pos := e.Col.ColPos
+		col := tableDef.Cols[pos]
+		if col == nil {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression references a missing column")
+		}
+		if col.GeneratedCol != nil {
+			return validateFunctionalIndexGeneratedColumn(ctx, pos, col, tableDef, states, values)
+		}
+		if col.Typ.AutoIncr {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression cannot depend on an auto-increment column")
+		}
+		value := functionalIndexValueForType(col.Typ)
+		if value.kind == functionalIndexExprInvalid {
+			return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx, "functional index expression references unsupported column type %s", types.T(col.Typ.Id).String())
+		}
+		return value, nil
+
+	case *plan.Expr_Lit:
+		value := functionalIndexValueForType(expr.Typ)
+		if value.kind == functionalIndexExprInvalid {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression contains an unsupported literal type")
+		}
+		if value.kind == functionalIndexExprString && (e.Lit == nil || e.Lit.Isnull) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression contains an untyped string literal")
+		}
+		return value, nil
+
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression contains an unresolved function")
+		}
+		fid, overload, ok := functionalIndexKnownOverload(e.F.Func.Obj)
+		if !ok {
+			return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx, "functional index expression uses an unknown overload for '%s'", e.F.Func.ObjName)
+		}
+		return validateFunctionalIndexFunction(ctx, fid, overload, e.F, expr, tableDef, states, values)
+
+	default:
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression contains an unsupported plan node")
+	}
+}
+
+func validateFunctionalIndexGeneratedColumn(
+	ctx context.Context,
+	pos int32,
+	col *ColDef,
+	tableDef *TableDef,
+	states map[int32]functionalIndexExprVisit,
+	values map[int32]functionalIndexExprValue,
+) (functionalIndexExprValue, error) {
+	switch states[pos] {
+	case functionalIndexExprVisiting:
+		return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx, "functional index expression has a cyclic generated-column dependency at '%s'", col.Name)
+	case functionalIndexExprDone:
+		return values[pos], nil
+	}
+	if col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
+		return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx, "functional index expression depends on generated column '%s' without an expression", col.Name)
+	}
+	states[pos] = functionalIndexExprVisiting
+	value, err := validateFunctionalIndexExprNode(ctx, col.GeneratedCol.Expr, tableDef, states, values)
+	if err != nil {
+		return functionalIndexExprValue{}, err
+	}
+	value, err = validateFunctionalIndexAssignmentTarget(ctx, value, col.Typ)
+	if err != nil {
+		return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx,
+			"functional index expression depends on generated column '%s': %s", col.Name, err)
+	}
+	states[pos] = functionalIndexExprDone
+	values[pos] = value
+	return value, nil
+}
+
+func functionalIndexKnownOverload(overloadID int64) (fid, overload int32, ok bool) {
+	fid, overload = function.DecodeOverloadID(overloadID)
+	if fid < 0 || overload < 0 {
+		return fid, overload, false
+	}
+	// Catalog metadata is not trusted input. The function package historically
+	// assumes a valid overload index and can panic for a malformed one, so keep
+	// the admission check total and fail closed at this boundary.
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	_, ok = function.GetFunctionByIdWithoutError(overloadID)
+	return fid, overload, ok
+}
+
+func functionalIndexValueForType(typ Type) functionalIndexExprValue {
+	switch types.T(typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return functionalIndexExprValue{kind: functionalIndexExprInteger, typ: typ}
+	case types.T_varchar:
+		if functionalIndexFixedVarchar(typ) {
+			return functionalIndexExprValue{kind: functionalIndexExprString, typ: typ}
+		}
+	case types.T_json:
+		return functionalIndexExprValue{kind: functionalIndexExprJSON, typ: typ}
+	}
+	return functionalIndexExprValue{kind: functionalIndexExprInvalid, typ: typ}
+}
+
+func functionalIndexFixedVarchar(typ Type) bool {
+	if typ.Id != int32(types.T_varchar) || typ.Width <= 0 || typ.Width > types.MaxVarcharLen || typ.PadSpace {
+		return false
+	}
+	switch typ.Charset {
+	case uint32(types.CharsetUTF8), uint32(types.CharsetUTF8MB4Bin):
+		return true
+	default:
+		return false
+	}
+}
+
+func functionalIndexJSONPathLiteral(expr *plan.Expr) bool {
+	if expr == nil || expr.GetLit() == nil || expr.GetLit().Isnull {
+		return false
+	}
+	return types.T(expr.Typ.Id).IsMySQLString() && expr.Typ.Id != int32(types.T_char) &&
+		expr.Typ.Id != int32(types.T_binary) && expr.Typ.Id != int32(types.T_varbinary)
+}
+
+func functionalIndexTypesEqual(a, b Type) bool {
+	return a.Id == b.Id && a.Width == b.Width && a.Scale == b.Scale &&
+		a.Charset == b.Charset && a.PadSpace == b.PadSpace
+}
+
+func functionalIndexIntegerBits(oid types.T) int {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 8
+	case types.T_int16, types.T_uint16:
+		return 16
+	case types.T_int32, types.T_uint32:
+		return 32
+	case types.T_int64, types.T_uint64:
+		return 64
+	default:
+		return 0
+	}
+}
+
+func functionalIndexIntegerWidening(source, target Type) bool {
+	if !types.T(source.Id).IsInteger() || !types.T(target.Id).IsInteger() {
+		return false
+	}
+	if source.Id == target.Id {
+		return true
+	}
+	sourceUnsigned := types.T(source.Id).IsUnsignedInt()
+	targetUnsigned := types.T(target.Id).IsUnsignedInt()
+	sourceBits, targetBits := functionalIndexIntegerBits(types.T(source.Id)), functionalIndexIntegerBits(types.T(target.Id))
+	if sourceBits == 0 || targetBits == 0 {
+		return false
+	}
+	if sourceUnsigned == targetUnsigned {
+		return targetBits >= sourceBits
+	}
+	// An unsigned value can widen to a signed type only when the destination is
+	// strictly wider.  The opposite direction can change the representable
+	// range and is therefore never an admission-safe cast.
+	return sourceUnsigned && !targetUnsigned && targetBits > sourceBits
+}
+
+// validateFunctionalIndexAssignmentTarget checks the conversion that the
+// generated-column declaration applies after evaluating its expression.  A
+// dependency is only safe when this boundary cannot truncate a value or turn
+// an error into a session-mode-dependent warning.
+func validateFunctionalIndexAssignmentTarget(
+	ctx context.Context,
+	source functionalIndexExprValue,
+	target Type,
+) (functionalIndexExprValue, error) {
+	targetValue := functionalIndexValueForType(target)
+	if targetValue.kind == functionalIndexExprInvalid {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "generated-column declaration has an unsupported type")
+	}
+	if functionalIndexTypesEqual(source.typ, target) {
+		return targetValue, nil
+	}
+	switch targetValue.kind {
+	case functionalIndexExprInteger:
+		if source.kind == functionalIndexExprInteger && functionalIndexIntegerWidening(source.typ, target) {
+			return targetValue, nil
+		}
+	case functionalIndexExprString:
+		if source.kind == functionalIndexExprString && functionalIndexFixedVarchar(source.typ) &&
+			functionalIndexFixedVarchar(target) && source.typ.Charset == target.Charset &&
+			target.Width >= source.typ.Width {
+			return targetValue, nil
+		}
+	}
+	return functionalIndexExprValue{}, moerr.NewNotSupported(ctx,
+		"generated-column declaration changes value or assignment error semantics")
+}
+
+func validateFunctionalIndexFunction(
+	ctx context.Context,
+	fid int32,
+	overload int32,
+	fn *plan.Function,
+	expr *plan.Expr,
+	tableDef *TableDef,
+	states map[int32]functionalIndexExprVisit,
+	values map[int32]functionalIndexExprValue,
+) (functionalIndexExprValue, error) {
+	args := fn.Args
+	child := func(index int) (functionalIndexExprValue, error) {
+		if index < 0 || index >= len(args) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index expression has invalid function arguments")
+		}
+		return validateFunctionalIndexExprNode(ctx, args[index], tableDef, states, values)
+	}
+
+	switch fid {
+	case function.PLUS:
+		if overload != 0 || len(args) != 2 {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index integer addition requires two arguments")
+		}
+		left, err := child(0)
+		if err != nil {
+			return functionalIndexExprValue{}, err
+		}
+		right, err := child(1)
+		if err != nil {
+			return functionalIndexExprValue{}, err
+		}
+		if left.kind != functionalIndexExprInteger || right.kind != functionalIndexExprInteger || !types.T(expr.Typ.Id).IsInteger() {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index integer addition requires integer operands")
+		}
+		return functionalIndexExprValue{kind: functionalIndexExprInteger, typ: expr.Typ}, nil
+
+	case function.LOWER:
+		if overload != 0 || len(args) != 1 {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index lower requires one argument")
+		}
+		arg, err := child(0)
+		if err != nil {
+			return functionalIndexExprValue{}, err
+		}
+		if arg.kind != functionalIndexExprString || !functionalIndexFixedVarchar(arg.typ) || !functionalIndexFixedVarchar(expr.Typ) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index lower requires fixed UTF8MB4 VARCHAR semantics")
+		}
+		return functionalIndexExprValue{kind: functionalIndexExprString, typ: expr.Typ}, nil
+
+	case function.JSON_EXTRACT:
+		if overload != 0 || len(args) != 2 || args[0] == nil || args[0].Typ.Id != int32(types.T_json) || !functionalIndexJSONPathLiteral(args[1]) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index JSON extraction requires one constant path")
+		}
+		arg, err := child(0)
+		if err != nil {
+			return functionalIndexExprValue{}, err
+		}
+		if arg.kind != functionalIndexExprJSON || expr.Typ.Id != int32(types.T_json) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index JSON extraction requires a JSON value")
+		}
+		return functionalIndexExprValue{kind: functionalIndexExprJSON, typ: expr.Typ}, nil
+
+	case function.JSON_UNQUOTE:
+		if overload != 0 || len(args) != 1 {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index JSON_UNQUOTE requires one argument")
+		}
+		arg, err := child(0)
+		if err != nil {
+			return functionalIndexExprValue{}, err
+		}
+		argFn := args[0].GetF()
+		argFID := int32(-1)
+		if argFn != nil && argFn.Func != nil {
+			argFID, _, _ = functionalIndexKnownOverload(argFn.Func.Obj)
+		}
+		if arg.kind != functionalIndexExprJSON || argFID != function.JSON_EXTRACT || !functionalIndexFixedVarchar(expr.Typ) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index JSON_UNQUOTE requires a constant-path JSON extraction")
+		}
+		return functionalIndexExprValue{kind: functionalIndexExprString, typ: expr.Typ}, nil
+
+	case function.CAST, function.CAST_STRICT, function.CAST_ASSIGN, function.CAST_IGNORE:
+		if fid == function.CAST && overload > 1 {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast overload is not session-invariant")
+		}
+		if fid != function.CAST && overload != 0 {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast overload is not session-invariant")
+		}
+		return validateFunctionalIndexCast(ctx, fid, fn, expr, tableDef, states, values)
+
+	default:
+		return functionalIndexExprValue{}, moerr.NewNotSupportedf(ctx, "functional index function '%s' is not in the session-invariant allowlist", fn.Func.ObjName)
+	}
+}
+
+func validateFunctionalIndexCast(
+	ctx context.Context,
+	fid int32,
+	fn *plan.Function,
+	expr *plan.Expr,
+	tableDef *TableDef,
+	states map[int32]functionalIndexExprVisit,
+	values map[int32]functionalIndexExprValue,
+) (functionalIndexExprValue, error) {
+	if len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetT() == nil {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast has no fixed target type")
+	}
+	source, err := validateFunctionalIndexExprNode(ctx, fn.Args[0], tableDef, states, values)
+	if err != nil {
+		return functionalIndexExprValue{}, err
+	}
+	target := fn.Args[1].Typ
+	targetValue := functionalIndexValueForType(target)
+	if targetValue.kind == functionalIndexExprInvalid {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast targets an unsupported type")
+	}
+	switch targetValue.kind {
+	case functionalIndexExprInteger:
+		if source.kind != functionalIndexExprInteger || !functionalIndexIntegerWidening(source.typ, target) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast is not an integer widening conversion")
+		}
+	case functionalIndexExprString:
+		if source.kind != functionalIndexExprString || !functionalIndexFixedVarchar(target) {
+			return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast requires fixed UTF8MB4 VARCHAR semantics")
+		}
+		isAssignmentWrapper := fid != function.CAST
+		if !functionalIndexTypesEqual(source.typ, target) {
+			if isAssignmentWrapper {
+				if target.Charset != source.typ.Charset || target.PadSpace || target.Width < source.typ.Width {
+					return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index assignment cast may depend on session width or collation semantics")
+				}
+			} else if !functionalIndexJSONUnquoteExpr(fn.Args[0]) && target.Charset != source.typ.Charset {
+				return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast changes string collation semantics")
+			}
+		}
+	default:
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast result is not session-invariant")
+	}
+	if !functionalIndexTypesEqual(expr.Typ, target) {
+		return functionalIndexExprValue{}, moerr.NewNotSupported(ctx, "functional index cast result metadata is inconsistent")
+	}
+	return targetValue, nil
+}
+
+func functionalIndexJSONUnquoteExpr(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fid, _, ok := functionalIndexKnownOverload(expr.GetF().Func.Obj)
+	return ok && fid == function.JSON_UNQUOTE
 }
 
 func functionalIndexColumnName(indexName string) string {
@@ -173,6 +589,9 @@ func lowerFunctionalIndex(ctx CompilerContext, indexInfo *tree.Index, tableDef *
 		return nil, err
 	}
 	if err = checkGeneratedExprReferences(ctx.GetContext(), bound, indexName, tableDef.Cols, make(map[int32]bool)); err != nil {
+		return nil, err
+	}
+	if err = validateFunctionalIndexExpression(ctx.GetContext(), bound, tableDef); err != nil {
 		return nil, err
 	}
 	if err = checkFunctionalIndexResultType(ctx.GetContext(), bound.Typ); err != nil {
@@ -392,7 +811,7 @@ func stripFunctionalAssignmentCast(expr *plan.Expr) *plan.Expr {
 	switch strings.ToLower(fn.Func.ObjName) {
 	case "cast", "cast_strict", "cast_assign", "cast_ignore":
 		arg := fn.Args[0]
-		if arg != nil && arg.Typ.Id == expr.Typ.Id && arg.Typ.Width == expr.Typ.Width && arg.Typ.Scale == expr.Typ.Scale && arg.Typ.Charset == expr.Typ.Charset {
+		if arg != nil && functionalIndexTypesEqual(arg.Typ, expr.Typ) {
 			return arg
 		}
 	}
@@ -405,7 +824,39 @@ func functionalExpressionMatches(generated, query *plan.Expr) bool {
 	}
 	left := normalizeFunctionalExpr(stripFunctionalAssignmentCast(generated))
 	right := normalizeFunctionalExpr(stripFunctionalAssignmentCast(query))
-	return exprStructuralEqual(left, right)
+	return functionalIndexExprTypesEqual(left, right) && exprStructuralEqual(left, right)
+}
+
+func functionalIndexExprTypesEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.Typ.PadSpace != right.Typ.PadSpace {
+		return false
+	}
+	switch l := left.Expr.(type) {
+	case *plan.Expr_F:
+		r, ok := right.Expr.(*plan.Expr_F)
+		if !ok || l.F == nil || r.F == nil || len(l.F.Args) != len(r.F.Args) {
+			return ok && l.F == r.F
+		}
+		for i := range l.F.Args {
+			if !functionalIndexExprTypesEqual(l.F.Args[i], r.F.Args[i]) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		r, ok := right.Expr.(*plan.Expr_List)
+		if !ok || l.List == nil || r.List == nil || len(l.List.List) != len(r.List.List) {
+			return ok && l.List == r.List
+		}
+		for i := range l.List.List {
+			if !functionalIndexExprTypesEqual(l.List.List[i], r.List.List[i]) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // functionalIndexQueryExpr returns the generated expression and its hidden
@@ -413,6 +864,9 @@ func functionalExpressionMatches(generated, query *plan.Expr) bool {
 // metadata disables the optional optimization instead of changing results.
 func functionalIndexQueryExpr(tableDef *TableDef, indexDef *plan.IndexDef) (*plan.Expr, int32, bool) {
 	if !isFunctionalIndexDef(tableDef, indexDef) {
+		return nil, -1, false
+	}
+	if err := validateFunctionalIndexMetadata(context.Background(), tableDef); err != nil {
 		return nil, -1, false
 	}
 	name := catalog.ResolveAlias(indexDef.Parts[0])
@@ -449,6 +903,15 @@ func validateFunctionalIndexMetadata(ctx context.Context, tableDef *TableDef) er
 	}
 	functionalRefs := make(map[string]int)
 	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return moerr.NewInternalError(ctx, "functional index has nil metadata")
+		}
+		for partPos, part := range indexDef.Parts {
+			if catalog.IsFunctionalIndexColumnName(catalog.ResolveAlias(part)) &&
+				(partPos != 0 || !hasFunctionalIndexColumnPart(indexDef)) {
+				return moerr.NewInternalError(ctx, "functional index hidden column is used by an unsupported key shape")
+			}
+		}
 		if !hasFunctionalIndexColumnPart(indexDef) {
 			continue
 		}
@@ -463,6 +926,21 @@ func validateFunctionalIndexMetadata(ctx context.Context, tableDef *TableDef) er
 	for name := range functionalColumns {
 		if functionalRefs[name] != 1 {
 			return moerr.NewInternalError(ctx, "functional index has orphaned hidden generated-column metadata")
+		}
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil || !catalog.IsFunctionalIndexColumnName(col.Name) || col.GeneratedCol == nil {
+			continue
+		}
+		value, err := validateFunctionalIndexExpressionValue(ctx, col.GeneratedCol.Expr, tableDef)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "functional index column '%s' has session-dependent expression: %s", col.Name, err)
+		}
+		if _, err = validateFunctionalIndexAssignmentTarget(ctx, value, col.Typ); err != nil {
+			return moerr.NewInternalErrorf(ctx, "functional index column '%s' has unsafe declared type: %s", col.Name, err)
+		}
+		if err = checkFunctionalIndexResultType(ctx, col.Typ); err != nil {
+			return moerr.NewInternalErrorf(ctx, "functional index column '%s' has unsupported key type: %s", col.Name, err)
 		}
 	}
 	return nil

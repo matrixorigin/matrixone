@@ -53,13 +53,13 @@ func TestRequireFunctionalIndexProtocol(t *testing.T) {
 		if hadOriginal {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, original)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
 		}
 	}()
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion55)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 56")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
+	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 57")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
 	require.NoError(t, requireFunctionalIndexProtocol(context.Background(), proc))
 }
 
@@ -110,6 +110,12 @@ func TestFunctionalExpressionMatchesNormalizesRelationAndAssignmentCast(t *testi
 	wrongColumn := DeepCopyExpr(query)
 	wrongColumn.GetCol().ColPos++
 	require.False(t, functionalExpressionMatches(generated, wrongColumn))
+
+	stringType := Type{Id: int32(types.T_varchar), Width: 16, Charset: uint32(types.CharsetUTF8)}
+	stringGenerated := &plan.Expr{Typ: stringType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	stringQuery := DeepCopyExpr(stringGenerated)
+	stringQuery.Typ.PadSpace = true
+	require.False(t, functionalExpressionMatches(stringGenerated, stringQuery))
 }
 
 func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
@@ -155,6 +161,12 @@ func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
 	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
 	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
 	table.Indexes[0].Parts = table.Indexes[0].Parts[:2]
+	table.Indexes = append(table.Indexes, &plan.IndexDef{
+		IndexName: "idx_bad_shape",
+		Parts:     []string{catalog.CreateAlias("id"), "__mo_fi_deadbeef"},
+	})
+	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
+	table.Indexes = table.Indexes[:1]
 	table.Indexes = nil
 	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
 }
@@ -274,6 +286,82 @@ func TestBuildCreateTableRejectsUnsupportedFunctionalIndexShapes(t *testing.T) {
 			require.Contains(t, strings.ToLower(err.Error()), "functional")
 		})
 	}
+}
+
+func TestBuildCreateTableRejectsSessionDependentFunctionalCast(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"create table functional_time (id int primary key, ts timestamp, key idx_time ((cast(ts as char(19)))))")
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "functional")
+}
+
+func TestLowerFunctionalIndexRejectsSessionDependentCastBeforePublishingColumn(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select cast(ts as char(19))", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	table := &TableDef{
+		Cols: []*ColDef{
+			{Name: "id", Typ: Type{Id: int32(types.T_int32), Width: 32}},
+			{Name: "ts", Typ: Type{Id: int32(types.T_timestamp), Scale: 6}},
+		},
+	}
+	index := &tree.Index{Name: "idx_time", KeyParts: []*tree.KeyPart{{Expr: selectClause.Exprs[0].Expr}}}
+	_, err = lowerFunctionalIndex(NewMockCompilerContext(false), index, table)
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "functional")
+	require.Len(t, table.Cols, 2)
+}
+
+func TestFunctionalIndexAdmissionRejectsSessionDependentGeneratedDependency(t *testing.T) {
+	created, err := runOneStmt(NewMockOptimizer(false), t,
+		"create table functional_time_dependency (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual)")
+	require.NoError(t, err)
+	table := created.GetDdl().GetCreateTable().GetTableDef()
+	generated := FindColumn(table.Cols, "g")
+	require.NotNil(t, generated)
+	require.NotNil(t, generated.GeneratedCol)
+	require.Error(t, validateFunctionalIndexExpression(context.Background(), generated.GeneratedCol.Expr, table))
+}
+
+func TestFunctionalIndexAdmissionRejectsUnknownOverload(t *testing.T) {
+	table := &TableDef{Cols: []*ColDef{{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}}}}
+	expr := &plan.Expr{
+		Typ: Type{Id: int32(types.T_int64), Width: 64},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(1000000) << 32, ObjName: "unknown"},
+		}},
+	}
+	require.Error(t, validateFunctionalIndexExpression(context.Background(), expr, table))
+}
+
+func TestFunctionalIndexAdmissionRejectsGeneratedColumnCycle(t *testing.T) {
+	table := &TableDef{Cols: []*ColDef{
+		{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}, GeneratedCol: &plan.GeneratedCol{
+			Expr: &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		}},
+		{Name: "b", Typ: Type{Id: int32(types.T_int64), Width: 64}, GeneratedCol: &plan.GeneratedCol{
+			Expr: &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		}},
+	}}
+	expr := &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	require.Error(t, validateFunctionalIndexExpression(context.Background(), expr, table))
+}
+
+func TestFunctionalIndexQueryRejectsUnsafePersistedMetadata(t *testing.T) {
+	created, err := runOneStmt(NewMockOptimizer(false), t,
+		"create table functional_metadata (id int primary key, a int, key idx_a ((a + 1)))")
+	require.NoError(t, err)
+	table := created.GetDdl().GetCreateTable().GetTableDef()
+	hidden := FindColumn(table.Cols, table.Indexes[0].Parts[0])
+	require.NotNil(t, hidden)
+	hidden.GeneratedCol.Expr = &plan.Expr{
+		Typ: hidden.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(1000000) << 32, ObjName: "unknown"},
+		}},
+	}
+	_, _, ok := functionalIndexQueryExpr(table, table.Indexes[0])
+	require.False(t, ok)
 }
 
 func TestShowCreateTableRendersFunctionalExpressionAndHidesImplementationColumn(t *testing.T) {
