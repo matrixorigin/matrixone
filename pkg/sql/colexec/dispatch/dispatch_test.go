@@ -1944,3 +1944,30 @@ func TestBroadcastEndsAfterAllRemoteReceiversStop(t *testing.T) {
 	require.Empty(t, d.ctr.remoteReceivers)
 	require.Len(t, stopped.Err, 1)
 }
+
+func TestRemoteReceiverRollbackPublishesFailure(t *testing.T) {
+	server := colexec.NewServer("")
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	uid := uuid.MustParse("00000000-0000-0000-0000-000000028313")
+	_, _, _, waiter, _ := server.AttachProcByUuidOrWait(uid)
+	t.Cleanup(waiter.Close)
+	d := &Dispatch{FuncId: SendToAllFunc, RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}}}
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	t.Cleanup(registration.Cleanup)
+	cause := moerr.NewInternalErrorNoCtx("registration rollback")
+	registration.Cancel(cause)
+	// The cleanup handle must not consult a reused Process for its cause.
+	proc.Ctx = nil
+	proc.Cancel = nil
+	registration.Cleanup()
+	_, _, state, _, terminal := server.AttachProcByUuidOrWait(uid)
+	require.Equal(t, colexec.RemoteReceiverFinished, state)
+	select {
+	case <-terminal.Done():
+	default:
+		t.Fatal("rollback did not publish its terminal result")
+	}
+	require.ErrorIs(t, terminal.Err(), cause)
+}

@@ -4319,11 +4319,11 @@ func TestCancelConsumedDispatchRegistrationCancelsOwnerProcess(t *testing.T) {
 		colexecServer: colexec.GetServer(""),
 	}
 	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
-	registeredProc, notifyChannel, state, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	registeredProc, notifyChannel, state, _, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
 	require.Equal(t, colexec.RemoteReceiverAttachedNow, state)
 	require.Same(t, dispatchProc, registeredProc)
 	require.Equal(t, notifyCh, notifyChannel)
-	receiver.cancelConsumedDispatchRegistration(registeredProc, cancelCause)
+	receiver.cancelConsumedDispatchRegistration(registeredProc, nil, cancelCause)
 
 	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
 	colexec.GetServer("").RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)

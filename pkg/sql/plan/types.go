@@ -432,6 +432,12 @@ type QueryBuilder struct {
 	// checks. Planner-local metadata lets the final cardinality pass choose table
 	// locks without weakening bounded UPDATE predicates into table-wide locks.
 	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
+	// fullTableUpdateSourceTableID identifies the single logical target whose
+	// complete scan cardinality can safely repair an underestimated LOCK_OP
+	// cardinality. The accompanying flag keeps table ID zero representable in
+	// planner tests and fail-closed mock catalogs.
+	fullTableUpdateSourceTableID    uint64
+	hasFullTableUpdateSourceTableID bool
 	// userWindowNodes contains only WINDOW nodes produced from user
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.

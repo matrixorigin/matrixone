@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strconv"
@@ -5420,25 +5421,39 @@ func TestPower(t *testing.T) {
 }
 
 func TestPowerOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name      string
-		bases     []float64
-		exponents []float64
+		bases     FunctionTestInput
+		exponents FunctionTestInput
 	}{
-		{name: "negative base with fractional exponent", bases: []float64{-2}, exponents: []float64{0.5}},
-		{name: "zero base with negative exponent", bases: []float64{0}, exponents: []float64{-1}},
-		{name: "invalid value after valid value", bases: []float64{2, -2}, exponents: []float64{3, 0.5}},
+		{
+			name:      "vector input errors after valid row",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
+		},
+		{
+			name:      "constant base with vector exponent errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
+		},
+		{
+			name:      "vector base with constant exponent errors",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-1, -1}, nil),
+		},
+		{
+			name:      "constant invalid result errors",
+			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
 	}
 
-	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_float64.ToType(), tc.bases, nil),
-					NewFunctionTestInput(types.T_float64.ToType(), tc.exponents, nil),
-				},
+				[]FunctionTestInput{tc.bases, tc.exponents},
 				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
 				Power,
 			)
@@ -5479,6 +5494,19 @@ func TestPowerRespectsSelectList(t *testing.T) {
 	value, isNull := resultParam.GetValue(1)
 	require.False(t, isNull)
 	require.Equal(t, float64(8), value)
+
+	tcc = NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+		Power,
+	)
+	tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 // TRUNCATE
@@ -5945,7 +5973,9 @@ func TestGeometry32Distances(t *testing.T) {
 	g32 := func(wkt string) string {
 		g, err := geo.ParseWKT(wkt)
 		require.NoError(t, err)
-		return string(geo.WriteWKBFloat32(g))
+		out, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(out)
 	}
 	run := func(fn fEvalFn, a, b string, want float32) {
 		t.Helper()
@@ -5971,7 +6001,9 @@ func TestGeometry32ReturningBinary(t *testing.T) {
 	g32 := func(wkt string) string {
 		g, err := geo.ParseWKT(wkt)
 		require.NoError(t, err)
-		return string(geo.WriteWKBFloat32(g))
+		out, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(out)
 	}
 	// out must be genuinely float32 WKB and round-trip to wantWKT.
 	assertF32 := func(tc FunctionTestCase, wantWKT string) {
@@ -6025,6 +6057,85 @@ func TestGeometry32ReturningBinary(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantU}, []bool{false}), StUnion),
 		wantU)
+}
+
+func TestGeometry32ConstructorAndDerivedOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	badPoint := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{1, 3.5e38}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), StPoint32)
+	require.NoError(t, badPoint.result.PreExtendAndReset(2))
+	err := StPoint32(badPoint.parameters, badPoint.result, proc, 2, nil)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+	require.Len(t, badPoint.GetResultVectorDirectly().GetBytesAt(0), 13)
+
+	goodPoint := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{9}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{10}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(9 10)"}, nil), StPoint32)
+	require.NoError(t, badPoint.result.PreExtendAndReset(1))
+	require.NoError(t, StPoint32(goodPoint.parameters, badPoint.result, proc, 1, nil))
+	raw := badPoint.GetResultVectorDirectly().GetBytesAt(0)
+	require.Len(t, raw, 13)
+	got, err := geo.ReadWKBFloat32(raw)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(9 10)", geo.WriteWKT(got))
+	require.Equal(t, 1, badPoint.GetResultVectorDirectly().Length())
+	require.False(t, badPoint.GetResultVectorDirectly().IsNull(0))
+	for _, off := range []int{5, 9} {
+		bits := binary.LittleEndian.Uint32(raw[off : off+4])
+		require.NotEqual(t, uint32(0x7f800000), bits&0x7f800000)
+	}
+
+	maxPoint := geom32WKB(t, fmt.Sprintf("POINT(%g 0)", float64(math.MaxFloat32)))
+	overflowBuffer := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{maxPoint}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MaxFloat32)}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), StBuffer)
+	require.NoError(t, overflowBuffer.result.PreExtendAndReset(1))
+	err = StBuffer(overflowBuffer.parameters, overflowBuffer.result, proc, 1, nil)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	maskedBuffer := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{maxPoint, geom32WKB(t, "POINT(0 0)")}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MaxFloat32), 1}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4, 4}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"", ""}, []bool{true, false}), StBufferQS).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	require.NoError(t, maskedBuffer.result.PreExtendAndReset(2))
+	require.NoError(t, StBufferQS(maskedBuffer.parameters, maskedBuffer.result, proc, 2, maskedBuffer.selectList))
+	maskedResult := maskedBuffer.GetResultVectorDirectly()
+	require.Equal(t, 2, maskedResult.Length())
+	require.True(t, maskedResult.IsNull(0))
+	require.False(t, maskedResult.IsNull(1))
+	buffered, err := geo.ReadWKBFloat32(maskedResult.GetBytesAt(1))
+	require.NoError(t, err)
+	polygon, ok := buffered.(geo.Polygon)
+	require.True(t, ok)
+	require.NotEmpty(t, polygon.Rings)
+	var minX, maxX, minY, maxY float64
+	minX, maxX = math.Inf(1), math.Inf(-1)
+	minY, maxY = math.Inf(1), math.Inf(-1)
+	for _, point := range polygon.Rings[0] {
+		minX = math.Min(minX, point.X)
+		maxX = math.Max(maxX, point.X)
+		minY = math.Min(minY, point.Y)
+		maxY = math.Max(maxY, point.Y)
+	}
+	require.InDelta(t, -1, minX, 1e-6)
+	require.InDelta(t, 1, maxX, 1e-6)
+	require.InDelta(t, -1, minY, 1e-6)
+	require.InDelta(t, 1, maxY, 1e-6)
 }
 
 func TestBufferOp(t *testing.T) {

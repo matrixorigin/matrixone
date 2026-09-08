@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"slices"
@@ -3299,6 +3300,87 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"cardinality-known shared targets must upgrade before acquisition")
 	require.False(t, builder.qry.Nodes[3].LockTargets[2].LockTable,
 		"unmarked exclusive targets retain owner-side range escalation")
+}
+
+func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceID   uint64
+		scanID     uint64
+		tableCnt   float64
+		lockOutcnt float64
+		want       bool
+	}{
+		{
+			name:       "target scan repairs underestimated lock cardinality",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       true,
+		},
+		{
+			name:       "small target remains row scoped",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   3,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "unrelated large scan cannot widen target lock",
+			sourceID:   42,
+			scanID:     99,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "non-finite target estimate fails closed",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   math.Inf(1),
+			lockOutcnt: 1,
+			want:       false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 3,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			target := &plan.LockTarget{Mode: lockpb.LockMode_Exclusive}
+			builder := &QueryBuilder{
+				compCtx:                         &mock.ctxt,
+				fullTableUpdateSourceTableID:    test.sourceID,
+				hasFullTableUpdateSourceTableID: true,
+				fullTableUpdateLockTargets:      map[*plan.LockTarget]struct{}{target: {}},
+				qry: &plan.Query{Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						TableDef: &plan.TableDef{TblId: test.scanID},
+						Stats:    &plan.Stats{TableCnt: test.tableCnt},
+					},
+					{
+						NodeType:    plan.Node_LOCK_OP,
+						Stats:       &plan.Stats{Outcnt: test.lockOutcnt},
+						LockTargets: []*plan.LockTarget{target},
+					},
+				}},
+			}
+
+			applyLockTableFallback(builder)
+			require.Equal(t, test.want, target.LockTable)
+		})
+	}
 }
 
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {

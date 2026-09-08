@@ -226,3 +226,30 @@ The planning acceptance run alternated precompiled baseline/candidate binaries
 rather than comparing two unpaired `go test` runs. Full repository CI,
 long-duration production workload measurements and maintainer approval are
 not claimed by these focused local checks.
+
+## PR preparation: merge with main (2026-09-08)
+
+Merged upstream `f72ca9efbe` into implementation `b569e12d95`. The only textual
+conflict appended independent dispatch tests; both sides were retained.
+A bounded independent review found no blocking interaction with upstream's
+remote receiver generation terminal or scalar aggregate planner changes.
+The registration handler retains its per-receiver Err notification alongside
+the generation terminal, so explicit receiver retirement can complete while
+other consumers still use the producer.
+
+Fresh merged-source validation (CGo wrapper, count=1 unless stated):
+
+- Full planner, dispatch and hashjoin packages: PASS (4.921 s, 0.082 s, 1.295 s).
+- Focused dispatch, compile and hashjoin race checks: PASS (1.216 s, 1.183 s,
+  1.760 s), including receiver stop, rollback, registration cancellation,
+  pipeline flow/stop and right existential match paths.
+- Upstream `TestRemoteNotifyReadsDispatchTerminal` and
+  `TestRemoteNotifyCancellationUsesRegistrationGeneration` under race: PASS
+  (1.169 s).
+- `TestDeepExistentialMultiCN`, count=2: PASS (14.572 s), covering all five
+  shapes and streamed-output cancellation/reuse.
+
+The earlier MySQL differential, BVT and performance measurements above identify
+the pre-merge implementation and binary; they were not rerun against the merged
+binary. The fresh checks above validate merge compatibility, not a new
+performance measurement. PR CI remains a separate validation step.
