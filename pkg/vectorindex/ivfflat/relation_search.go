@@ -277,13 +277,14 @@ func canUseStorageTopK(
 	limit uint,
 	rangeSupported bool,
 ) bool {
-	// Storage vector Top-N currently ranks only ascending distances. Membership
-	// alone may be applied after the bounded Top-K as the documented approximate
-	// PRE policy. Ordinary user predicates remain filter-first. Distance ranges
+	// Storage vector Top-N currently ranks only ascending distances. Optional
+	// membership may retain the documented approximate PRE policy, but a required
+	// membership predicate must use the filter-before-local-TopK path. Ordinary
+	// user predicates remain filter-first. Distance ranges
 	// are safe only after storageDistanceRange has translated them into the
 	// stored metric domain; objectio applies those bounds before heap admission.
 	if sqlproc == nil || !rangeSupported || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
-		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
+		sqlproc.IvfMembershipFilterRequired || ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
 		return false
 	}
 	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
