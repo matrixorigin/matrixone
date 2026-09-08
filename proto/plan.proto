@@ -1277,6 +1277,10 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // A required runtime filter is part of query semantics, not an optional
+  // probe-side acceleration. Consumers must reject PASS instead of executing
+  // a bounded operation without this input.
+  bool must_apply = 12;
 }
 
 message IdList {

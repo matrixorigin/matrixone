@@ -160,6 +160,15 @@ func newVectorJoinEqFilter(tag int32, colPos int32) *plan.Expr {
 	}
 }
 
+func newVectorJoinSemiOn(leftTag, rightTag int32) *plan.Expr {
+	return &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "="}, Args: []*plan.Expr{
+			newVectorJoinColExpr(leftTag, 0, "id", plan.Type{Id: int32(types.T_varchar)}),
+			newVectorJoinColExpr(rightTag, 0, "id", plan.Type{Id: int32(types.T_varchar)}),
+		},
+	}}}
+}
+
 func newVectorJoinIsNotNullFilter(tag int32, colPos int32) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
@@ -249,6 +258,11 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
 	ctx := NewBindContext(builder, nil)
 	mainTableDef := newVectorJoinTableDef(true, false)
+	if opts.joinType == plan.Node_SEMI {
+		for _, indexDef := range newVectorJoinIvfIndex().IndexDefs {
+			mainTableDef.Indexes = append(mainTableDef.Indexes, indexDef)
+		}
+	}
 	providerTableDef := newVectorJoinTableDef(true, opts.providerVectorNotNull)
 	mainVecTyp := mainTableDef.Cols[1].Typ
 	providerVecTyp := providerTableDef.Cols[1].Typ
@@ -287,6 +301,9 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		JoinType: opts.joinType,
 		Children: []int32{mainScanNodeID, providerScanNodeID},
 	}
+	if opts.joinType == plan.Node_SEMI {
+		joinNode.OnList = []*plan.Expr{newVectorJoinSemiOn(mainScanNode.BindingTags[0], providerScanNode.BindingTags[0])}
+	}
 	joinNodeID := builder.appendNode(joinNode, ctx)
 
 	distFnExpr := &plan.Function{
@@ -309,6 +326,9 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 				}},
 			},
 		},
+	}
+	if opts.joinType == plan.Node_SEMI {
+		distFnExpr.Args[1] = newVectorJoinStringLitExpr()
 	}
 
 	sortChildID := joinNodeID
@@ -377,6 +397,197 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		mainScanNodeID: mainScanNodeID,
 		providerNodeID: providerScanNodeID,
 	}
+}
+
+func TestBuildVectorSortContextThroughJoin_SemiMembership(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+	require.Equal(t, tc.mainScanNodeID, vecCtx.scanNode.NodeId)
+	require.Equal(t, tc.builder.qry.Nodes[tc.projNode.Children[0]].Children[0], vecCtx.membershipNodeID)
+	require.Nil(t, vecCtx.vecArgExpr)
+	require.True(t, vecCtx.hasMembership)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_SemiMembership(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+	originalMembershipNode := tc.builder.qry.Nodes[vecCtx.membershipNodeID]
+	originalMembershipLeftID := originalMembershipNode.Children[0]
+	membershipInput := tc.builder.qry.Nodes[originalMembershipNode.Children[1]]
+	membershipInput.Limit = makePlan2Uint64ConstExprWithType(2)
+	membershipInput.Offset = makePlan2Uint64ConstExprWithType(1)
+
+	newNodeID, err := tc.builder.applyIndicesForSortUsingIvfflat(
+		tc.projNodeID, vecCtx, newVectorJoinIvfIndex(), map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, tc.projNodeID, newNodeID)
+
+	reachable := reachableVectorJoinNodeIDs(tc.builder.qry, tc.projNodeID)
+	require.False(t, reachable[originalMembershipNode.NodeId], "the rewrite must use a copy so fallback keeps the original plan intact")
+	require.Equal(t, originalMembershipLeftID, originalMembershipNode.Children[0])
+	require.Equal(t, uint64(2), membershipInput.Limit.GetLit().GetU64Val(), "membership subquery LIMIT is semantic")
+	require.Equal(t, uint64(1), membershipInput.Offset.GetLit().GetU64Val(), "membership subquery OFFSET is semantic")
+	require.True(t, reachable[tc.mainScanNodeID], "the original scan must remain the row-fetch side")
+
+	membershipProducer := findReachableVectorMembershipJoin(tc.builder.qry, tc.projNodeID, tc.providerNodeID)
+	require.NotNil(t, membershipProducer, "a copied membership SEMI JOIN must feed the runtime-filter producer")
+	require.NotEqual(t, originalMembershipNode.NodeId, membershipProducer.NodeId)
+
+	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
+	require.NotNil(t, funcScan)
+	require.True(t, reachable[funcScan.NodeId])
+	require.Len(t, funcScan.RuntimeFilterProbeList, 1)
+	require.True(t, funcScan.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, funcScan.RuntimeFilterProbeList[0].MustApply)
+	buildCount := 0
+	for nodeID := range reachable {
+		for _, spec := range tc.builder.qry.Nodes[nodeID].RuntimeFilterBuildList {
+			if spec.UseMembershipFilter {
+				buildCount++
+				require.True(t, spec.MustApply)
+			}
+		}
+	}
+	require.Equal(t, 1, buildCount)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_SemiMembershipRemapsCoveringIndexColumns(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	mainScan := tc.builder.qry.Nodes[tc.mainScanNodeID]
+	varcharType := plan.Type{Id: int32(types.T_varchar)}
+	mainScan.TableDef.Cols = append(mainScan.TableDef.Cols,
+		&plan.ColDef{Name: "category", Typ: varcharType},
+		&plan.ColDef{Name: "document_id", Typ: varcharType})
+	mainScan.TableDef.Name2ColIndex["category"] = 2
+	mainScan.TableDef.Name2ColIndex["document_id"] = 3
+	const indexTable = "__mo_index_category_document"
+	mainScan.TableDef.Indexes = append(mainScan.TableDef.Indexes, &plan.IndexDef{
+		IndexName:      "idx_category_document",
+		IndexAlgo:      "btree",
+		IndexTableName: indexTable,
+		TableExist:     true,
+		Parts:          []string{"category", "document_id", catalog.CreateAlias("id")},
+	})
+	mainScan.FilterList = []*plan.Expr{
+		newVectorJoinConstEqFilter(mainScan.BindingTags[0], 2, "category", varcharType),
+	}
+	membershipNode := tc.builder.qry.Nodes[tc.builder.qry.Nodes[tc.projNode.Children[0]].Children[0]]
+	providerScan := tc.builder.qry.Nodes[tc.providerNodeID]
+	membershipNode.OnList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{
+				newVectorJoinColExpr(mainScan.BindingTags[0], 3, "document_id", varcharType),
+				newVectorJoinColExpr(providerScan.BindingTags[0], 0, "id", varcharType),
+			},
+		}},
+	}}
+	mockCtx := tc.builder.compCtx.(*customMockCompilerContext)
+	mockCtx.tables[indexTable] = &plan.TableDef{
+		Name: indexTable,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: varcharType},
+			{Name: catalog.IndexTablePrimaryColName, Typ: varcharType},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: "db", ObjName: indexTable}
+
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+	_, err := tc.builder.applyIndicesForSortUsingIvfflat(
+		tc.projNodeID, vecCtx, newVectorJoinIvfIndex(), map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+
+	producer := findReachableVectorMembershipJoin(tc.builder.qry, tc.projNodeID, tc.providerNodeID)
+	require.NotNil(t, producer)
+	indexedInput := tc.builder.qry.Nodes[producer.Children[0]]
+	require.Equal(t, plan.Node_TABLE_SCAN, indexedInput.NodeType)
+	require.Equal(t, "idx_category_document", indexedInput.IndexScanInfo.IndexName)
+	availableTags := tc.builder.collectBindingTags(producer)
+	for _, expr := range producer.OnList {
+		require.True(t, vectorExprRefsOnlyAvailableTags(expr, availableTags),
+			"membership expression must reference the optimized input's actual output")
+	}
+	leftKey := producer.OnList[0].GetF().Args[0]
+	require.NotNil(t, leftKey.GetF(), "document_id must be remapped to the composite index expression")
+}
+
+func TestApplyIndicesForProject_SemiMembershipUsesIvf(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	newNodeID, err := tc.builder.applyIndicesForProject(
+		tc.projNodeID, tc.projNode, map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, tc.projNodeID, newNodeID)
+
+	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
+	require.NotNil(t, funcScan)
+	require.Equal(t, "ivf_search", funcScan.TableDef.TblFunc.Name)
+	require.Len(t, funcScan.RuntimeFilterProbeList, 1)
+	require.True(t, funcScan.RuntimeFilterProbeList[0].MustApply)
+}
+
+func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsNonIvfIndex(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
+	tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes = newVectorJoinTableDef(true, false).Indexes
+	require.Nil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode))
+}
+
+func findReachableVectorMembershipJoin(query *plan.Query, rootID, rightID int32) *plan.Node {
+	for nodeID := range reachableVectorJoinNodeIDs(query, rootID) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SEMI &&
+			len(node.Children) == 2 && node.Children[1] == rightID {
+			return node
+		}
+	}
+	return nil
+}
+
+func reachableVectorJoinNodeIDs(query *plan.Query, rootID int32) map[int32]bool {
+	reachable := make(map[int32]bool)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || reachable[nodeID] {
+			return
+		}
+		reachable[nodeID] = true
+		for _, childID := range query.Nodes[nodeID].Children {
+			visit(childID)
+		}
+	}
+	visit(rootID)
+	return reachable
+}
+
+func vectorExprRefsOnlyAvailableTags(expr *plan.Expr, available map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+	if col := expr.GetCol(); col != nil {
+		return available[col.RelPos]
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if !vectorExprRefsOnlyAvailableTags(arg, available) {
+				return false
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if !vectorExprRefsOnlyAvailableTags(item, available) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func TestBuildVectorSortContextThroughJoin_RejectsSingleJoinProvider(t *testing.T) {
