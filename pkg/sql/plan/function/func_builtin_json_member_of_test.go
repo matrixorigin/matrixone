@@ -152,10 +152,13 @@ func TestJSONMemberOfPreparedBinaryStringKeepsOpaqueDomain(t *testing.T) {
 	require.True(t, succeed, message)
 }
 
-func TestJSONMemberOfStaticBinaryLeftKeepsOpaqueDomain(t *testing.T) {
+func TestJSONMemberOfStaticBinaryLeftMatchesBinarySubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	raw := string([]byte{0, 1, 2})
-	array, err := bytejson.CreateByteJSON([]any{newTypedByteJson(bytejson.TpCodeOpaque, raw)})
+	value, err := bytejson.NewMySQLOpaque(
+		bytejson.MySQLOpaqueProtocolVersion, 254, []byte(raw))
+	require.NoError(t, err)
+	array, err := bytejson.CreateByteJSON([]any{value})
 	require.NoError(t, err)
 	encoded, err := array.Marshal()
 	require.NoError(t, err)
@@ -171,6 +174,132 @@ func TestJSONMemberOfStaticBinaryLeftKeepsOpaqueDomain(t *testing.T) {
 	)
 	succeed, message := testCase.Run()
 	require.True(t, succeed, message)
+}
+
+func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	raw := string([]byte{0, 1, 2})
+	other := string([]byte{0, 1, 3})
+
+	tests := []struct {
+		name      string
+		typ       types.Type
+		makeInput func(values []string) FunctionTestInput
+		makeLeft  func(values []string, nulls []bool) FunctionTestInput
+		prepared  bool
+	}{
+		{
+			name: "binary",
+			typ:  types.New(types.T_binary, 3, 0),
+			makeInput: func(values []string) FunctionTestInput {
+				return NewFunctionTestInput(types.New(types.T_binary, 3, 0), values, nil)
+			},
+			makeLeft: func(values []string, nulls []bool) FunctionTestInput {
+				return NewFunctionTestInput(types.New(types.T_binary, 3, 0), values, nulls)
+			},
+			prepared: true,
+		},
+		{
+			name: "varbinary",
+			typ:  types.New(types.T_varbinary, 3, 0),
+			makeInput: func(values []string) FunctionTestInput {
+				return NewFunctionTestInput(types.New(types.T_varbinary, 3, 0), values, nil)
+			},
+			makeLeft: func(values []string, nulls []bool) FunctionTestInput {
+				return NewFunctionTestInput(types.New(types.T_varbinary, 3, 0), values, nulls)
+			},
+			prepared: true,
+		},
+		{
+			name: "blob",
+			typ:  types.T_blob.ToType(),
+			makeInput: func(values []string) FunctionTestInput {
+				return NewFunctionTestInput(types.T_blob.ToType(), values, nil)
+			},
+			makeLeft: func(values []string, nulls []bool) FunctionTestInput {
+				return NewFunctionTestInput(types.T_blob.ToType(), values, nulls)
+			},
+			prepared: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			array := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{tc.makeInput([]string{raw})},
+				types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+			encoded, isNull := vector.GenerateFunctionStrParameter(array).GetStrValue(0)
+			require.False(t, isNull)
+
+			runJSONMemberOfCase(t,
+				[]FunctionTestInput{
+					tc.makeLeft([]string{raw, other, raw}, []bool{false, false, true}),
+					NewFunctionTestConstInput(types.T_json.ToType(), []string{string(encoded)}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false,
+					[]int64{1, 0, 0}, []bool{false, false, true}))
+
+			if tc.prepared {
+				prepared := NewFunctionTestCase(
+					proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(types.T_text.ToType(), []string{raw}, nil),
+						NewFunctionTestConstInput(types.T_json.ToType(), []string{string(encoded)}, nil),
+					},
+					NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
+					jsonMemberOf)
+				prepared.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+				prepared.parameters[0].SetPrepareParamType(tc.typ.Oid)
+				succeed, message := prepared.Run()
+				require.True(t, succeed, message)
+			}
+		})
+	}
+
+	largeInputs := make([]FunctionTestInput, 512)
+	for i := range largeInputs {
+		largeInputs[i] = tests[0].makeInput([]string{raw})
+	}
+	largeArray := runJsonFunctionWithSelectList(t, proc, largeInputs,
+		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+	largeEncoded, isNull := vector.GenerateFunctionStrParameter(largeArray).GetStrValue(0)
+	require.False(t, isNull)
+	// A single probe deliberately takes the linear path even for a large
+	// array. Use enough independently evaluated rows to select the index.
+	values := make([]string, 32)
+	expected := make([]int64, len(values))
+	for i := range values {
+		values[i] = other
+		if i%2 == 0 {
+			values[i], expected[i] = raw, 1
+		}
+	}
+	require.True(t, jsonOverlapShouldPrepareScalar(len(largeInputs), len(values)))
+	runJSONMemberOfCase(t,
+		[]FunctionTestInput{
+			tests[0].makeLeft(values, nil),
+			NewFunctionTestConstInput(types.T_json.ToType(), []string{string(largeEncoded)}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, expected, nil))
+}
+
+func TestJSONMemberOfConstructorBitValuePreservesDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_bit, 9, 0)
+	array := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, []uint64{0x10a}, nil),
+		}, types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+	encoded, isNull := vector.GenerateFunctionStrParameter(array).GetStrValue(0)
+	require.False(t, isNull)
+
+	runJSONMemberOfCase(t,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, []uint64{0x10a, 0x10b, 0x10a}, []bool{false, false, true}),
+			NewFunctionTestConstInput(types.T_json.ToType(), []string{string(encoded)}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{1, 0, 0}, []bool{false, false, true}))
 }
 
 func TestJSONMemberOfJSONValuesAndNonArrayRHS(t *testing.T) {
