@@ -6835,7 +6835,17 @@ func getCount[T number](typ types.Type, val T) int64 {
 		} else if v < float64(math.MinInt64) {
 			r = math.MinInt64
 		} else {
-			r = int64(v)
+			// MySQL converts fractional counts to the nearest integer.
+			// math.Round rounds halfway cases away from zero, matching the
+			// DECIMAL conversion used by SUBSTRING_INDEX.
+			rounded := math.Round(v)
+			if rounded > float64(math.MaxInt64) {
+				r = math.MaxInt64
+			} else if rounded < float64(math.MinInt64) {
+				r = math.MinInt64
+			} else {
+				r = int64(rounded)
+			}
 		}
 	case types.T_uint64, types.T_bit:
 		v := uint64(val)
