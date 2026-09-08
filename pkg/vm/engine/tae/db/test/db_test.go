@@ -9075,10 +9075,10 @@ func TestIscpMeta(t *testing.T) {
 		data.Vecs[1].Append(tableID, false)                             // table_id
 		data.Vecs[2].Append([]byte(jobName), false)                     // job_name
 		data.Vecs[3].Append(jobID, false)                               // job_id
-		data.Vecs[4].Append(jobSpecBytes, false)           // job_spec
+		data.Vecs[4].Append(jobSpecBytes, false)                        // job_spec
 		data.Vecs[5].Append(uint8(1), false)                            // job_state (active)
 		data.Vecs[6].Append([]byte(watermark), false)                   // watermark
-		data.Vecs[7].Append(jobStatusBytes, false)         // job_status
+		data.Vecs[7].Append(jobStatusBytes, false)                      // job_status
 		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false) // create_at
 
 		if isDropped {
