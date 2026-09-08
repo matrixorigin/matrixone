@@ -38,6 +38,7 @@ func (i *IOVector) Release() {
 		if entry.releaseData != nil {
 			entry.releaseData()
 		}
+		entry.decodeLease.release()
 	}
 }
 
@@ -52,6 +53,8 @@ func (i *IOVector) ReleaseReadResultOnError() {
 			entry.releaseData()
 			entry.releaseData = nil
 		}
+		entry.decodeLease.release()
+		entry.decodeLease = nil
 		entry.done = false
 		entry.fromCache = nil
 	}

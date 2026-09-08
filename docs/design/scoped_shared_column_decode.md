@@ -1,8 +1,9 @@
 # Scoped sharing of decoded object columns
 
-- Status: draft; implementation is gated on design approval.
-- Base: `585a38efd152fadf216c8675b7b997a35ca8deb1` (newest main when prepared).
+- Status: in progress; coding design approved in the conversation before implementation.
+- Design base: `585a38efd152fadf216c8675b7b997a35ca8deb1`; implementation merges newer main before delivery.
 - Branch: `fix/shared-column-decompression`.
+- Implementation PR: [#28413](https://github.com/matrixorigin/matrixone/pull/28413).
 - Tracking issue: [#24097 — query execution performance improvements](https://github.com/matrixorigin/matrixone/issues/24097), specifically decompression overhead, copying and syscall costs. This PR contributes to the umbrella issue; it does not close it.
 - Scope decision: the user requested a separate PR, not an extension of #28002.
 - Motivation: the cache-pressure mechanism investigated for #27854. This is
@@ -39,6 +40,13 @@ memory-cache admission is unavailable. It is not missing Free/Release.
 
 ## Initial integration boundary
 
+The approved revision shares decompression only, not compressed-byte reads.
+Install the opt-in converter wrapper after a memory-cache miss, and join the
+registry only when the converter receives its compressed input. Every caller
+keeps its ordinary I/O counters and cache-update errors. Restore the converter
+before Read returns. This replaces the earlier proposal to share an entire
+disk-read/cache-publication operation.
+
 Opt in only the single-column, scoped `LoadColumnDataByTopN` path. Its cached
 Vector stays inside ObjectIO; only row coordinates and distances escape.
 Do not initially opt in fused INCLUDE reads, arbitrary FileService converters,
@@ -66,7 +74,7 @@ protobuf, catalog or on-disk format change.
 The S3FS instance owns a bounded registry of loading/actively consumed columns.
 Defaults: at most 64 entries, 128 participating reads per entry (including the
 leader), and decoded backing reservations totaling at most
-`min(configured memory-cache capacity, 64 MiB)`. No memory cache means no
+`min(configured memory-cache capacity, effective capacity at initialization, 64 MiB)`. No memory cache means no
 sharing. Reserve the larger of the cached and transient allocators' backing-size
 estimates before electing a leader. Check actual returned capacity before
 publication; if it exceeds the reservation, deliver the leader's ordinary
@@ -98,23 +106,29 @@ execute the existing read without sharing or admission waits.
 | Missing key with available admission | Register loading generation; this caller is leader. |
 | Existing loading generation | Join with a ticket; wait on its completion or caller cancellation. |
 | Existing ready generation | Retain its immutable data and acquire a ticket under the registry lock. |
-| Leader completes all read/validation/cache-update work | Publish the complete data and wake waiters. |
-| Ordinary read/decode failure | Publish the error, remove generation, return its reservation. |
+| Leader completes conversion/validation | Publish the complete decoded data and wake waiters; each read owns its subsequent cache updates. |
+| Ordinary decode failure | Publish the error and detach the generation; the final ticket returns its reservation. |
+| I/O or cache-update failure | Preserve that caller's ordinary error and release its ticket through read-error cleanup. |
 | Leader cancellation | Live followers fall back once to the ordinary unshared read; do not inherit another query's cancellation. |
 | Follower cancellation or 200 ms wait bound | Drop its ticket; cancellation returns immediately, timeout falls back once without rejoining. |
 | Final participating read releases | Remove the matching generation and release data/reservation. |
-| FileService close | Stop admission and wake pending followers; detach generations without freeing live consumer data. |
+| FileService close | Stop admission and wake pending followers with a closed-operation error; detach generations without freeing live consumer data. |
 
 No I/O, conversion, allocator release or cache update runs under the registry
-mutex. Publish only after the existing deferred cache updates have completed,
-so followers cannot observe success before a leader's required work fails.
+mutex. Publication covers conversion/validation only; subsequent per-read
+cache updates remain independent and may fail independently.
 Use generation identity for removal; a late completion cannot delete a newer
 generation. Late completion after close releases its result without publishing.
 
 Use the leader's existing read context; do not start a background task or
 detach its deadline. Existing allocator arena retirement keeps outstanding
 allocations valid after close until their normal final release. Close itself
-must not wait for a consumer to finish computing Top-K.
+must not wait for a consumer to finish computing Top-K. Guard each opted-in
+read through conversion and its enclosing read/cache-update cleanup. If Close
+finds guarded reads active, the final guard performs cache retirement after
+they finish, without starting a detached worker. Keep sharing quota charged
+until the registry's final data reference is released, including detached
+generations. Deferred abandonment cleanup handles panics without recover.
 
 ## Alternatives and tradeoffs
 
@@ -156,3 +170,72 @@ approval preceding production implementation. Merge newest authoritative main
 before pushing to aunjgr. Chunked Top-K and bounded buffer reuse remain later,
 separately evaluated steps. Do not download Wiki data or dispatch remote runs
 without the user's request.
+
+## Implementation and validation record
+
+The approved decompression-only revision is implemented in this PR. Compressed
+I/O and cache updates remain per read. No runtime measurement switch is shipped.
+
+| Closure | Risk and ownership proof |
+|---|---|
+| S3FS registry and scoped read guard (R3) | Admission and publication are under one mutex; I/O, conversion, cache updates and final release are outside it. Close seals admission, wakes followers and defers cache retirement to the final active read guard. |
+| IOVector and ObjectIO (R2/R3) | The registry and each consumer retain separate references to the original validated data. The final consumer's ticket removes only its own generation. Top-K exports row coordinates and distances, never the borrowed vector. |
+| Boundedness (R3) | Bytes, live generations (including detached cleanup), participants and follower waiting have explicit limits. No worker or idle retention is introduced. Quota remains charged until the registry reference is released. |
+| Metrics (R1) | Fixed-label conversion/leader/reuse/bypass counters and active-generation/reserved-byte gauges; no object/query labels. |
+| Compatibility (R2) | No persisted, SQL, wire or catalog change. Unscoped reads, other FileService implementations and fused INCLUDE reads do not opt in. |
+
+The permanent tests cover concurrent/late reuse, key and policy isolation,
+admission limits, oversized output, ordinary/partial-result errors, cancellation
+of either role, bounded fallback, panic abandonment, stale-generation cleanup,
+last physical release, close during conversion and deferred cache update, and
+real persisted ObjectIO Top-K consumers with different queries/selections/bounds.
+The actual disk-cache test proves one conversion, one backing allocation and no
+object-store GET for eight overlapping reads under pinned-cache pressure.
+
+Normal owning-package and race validation cover FileService, ObjectIO and
+ObjectIO/ioutil. Metrics has normal package validation. Focused lifecycle tests
+are measured once under race and then stressed individually with the bounded
+100-repetition budget. Dependent block-reader tests cover persisted Top-K,
+appendable fallback and residual filtering. No new SQL behavior requires a new
+BVT case; a real SQL performance diagnostic additionally compares exact rows
+and distances through the frontend.
+
+Local performance evidence (Go 1.26.4, Linux amd64; synthetic, not Wiki-10M):
+
+| Microbenchmark (five-run medians) | Sharing off | Sharing on |
+|---|---:|---:|
+| Memory hit | 713 ns/read | 721 ns/read |
+| Independent read | 114.0 us/read | 115.5 us/read |
+| Eight independent keys | 309.9 us/batch | 317.2 us/batch |
+| Eight overlapping reads | 182.8 us/batch, 8 decodes | 147.2 us/batch, 1 decode |
+
+All three control medians remain within 5%; the overlapping batch improves by
+about 20%. The 512 KiB decode workload also reduces decoded backing allocation
+from eight buffers to one; Go allocation accounting alone excludes that native
+backing and does not represent the memory saving.
+
+The SQL diagnostic uses 32,768 synthetic 768-dimensional vectors, eight flushed
+index objects, two CNs and 32 fixed queries with prefiltering and a distance
+bound. Each off/on/on/off comparison uses one unchanged index and query set.
+Temporary local instrumentation only disables the opt-in descriptor and counts
+actual conversions/backing capacity; it is removed before delivery. This is a
+same-binary mechanism control, not a comparison of independently rebuilt ANN
+indexes or a claim about the incident-scale dataset.
+
+| SQL, concurrency 100 (mean of two runs per mode) | Sharing off | Sharing on |
+|---|---:|---:|
+| 32 MiB cache: decodes/query | 7.94 | 6.36 |
+| 32 MiB cache: decoded backing bytes/query | 129.4 MB | 103.3 MB |
+| 32 MiB cache: CPU/query | 144.0 ms | 114.9 ms |
+| 32 MiB cache: QPS | 205.6 | 258.0 |
+| 32 MiB cache: p95 / p99 | 647 / 730 ms | 558 / 659 ms |
+| 256 MiB cache: decodes/query | 0 | 0 |
+| 256 MiB cache: CPU/query | 6.80 ms | 6.89 ms |
+| 256 MiB cache: QPS | 4,340 | 4,290 |
+
+These measurements used main `c51bb4ed86` plus this implementation. The large
+cache's short high-QPS samples have noisy tails (p95 78/96 ms, p99 142/133 ms);
+they are not a tail-latency improvement claim. Sequential queries decoded eight
+columns in both modes under pressure and zero with the large cache, as expected.
+All compared rows and distances matched. Profiles, raw measurements and the
+temporary harness are retained locally; no external dataset was downloaded.
