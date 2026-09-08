@@ -91,6 +91,7 @@ func readColumnsData(
 	extraTSColumn *uint16,
 	m *mpool.MPool,
 	policy fileservice.Policy,
+	options ...objectio.ReadOneBlockOption,
 ) (ioVectors fileservice.IOVector, fromCache bool, err error) {
 	if len(columns) != len(typs) {
 		return ioVectors, false, moerr.NewInvalidInputNoCtxf(
@@ -129,6 +130,7 @@ func readColumnsData(
 		m,
 		fs,
 		policy,
+		options...,
 	)
 	if err != nil {
 		return ioVectors, false, err
@@ -371,6 +373,7 @@ func LoadColumnDataByTopN(
 		nil,
 		m,
 		policy,
+		objectio.ShareScopedDecodedColumn,
 	)
 	if err != nil {
 		return nil, nil, false, err
