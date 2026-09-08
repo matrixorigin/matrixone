@@ -3037,7 +3037,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExpr(def, colType, ctx.GetProcess())
+				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
 				if err != nil {
 					return err
 				}
@@ -3066,6 +3066,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Comment:      comment,
 				GeneratedCol: generatedCol,
 			}
+			// Keep the pre-scanned schema in lockstep with the finalized column.
+			// Later generated/default expressions use it as their row scope, and
+			// the final dependency validation uses the persisted metadata.
+			allColDefs[genColIdx] = col
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
 				asSelectCols[idx] = col
@@ -3244,6 +3248,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	if err := validateDefaultColumnDependencies(ctx.GetContext(), allColDefs); err != nil {
+		return err
 	}
 
 	if stmt.IsAsSelect {

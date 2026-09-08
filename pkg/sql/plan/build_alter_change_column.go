@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,6 +68,9 @@ func ChangeColumn(
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
 		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
+		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
 			return false, err
 		}
 		// CHANGE COLUMN renames through the COPY path. Rewrite the CHECK
@@ -146,6 +150,14 @@ func buildColumnAndConstraint(
 		Typ:        colType,
 		Alg:        plan.CompressType_Lz4,
 	}
+	defaultScope := make([]*ColDef, len(targetTableDef.Cols))
+	for i, col := range targetTableDef.Cols {
+		if strings.EqualFold(col.Name, oldCol.Name) {
+			defaultScope[i] = newCol
+		} else {
+			defaultScope[i] = col
+		}
+	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false
@@ -209,14 +221,14 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
@@ -261,7 +273,7 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}

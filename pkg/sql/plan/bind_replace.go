@@ -1382,6 +1382,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	genColIdxToProj1Pos := make(map[int]int, colCount)
 	genColIdxToProj2Pos := make(map[int]int, colCount)
 	generatedColIdxs := make([]int, 0)
+	defaultProjPositions := make([]int32, 0, colCount)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -1445,6 +1446,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 			}
 
+			defaultProjPositions = append(defaultProjPositions, int32(len(projList1)))
 			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
@@ -1459,6 +1461,18 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		}
 
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
+	}
+
+	columnExprs := make(map[int32]*plan.Expr, len(colIdxToProjPos))
+	for colIdx, projPos := range colIdxToProjPos {
+		if projPos >= 0 && int(projPos) < len(projList1) {
+			columnExprs[colIdx] = projList1[projPos]
+		}
+	}
+	if err := expandDefaultExprsInProjection(
+		builder.GetContext(), projList1, defaultProjPositions, columnExprs,
+	); err != nil {
+		return 0, nil, nil, err
 	}
 
 	for _, i := range generatedColIdxs {

@@ -925,9 +925,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			pkCols[name] = struct{}{}
 		}
 	}
-	for _, col := range tableDef.Cols {
+	columnExprs := make(map[int32]*plan.Expr, len(tableDef.Cols))
+	defaultPositions := make([]int32, 0, len(tableDef.Cols))
+	for colIdx, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
+			columnExprs[int32(colIdx)] = oldExpr
 			// if col.Typ.AutoIncr {
 			// if _, ok := pkCols[col.Name]; ok {
 			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
@@ -952,7 +955,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			projectList = append(projectList, defExpr)
+			defaultPositions = append(defaultPositions, int32(len(projectList)-1))
+			columnExprs[int32(colIdx)] = defExpr
 		}
+	}
+	if err := expandDefaultExprsInProjection(
+		builder.GetContext(), projectList, defaultPositions, columnExprs,
+	); err != nil {
+		return false, nil, nil, err
 	}
 
 	// append ProjectNode
@@ -1042,6 +1052,24 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
+						if err != nil {
+							return false, nil, nil, err
+						}
+						rowValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+						for colIdx, rowCol := range tableDef.Cols {
+							if colIdx < len(rightTableDef.Cols) {
+								rowValues[int32(colIdx)] = &plan.Expr{
+									Typ: rowCol.Typ,
+									Expr: &plan.Expr_Col{Col: &plan.ColRef{
+										RelPos: rightTag,
+										ColPos: int32(colIdx),
+									}},
+								}
+							}
+						}
+						defExpr, err = expandDefaultExprWithColumnExprs(
+							builder.GetContext(), defExpr, rowValues,
+						)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -1934,6 +1962,7 @@ func buildValueScan(
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
 	}
+	hasLocalDefaultRefs := false
 	for i := 0; i < colCount; i++ {
 		rowsetData.Cols[i] = new(plan.ColData)
 	}
@@ -1963,6 +1992,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
+			hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
 			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(slt.Rows))
 			for j := range slt.Rows {
 				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
@@ -1979,6 +2009,7 @@ func buildValueScan(
 						return err
 					}
 					if handled {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
 						continue
 					}
@@ -1989,6 +2020,7 @@ func buildValueScan(
 						return err
 					}
 					if expr != nil {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 							Expr: expr,
 						})
@@ -2027,6 +2059,7 @@ func buildValueScan(
 				if err != nil {
 					return err
 				}
+				hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 					Expr: defExpr,
 				})
@@ -2048,6 +2081,15 @@ func buildValueScan(
 			},
 		}
 		projectList[i] = expr
+	}
+
+	rowsetData.RowCount = int32(len(slt.Rows))
+	if hasLocalDefaultRefs {
+		if err := expandDefaultExprsInValueScan(
+			builder.GetContext(), tableDef, updateColumns, rowsetData,
+		); err != nil {
+			return err
+		}
 	}
 
 	onUpdateExprs := make([]*plan.Expr, 0)

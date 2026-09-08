@@ -1028,19 +1028,31 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			valueByColumn[column] = values[i]
 		}
 		projList = make([]*plan.Expr, 0, len(unionColumns))
+		columnExprs := make(map[int32]*plan.Expr, len(unionColumns))
+		defaultPositions := make([]int32, 0, len(unionColumns))
 		for _, column := range unionColumns {
-			colDef := tableDef.Cols[tableDef.Name2ColIndex[column]]
+			colIdx := tableDef.Name2ColIndex[column]
+			colDef := tableDef.Cols[colIdx]
 			expr, ok := valueByColumn[column]
 			var err error
 			if ok {
 				expr, err = builder.castInsertSourceColumn(expr, expr, colDef)
 			} else {
 				expr, err = getDefaultExpr(sysCtx, colDef)
+				if err == nil {
+					defaultPositions = append(defaultPositions, int32(len(projList)))
+				}
 			}
 			if err != nil {
 				return 0, err
 			}
+			columnExprs[colIdx] = expr
 			projList = append(projList, expr)
+		}
+		if err := expandDefaultExprsInProjection(
+			sysCtx, projList, defaultPositions, columnExprs,
+		); err != nil {
+			return 0, err
 		}
 	}
 

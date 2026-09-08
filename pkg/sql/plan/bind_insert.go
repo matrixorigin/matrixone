@@ -2658,6 +2658,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				// A DEFAULT expression in the UPDATE arm is evaluated against the
+				// conflicting row. getDefaultExpr deliberately returns local column
+				// references, so bind them to the old-row scan before the expression
+				// reaches the dedup join. Leaving RelPos=0 here makes the optimizer
+				// treat a valid dependency (for example b DEFAULT (a + 1)) as a
+				// missing input column.
+				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
 				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
 				if err != nil {
@@ -4893,6 +4900,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	genColIdxToProj1Pos := make(map[int]int)
 	genColIdxToProj2Pos := make(map[int]int)
 	generatedColIdxs := make([]int, 0)
+	defaultProjPositions := make([]int32, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -4972,6 +4980,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				}
 			}
 
+			defaultProjPositions = append(defaultProjPositions, int32(len(projList1)))
 			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
@@ -4985,6 +4994,18 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList1 = append(projList1, defExpr)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
+	}
+
+	columnExprs := make(map[int32]*plan.Expr, len(colIdxToProjPos))
+	for colIdx, projPos := range colIdxToProjPos {
+		if projPos >= 0 && int(projPos) < len(projList1) {
+			columnExprs[colIdx] = projList1[projPos]
+		}
+	}
+	if err := expandDefaultExprsInProjection(
+		builder.GetContext(), projList1, defaultProjPositions, columnExprs,
+	); err != nil {
+		return 0, nil, nil, -1, err
 	}
 
 	for _, i := range generatedColIdxs {
@@ -5176,6 +5197,7 @@ func (builder *QueryBuilder) buildValueScan(
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
 	}
+	hasLocalDefaultRefs := false
 	for i := 0; i < colCount; i++ {
 		rowsetData.Cols[i] = new(plan.ColData)
 	}
@@ -5190,6 +5212,7 @@ func (builder *QueryBuilder) buildValueScan(
 		valueBindCtx = NewBindContext(builder, bindCtx)
 	}
 	appendValueExpr := func(colIdx int, expr *plan.Expr) {
+		hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 		rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: expr})
 	}
 
@@ -5377,6 +5400,14 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 
 	rowsetData.RowCount = int32(len(stmt.Rows))
+	if hasLocalDefaultRefs {
+		if err := expandDefaultExprsInValueScan(
+			builder.GetContext(), tableDef, colNames, rowsetData,
+		); err != nil {
+			return 0, err
+		}
+	}
+
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,

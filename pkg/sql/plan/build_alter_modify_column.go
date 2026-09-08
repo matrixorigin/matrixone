@@ -98,7 +98,6 @@ func ModifyColumn(
 	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
 		return false, err
 	}
-
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
