@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -68,14 +69,19 @@ type readFilterSearchTerm struct {
 	values [][]byte
 	lb     []byte
 	ub     []byte
-	// exactTail is needed only when the byte-ordered tail is not also ordered
-	// by length. Keeping it optional avoids enlarging ordinary EQ terms.
+	// Optional secondary order/membership index; ordinary EQ terms keep the
+	// same size and allocation count.
 	exactTail *readFilterExactTail
 }
 
 type readFilterExactTail struct {
 	// Only these slice headers are copied; payloads belong to the term's values.
 	values [][]byte
+	// Only large groups of out-of-line keys need hashing. Short keys retain
+	// binary search so ordinary IN construction does not pay for a hash table.
+	// Keys alias the descriptor's owned, immutable payloads, never caller/cache
+	// buffers. Both this map and values are fully built before publication.
+	members map[string]struct{}
 }
 
 // ReadFilterSearch is an immutable search description for a single varlen
@@ -175,9 +181,10 @@ func newReadFilterSearch(oid types.T, term readFilterSearchTerm) *ReadFilterSear
 			tail := copied[readFilterLinearKeys:]
 			// Equal-length keys are already in the required byte order. Avoid
 			// another allocation/sort unless the length order actually differs.
-			if !slices.IsSortedFunc(tail, func(a, b []byte) int {
+			reorder := !slices.IsSortedFunc(tail, func(a, b []byte) int {
 				return cmp.Compare(len(a), len(b))
-			}) {
+			})
+			if reorder {
 				tail = slices.Clone(tail)
 				// The original byte order is already correct within each length.
 				// Stable length-only sorting preserves it without rereading long
@@ -185,18 +192,41 @@ func newReadFilterSearch(oid types.T, term readFilterSearchTerm) *ReadFilterSear
 				slices.SortStableFunc(tail, func(a, b []byte) int {
 					return cmp.Compare(len(a), len(b))
 				})
+			}
+			var indexed int
+			for start := 0; start < len(tail); {
+				end := start + 1
+				for end < len(tail) && len(tail[end]) == len(tail[start]) {
+					end++
+				}
+				if end-start > readFilterLinearKeys && len(tail[start]) > types.VarlenaInlineSize {
+					indexed += end - start
+				}
+				start = end
+			}
+			if indexed > 0 || reorder {
 				term.exactTail = &readFilterExactTail{values: tail}
+			}
+			if indexed > 0 {
+				term.exactTail.members = make(map[string]struct{}, indexed)
+				for start := 0; start < len(tail); {
+					end := start + 1
+					for end < len(tail) && len(tail[end]) == len(tail[start]) {
+						end++
+					}
+					if end-start > readFilterLinearKeys && len(tail[start]) > types.VarlenaInlineSize {
+						for _, value := range tail[start:end] {
+							// newReadFilterSearch cloned these Go-heap bytes above.
+							// No writer can mutate them after this descriptor is built.
+							term.exactTail.members[util.UnsafeBytesToString(value)] = struct{}{}
+						}
+					}
+					start = end
+				}
 			}
 		}
 	}
 	return &ReadFilterSearch{oid: oid, terms: []readFilterSearchTerm{term}}
-}
-
-func compareReadFilterExactValues(a, b []byte) int {
-	if order := cmp.Compare(len(a), len(b)); order != 0 {
-		return order
-	}
-	return bytes.Compare(a, b)
 }
 
 // CombineReadFilterSearch combines disjunct terms. All inputs must target the

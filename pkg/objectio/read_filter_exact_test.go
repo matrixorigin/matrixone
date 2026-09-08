@@ -81,11 +81,13 @@ func TestReadFilterExactLengthOrdering(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	for _, oid := range []types.T{types.T_varchar, types.T_varbinary} {
-		for _, shape := range []string{"uniform", "increasing", "decreasing", "interleaved", "empty"} {
+		for _, shape := range []string{"uniform", "increasing", "decreasing", "interleaved", "sparse", "empty"} {
 			t.Run(fmt.Sprintf("%s/%s", oid, shape), func(t *testing.T) {
 				count := 16
-				if shape == "interleaved" {
+				if shape == "uniform" {
 					count = 32
+				} else if shape == "interleaved" || shape == "sparse" {
+					count = 64
 				}
 				prefix := bytes.Repeat([]byte{'a'}, 32)
 				needles := make([][]byte, count)
@@ -100,6 +102,8 @@ func TestReadFilterExactLengthOrdering(t *testing.T) {
 						suffixLen = 2 * (count - i)
 					} else if shape == "interleaved" {
 						suffixLen = 2 * (i % 3)
+					} else if shape == "sparse" && i >= 24 {
+						suffixLen = 2 * i
 					}
 					if shape != "empty" {
 						needles[i] = append([]byte(fmt.Sprintf("%s%02d", prefix, i)), bytes.Repeat([]byte{'x'}, suffixLen)...)
@@ -122,9 +126,12 @@ func TestReadFilterExactLengthOrdering(t *testing.T) {
 				}
 				search := NewReadFilterSearch(oid, needles)
 				term := &search.terms[0]
-				require.Equal(t, shape == "decreasing" || shape == "interleaved",
+				require.Equal(t, shape == "decreasing" || shape == "interleaved" || shape == "uniform" || shape == "sparse",
 					term.exactTail != nil,
-					"only allocate a secondary order when the existing headers cannot be reused")
+					"only allocate auxiliary state for reordering or large length groups")
+				if shape == "uniform" || shape == "interleaved" || shape == "sparse" {
+					require.NotEmpty(t, term.exactTail.members)
+				}
 				for _, needle := range needles {
 					clear(needle)
 				}
@@ -300,24 +307,136 @@ func BenchmarkReadFilterExactKeyLengths(b *testing.B) {
 func BenchmarkReadFilterExactConstruction(b *testing.B) {
 	for _, count := range []int{1, 16, 4096} {
 		for _, mixed := range []bool{false, true} {
-			b.Run(fmt.Sprintf("keys=%d/mixed=%t", count, mixed), func(b *testing.B) {
+			for _, prefixLen := range []int{0, 2048} {
+				b.Run(fmt.Sprintf("keys=%d/mixed=%t/prefix=%d", count, mixed, prefixLen), func(b *testing.B) {
+					prefix := string(bytes.Repeat([]byte{'a'}, prefixLen))
+					needles := make([][]byte, count)
+					for i := range needles {
+						width := 8
+						if mixed {
+							width += 2 * (i % 3)
+						}
+						needles[i] = []byte(fmt.Sprintf("%skey-%0*d", prefix, width, i))
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						search := NewReadFilterSearch(types.T_varchar, needles)
+						if len(search.terms[0].values) != count {
+							b.Fatal("lost search keys")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func BenchmarkReadFilterExactHotRanks(b *testing.B) {
+	for _, count := range []int{9, 64, 4096} {
+		ranks := []int{9}
+		if count > 9 {
+			ranks = append(ranks, 10, 17, count/2, count, 0)
+		}
+		for _, rank := range ranks {
+			b.Run(fmt.Sprintf("keys=%d/rank=%d", count, rank), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				prefix := bytes.Repeat([]byte{'a'}, 2048)
 				needles := make([][]byte, count)
 				for i := range needles {
-					width := 8
-					if mixed {
-						width += 2 * (i % 3)
-					}
-					needles[i] = []byte(fmt.Sprintf("key-%0*d", width, i))
+					needles[i] = append(bytes.Clone(prefix), []byte(fmt.Sprintf("%08d", i))...)
 				}
-				b.ReportAllocs()
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					search := NewReadFilterSearch(types.T_varchar, needles)
-					if len(search.terms[0].values) != count {
-						b.Fatal("lost search keys")
+				search := NewReadFilterSearch(types.T_varchar, needles)
+				vec := vector.NewVec(types.T_varchar.ToType())
+				defer vec.Free(mp)
+				want := make([]int64, 1024)
+				for i := range want {
+					want[i] = int64(i)
+					key := rank - 1
+					if rank == 0 {
+						// Cycle multiple tail keys: no consecutive-value memo can
+						// hide the cost of actually searching different hot keys.
+						key = 8 + i%min(count-8, 32)
+					}
+					require.NoError(b, vector.AppendBytes(vec, needles[key], false, mp))
+				}
+				linear := vector.VarlenLinearSearchOffsetByValFactory(needles)
+				run := func(b *testing.B, find func() []int64) {
+					require.Equal(b, want, find())
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if got := find(); len(got) != len(want) {
+							b.Fatal("incorrect membership")
+						}
 					}
 				}
+				b.Run("current", func(b *testing.B) { run(b, func() []int64 { return search.search(vec, false) }) })
+				b.Run("linear", func(b *testing.B) { run(b, func() []int64 { return linear(vec) }) })
 			})
 		}
+	}
+}
+
+func TestReadFilterExactMembershipDispatch(t *testing.T) {
+	for _, size := range []int{types.VarlenaInlineSize, types.VarlenaInlineSize + 1} {
+		for _, count := range []int{16, 17} {
+			t.Run(fmt.Sprintf("bytes=%d/keys=%d", size, count), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				vec := vector.NewVec(types.T_varbinary.ToType())
+				defer vec.Free(mp)
+				needles := make([][]byte, count)
+				var want []int64
+				for i := range needles {
+					needles[i] = bytes.Repeat([]byte{'a'}, size)
+					needles[i][size-1] = byte(i)
+					require.NoError(t, vector.AppendBytes(vec, needles[i], false, mp))
+					want = append(want, int64(i))
+				}
+				require.NoError(t, vector.AppendBytes(vec, bytes.Repeat([]byte{'z'}, size), false, mp))
+				require.NoError(t, vector.AppendBytes(vec, needles[0][:size-1], false, mp))
+				search := NewReadFilterSearch(types.T_varbinary, needles)
+				indexed := search.terms[0].exactTail != nil && search.terms[0].exactTail.members != nil
+				require.Equal(t, size > types.VarlenaInlineSize && count > 16, indexed)
+				for _, value := range needles {
+					clear(value)
+				}
+				require.Equal(t, want, search.search(vec, false))
+			})
+		}
+	}
+}
+
+func TestReadFilterExactConcurrentReuse(t *testing.T) {
+	needles := make([][]byte, 32)
+	for i := range needles {
+		needles[i] = []byte(fmt.Sprintf("owned-key-with-out-of-line-payload-%02d", i))
+	}
+	search := NewReadFilterSearch(types.T_varchar, needles)
+	require.NotEmpty(t, search.terms[0].exactTail.members)
+	combined := CombineReadFilterSearch(search, search)
+	for _, value := range needles {
+		clear(value)
+	}
+	for worker := 0; worker < 4; worker++ {
+		t.Run(fmt.Sprintf("reader=%d", worker), func(t *testing.T) {
+			t.Parallel()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			vec := vector.NewVec(types.T_varchar.ToType())
+			defer vec.Free(mp)
+			want := make([]int64, 32)
+			for i := range want {
+				want[i] = int64(i)
+				value := []byte(fmt.Sprintf("owned-key-with-out-of-line-payload-%02d", (i+worker)%32))
+				require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+			}
+			require.NoError(t, vector.AppendBytes(vec, []byte("owned-key-with-out-of-line-payload-99"), false, mp))
+			for range 4 {
+				require.Equal(t, want, combined.search(vec, false))
+			}
+		})
 	}
 }
