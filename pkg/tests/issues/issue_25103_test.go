@@ -48,6 +48,7 @@ func TestIssue25103InformationSchemaMetadata(t *testing.T) {
 		dbName := testutils.GetDatabaseName(t)
 		schemaName := strings.ToLower(dbName)
 		decoyDBName := dbName + "_decoy"
+		decoySchemaName := strings.ToLower(decoyDBName)
 		execSQLRequire(t, ctx, db, "create database `"+dbName+"`")
 		defer execSQLMaybe(t, ctx, db, "drop database if exists `"+dbName+"`")
 		execSQLRequire(t, ctx, db, "create database `"+decoyDBName+"`")
@@ -172,29 +173,53 @@ where B.constraint_type = 'FOREIGN KEY'
 		require.Equal(t, "PRIMARY", uniqueConstraintName)
 
 		// Exercise a metadata join that omits CONSTRAINT_SCHEMA and assert that
-		// the target schema has one imported key rather than duplicated rows.
+		// explicitly requested cross-schema matches remain visible.
 		metadataRows, err := db.QueryContext(ctx, `
-select distinct A.referenced_table_schema, A.referenced_table_name,
-       A.referenced_column_name, A.table_schema, A.table_name,
-       A.column_name, A.ordinal_position, A.constraint_name,
-       R.unique_constraint_name, R.update_rule, R.delete_rule
+select A.constraint_schema, B.constraint_schema, A.table_name, B.table_name
 from information_schema.key_column_usage A
 join information_schema.table_constraints B
   using (constraint_name, table_name)
-join information_schema.referential_constraints R
-  on R.constraint_name = B.constraint_name
- and R.table_name = B.table_name
- and R.constraint_schema = B.table_schema
-where B.constraint_type = 'FOREIGN KEY'
-  and A.table_schema = ? and A.table_name = ?
-  and A.referenced_table_schema is not null`, schemaName, "child")
+where A.constraint_name = 'fk_parent' and A.table_name = 'child'`)
 		require.NoError(t, err)
 		defer func() { require.NoError(t, metadataRows.Close()) }()
-		metadataRowCount := 0
+		var crossSchemaMatch bool
 		for metadataRows.Next() {
-			metadataRowCount++
+			var leftSchema, rightSchema, leftTable, rightTable string
+			require.NoError(t, metadataRows.Scan(&leftSchema, &rightSchema, &leftTable, &rightTable))
+			if leftSchema == schemaName && rightSchema == decoySchemaName && leftTable == "child" && rightTable == "child" {
+				crossSchemaMatch = true
+			}
 		}
 		require.NoError(t, metadataRows.Err())
-		require.Equal(t, 1, metadataRowCount)
+		require.True(t, crossSchemaMatch)
+
+		// USING only coalesces the columns explicitly listed by the query. A
+		// planner rewrite must not silently coalesce CONSTRAINT_SCHEMA as well.
+		selectStarRows, err := db.QueryContext(ctx, `
+select *
+from information_schema.key_column_usage A
+join information_schema.table_constraints B
+  using (constraint_name, table_name)
+where A.constraint_schema = ? and A.table_name = ?
+limit 1`, schemaName, "child")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, selectStarRows.Close()) }()
+		columns, err := selectStarRows.Columns()
+		require.NoError(t, err)
+		require.True(t, selectStarRows.Next())
+		require.NoError(t, selectStarRows.Err())
+		require.Equal(t, 1, countMetadataColumns(columns, "constraint_name"))
+		require.Equal(t, 1, countMetadataColumns(columns, "table_name"))
+		require.Equal(t, 2, countMetadataColumns(columns, "constraint_schema"))
 	})
+}
+
+func countMetadataColumns(columns []string, name string) int {
+	count := 0
+	for _, column := range columns {
+		if strings.EqualFold(column, name) {
+			count++
+		}
+	}
+	return count
 }
