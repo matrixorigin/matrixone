@@ -820,7 +820,8 @@ v
 -1
 18446744073709551615
 SELECT CAST(18446744073709551615 AS SIGNED);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ cast(18446744073709551615 as signed)[-5,64,0]  𝄀
+-1
 DROP TABLE IF EXISTS union_signed_unsigned_28233_empty;
 CREATE TABLE union_signed_unsigned_28233_empty AS
 SELECT s AS v FROM union_signed_unsigned_28233 WHERE 1 = 0
