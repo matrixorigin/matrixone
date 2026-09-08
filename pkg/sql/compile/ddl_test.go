@@ -1605,7 +1605,7 @@ func TestScopeRefreshMaterializedViewOnDemand(t *testing.T) {
 	require.NoError(t, scope.RefreshMaterializedView(c))
 	require.Equal(t, []string{
 		"delete from `db`.`mv` where `__mo_fake_pk_col` is not null",
-		"insert into `db`.`mv` (`service`,`requests`,`__mo_fake_pk_col`) select `service`,`requests`, row_number() over () from (select `service`, count(*) as `requests` from `db`.`events` group by `service`) as `__mo_mv_refresh`",
+		"insert into `db`.`mv` (`service`,`requests`,`__mo_fake_pk_col`) select `service`,`requests`, row_number() over () from (select `service`, count(*) as `requests` from `db`.`events` group by `service`) as `__mo_mv_refresh` (`service`,`requests`)",
 	}, sqls)
 }
 func TestMaterializedViewCreationFinalizesCatalogWithoutJob(t *testing.T) {

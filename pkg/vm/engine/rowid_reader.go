@@ -14,14 +14,14 @@
 
 package engine
 
-import "errors"
+import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 const (
 	MaxRowIDReadRows  = 32768
 	MaxRowIDReadBytes = 8 << 20
 )
 
-var ErrRowIDReadLimit = errors.New("historical row lookup exceeds refresh scratch limit")
+var ErrRowIDReadLimit = moerr.NewInternalErrorNoCtx("historical row lookup exceeds refresh scratch limit")
 
 // RowIDReadBudget is shared across all snapshot groups in one consumer chunk.
 // Charge before copying values out of a borrowed engine batch. This limits
