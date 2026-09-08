@@ -47,7 +47,6 @@ func TestBinBinaryNumericLiteralsUseUnsignedNumericPath(t *testing.T) {
 	}
 }
 
-
 func TestBinStringOperandsKeepPrefixPath(t *testing.T) {
 	binaryIntroducer := makePlan2StringConstExprWithType(string([]byte{0x37, 0xff}), true)
 	binaryIntroducer.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
