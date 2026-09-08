@@ -158,7 +158,34 @@ insert into events values(8,'api',10,'new');
 select row_count=1 and duration_sum=10 and trace_count=1 as rebuilt_group from mv_fast;
 ➤ rebuilt_group[-7,1,0]  𝄀
 1
-
+create table distinct_events(id int primary key,k varchar(20),v int);
+insert into distinct_events values(1,null,10),(2,null,20),(3,null,10),(4,null,null),(5,'api',5);
+create materialized view mv_distinct refresh fast on change as select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k;
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+insert into distinct_events values(6,null,30),(7,'api',15);
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+delete from distinct_events where id=1;
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+delete from distinct_events where id=2;
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+update distinct_events set k='api',v=25 where id=3;
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+delete from distinct_events;
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+➤ distinct_matches[-7,1,0]  𝄀
+1
+drop materialized view mv_distinct;
+drop table distinct_events;
 create table union_events (
 id bigint primary key,
 service varchar(20),

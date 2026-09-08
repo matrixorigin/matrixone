@@ -135,24 +135,26 @@ func setMaterializedViewProperty(ctx context.Context, rel engine.Relation, key, 
 	var props *engine.StreamConfigsDef
 	for _, item := range constraint.Cts {
 		if current, ok := item.(*engine.StreamConfigsDef); ok {
-			props = current
-			break
+			if props == nil {
+				props = current
+			}
+			// Plan definitions may contribute several property blocks. Replace
+			// the key across all of them, so no unresolved CREATE-time envelope
+			// survives beside the finalized catalog identity.
+			kept := current.Configs[:0]
+			for _, property := range current.Configs {
+				if property.Key != key {
+					kept = append(kept, property)
+				}
+			}
+			current.Configs = kept
 		}
 	}
 	if props == nil {
 		props = &engine.StreamConfigsDef{}
 		constraint.Cts = append(constraint.Cts, props)
 	}
-	found := false
-	for _, prop := range props.Configs {
-		if prop.Key == key {
-			prop.Value = value
-			found = true
-		}
-	}
-	if !found {
-		props.Configs = append(props.Configs, &plan.Property{Key: key, Value: value})
-	}
+	props.Configs = append(props.Configs, &plan.Property{Key: key, Value: value})
 	return rel.UpdateConstraint(ctx, constraint)
 }
 

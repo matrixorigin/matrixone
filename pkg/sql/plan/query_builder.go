@@ -7098,7 +7098,7 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 		}
 	}
 	for _, groupExpr := range fullGroupingSet {
-		walkGroupingSetOrderByExpr(groupExpr, func(expr tree.Expr) bool {
+		walkASTExpressions(groupExpr, func(expr tree.Expr) bool {
 			if _, subquery := expr.(*tree.Subquery); subquery {
 				return false
 			}
@@ -7729,7 +7729,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 
 func (state *rollupWindowRewriteState) orderExprNeedsOuterAlias(expr tree.Expr) bool {
 	needsOuter := false
-	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+	walkASTExpressions(expr, func(candidate tree.Expr) bool {
 		if _, subquery := candidate.(*tree.Subquery); subquery {
 			return false
 		}
@@ -7792,7 +7792,7 @@ func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Whe
 
 func exprHasPendingAggregate(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		switch e := expr.(type) {
 		case *tree.Subquery:
 			return false
@@ -7946,7 +7946,7 @@ func resolveRollupWindowOrderSourceProbes(
 	}
 
 	for _, order := range orderBy {
-		walkGroupingSetOrderByExpr(order.Expr, func(expr tree.Expr) bool {
+		walkASTExpressions(order.Expr, func(expr tree.Expr) bool {
 			name, ok := expr.(*tree.UnresolvedName)
 			if !ok || name.Star || name.NumParts != 1 {
 				return true
@@ -9329,7 +9329,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 	}
 
 	canBind := true
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			canBind = false
 			return false
@@ -9354,7 +9354,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 func groupingSetOrderExprEqual(left, right tree.Expr) bool {
 	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
 		normalized := cloneTreeExpr(expr)
-		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
+		walkASTExpressions(normalized, func(node tree.Expr) bool {
 			name, ok := node.(*tree.UnresolvedName)
 			if !ok {
 				return true
@@ -9603,7 +9603,7 @@ func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]
 
 func containsGroupingFunction(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
+	walkASTExpressions(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
 		switch typedExpr := expr.(type) {
 		case *tree.FuncExpr:
 			if typedExpr.FuncName != nil && typedExpr.FuncName.Compare() == "grouping" {
@@ -9620,7 +9620,9 @@ func containsGroupingFunction(astExpr tree.Expr) bool {
 
 var groupingOrderFuncExprType = reflect.TypeOf(tree.FuncExpr{})
 
-func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
+// walkASTExpressions visits expression-bearing AST fields, including clauses
+// outside a projection. Func naming metadata is not an executable expression.
+func walkASTExpressions(root tree.NodeFormatter, visit func(tree.Expr) bool) {
 	visited := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -9672,7 +9674,7 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 			}
 		}
 	}
-	walk(reflect.ValueOf(astExpr))
+	walk(reflect.ValueOf(root))
 }
 
 func (builder *QueryBuilder) bindOrderBy(
@@ -10818,7 +10820,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 
 	qualified := cloneTreeExpr(astExpr)
 	var bindErr error
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		function, ok := expr.(*tree.FuncExpr)
 		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
 			return true
@@ -10836,7 +10838,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 	}
 
 	fallbackNames := make(map[string]struct{})
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			return false
 		}

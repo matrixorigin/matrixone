@@ -1,6 +1,9 @@
 drop database if exists mv_identity;
 create database mv_identity;
 use mv_identity;
+-- The typed VALUES transport used by delta SQL must retain earlier NULLs.
+select count(*)=2 and count(column_0)=1 as nullable_values from (values row(cast(null as int)),row(cast(1 as int))) v;
+select count(*)=2 as nullable_groups from (select column_0,count(*) c from (values row(cast(null as int)),row(cast(1 as int))) v group by column_0) g;
 -- Comments are user text, never object identity.
 create table ordinary(a int primary key) comment='matrixone materialized view state';
 insert into ordinary values(1);
@@ -12,6 +15,14 @@ create table spoof(a int) properties('mv_materialized'='true');
 create table __mo_mv_state_spoof(a int);
 create table src(k int primary key,v int);
 insert into src values(7,5);
+-- Every refresh mode must have complete tracked inputs. Ordinary views retain subqueries.
+create materialized view hidden_input refresh complete on change as select k,sum(v) s from src where exists(select 1 from src s2 where s2.k=src.k) group by k;
+create materialized view volatile_input refresh fast on change as select k,count(*) c from src group by k having rand()>0.5;
+create materialized view session_input refresh complete on demand as select k,v+@source_id s from src;
+select count(*)=0 as rejected_inputs from mo_catalog.mo_tables where reldatabase='mv_identity' and relname in ('hidden_input','volatile_input','session_input');
+create view ordinary_query as select k,v from src where exists(select 1 from src s2 where s2.k=src.k);
+select sum(v)=5 as ordinary_query_works from ordinary_query;
+drop view ordinary_query;
 create materialized view mv refresh complete on demand as select k,sum(v) s from src group by k;
 refresh materialized view mv;
 select sum(s)=5 as ok from mv;

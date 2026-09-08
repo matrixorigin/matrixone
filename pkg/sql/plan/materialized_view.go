@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -25,7 +26,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+// Direct FROM sources are the complete scheduling and snapshot boundary.
+// Nested queries and session inputs cannot participate until their dependencies
+// are represented too. Inspect the AST before binding can fold volatile inputs.
+func validateMaterializedViewQuery(ctx context.Context, stmt *tree.Select) error {
+	unsupported := func() error {
+		return moerr.NewNotSupported(ctx, "materialized view requires deterministic expressions without subqueries, CTEs or session variables")
+	}
+	if stmt == nil || stmt.With != nil {
+		return unsupported()
+	}
+	var err error
+	walkASTExpressions(stmt, func(expr tree.Expr) bool {
+		if err != nil {
+			return false
+		}
+		switch node := expr.(type) {
+		case *tree.Subquery, *tree.VarExpr, *tree.ParamExpr:
+			err = unsupported()
+		case *tree.FuncExpr:
+			if function.GetFunctionIsVolatileOrRealTimeRelatedByName(materializedViewIncrementalFunctionName(node)) {
+				err = unsupported()
+			}
+		}
+		return err == nil
+	})
+	return err
+}
 
 func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView, createView *plan.CreateView) error {
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnDemand && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {

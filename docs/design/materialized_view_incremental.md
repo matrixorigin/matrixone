@@ -19,6 +19,9 @@ semantics. Unsupported expressions, set operations or incompatible branch state
 are rejected for FAST. FORCE selects COMPLETE when the definition is outside the
 incremental subset. COMPLETE supports up to 16 direct base sources, including
 joins. Temporary, external and view sources are rejected.
+All refresh modes reject subqueries, CTEs, session variables/parameters and
+volatile or time-dependent functions before binding. Their inputs are not
+represented by the direct-source scheduling and snapshot contract.
 
 A UNION ALL branch has an explicit branch identity even when two branches read
 the same table. Sources are deduplicated for scheduling, while each matching
@@ -50,6 +53,11 @@ version. DROP/recreate, TRUNCATE, rename and schema-version-changing ALTER
 invalidate the dependent generation. Reads and refreshes then fail with a
 recreation diagnostic. DROP MV remains available to retire the invalid object.
 
+An unrestricted DELETE remains a row deletion when a source has an MV dependent,
+including ON DEMAND views. After acquiring the source catalog lock, compilation
+checks the account's view definitions before using the normal truncate shortcut.
+This lookup is proportional to the account's views and adds no dependency cache.
+
 Public writes and ALTER/rename/TRUNCATE on a result or its auxiliary state are
 rejected. An ordinary comment has no ownership meaning. Public CREATE TABLE
 rejects reserved `mv_*` properties and `__mo_mv_state_` names. Internal refresh
@@ -64,12 +72,18 @@ relation in the same transaction, then persists their final IDs. The auxiliary
 owner records the tenant, target ID/generation and state ID. Creation publishes
 an ON CHANGE job only after these identities are complete. Consumers never run
 `CREATE TABLE IF NOT EXISTS` to recover state by name.
+Finalization replaces the envelope across every property block, leaving one
+authoritative definition. A CREATE whose source changes while waiting for a
+catalog lock aborts and can be retried against the current definition.
 
 Initial snapshot replacement publishes target and auxiliary data atomically.
 Initial watermark finalization can follow this transaction; a crash in that gap
 repeats replacement. Tail refresh publishes result, state and watermark CAS in
 one transaction. Every generated delta DML advances the statement boundary so
 later statements observe preceding workspace writes.
+AVG and AVG(DISTINCT) persist sums and counts; the visible quotient is never used
+as additive state. VALUES column nullability includes every row so NULL groups
+survive transport into ordinary and DISTINCT delta aggregates.
 
 A refresh holds shared locks on the same database/relation catalog keys used by
 DDL, in a stable order. Generation CAS fences stale workers. A recoverable delta
@@ -143,3 +157,11 @@ maximum freshness at most 10 s, source throughput reduction at most 20%, and bur
 drain at most twice the burst duration. Logical auxiliary state must stop growing
 when the live groups/values stop growing. Record measured data and host/config
 with the PR; these are acceptance gates, not guarantees derived from unit tests.
+
+On a Ryzen 9 7900X with GOMAXPROCS=4, three paired 60,000-row runs measured median
+source throughput of 55,339 rows/s without a view and 58,100 with one COUNT/SUM
+view (no measured reduction in this run). At 6,500 offered rows/s, 170 commit observations measured
+p99 freshness 1.166 s and maximum 1.267 s; a 2 s burst drained in 0.205 s.
+Six insert/delete cycles with NULL and ordinary groups returned logical auxiliary
+row counts to zero every time. These measurements describe this harness, not a
+general capacity guarantee.

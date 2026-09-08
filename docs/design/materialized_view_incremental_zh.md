@@ -3,6 +3,9 @@
 本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求协议
 57；本文不把尚未实现的算子图格式列为当前契约。
 
+所有刷新模式在绑定前拒绝子查询、CTE、会话变量/参数和非确定性或时间相关函数，
+因为当前直接来源调度与快照契约尚未表示这些额外输入。
+
 ## SQL 与刷新策略
 
 `CREATE MATERIALIZED VIEW ... REFRESH FAST|FORCE|COMPLETE ON CHANGE AS SELECT ...`
@@ -35,6 +38,10 @@ ISCP 任务只保存目标 ID、generation、SHA256 摘要及派生调度来源�
 TRUNCATE、改名或改变 schema version 的 ALTER 会使旧 generation 失效；查询与刷新
 报错要求重建，DROP MV 仍可清理该对象。
 
+来源存在 MV 依赖时，无 WHERE 的 DELETE 保留逐行删除语义，包括 ON DEMAND 视图。
+取得来源目录锁后，编译阶段检查当前租户的视图定义，再决定能否使用 TRUNCATE 优化。
+该检查成本与租户视图数相关，不引入依赖缓存。
+
 禁止公共 DML 和 ALTER/改名/TRUNCATE 修改目标或辅助状态。普通 COMMENT 不代表
 内部对象身份。公共 CREATE TABLE 拒绝 `mv_*` 属性及 `__mo_mv_state_` 名称。
 内部刷新通过私有 context capability 精确授权租户、目标 ID、generation 和辅助表 ID；
@@ -45,10 +52,14 @@ TRUNCATE、改名或改变 schema version 的 ALTER 会使旧 generation 失效�
 CREATE 在同一事务中解析并锁住来源，创建目标及可选辅助表，保存实际 ID，最后发布
 ON CHANGE 任务。辅助表记录租户、所属目标 ID/generation 和自身 ID。消费者不再用
 `CREATE TABLE IF NOT EXISTS` 按名称重建状态。
+最终定义替换所有属性块中的临时定义，只保留一个权威副本。CREATE 等锁期间若来源
+发生变化，整个创建回滚，调用方可基于当前定义重试。
 
 初始快照的目标和辅助数据原子替换。初始 watermark 可随后确认；这段间隙崩溃会重新
 执行替换。增量刷新把结果、状态和 watermark CAS 放在同一事务。每条增量 DML 推进
 statement boundary，使后续语句能看到此前 workspace 写入。
+AVG 和 AVG(DISTINCT) 的加法状态为和与计数，不使用可见平均值。VALUES 的 NULL 属性
+综合整列所有行，保证普通聚合和 DISTINCT 增量传输都保留 NULL 分组。
 
 刷新按稳定顺序持有与 DDL 相同目录键上的共享锁，CAS 阻止过期 worker 发布。只有
 增量事务成功回滚后的可恢复错误才允许 FORCE 全量替换。取消、超时、身份/格式错误、
@@ -101,3 +112,9 @@ DROP 先按目标 ID 注销所有活跃任务 generation，再删除拥有的关
 p99 新鲜度不超过 5 秒，最大不超过 10 秒，来源吞吐下降不超过 20%，突发排空时间不
 超过突发持续时间的两倍。活跃分组/值不增长时，逻辑辅助状态不得持续增长。PR 必须记录
 实际测量、环境和配置，不能用单元测试通过替代这些准入条件。
+
+本地 Ryzen 9 7900X、GOMAXPROCS=4 环境下，三轮各 60,000 行的配对测试中，无 MV
+吞吐中位数为 55,339 行/秒，一个 COUNT/SUM MV 为 58,100 行/秒，本轮未测得吞吐下降。
+每秒输入 6,500 行时，170 个提交观测的 p99 延迟为 1.166 秒，最大 1.267 秒；
+2 秒突发在 0.205 秒内排空。包含 NULL 和普通分组的六轮插入/删除均将逻辑辅助行数
+归零。这些数据仅描述该测试环境，不构成通用容量保证。

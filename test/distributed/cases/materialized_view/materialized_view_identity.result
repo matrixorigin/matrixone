@@ -1,6 +1,12 @@
 drop database if exists mv_identity;
 create database mv_identity;
 use mv_identity;
+select count(*)=2 and count(column_0)=1 as nullable_values from (values row(cast(null as int)),row(cast(1 as int))) v;
+➤ nullable_values[-7,1,0]  𝄀
+1
+select count(*)=2 as nullable_groups from (select column_0,count(*) c from (values row(cast(null as int)),row(cast(1 as int))) v group by column_0) g;
+➤ nullable_groups[-7,1,0]  𝄀
+1
 create table ordinary(a int primary key) comment='matrixone materialized view state';
 insert into ordinary values(1);
 update ordinary set a=2;
@@ -15,6 +21,20 @@ create table __mo_mv_state_spoof(a int);
 not supported: table name __mo_mv_state_spoof is reserved for materialized view state
 create table src(k int primary key,v int);
 insert into src values(7,5);
+create materialized view hidden_input refresh complete on change as select k,sum(v) s from src where exists(select 1 from src s2 where s2.k=src.k) group by k;
+not supported: materialized view requires deterministic expressions without subqueries, CTEs or session variables
+create materialized view volatile_input refresh fast on change as select k,count(*) c from src group by k having rand()>0.5;
+not supported: materialized view requires deterministic expressions without subqueries, CTEs or session variables
+create materialized view session_input refresh complete on demand as select k,v+@source_id s from src;
+not supported: materialized view requires deterministic expressions without subqueries, CTEs or session variables
+select count(*)=0 as rejected_inputs from mo_catalog.mo_tables where reldatabase='mv_identity' and relname in ('hidden_input','volatile_input','session_input');
+➤ rejected_inputs[-7,1,0]  𝄀
+1
+create view ordinary_query as select k,v from src where exists(select 1 from src s2 where s2.k=src.k);
+select sum(v)=5 as ordinary_query_works from ordinary_query;
+➤ ordinary_query_works[-7,1,0]  𝄀
+1
+drop view ordinary_query;
 create materialized view mv refresh complete on demand as select k,sum(v) s from src group by k;
 refresh materialized view mv;
 select sum(s)=5 as ok from mv;

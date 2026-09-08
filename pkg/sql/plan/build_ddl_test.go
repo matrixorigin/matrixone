@@ -1668,6 +1668,39 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.ErrorContains(t, err, "only supported")
 }
 
+func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		valid bool
+	}{
+		{"select k,sum(v) from src group by k having count(*)>1", true},
+		{"select a.k,sum(a.v) from src a join dim b on a.k=b.k group by a.k", true},
+		{"select k,(select max(v) from src) from src", false},
+		{"select k from src where exists(select 1 from dim)", false},
+		{"select k,count(*) from src group by k having count(*)>(select max(v) from dim)", false},
+		{"select a.k from src a join dim b on a.k=(select max(k) from dim)", false},
+		{"select row_number() over(partition by (select max(k) from dim)) from src", false},
+		{"select k from src order by (select max(k) from dim)", false},
+		{"select k,count(*) from src group by k having rand()>0.5", false},
+		{"select k,now() from src", false},
+		{"select k from src where k=@limit", false},
+		{"select k from src where k=?", false},
+		{"with d as (select k from dim) select k from src", false},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.query, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			err = validateMaterializedViewQuery(t.Context(), stmt.(*tree.Select))
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "requires deterministic expressions")
+			}
+		})
+	}
+}
+
 func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1738,6 +1771,8 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.NotEmpty(t, desc.Aggregates[0].StateSumColumn)
 				require.NotEmpty(t, desc.Aggregates[0].StateCountColumn)
 				require.Positive(t, desc.Aggregates[0].StateIndex)
+				require.Contains(t, strings.ToLower(refreshSQL), "sum(distinct bytes) as "+desc.Aggregates[0].StateSumColumn)
+				require.Contains(t, strings.ToLower(refreshSQL), "count(distinct bytes) as "+desc.Aggregates[0].StateCountColumn)
 			}
 			if tc.name == "having" {
 				require.Equal(t, "hybrid-affected-group", desc.Strategy)

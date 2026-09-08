@@ -147,9 +147,6 @@ select service, row_count, duration_count, duration_sum, duration_avg,
 from mv_fast
 order by service;
 
--- UNION ALL keeps branch identity in the hidden key. Equal visible groups from
--- different sources remain duplicate output rows and each source batch is
--- routed only to its own incremental branch.
 -- DELETE of every source row must release logical auxiliary state and allow reuse.
 delete from events;
 -- @wait_expect(2, 30)
@@ -162,6 +159,34 @@ insert into events values(8,'api',10,'new');
 -- @wait_expect(2, 30)
 select row_count=1 and duration_sum=10 and trace_count=1 as rebuilt_group from mv_fast;
 
+-- DISTINCT averages persist sum/count through snapshot, duplicate deletion,
+-- last-value deletion and group movement, independently of MIN/MAX recompute.
+create table distinct_events(id int primary key,k varchar(20),v int);
+insert into distinct_events values(1,null,10),(2,null,20),(3,null,10),(4,null,null),(5,'api',5);
+create materialized view mv_distinct refresh fast on change as select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k;
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+insert into distinct_events values(6,null,30),(7,'api',15);
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+delete from distinct_events where id=1;
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+delete from distinct_events where id=2;
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+update distinct_events set k='api',v=25 where id=3;
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+delete from distinct_events;
+-- @wait_expect(2, 30)
+select count(*)=0 as distinct_matches from mv_distinct m full outer join (select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k) e on m.k <=> e.k where m.c is null or e.c is null or not (m.c <=> e.c and m.s <=> e.s and m.a <=> e.a);
+drop materialized view mv_distinct;
+drop table distinct_events;
+
+-- UNION ALL keeps branch identity in the hidden key. Equal visible groups from
+-- different sources remain duplicate output rows and each source batch is
+-- routed only to its own incremental branch.
 create table union_events (
     id bigint primary key,
     service varchar(20),

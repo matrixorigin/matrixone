@@ -240,7 +240,7 @@ func buildMaterializedViewIncrementalBranchPlan(
 				materializedViewStateColumn(agg.StateSumColumn, outputCols[i].Typ, true),
 				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
 			stateExprs = append(stateExprs,
-				name+"(DISTINCT "+agg.InputExpression+")", "count(DISTINCT "+agg.InputExpression+")")
+				"sum(DISTINCT "+agg.InputExpression+")", "count(DISTINCT "+agg.InputExpression+")")
 		} else if name == "avg" {
 			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_count_%d", i))

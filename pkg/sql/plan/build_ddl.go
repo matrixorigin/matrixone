@@ -1577,6 +1577,11 @@ func ctasExprCanBeNull(expr *Expr) bool {
 }
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	if stmt.Materialized {
+		if err := validateMaterializedViewQuery(ctx.GetContext(), stmt.AsSource); err != nil {
+			return nil, err
+		}
+	}
 	viewName := stmt.Name.ObjectName
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
 		return nil, err

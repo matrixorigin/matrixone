@@ -1630,7 +1630,10 @@ func TestMaterializedViewCreationFinalizesCatalogWithoutJob(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(src, nil)
 	src.EXPECT().GetTableDef(gomock.Any()).Return(source)
-	original := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.StreamConfigsDef{Configs: []*plan2.Property{{Key: "preserve", Value: "value"}, {Key: mvdefinition.Property, Value: encoded}}}}}
+	original := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.StreamConfigsDef{Configs: []*plan2.Property{{Key: "preserve", Value: "value"}, {Key: mvdefinition.Property, Value: encoded}}},
+		&engine.StreamConfigsDef{Configs: []*plan2.Property{{Key: mvdefinition.Property, Value: encoded}}},
+	}}
 	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{original}, nil)
 	rel.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *engine.ConstraintDef) error {
 		props := updated.Cts[0].(*engine.StreamConfigsDef).Configs
@@ -1639,7 +1642,9 @@ func TestMaterializedViewCreationFinalizesCatalogWithoutJob(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(100), final.Target.ID)
 		require.Equal(t, uint64(1), final.Target.DatabaseID)
+		require.Empty(t, updated.Cts[1].(*engine.StreamConfigsDef).Configs, "one authoritative definition across all property blocks")
 		require.Equal(t, encoded, original.Cts[0].(*engine.StreamConfigsDef).Configs[1].Value, "do not mutate shared cached constraints")
+		require.Equal(t, encoded, original.Cts[1].(*engine.StreamConfigsDef).Configs[0].Value)
 		return nil
 	})
 	proc := testutil.NewProcess(t)
