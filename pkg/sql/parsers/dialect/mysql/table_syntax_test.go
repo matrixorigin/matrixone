@@ -179,6 +179,17 @@ func TestIssue28373UnparenthesizedValuesQuerySources(t *testing.T) {
 			},
 		},
 		{
+			name: "ctas values with modifiers",
+			sql:  "create table dst as values row(1, 2), row(3, 4) order by column_0 desc limit 1",
+			check: func(t *testing.T, stmt tree.Statement) {
+				createStmt, ok := stmt.(*tree.CreateTable)
+				require.True(t, ok)
+				require.NotNil(t, createStmt.AsSource.OrderBy)
+				require.NotNil(t, createStmt.AsSource.Limit)
+				requireValuesSource(t, createStmt.AsSource)
+			},
+		},
+		{
 			name: "view",
 			sql:  "create view v as values row(1, 2), row(3, 4)",
 			check: func(t *testing.T, stmt tree.Statement) {

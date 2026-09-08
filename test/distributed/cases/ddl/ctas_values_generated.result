@@ -64,6 +64,15 @@ select extra, a, b from default_extra order by a;
 ➤ extra[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 9  ¦  1  ¦  2  𝄀
 9  ¦  3  ¦  4
+create temporary table generated_temp(
+a int,
+b int,
+g int generated always as (a - b) stored
+) as select a, b from generated_source;
+select g, a, b from generated_temp order by a;
+➤ g[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+-1  ¦  1  ¦  2  𝄀
+-1  ¦  3  ¦  4
 create table generated_explicit(
 a int,
 b int,

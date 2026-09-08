@@ -65,6 +65,14 @@ create table default_extra(extra int default 9, a int, b int)
     as select a, b from generated_source;
 select extra, a, b from default_extra order by a;
 
+-- Temporary CTAS uses the same generated-column projection path.
+create temporary table generated_temp(
+    a int,
+    b int,
+    g int generated always as (a - b) stored
+) as select a, b from generated_source;
+select g, a, b from generated_temp order by a;
+
 -- Explicitly projecting a generated target column remains invalid.
 create table generated_explicit(
     a int,
