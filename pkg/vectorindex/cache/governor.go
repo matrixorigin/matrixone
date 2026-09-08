@@ -287,9 +287,9 @@ type arrival struct {
 // spans reclaim, Preload/Load, a Destroy or a search.
 func (g *VectorIndexGovernor) reserve(key string, account uint32, size caps, perCard map[int]int64) (*arrival, func()) {
 	g.arrivalMu.Lock()
+	defer g.arrivalMu.Unlock()
 	a := &arrival{seq: g.arrivalSeq.Add(1), account: account, size: size, perCard: perCard}
 	g.inflight.Store(key, a)
-	g.arrivalMu.Unlock()
 	return a, func() {
 		g.inflight.CompareAndDelete(key, a)
 	}

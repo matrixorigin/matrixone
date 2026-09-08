@@ -1,6 +1,7 @@
 # Named-snapshot index reads and index-cache residency
 
-- Status: **Design approved** 2026-09-07 (Eric) — implementation complete
+- Status: **Design approved** 2026-09-07 (Eric) — implementation complete, with TWO
+  decisions added since that approval and marked **pending re-approval** below
 - Issues: [#27941](https://github.com/matrixorigin/matrixone/issues/27941),
   [#27927](https://github.com/matrixorigin/matrixone/issues/27927)
 - Implementation: branch `bug_27941`
@@ -19,9 +20,16 @@ sign-off they carry. Implementation conformance is reviewed against them.
 | Capacity **derivation** (90% of RAM/VRAM, sentinel handling, no fallback) | §5.1 | Eric — 2026-09-07 |
 | Isolation and **eviction ownership** (per-tenant vs CN-wide, coldest-first, pay-first) | §5.2, §5.3 | Eric — 2026-09-07 |
 | **Migration**: widening every index metadata table, and the rolling-upgrade contract | §7 | Eric — 2026-09-07 |
+| **One metadata row per CDC tail frame** for fulltext2, cagra and ivfpq — reverses the original non-goal in §2, and tail sizing now depends on those rows | §7.1, §14 | **pending re-approval** |
+| **CREATE-time capability gate**: below `MOProtocolVersion 57` a metadata table is born in the legacy shape, so an index created mid-rollout carries no provenance until something widens it | §12 | **pending re-approval** |
 
 A later change to any of these rows is a change to the contract, not an
 implementation detail: it needs the row re-approved, not just the code updated.
+The two rows marked **pending re-approval** are exactly that case: the first
+reverses a documented non-goal, the second adds a rolling-upgrade window with a
+user-visible consequence. Both are implemented and described here so they can be
+reviewed as a contract, but neither has been signed off, and the sign-off is not
+the author's to give.
 
 ## 1. Problem and contract
 
@@ -68,8 +76,11 @@ Non-goals:
   the `(doc_id, pos, word)` postings table — so there is nowhere to record it.
 - **Fair-share arithmetic.** Budgets are per-tenant and CN-wide bounds, not
   computed splits between tenants.
-- **Versioning fulltext2/cagra/ivfpq CDC tails.** They write no metadata row at
-  all, so there is nothing to carry a version (§7).
+- ~~**Versioning fulltext2/cagra/ivfpq CDC tails.**~~ **Superseded.** This was a
+  non-goal in the first revision, on the grounds that those algorithms wrote no
+  metadata row for a tail. They now write ONE ROW PER TAIL FRAME, so the tail
+  carries both its size and its version; see §7.1. Sizing depends on those rows,
+  so this moved into scope rather than remaining an omission.
 - **Charging measured residency instead of file size** for mmapped indexes (§6).
 
 ## 3. Historical reads
@@ -573,10 +584,25 @@ equal-physical case resolves favourably rather than ambiguously: with a snapshot
 at `(P, 0)` and a generation at `(P, L>=0)`, `(P, 0) <= (P, L)` always holds, so
 an ordinary `snapshot_ts <= build_ts` is exact for named snapshots.
 
-fulltext2, cagra and ivfpq write no metadata row for a CDC tail — tails are
-storage chunks — so for them CDC leaves the base generation's `build_ts` as it
-was, and the tail is unversioned. Giving those tails a version means writing
-metadata rows for them, a larger change than this design makes.
+### 7.1 One metadata row per CDC tail frame
+
+fulltext2, cagra and ivfpq record ONE metadata row per tail frame, keyed
+`cdc_tail:<startChunkId>` — an id no base sub-index can collide with, since those
+are `<index table>:<ts>:<n>` or `:<n>:<n>:<n>`. The row is written in the SAME
+transaction as the chunks it describes, so an index's recorded coverage can never
+disagree with what it actually stores — which a watermark read from elsewhere
+(`mo_iscp_log`) cannot promise across multiple CNs.
+
+Each row carries the frame's `filesize` and the `build_ts` the flush applied. That
+is what makes tail sizing cheap and exact: summing `filesize` over the rows reads
+metadata only, where `SUM(LENGTH(data))` would project the blob column and read the
+entire tail off storage just to measure it. §14 covers what happens when the rows
+describe only part of a tail.
+
+Two conditions gate emission, and they answer different questions — see §12.
+Readers that mean "the bases" must exclude these rows
+(`vectorindex.NotTailFrameSQL`); a reader that forgets loads a tail frame AS a base
+sub-index, or folds the tail's bytes into the base totals.
 
 `nrow` gives hnsw the pre-load estimate of §6 that no other source provides at the
 right granularity.
@@ -606,10 +632,12 @@ The ALTER preserves `relkind`. A copy-rebuild that drops it un-hides an index
 metadata table from restore and CLONE, which is a separate defect this branch also
 fixes.
 
-A rolling upgrade has **two** windows, and they need different answers:
+A rolling upgrade has **three** windows, and they need different answers. The
+first is CREATE-time and is covered in full by §12; the other two are here:
 
 | window | who meets what | answer |
 |---|---|---|
+| mixed CNs, a table is CREATED | a NEW CN would create a six-column table that an OLD CN's positional writer then fails on | `CREATE INDEX` builds the LEGACY shape until `MOProtocolVersion >= 57`; the migration widens it later (§12) |
 | mixed CNs, migration not yet started | an OLD CN writes four positional values into a table another CN may have widened | `RequiredProtocolVersion` holds the tenant snapshot until every service reports the protocol carrying the new writer, so the widening cannot begin while such a CN is alive |
 | all CNs new, migration running | a NEW CN serves a tenant whose tables are not widened yet — the migration is asynchronous and per tenant | the writer **names its columns** and omits the provenance ones until the table has them |
 
