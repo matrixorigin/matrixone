@@ -75,6 +75,8 @@ func TestIssue28392ConvBinNumericPrefixes(t *testing.T) {
 			{name: "conv whitespace", query: "select conv('   ', 10, 16)", want: "0"},
 			{name: "conv empty", query: "select conv('', 10, 16)", null: true},
 			{name: "bin valid prefix", query: "select bin('7x')", want: "111"},
+			{name: "bin bit literal", query: "select bin(0b11111111)", want: "11111111"},
+			{name: "bin hex literal", query: "select bin(0xFF)", want: "11111111"},
 			{name: "bin binary prefix", query: "select bin(_binary x'37ff')", want: "111"},
 			{name: "bin binary unicode whitespace", query: "select bin(_binary x'e380803778')", want: "0"},
 			{name: "bin negative unsigned overflow", query: "select bin('-18446744073709551617tail')", want: "0"},
