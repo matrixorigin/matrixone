@@ -7,8 +7,7 @@ data varchar(50)
 );
 insert into temp_truncate_test values (1, 'test1');
 insert into temp_truncate_test values (2, 'test2');
-truncate table temp_truncate_test;  -- 失败
-no such table unnormal_db.temp_truncate_test
+truncate table temp_truncate_test;
 delete from temp_truncate_test;
 select * from temp_truncate_test;  -- 应该返回空结果
 ➤ id[4,32,0]  ¦  data[12,50,0]
