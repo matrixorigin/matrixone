@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -640,34 +641,41 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
-		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+		if err := validateRemoteStatementLastInsertIDProtocol(
+			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:         t.SchemaName,
-			TableDef:           t.TableDef,
-			HasAutoCol:         t.HasAutoCol,
-			IsOldUpdate:        t.IsOldUpdate,
-			IsNewUpdate:        t.IsNewUpdate,
-			Attrs:              t.Attrs,
-			EstimatedRowCount:  int64(t.EstimatedRowCount),
-			CompPkeyExpr:       t.CompPkeyExpr,
-			ClusterByExpr:      t.ClusterByExpr,
-			ColOffset:          t.ColOffset,
-			RejectZeroTemporal: t.RejectZeroTemporal,
-			HasTargetSelector:  t.HasTargetSelector,
-			TargetRowNumberCol: t.TargetRowNumberCol,
-			TargetActiveCol:    t.TargetActiveCol,
-			TargetRowIdCol:     t.TargetRowIDCol,
+			SchemaName:                   t.SchemaName,
+			TableDef:                     t.TableDef,
+			HasAutoCol:                   t.HasAutoCol,
+			IsOldUpdate:                  t.IsOldUpdate,
+			IsNewUpdate:                  t.IsNewUpdate,
+			Attrs:                        t.Attrs,
+			EstimatedRowCount:            int64(t.EstimatedRowCount),
+			CompPkeyExpr:                 t.CompPkeyExpr,
+			ClusterByExpr:                t.ClusterByExpr,
+			ColOffset:                    t.ColOffset,
+			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
+			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			RejectZeroTemporal:           t.RejectZeroTemporal,
+			HasTargetSelector:            t.HasTargetSelector,
+			TargetRowNumberCol:           t.TargetRowNumberCol,
+			TargetActiveCol:              t.TargetActiveCol,
+			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := validateRemoteAutoIncrementSessionOptionsProtocol(
+			proc, t.PreInsertCtx.GetAutoIncrementReorder()); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteODKUActionRowsProtocol(
 			proc, t.PreInsertCtx.GetOdkuTargetArbitration()); err != nil {
 			return ctxId, nil, err
@@ -1234,6 +1242,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
+		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
+		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1926,13 +1936,40 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
-func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
-	if !hasAutoCol {
-		return nil
-	}
-	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+func validateRemoteStatementLastInsertIDProtocol(
+	proc *process.Process,
+	hasAutoCol bool,
+	trackAutoIncrementGenerated bool,
+) error {
+	if hasAutoCol && (proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService())) {
 		return moerr.NewNotSupportedNoCtx(
 			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
+		)
+	}
+	if !hasAutoCol && !trackAutoIncrementGenerated {
+		return nil
+	}
+	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
+}
+
+func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	options := incrservice.NormalizeAutoIncrementOptions(
+		proc.GetSessionInfo().AutoIncrementIncrement,
+		proc.GetSessionInfo().AutoIncrementOffset,
+	)
+	return !options.IsDefault()
+}
+
+func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAutoIncrementSessionOptions(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment session/provenance metadata requires MORPC protocol version 56",
 		)
 	}
 	return nil
@@ -2091,7 +2128,14 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
-			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(
+				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
+				return err
+			}
+		}
+		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
+			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
+				proc, preInsertUnique.PreInsertUkCtx.GetAutoIncrementReorder()); err != nil {
 				return err
 			}
 		}
