@@ -574,6 +574,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
 		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
+		op.TrackODKUResult = t.TrackODKUResult
+		op.ODKUOrdinalColumn = t.ODKUOrdinalColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -695,6 +697,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CountFoundRows = t.CountFoundRows
 		op.EmitActionRows = t.EmitActionRows
 		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ODKUResultTracking = t.ODKUResultTracking
+		op.ODKUTargetAutoIncrementCol = t.ODKUTargetAutoIncrementCol
+		op.ODKUGeneratedCol = t.ODKUGeneratedCol
+		op.ODKUOrdinalCol = t.ODKUOrdinalCol
+		op.ODKUGeneratedAutoIncrementCol = t.ODKUGeneratedAutoIncrementCol
 		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -906,6 +913,8 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.ColOffset = preCtx.ColOffset
 	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
 	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
+	op.TrackODKUResult = preCtx.TrackODKUResult
+	op.ODKUOrdinalColumn = preCtx.ODKUOrdinalColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol
@@ -1603,6 +1612,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
 	arg.DedupDeleteMarkerColIdx = -1
+	arg.ODKUTargetAutoIncrementCol = -1
+	arg.ODKUGeneratedCol = -1
+	arg.ODKUOrdinalCol = -1
+	arg.ODKUGeneratedAutoIncrementCol = -1
 	if node.DedupJoinCtx != nil {
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
@@ -1623,6 +1636,19 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
 				ColIdxList:           slices.Clone(check.ColIdxList),
 				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
+		if node.DedupJoinCtx.OdkuTargetAutoIncrementCol != nil &&
+			node.DedupJoinCtx.OdkuGeneratedCol != nil &&
+			node.DedupJoinCtx.OdkuOrdinalCol != nil {
+			arg.ODKUResultTracking = true
+			arg.ODKUTargetAutoIncrementCol = node.DedupJoinCtx.OdkuTargetAutoIncrementCol.ColPos
+			arg.ODKUGeneratedCol = node.DedupJoinCtx.OdkuGeneratedCol.ColPos
+			arg.ODKUOrdinalCol = node.DedupJoinCtx.OdkuOrdinalCol.ColPos
+			if node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol != nil {
+				arg.ODKUGeneratedAutoIncrementCol = node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol.ColPos
+			} else {
+				arg.ODKUResultTracking = false
 			}
 		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE

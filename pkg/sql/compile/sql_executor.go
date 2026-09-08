@@ -647,7 +647,12 @@ func (exec *txnExecutor) Exec(
 		)
 	}
 
-	result.LastInsertID = proc.GetStatementLastInsertID()
+	if insert, ok := c.stmt.(*tree.Insert); ok && len(insert.OnDuplicateUpdate) > 0 &&
+		!(len(insert.OnDuplicateUpdate) == 1 && insert.OnDuplicateUpdate[0] == nil) {
+		result.LastInsertID, _ = proc.GetODKUProtocolID()
+	} else {
+		result.LastInsertID = proc.GetStatementLastInsertID()
+	}
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()

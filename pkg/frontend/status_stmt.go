@@ -409,9 +409,18 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
-				ses.SetLastInsertID(res.lastInsertId)
+			isODKU := len(st.OnDuplicateUpdate) > 0 &&
+				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
+			if isODKU {
+				res.lastInsertId, generated := execCtx.proc.GetODKUProtocolID()
+				if generated {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,

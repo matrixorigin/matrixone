@@ -156,6 +156,33 @@ drop table if exists t_odku_auto;
 -- Unique-key conflicts on auto_increment tables update the conflicting row
 -- (aligns with MySQL: any unique-key conflict triggers the update).
 drop table if exists ai_duplicate_test;
+
+-- ============================================================
+-- Part 7: ODKU session LAST_INSERT_ID versus generated candidate
+-- ============================================================
+drop table if exists t_odku_return_id;
+create table t_odku_return_id (
+    id int auto_increment primary key,
+    code varchar(20) unique,
+    payload int
+);
+insert into t_odku_return_id (code, payload) values ('A', 1);
+drop table if exists t_odku_marker;
+create table t_odku_marker (id int auto_increment primary key) auto_increment = 500;
+insert into t_odku_marker values ();
+select last_insert_id();
+-- The duplicate reserves a candidate but only updates the existing row.
+insert into t_odku_return_id (code, payload) values ('A', 2)
+    on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+select last_insert_id();
+-- A real generated insert publishes its generated value to the session.
+insert into t_odku_return_id (code, payload) values ('B', 3)
+    on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+select last_insert_id();
+drop table if exists t_odku_return_id;
+drop table if exists t_odku_marker;
 create table ai_duplicate_test (
     id int auto_increment primary key,
     code varchar(20) unique,

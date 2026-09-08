@@ -133,7 +133,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:         "",
 		Role:         "",
 		ConnectionID: 0,
-		LastInsertID: 0,
+		LastInsertID: 500,
 		Database:     "",
 		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
@@ -149,12 +149,13 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SeqLastValue:   nil,
 		SqlHelper:      nil,
 	}
+	proc.SetLastInsertID(500)
 
 	remoteExecutionID := uuid.New()
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, 1<<32)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -165,6 +166,8 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.Equal(t, uint64(1<<32), restored.OdkuOrdinalBase)
+	require.Equal(t, uint64(500), restored.SessionInfo.LastInsertId)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
@@ -1064,6 +1067,70 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	require.True(t, instruction.PreInsert.HasAutoCol)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+}
+
+func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	pre := &preinsert.PreInsert{
+		HasAutoCol:                   true,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+	}
+	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:                  true,
+				TrackAutoIncrementGenerated: true,
+				TrackOdkuResult:             true,
+				OdkuOrdinalColumn:           1,
+			},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
+	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 57")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
+		"requires MORPC protocol version 57")
+	dedup := &dedupjoin.DedupJoin{ODKUResultTracking: true}
+	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.DedupJoin),
+			DedupJoin: &pipeline.DedupJoin{OdkuResultTracking: true},
+		}},
+	}}}
+	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 57")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 57")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
+	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.DedupJoin.OdkuResultTracking)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {

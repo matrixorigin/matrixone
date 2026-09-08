@@ -181,6 +181,70 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
 }
 
+func TestODKUResultSummaryOrderingAndSessionSplit(t *testing.T) {
+	last := uint64(500)
+	statement := uint64(0)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+		ODKUResult:            &ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
+	}}
+
+	proc.RecordODKUAction(9, 42, true)
+	proc.RecordODKUAction(3, 7, true)
+	proc.RecordODKUAction(6, 0, false) // zero is a valid fallback value
+	proc.RecordODKUGenerated(8, 101)
+	proc.RecordODKUGenerated(2, 99)
+
+	summary := proc.GetODKUResultSummary()
+	require.True(t, summary.HasGenerated)
+	require.Equal(t, uint64(2), summary.FirstGeneratedOrdinal)
+	require.Equal(t, uint64(99), summary.FirstGeneratedID)
+	require.True(t, summary.HasAction)
+	require.Equal(t, uint64(9), summary.LastActionOrdinal)
+	require.Equal(t, uint64(42), summary.LastActionID)
+	require.True(t, summary.HasSuccessfulAction)
+	require.Equal(t, uint64(9), summary.LastSuccessfulOrdinal)
+	require.Equal(t, uint64(42), summary.LastSuccessfulID)
+	id, generated := proc.GetODKUProtocolID()
+	require.True(t, generated)
+	require.Equal(t, uint64(99), id)
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
+
+	proc.ResetODKUResult()
+	proc.RecordODKUAction(1, 42, true)
+	proc.RecordODKUAction(2, 77, false)
+	proc.MergeODKUResultSummary(ODKUResultSummary{
+		HasAction:             true,
+		LastActionOrdinal:     4,
+		LastActionID:          88,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 3,
+		LastSuccessfulID:      66,
+	})
+	id, generated = proc.GetODKUProtocolID()
+	require.False(t, generated)
+	require.Equal(t, uint64(88), id)
+	require.Equal(t, uint64(4), proc.GetODKUResultSummary().LastActionOrdinal)
+	require.Equal(t, uint64(3), proc.GetODKUResultSummary().LastSuccessfulOrdinal)
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
+
+	proc.ResetODKUResult()
+	proc.RecordODKUAction(0, 0, false)
+	id, generated = proc.GetODKUProtocolID()
+	require.False(t, generated)
+	require.Zero(t, id)
+
+	proc.ResetODKUResult()
+	base0 := proc.NextODKURemoteOrdinalBase()
+	base1 := proc.NextODKURemoteOrdinalBase()
+	require.Zero(t, base0)
+	require.Equal(t, odkuRemoteOrdinalBlockSize, base1)
+	proc.SetODKUInputOrdinalBase(base1)
+	require.Equal(t, base1, proc.NextODKUInputOrdinal(1))
+}
+
 func TestFoundRows(t *testing.T) {
 	var nilProc *Process
 	nilProc.BeginFoundRowsStatement(true)

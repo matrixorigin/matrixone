@@ -179,6 +179,8 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		TargetRowIdCol:               ctx.TargetRowIdCol,
 		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
 		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
+		TrackODKUResult:              ctx.TrackODKUResult,
+		ODKUOrdinalColumn:            ctx.ODKUOrdinalColumn,
 	}
 
 	return newCtx
@@ -264,6 +266,22 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 	if ctx.ActionFinalCol != nil {
 		col := *ctx.ActionFinalCol
 		newCtx.ActionFinalCol = &col
+	}
+	if ctx.OdkuTargetAutoIncrementCol != nil {
+		col := *ctx.OdkuTargetAutoIncrementCol
+		newCtx.OdkuTargetAutoIncrementCol = &col
+	}
+	if ctx.OdkuGeneratedCol != nil {
+		col := *ctx.OdkuGeneratedCol
+		newCtx.OdkuGeneratedCol = &col
+	}
+	if ctx.OdkuOrdinalCol != nil {
+		col := *ctx.OdkuOrdinalCol
+		newCtx.OdkuOrdinalCol = &col
+	}
+	if ctx.OdkuGeneratedAutoIncrementCol != nil {
+		col := *ctx.OdkuGeneratedAutoIncrementCol
+		newCtx.OdkuGeneratedAutoIncrementCol = &col
 	}
 	newCtx.ForeignKeyChecks = make([]plan.ODKUForeignKeyCheck, len(ctx.ForeignKeyChecks))
 	for i, check := range ctx.ForeignKeyChecks {

@@ -34,6 +34,49 @@ func TestODKUAffectedRowsRules(t *testing.T) {
 	require.EqualValues(t, 1, odkuAffectedRows(false, true))
 }
 
+func TestODKUResultTrackingRecordsGeneratedAndPerActionValidity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.ResetODKUResult()
+
+	marker := vector.NewVec(types.T_bool.ToType())
+	ordinal := vector.NewVec(types.T_uint64.ToType())
+	generatedID := vector.NewVec(types.T_int64.ToType())
+	targetID := vector.NewVec(types.T_int64.ToType())
+	for _, vec := range []*vector.Vector{marker, ordinal, generatedID, targetID} {
+		defer vec.Free(proc.Mp())
+	}
+	require.NoError(t, vector.AppendFixed(marker, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(ordinal, uint64(4), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(generatedID, int64(9), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(targetID, int64(7), false, proc.Mp()))
+	input := &batch.Batch{Vecs: []*vector.Vector{marker, ordinal, generatedID}}
+	target := &batch.Batch{Vecs: []*vector.Vector{targetID}}
+	input.SetRowCount(1)
+	target.SetRowCount(1)
+	ap := &DedupJoin{
+		ODKUResultTracking:            true,
+		ODKUGeneratedCol:              0,
+		ODKUOrdinalCol:                1,
+		ODKUGeneratedAutoIncrementCol: 2,
+		ODKUTargetAutoIncrementCol:    0,
+	}
+	ctr := &container{}
+	ctr.recordODKUGenerated(ap, input, 0, proc)
+	ctr.recordODKUAction(ap, input, 0, target, 0, true, proc)
+	ctr.recordODKUAction(ap, input, 0, target, 0, false, proc)
+	ctr.flushODKUResult(proc)
+
+	summary := proc.GetODKUResultSummary()
+	require.True(t, summary.HasGenerated)
+	require.Equal(t, uint64(4), summary.FirstGeneratedOrdinal)
+	require.Equal(t, uint64(9), summary.FirstGeneratedID)
+	require.Equal(t, uint64(4), summary.LastActionOrdinal)
+	require.Equal(t, uint64(7), summary.LastActionID)
+	require.True(t, summary.HasSuccessfulAction)
+	require.Equal(t, uint64(7), summary.LastSuccessfulID)
+}
+
 func TestODKUMetadataContractRejectsMalformedPlans(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

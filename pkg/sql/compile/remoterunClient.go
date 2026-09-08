@@ -256,6 +256,7 @@ func prepareRemoteRunSendingData(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		proc.NextODKURemoteOrdinalBase(),
 	); err != nil {
 		return nil, false, nil, false, err
 	}
@@ -951,6 +952,19 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	}
+	if sender.proc != nil && envelope.ODKUResult != nil {
+		sender.proc.MergeODKUResultSummary(process.ODKUResultSummary{
+			HasGenerated:          envelope.ODKUResult.HasGenerated,
+			FirstGeneratedOrdinal: envelope.ODKUResult.FirstGeneratedOrdinal,
+			FirstGeneratedID:      envelope.ODKUResult.FirstGeneratedID,
+			HasAction:             envelope.ODKUResult.HasAction,
+			LastActionOrdinal:     envelope.ODKUResult.LastActionOrdinal,
+			LastActionID:          envelope.ODKUResult.LastActionID,
+			HasSuccessfulAction:   envelope.ODKUResult.HasSuccessfulAction,
+			LastSuccessfulOrdinal: envelope.ODKUResult.LastSuccessfulOrdinal,
+			LastSuccessfulID:      envelope.ODKUResult.LastSuccessfulID,
+		})
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)

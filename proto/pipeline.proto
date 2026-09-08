@@ -231,6 +231,8 @@ message PreInsert {
   int32 target_row_id_col = 16;
   bool track_auto_increment_generated = 17;
   int32 auto_increment_generated_column = 18;
+  bool track_odku_result = 19;
+  int32 odku_ordinal_column = 20;
 }
 
 message PostDml {
@@ -352,6 +354,11 @@ message DedupJoin {
   bool emit_action_rows = 27;
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
+  int32 odku_target_auto_increment_col = 30;
+  int32 odku_generated_col = 31;
+  int32 odku_ordinal_col = 32;
+  bool odku_result_tracking = 33;
+  int32 odku_generated_auto_increment_col = 34;
 }
 
 message RightDedupJoin {
@@ -759,6 +766,9 @@ message ProcessInfo {
   // matching Shuffle wire opcode makes pre-v33 receivers reject the pipeline;
   // the pair prevents a rollout change from silently splitting key ownership.
   uint32 string_shuffle_hash_algorithm = 16;
+  // Statement-local ODKU ordinal range reserved by the initiating CN before
+  // this remote pipeline starts. Older senders leave it zero.
+  uint64 odku_ordinal_base = 17;
 }
 
 message SessionInfo {
@@ -781,6 +791,9 @@ message SessionInfo {
   // value of one on the receiving CN.
   uint64 auto_increment_increment = 15;
   uint64 auto_increment_offset = 16;
+  // Session-visible LAST_INSERT_ID() baseline for expressions evaluated on a
+  // remote CN. Zero is a valid value and also preserves old payload behavior.
+  uint64 last_insert_id = 17;
 }
 
 message SessionLoggerInfo {

@@ -744,6 +744,14 @@ message DedupJoinCtx {
   bool emit_action_rows = 10;
   ColRef action_final_col = 11;
   repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
+  // ODKU result tracking is explicit plan metadata.  The target column is
+  // read from the old/probe row; the generated and ordinal columns are read
+  // from the input/build row.  Presence is restricted to the main UPDATE
+  // dedup join and survives projection/remap like the other metadata refs.
+  ColRef odku_target_auto_increment_col = 13;
+  ColRef odku_generated_col = 14;
+  ColRef odku_ordinal_col = 15;
+  ColRef odku_generated_auto_increment_col = 16;
 }
 
 message UpdateCtx {
@@ -1518,6 +1526,10 @@ message PreInsertCtx {
   // INSERT IGNORE arbiter must distinguish generated from explicit values.
   bool track_auto_increment_generated = 13;
   int32 auto_increment_generated_column = 14;
+  // ODKU keeps the generated marker and a statement-local source ordinal so
+  // the DEDUP action owner can publish first-generated/last-action results.
+  bool track_odku_result = 15;
+  int32 odku_ordinal_column = 16;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

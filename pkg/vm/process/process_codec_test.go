@@ -97,6 +97,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		LastInsertID:                        500,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -154,6 +155,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			LastInsertId:                        500,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -164,6 +166,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, uint64(500), info.LastInsertID)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})

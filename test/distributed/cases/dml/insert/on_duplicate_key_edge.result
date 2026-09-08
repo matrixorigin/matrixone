@@ -133,6 +133,39 @@ select * from t_odku_auto order by id;
 4  ¦  3  ¦  third
 drop table if exists t_odku_auto;
 drop table if exists ai_duplicate_test;
+
+drop table if exists t_odku_return_id;
+create table t_odku_return_id (
+id int auto_increment primary key,
+code varchar(20) unique,
+payload int
+);
+insert into t_odku_return_id (code, payload) values ('A', 1);
+drop table if exists t_odku_marker;
+create table t_odku_marker (id int auto_increment primary key) auto_increment = 500;
+insert into t_odku_marker values ();
+select last_insert_id();
+➤ last_insert_id()
+500
+insert into t_odku_return_id (code, payload) values ('A', 2)
+on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]
+1  ¦  A  ¦  2
+select last_insert_id();
+➤ last_insert_id()
+500
+insert into t_odku_return_id (code, payload) values ('B', 3)
+on duplicate key update payload = values(payload);
+select id, code, payload from t_odku_return_id order by id;
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]
+1  ¦  A  ¦  2  𝄀
+3  ¦  B  ¦  3
+select last_insert_id();
+➤ last_insert_id()
+3
+drop table if exists t_odku_return_id;
+drop table if exists t_odku_marker;
 create table ai_duplicate_test (
 id int auto_increment primary key,
 code varchar(20) unique,

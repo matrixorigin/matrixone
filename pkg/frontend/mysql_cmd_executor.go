@@ -5817,6 +5817,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		// A COM_QUERY may contain multiple statements.  The previous statement
+		// can have published a generated ODKU value to the session after the
+		// process was initialized, so reseed the expression-visible process
+		// value before planning this statement.
+		lastInsertID := ses.GetLastInsertID()
+		proc.SetLastInsertID(lastInsertID)
+		// Retry restoration uses the session snapshot carried by SessionInfo. Keep
+		// that attempt baseline aligned when COM_QUERY reuses the process across
+		// statements.
+		proc.Base.SessionInfo.LastInsertID = lastInsertID
+		proc.ResetODKUResult()
 		// SET statements in the same COM_QUERY execute after the wrappers were
 		// planned.  Refresh the runtime snapshot immediately before each
 		// statement so the remote PRE_INSERT path observes the session values

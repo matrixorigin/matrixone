@@ -441,12 +441,25 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				// A terminal envelope can accompany an error response. ODKU facts
+				// are publishable only for a fully successful statement; do not let
+				// an invalidated attempt leak its partial action summary to the
+				// initiating CN.
+				if err == nil {
+					receiver.odkuResult = remoteODKUResultFromProcess(
+						runCompile.proc.GetODKUResultSummary())
+				} else {
+					receiver.odkuResult = nil
+				}
 				runCompile.clear()
 				return nil
 			}))
 			terminal, terminalErr := allocationParticipant.finish(err)
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 			for _, snapshot := range terminal.allocation {
 				localAllocationQuality |= addAllocationAccountTerminal(
 					&localAllocation,
@@ -797,6 +810,7 @@ type processHelper struct {
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
 	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	odkuOrdinalBase            uint64
 	prepareParams              pipeline.PrepareParamInfo
 	affectedRows               int64
 	remoteFragmentCounts       map[string]uint32
@@ -842,6 +856,7 @@ type messageReceiverOnServer struct {
 	warningCount                      uint64
 	warningDiagnostics                []remoteWarningDiagnostic
 	statementLastInsertID             uint64
+	odkuResult                        *remoteODKUResultSummary
 }
 
 func newMessageReceiverOnServer(
@@ -969,6 +984,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.SetLastInsertID(pHelper.sessionInfo.LastInsertID)
+	proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
 	receiver.warningSession = &remoteWarningCollector{}
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
@@ -1259,6 +1276,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
 		StatementLastInsertID:     receiver.statementLastInsertID,
+		ODKUResult:                receiver.odkuResult,
 		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
@@ -1305,6 +1323,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		odkuOrdinalBase:            procInfo.OdkuOrdinalBase,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {

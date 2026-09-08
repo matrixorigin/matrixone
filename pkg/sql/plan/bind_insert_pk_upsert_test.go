@@ -79,6 +79,41 @@ func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
 	requireOnDupUpdateColumns(t, logicPlan, []int32{1}, []int32{0})
 }
 
+func TestInsertOnDupCarriesAutoIncrementResultProvenance(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["t1"]
+	require.NotNil(t, table)
+	require.NotEmpty(t, table.Cols)
+	original := table.Cols[0].Typ.AutoIncr
+	table.Cols[0].Typ.AutoIncr = true
+	t.Cleanup(func() { table.Cols[0].Typ.AutoIncr = original })
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update b = values(b)")
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT && node.PreInsertCtx != nil &&
+			node.PreInsertCtx.TrackOdkuResult {
+			require.GreaterOrEqual(t, node.PreInsertCtx.AutoIncrementGeneratedColumn, int32(0))
+			require.Equal(t, node.PreInsertCtx.AutoIncrementGeneratedColumn+1,
+				node.PreInsertCtx.OdkuOrdinalColumn)
+		}
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE || node.DedupJoinCtx == nil {
+			continue
+		}
+		found = true
+		require.NotNil(t, node.DedupJoinCtx.OdkuTargetAutoIncrementCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuGeneratedCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuOrdinalCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol)
+	}
+	require.True(t, found, "expected an ODKU dedup join")
+}
+
 func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t,

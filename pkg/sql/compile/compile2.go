@@ -1045,6 +1045,7 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	// generates a replacement value.
 	c.proc.SetStatementLastInsertID(0)
 	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
+	c.proc.ResetODKUResult()
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()

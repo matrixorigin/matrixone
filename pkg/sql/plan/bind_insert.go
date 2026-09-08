@@ -41,6 +41,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
+	builder.isODKU = len(stmt.OnDuplicateUpdate) > 0 &&
+		!(len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil)
 	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
 	// CHAR/VARCHAR writes to truncation instead of rejection.
 	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
@@ -3409,6 +3411,48 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					CountFoundRows:         countFoundRows,
 					EmitActionRows:         emitODKUActionRows,
 				}
+				// ODKU result tracking is attached only to the main UPDATE join.
+				// The old/probe auto-increment value is the protocol fallback target;
+				// the input/build marker and ordinal identify a successful generated
+				// INSERT action.  Explicit refs let every later projection/remap keep
+				// the contract intact without inspecting transient column names.
+				autoIncrementCol := int32(-1)
+				autoIncrementInputCol := int32(-1)
+				for i, col := range tableDef.Cols {
+					if col == nil || col.Hidden || col.Name == catalog.FakePrimaryKeyColName || !col.Typ.AutoIncr {
+						continue
+					}
+					if autoIncrementCol >= 0 {
+						return 0, moerr.NewInvalidInput(builder.GetContext(),
+							"ODKU result tracking requires one auto-increment column")
+					}
+					autoIncrementCol = int32(i)
+					var ok bool
+					autoIncrementInputCol, ok = colName2Idx[tableDef.Name+"."+col.Name]
+					if !ok {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU auto-increment column is missing from input projection")
+					}
+				}
+				if autoIncrementCol >= 0 && autoIncrementInputCol >= 0 && autoIncrementGeneratedColumn >= 0 {
+					ordinalCol := autoIncrementGeneratedColumn + 1
+					if int(ordinalCol) >= len(selectNode.ProjectList) {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU result provenance columns are missing from input projection")
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuTargetAutoIncrementCol = &plan.ColRef{
+						RelPos: scanTag, ColPos: autoIncrementCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementGeneratedColumn,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuOrdinalCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: ordinalCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedAutoIncrementCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementInputCol,
+					}
+				}
 				if emitODKUActionRows {
 					dedupJoinNode.DedupJoinCtx.ActionFinalCol = &plan.ColRef{
 						RelPos: selectTag, ColPos: actionFinalInputPos,
@@ -5032,6 +5076,25 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
+	// A table without a user-visible AUTO_INCREMENT column may still carry
+	// MatrixOne's hidden fake primary key. That key is an allocation detail and
+	// must not become LAST_INSERT_ID or an ODKU OK-packet value.
+	hasODKUAutoCol := false
+	for _, col := range tableDef.Cols {
+		if col != nil && !col.Hidden && col.Name != catalog.FakePrimaryKeyColName && col.Typ.AutoIncr {
+			hasODKUAutoCol = true
+			break
+		}
+	}
+	trackODKUResult := builder.isODKU && hasODKUAutoCol
+	if trackODKUResult {
+		// ODKU uses the same pre-allocation generated marker as INSERT IGNORE,
+		// but keeps a distinct statement-local ordinal beside it.  The marker is
+		// never used as a hidden-name convention; its physical position is carried
+		// through PreInsertCtx and the DEDUP metadata below.
+		markerPhysicalPos = int32(len(projList2))
+		trackAutoIncrementGenerated = true
+	}
 	if trackAutoIncrementGenerated {
 		projList2 = append(projList2, &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
@@ -5040,6 +5103,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				ColPos: markerPhysicalPos,
 			}},
 		})
+		if trackODKUResult {
+			projList2 = append(projList2, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_uint64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: preInsertTag,
+					ColPos: markerPhysicalPos + 1,
+				}},
+			})
+		}
 	}
 
 	tmpCtx := NewBindContext(builder, bindCtx)
@@ -5062,6 +5134,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				ClusterByExpr:                clusterByExpr,
 				TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
 				AutoIncrementGeneratedColumn: markerPhysicalPos,
+				TrackODKUResult:              trackODKUResult,
+				ODKUOrdinalColumn:            markerPhysicalPos + 1,
 			},
 			BindingTags: []int32{preInsertTag},
 		}, tmpCtx)

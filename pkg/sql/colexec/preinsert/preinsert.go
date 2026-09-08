@@ -41,6 +41,7 @@ import (
 const opName = "preinsert"
 
 const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
+const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -81,6 +82,17 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	}
 	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
+	}
+	if preInsert.TrackODKUResult && preInsert.ODKUOrdinalColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU input ordinal column")
+	}
+	if preInsert.TrackODKUResult && !preInsert.TrackAutoIncrementGenerated {
+		return moerr.NewInvalidInput(proc.Ctx,
+			"ODKU result tracking requires auto-increment provenance")
+	}
+	if preInsert.TrackODKUResult && !preInsert.HasAutoCol {
+		return moerr.NewInvalidInput(proc.Ctx,
+			"ODKU result tracking requires an auto-increment column")
 	}
 	return
 }
@@ -270,6 +282,11 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	// constructColBuf copies the child vectors into the reusable output batch,
+	// but deliberately leaves its row count for this point.  Set it before
+	// capturing per-row ODKU provenance so the marker and ordinal slices cover
+	// the actual rows passed to the allocator.  The output batch is then not
+	// counted a second time below.
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
@@ -277,6 +294,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			convertZeroToNull(workBat, preInsert)
 		}
 		if err = preInsert.captureAutoIncrementGeneratedRows(workBat); err != nil {
+			return result, err
+		}
+		if err = preInsert.captureODKUInputOrdinals(proc, workBat); err != nil {
 			return result, err
 		}
 		start := time.Now()
@@ -314,12 +334,31 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
 	}
-	if err = preInsert.constructAutoIncrementGeneratedCol(proc, bat, first); err != nil {
+	provenanceBat := bat
+	if preInsert.TrackODKUResult {
+		provenanceBat = workBat
+	}
+	if err = preInsert.constructAutoIncrementGeneratedCol(proc, provenanceBat, first); err != nil {
 		return result, err
 	}
 
 	result.Batch = preInsert.ctr.buf
 	return result, nil
+}
+
+func (preInsert *PreInsert) captureODKUInputOrdinals(proc *proc, bat *batch.Batch) error {
+	if !preInsert.TrackODKUResult {
+		return nil
+	}
+	if bat == nil {
+		return moerr.NewInternalError(proc.Ctx, "ODKU input ordinal capture received nil batch")
+	}
+	start := proc.NextODKUInputOrdinal(bat.RowCount())
+	preInsert.ctr.odkuOrdinals = make([]uint64, bat.RowCount())
+	for i := range preInsert.ctr.odkuOrdinals {
+		preInsert.ctr.odkuOrdinals[i] = start + uint64(i)
+	}
+	return nil
 }
 
 func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
@@ -376,6 +415,18 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 			vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
+		if preInsert.TrackODKUResult {
+			ordinalPos := int(preInsert.ODKUOrdinalColumn)
+			if ordinalPos != len(preInsert.ctr.buf.Vecs) {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ODKU input ordinal column %d does not follow provenance output width %d",
+					ordinalPos, len(preInsert.ctr.buf.Vecs))
+			}
+			preInsert.ctr.canFreeVecIdx[ordinalPos] = true
+			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
+				vector.NewOffHeapVecWithType(types.T_uint64.ToType()))
+			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, odkuInputOrdinalAttr)
+		}
 	} else {
 		if markerPos >= len(preInsert.ctr.buf.Vecs) {
 			return moerr.NewInternalErrorf(proc.Ctx,
@@ -383,6 +434,15 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 				markerPos, len(preInsert.ctr.buf.Vecs))
 		}
 		preInsert.ctr.buf.Vecs[markerPos].CleanOnlyData()
+		if preInsert.TrackODKUResult {
+			ordinalPos := int(preInsert.ODKUOrdinalColumn)
+			if ordinalPos < 0 || ordinalPos >= len(preInsert.ctr.buf.Vecs) {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ODKU input ordinal column %d is outside PRE_INSERT output width %d",
+					ordinalPos, len(preInsert.ctr.buf.Vecs))
+			}
+			preInsert.ctr.buf.Vecs[ordinalPos].CleanOnlyData()
+		}
 	}
 	generated := preInsert.ctr.autoIncrementGenerated
 	preInsert.ctr.autoIncrementGenerated = nil
@@ -395,6 +455,22 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		if err := vector.AppendFixed(
 			preInsert.ctr.buf.Vecs[markerPos], value, false, proc.Mp()); err != nil {
 			return err
+		}
+	}
+	if preInsert.TrackODKUResult {
+		ordinals := preInsert.ctr.odkuOrdinals
+		preInsert.ctr.odkuOrdinals = nil
+		if len(ordinals) != bat.RowCount() {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"ODKU input ordinal rows %d do not match batch rows %d",
+				len(ordinals), bat.RowCount())
+		}
+		ordinalPos := int(preInsert.ODKUOrdinalColumn)
+		for _, ordinal := range ordinals {
+			if err := vector.AppendFixed(
+				preInsert.ctr.buf.Vecs[ordinalPos], ordinal, false, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -668,7 +744,7 @@ retryInsertValues:
 		}
 	}
 
-	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated {
+	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
 		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
 		// all sharing the statement-wide process state.  Publish the smallest
 		// generated value through the shared coordinator so scheduling cannot make
