@@ -241,7 +241,14 @@ func (c *cluster) closeServicesLocked() error {
 func (c *cluster) closeServicesFromLocked(from int) error {
 	var err error
 	for i := len(c.services) - 1; i >= from; i-- {
-		err = errors.Join(err, c.services[i].Close())
+		closeErr := c.services[i].Close()
+		err = errors.Join(err, closeErr)
+		if closeErr != nil {
+			// Keep the remaining dependencies alive.  In particular, a TN
+			// drain failure must not close LogService/WAL while accepted
+			// handlers are still resolving their terminal state.
+			return err
+		}
 	}
 	return err
 }
