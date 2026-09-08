@@ -2657,7 +2657,13 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			if err != nil {
 				return nil, nil, err
 			}
-			for entry, err := range fs.List(param.Ctx, readPath) {
+			entries := fs.List(param.Ctx, readPath)
+			// Dot-prefixed components explicitly select hidden local entries.
+			// Keep ordinary glob discovery (and other List consumers) unchanged.
+			if local, ok := fs.(*fileservice.LocalETLFS); ok && strings.HasPrefix(pathDir[i], ".") {
+				entries = local.ListWithHidden(param.Ctx, readPath)
+			}
+			for entry, err := range entries {
 				if err != nil {
 					return nil, nil, err
 				}
