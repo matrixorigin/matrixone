@@ -323,7 +323,14 @@ func TestKeeper(t *testing.T) {
 				newRemoteLockTable(
 					"s1",
 					time.Second,
-					pb.LockTable{ServiceID: "s2"},
+					pb.LockTable{
+						Group:       0,
+						Table:       0,
+						OriginTable: 0,
+						ServiceID:   "s2",
+						Version:     1,
+						Valid:       true,
+					},
 					c,
 					func(lt pb.LockTable) {},
 					getLogger(""),
@@ -335,7 +342,14 @@ func TestKeeper(t *testing.T) {
 				newRemoteLockTable(
 					"s1",
 					time.Second,
-					pb.LockTable{ServiceID: "s1"},
+					pb.LockTable{
+						Group:       0,
+						Table:       1,
+						OriginTable: 1,
+						ServiceID:   "s1",
+						Version:     1,
+						Valid:       true,
+					},
 					c,
 					func(lt pb.LockTable) {},
 					getLogger(""),
@@ -1248,14 +1262,20 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 	)
 }
 
-func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T) {
+func TestKeepRemoteLockRejectedBindInvalidatesOldBind(t *testing.T) {
 	testCases := []struct {
-		name        string
-		withNewBind bool
-		keepErr     error
+		name               string
+		withNewBind        bool
+		keepErr            error
+		refreshReturnsSame bool
 	}{
 		{name: "new-bind", withNewBind: true},
 		{name: "bind-not-found", keepErr: ErrLockTableNotFound},
+		{
+			name:               "bind-changed-with-stale-allocator",
+			keepErr:            ErrLockTableBindChanged,
+			refreshReturnsSame: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1273,6 +1293,8 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						Group: 0, Table: 2, OriginTable: 2,
 						ServiceID: "s2", Version: 1, Valid: true,
 					}
+					var oldKeepCalls atomic.Int64
+					var unrelatedKeepCalls atomic.Int64
 
 					server.RegisterMethodHandler(
 						pb.Method_KeepRemoteLock,
@@ -1283,11 +1305,14 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 							resp *pb.Response,
 							cs morpc.ClientSession) {
 							var err error
-							if req.LockTable.Table == oldBind.Table && tc.withNewBind {
-								resp.NewBind = &responseBind
-							}
 							if req.LockTable.Table == oldBind.Table {
+								oldKeepCalls.Add(1)
+								if tc.withNewBind {
+									resp.NewBind = &responseBind
+								}
 								err = tc.keepErr
+							} else {
+								unrelatedKeepCalls.Add(1)
 							}
 							writeResponse(getLogger(""), cancel, resp, err, cs)
 						})
@@ -1299,6 +1324,11 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 							req *pb.Request,
 							resp *pb.Response,
 							cs morpc.ClientSession) {
+							if tc.refreshReturnsSame {
+								resp.GetBind.LockTable = oldBind
+								writeResponse(getLogger(""), cancel, resp, nil, cs)
+								return
+							}
 							writeResponse(
 								getLogger(""),
 								cancel,
@@ -1363,6 +1393,8 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					}
 					keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
+					require.Equal(t, int64(1), oldKeepCalls.Load())
+					require.Equal(t, int64(1), unrelatedKeepCalls.Load())
 					oldTxn.Lock()
 					require.True(t, oldTxn.bindChanged)
 					oldTxn.Unlock()
@@ -1375,8 +1407,18 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						unrelatedBind,
 						svc.tableGroups.get(unrelatedBind.Group, unrelatedBind.Table).getBind(),
 					)
+					require.Equal(t, []pb.LockTable{unrelatedBind}, svc.collectRemoteLockBinds(nil))
+					svc.mu.RLock()
+					oldRef := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+					svc.mu.RUnlock()
+					require.True(t, oldRef.invalidated)
 
-					closeTxn := func(txnID []byte, txn *activeTxn) {
+					keeper.doKeepRemoteLock(context.Background(), nil, nil)
+					require.Equal(t, int64(1), oldKeepCalls.Load(),
+						"an owner-rejected bind must not be retried while cleanup is pending")
+					require.Equal(t, int64(2), unrelatedKeepCalls.Load())
+
+					closeTxn := func(txnID []byte, txn *activeTxn, bind pb.LockTable) {
 						require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 						txn.Lock()
 						err := txn.close(
@@ -1387,9 +1429,11 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						)
 						txn.Unlock()
 						require.NoError(t, err)
+						svc.releaseTxnBindRefs([]pb.LockTable{bind})
 					}
-					closeTxn(oldTxnID, oldTxn)
-					closeTxn(unrelatedTxnID, unrelatedTxn)
+					closeTxn(oldTxnID, oldTxn, oldBind)
+					closeTxn(unrelatedTxnID, unrelatedTxn, unrelatedBind)
+					require.Empty(t, svc.collectRemoteLockBinds(nil))
 				},
 			)
 		})
@@ -1585,26 +1629,55 @@ func TestKeepRemoteLockMissingOwnerFencesActiveTxn(t *testing.T) {
 			} else {
 				require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
 			}
-			expectedBinds := []pb.LockTable{oldBind}
+			expectedBinds := []pb.LockTable(nil)
 			if test.addReplacementTxn {
 				expectedBinds = append(expectedBinds, newBind)
 			}
 			require.ElementsMatch(t, expectedBinds, svc.collectRemoteLockBinds(nil),
-				"bind leases stay owned until their transactions clean up")
+				"an invalidated bind must stop keeper retries before transaction cleanup")
+			svc.mu.RLock()
+			oldRef, oldRefExists := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.True(t, oldRefExists,
+				"transaction cleanup still owns the invalidated bind ref")
+			require.True(t, oldRef.invalidated)
+			expectedOldRefs := uint64(1)
+			if test.addIntentTxn {
+				expectedOldRefs++
+			}
+			require.Equal(t, expectedOldRefs, oldRef.refs)
+
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Equal(t, int64(1), client.missingKeepCalls.Load(),
+				"an invalidated bind must not be retried while its transaction remains open")
+			if test.addReplacementTxn {
+				require.Equal(t, int64(2), client.otherKeepCalls.Load())
+				require.Equal(t, int64(3), client.getBindCalls.Load())
+			} else {
+				require.Equal(t, int64(0), client.otherKeepCalls.Load())
+				require.Equal(t, int64(1), client.getBindCalls.Load())
+			}
 
 			closeTxn(oldTxnID, oldTxn, oldBind)
 			if test.addIntentTxn {
 				closeTxn(intentTxnID, intentTxn, oldBind)
+			}
+			svc.mu.RLock()
+			_, oldRefExists = svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.False(t, oldRefExists,
+				"the invalidated tombstone must leave after its last transaction cleans up")
+			if test.addReplacementTxn {
+				newTxn.Lock()
+				require.False(t, newTxn.bindChanged)
+				newTxn.Unlock()
+				closeTxn(newTxnID, newTxn, newBind)
 			}
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 			require.Equal(t, int64(1), client.missingKeepCalls.Load(),
 				"a cleaned stale bind must not be retried by later keeper rounds")
 			if test.addReplacementTxn {
 				require.Equal(t, int64(2), client.otherKeepCalls.Load())
-				newTxn.Lock()
-				require.False(t, newTxn.bindChanged)
-				newTxn.Unlock()
-				closeTxn(newTxnID, newTxn, newBind)
 			}
 			require.Empty(t, svc.collectRemoteLockBinds(nil))
 		})
@@ -1620,6 +1693,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			newBind.ServiceID = "s3"
 			newBind.Version = 2
 
+			var keepCalls atomic.Int64
 			server.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
@@ -1639,6 +1713,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
+					keepCalls.Add(1)
 					writeResponse(getLogger(""), cancel, resp, ErrLockTableNotFound, cs)
 				})
 
@@ -1680,10 +1755,17 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			}
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
+			require.Equal(t, int64(1), keepCalls.Load())
 			txn.Lock()
 			require.True(t, txn.bindChanged)
 			txn.Unlock()
 			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
+			require.Empty(t, svc.collectRemoteLockBinds(nil),
+				"a superseded bind must stop keeper retries before transaction cleanup")
+
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Equal(t, int64(1), keepCalls.Load(),
+				"the fenced transaction must not heartbeat its superseded bind")
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
@@ -1692,6 +1774,11 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			}, logger)
 			txn.Unlock()
 			require.NoError(t, err)
+			svc.releaseTxnBindRefs([]pb.LockTable{oldBind})
+			svc.mu.RLock()
+			_, oldRefExists := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.False(t, oldRefExists)
 		},
 	)
 }

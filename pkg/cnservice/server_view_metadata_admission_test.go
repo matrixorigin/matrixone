@@ -689,14 +689,15 @@ func TestViewMetadataCatalogFenceRetryDelayIsBoundedAndJittered(t *testing.T) {
 func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 	const discoveryTimeout = 20 * time.Millisecond
 	var catalogCommitted atomic.Bool
-	var catalogStatements atomic.Int64
+	var catalogAttempts atomic.Int64
 	catalogAttempted := make(chan struct{})
 	var attemptOnce sync.Once
 	boot := &testBootService{}
 	sqlExecutor := &admissionRollbackJoiningExecutor{
 		SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			catalogStatements.Add(1)
 			if sql == catalog.ViewMetadataLifecycleGateSQL {
+				// Count fence attempts, not the SQL prefix used to acquire its gates.
+				catalogAttempts.Add(1)
 				if !catalogCommitted.Load() {
 					attemptOnce.Do(func() { close(catalogAttempted) })
 					return executor.Result{}, nil
@@ -728,7 +729,7 @@ func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 		t.Fatalf("Start returned before the upgrade owner deadline: %v", err)
 	case <-time.After(2 * discoveryTimeout):
 	}
-	require.Equal(t, int64(1), catalogStatements.Load(),
+	require.Equal(t, int64(1), catalogAttempts.Load(),
 		"heartbeat updates must not bypass the startup catalog backoff")
 
 	catalogCommitted.Store(true)

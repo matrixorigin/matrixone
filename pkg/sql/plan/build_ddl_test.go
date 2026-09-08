@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1393,8 +1394,8 @@ func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
 		sql        string
 		wantOffset uint64
 	}{
-		{name: "session offset", sql: "create table t(id int auto_increment)", wantOffset: 9},
-		{name: "zero keeps session offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 9},
+		{name: "session offset does not affect DDL", sql: "create table t(id int auto_increment)", wantOffset: 0},
+		{name: "zero keeps default offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 0},
 		{name: "nonzero overrides session offset", sql: "create table t(id int auto_increment) auto_increment = 100", wantOffset: 99},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3124,6 +3125,40 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id)
 		require.Equal(t, int32(8), cols[index].Typ.Width)
 	}
+}
+
+func TestBuildCTASPreservesJsonUnquoteTextBounds(t *testing.T) {
+	const sql = `create table json_unquote_copy as select
+		json_unquote(json_text) as plain_text,
+		json_unquote(json_mediumtext) as plain_mediumtext,
+		json_unquote(json_longtext) as plain_longtext,
+		json_unquote(json_doc) as json_text_value,
+		json_unquote('"literal"') as literal_value
+		from nation`
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{Name: "json_text", Typ: plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_mediumtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen, Charset: uint32(types.CharsetUTF8)}},
+		&plan.ColDef{Name: "json_longtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen, Charset: uint32(types.CharsetUTF8MB4Bin)}},
+		&plan.ColDef{Name: "json_doc", Typ: plan.Type{Id: int32(types.T_json)}},
+	)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 5)
+	for i, width := range []int32{0, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		require.Equal(t, int32(types.T_text), cols[i].Typ.Id)
+		require.Equal(t, width, cols[i].Typ.Width)
+	}
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[0].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[1].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[2].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[3].Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), cols[4].Typ.Charset)
 }
 
 func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
@@ -5274,6 +5309,54 @@ func TestCreateSingleTable(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	outPutPlan(logicPlan, true, t)
+}
+
+func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create cluster table cluster_replay (
+			id int not null,
+			payload varchar(20),
+			primary key (id, account_id)
+		)`)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	// The engine persists CREATE CLUSTER TABLE as a SystemClusterRel table.
+	createTable.TableDef.TableType = catalog.SystemClusterRel
+	createSQL, stmt, err := ConstructCreateTableSQL(
+		mock.CurrentContext(), createTable.GetTableDef(), nil, false, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	defer stmt.Free()
+
+	// SHOW CREATE exposes the physical account_id column, so only internal
+	// replay may accept the generated DDL.
+	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	require.ErrorContains(t, err,
+		"the attribute account_id in the cluster table can not be defined directly by the user")
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	replayedPlan, err := runOneStmt(internalMock, t, createSQL)
+	require.NoError(t, err)
+
+	accountID := FindColumn(
+		replayedPlan.GetDdl().GetCreateTable().GetTableDef().GetCols(),
+		util.GetClusterTableAttributeName(),
+	)
+	require.NotNil(t, accountID)
+	require.NotNil(t, accountID.GetDefault())
+	require.False(t, accountID.GetDefault().GetNullAbility())
+	require.NotNil(t, accountID.GetDefault().GetExpr())
+	require.Equal(t, uint32(catalog.System_Account),
+		accountID.GetDefault().GetExpr().GetLit().GetU32Val())
 }
 
 func TestCreateTableAsSelect(t *testing.T) {

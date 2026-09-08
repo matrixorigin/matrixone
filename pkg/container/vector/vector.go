@@ -65,10 +65,22 @@ const (
 func PrepareParamKindForType(typ types.T) (PrepareParamKind, bool) {
 	switch typ {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_bit, types.T_year:
 		return PrepareParamInteger, true
-	case types.T_float32:
+	case types.T_float32, types.T_float64:
 		return PrepareParamFloat, true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return PrepareParamDecimal, true
+	case types.T_bool:
+		return PrepareParamBoolean, true
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_json, types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum,
+		types.T_geometry, types.T_geometry32, types.T_uuid,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return PrepareParamNone, true
 	default:
 		return PrepareParamNone, false
 	}

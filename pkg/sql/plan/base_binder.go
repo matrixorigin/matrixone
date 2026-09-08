@@ -836,6 +836,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	b.builder.nextExistentialBlock++
+	subCtx.existentialBlock = b.builder.nextExistentialBlock
+	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
 	if b.subqueryInAggregateInput {
 		subCtx.aggregateInputParent = b.ctx
 	}
@@ -2546,6 +2549,8 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		op = "reg_match"
 	case tree.NOT_REG_MATCH:
 		op = "not_reg_match"
+	case tree.MEMBER_OF:
+		op = "member of"
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
@@ -4791,6 +4796,14 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
+	}
+	if name == "member of" {
+		if len(args) > 0 {
+			args[0], err = makeEnumOrSetDisplayValue(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	switch name {

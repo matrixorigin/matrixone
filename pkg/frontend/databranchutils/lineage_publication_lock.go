@@ -40,10 +40,7 @@ func LineageOwnerLifecycleLockSQL() string {
 // feature registry row without creating a new MVCC version. The lock remains
 // held by the caller's transaction through the protected owner mutation.
 func LineageOwnerLifecyclePessimisticLockSQL() string {
-	return fmt.Sprintf(
-		"select feature_code from %s.%s where feature_code = 'SNAPSHOT' for update",
-		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY,
-	)
+	return catalog.SnapshotLifecycleGateSQL
 }
 
 // LineageOwnerLifecycleLockSQLForTxn selects the lifecycle gate that matches

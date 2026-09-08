@@ -863,6 +863,10 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return newProtocolVersionResultValue(t,
 					`{"method":"GETPROTOCOLVERSION","result":"cn-a:48,cn-b:48"}`), nil
 			}
+			if strings.HasPrefix(sql, "SHOW CREATE TABLE `mo_task`.") {
+				return newShowCreateTableResult(t, "task_table",
+					"create table task_table (account_id int, task_parent_id varchar(64))"), nil
+			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
 		})

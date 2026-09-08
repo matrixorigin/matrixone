@@ -2918,3 +2918,63 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestAlterTemporaryTableRejectsMissingAlias(t *testing.T) {
+	for _, copyTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy=%v", copyTable), func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels["t"] = newStubRelation("t")
+			eng.dbs["test"] = db
+			proc := testutil.NewProcess(t)
+			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			c.proc.Session = &trackingTempTableSession{tables: make(map[string]string)}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+					Database: "test", TableDef: &plan2.TableDef{Name: "t", IsTemporary: true},
+				}},
+			}}}}
+			var err error
+			if copyTable {
+				err = s.AlterTableCopy(c)
+			} else {
+				err = s.AlterTableInplace(c)
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+			require.Contains(t, db.rels, "t")
+		})
+	}
+}
+
+func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
+	for _, copyTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy=%v", copyTable), func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels["physical_t"] = &stubRelation{name: "physical_t", tableID: 2}
+			eng.dbs["test"] = db
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+					Database: "test", TableDef: &plan2.TableDef{Name: "t", TblId: 1, IsTemporary: true},
+				}},
+			}}}}
+			var err error
+			if copyTable {
+				err = s.AlterTableCopy(c)
+			} else {
+				err = s.AlterTableInplace(c)
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			require.Equal(t, "t", s.Plan.GetDdl().GetAlterTable().TableDef.Name)
+			name, exists := c.proc.GetSession().GetTempTable("test", "t")
+			require.True(t, exists)
+			require.Equal(t, "physical_t", name)
+		})
+	}
+}

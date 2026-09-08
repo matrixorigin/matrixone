@@ -491,7 +491,9 @@ func castGeometryToString(
 	toType := types.New(targetType, width, 0)
 	payload := encodeGeometryPayload(input, 0, false)
 	if sourceType == types.T_geometry32 {
-		payload = encodeGeometryPayloadFloat32(input)
+		var err error
+		payload, err = encodeGeometryPayloadFloat32(input)
+		require.NoError(t, err)
 	}
 	var src *vector.Vector
 	if constSource {

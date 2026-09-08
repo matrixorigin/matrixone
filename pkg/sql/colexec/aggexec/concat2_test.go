@@ -534,7 +534,9 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		}
 		line := geo.LineString{Points: points}
 		if float32 {
-			return geo.WriteWKBFloat32(line)
+			out, err := geo.WriteWKBFloat32(line)
+			require.NoError(t, err)
+			return out
 		}
 		return geo.WriteWKB(line)
 	}

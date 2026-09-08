@@ -228,6 +228,7 @@ type Session struct {
 	// The outer key is the engine transaction ID. Entries are allocated lazily,
 	// only when a transaction actually changes a temporary-table alias.
 	tempTableTxnJournals map[string]*tempTableTxnJournal
+	retiredTempTables    map[string]sessionTempTable
 	// ddlVersion changes after every successful session DDL. It covers
 	// transaction-local catalog writes that are not visible in CatalogCache.
 	ddlVersion      atomic.Uint64
@@ -1599,6 +1600,7 @@ func (ses *Session) ReserveConnAndClose() {
 }
 
 type sessionTempTable struct {
+	retired  bool
 	aliasKey string
 	dbName   string
 	realName string
@@ -1617,6 +1619,10 @@ func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 			identity: identity,
 		})
 	}
+	for _, tbl := range ses.retiredTempTables {
+		tempTables = append(tempTables, tbl)
+	}
+	ses.retiredTempTables = nil
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
 	ses.tempTableIdentities = nil
@@ -1686,6 +1692,13 @@ func (ses *Session) resetTempTables(ctx context.Context) error {
 		ses.tempTablesRev = make(map[string]string, len(tempTables))
 		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
 		for _, tbl := range tempTables {
+			if tbl.retired {
+				if ses.retiredTempTables == nil {
+					ses.retiredTempTables = make(map[string]sessionTempTable)
+				}
+				ses.retiredTempTables[tbl.realName] = tbl
+				continue
+			}
 			ses.tempTables[tbl.aliasKey] = tbl.realName
 			ses.tempTablesRev[tbl.realName] = tbl.aliasKey
 			ses.tempTableIdentities[tbl.aliasKey] = tbl.identity

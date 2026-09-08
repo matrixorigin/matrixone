@@ -710,7 +710,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
 		return nil, nil, err
 	}
-	tableDef.IsTemporary = isTmpTable
+	ownedTemporary := false
+	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok {
+		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	tableDef.IsTemporary = isTmpTable || ownedTemporary
 
 	// convert
 	var subscriptionName string
@@ -726,6 +730,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		Obj:              tableID,
+		NotLockMeta:      ownedTemporary,
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
@@ -877,6 +882,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		Obj:              tableID,
 		SubscriptionName: ref.SubscriptionName,
 		PubInfo:          ref.PubInfo,
+		NotLockMeta:      ref.NotLockMeta,
 	}
 
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)

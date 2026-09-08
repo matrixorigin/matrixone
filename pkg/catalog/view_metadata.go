@@ -30,6 +30,21 @@ const LegacyViewScanCursorRelation = "__mo_legacy_view_scan_cursor__"
 const ViewMetadataLifecycleGateSQL = "select rel_id from mo_catalog.mo_tables " +
 	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_view_refresh' for update"
 
+// SnapshotLifecycleGateSQL takes the outer lifecycle lock without publishing a
+// new MVCC version. Owner mutations retain their separate write barrier.
+const SnapshotLifecycleGateSQL = "select feature_code from mo_catalog.mo_feature_registry " +
+	"where feature_code = 'SNAPSHOT' for update"
+
+// LockViewMetadataLifecycle preserves SNAPSHOT -> View ordering across an
+// entire transaction, including CREATE followed by DROP in a later statement.
+// Keep the View lock as well: older CNs still use it during rolling upgrades.
+func LockViewMetadataLifecycle(exec func(string) error) error {
+	if err := exec(SnapshotLifecycleGateSQL); err != nil {
+		return err
+	}
+	return exec(ViewMetadataLifecycleGateSQL)
+}
+
 const MoViewDependenciesColumns = "account_id,target_database_id,target_relation_id," +
 	"target_logical_id,target_database_name,target_relation_name,dependency_ordinal,source_account_id," +
 	"source_database_id,source_relation_id,source_logical_id,source_database_name," +

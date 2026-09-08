@@ -12762,13 +12762,13 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
-		require.Contains(t, bh.executedSQLs[1], "d.dependency_generation")
-		require.Contains(t, bh.executedSQLs[1], "d.source_relation_kind")
-		require.NotContains(t, bh.executedSQLs[1], "'','','','','REVALIDATE_SCAN'")
-		require.Contains(t, bh.executedSQLs[1],
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
+		require.Contains(t, bh.executedSQLs[2], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[2], "d.source_relation_kind")
+		require.NotContains(t, bh.executedSQLs[2], "'','','','','REVALIDATE_SCAN'")
+		require.Contains(t, bh.executedSQLs[2],
 			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
 	})
 
@@ -12781,9 +12781,9 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 
 		missing := &backgroundExecTest{}
 		missing.init()
@@ -12791,7 +12791,7 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
 		require.NoError(t, inheritViewMetadataRevalidation(
 			context.Background(), missing, ses.GetService(), 43))
-		require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
 	})
 }
 
@@ -17196,7 +17196,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setPu("", pu)
 
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,
