@@ -7446,23 +7446,63 @@ func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList.IgnoreAllRow() {
+		return rs.AppendMultiBytes(nil, true, length)
+	}
 
 	rowCount := uint64(length)
+	var small [64]byte
+	decoded := small[:]
+	var compact []byte
 	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		data, null := source.GetStrValue(i)
 		if null {
-			return rs.AppendMustNullForBytesResult()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
 		}
 
-		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
-		_, err := base64.StdEncoding.Decode(buf, data)
-		if err != nil {
-			return rs.AppendMustNullForBytesResult()
+		size := base64.StdEncoding.DecodedLen(len(data))
+		if cap(decoded) < size {
+			decoded = make([]byte, size)
 		}
-		_ = rs.AppendMustBytesValue(buf)
+		n, err := base64.StdEncoding.Decode(decoded[:size], data)
+		if err != nil {
+			// Keep ordinary Base64 on the standard decoder's fast path. On
+			// failure, retry after removing MySQL's whitespace bytes (not
+			// Unicode whitespace), without mutating input vector storage.
+			for j, b := range data {
+				if isBase64Space(b) {
+					compact = append(compact[:0], data[:j]...)
+					for _, b := range data[j+1:] {
+						if !isBase64Space(b) {
+							compact = append(compact, b)
+						}
+					}
+					n, err = base64.StdEncoding.Decode(decoded[:size], compact)
+					break
+				}
+			}
+		}
+		// Decode may return a valid prefix with an error. Never publish that
+		// prefix, and never let one invalid row terminate the batch.
+		if err := rs.AppendBytes(decoded[:n], err != nil); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func isBase64Space(b byte) bool {
+	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).

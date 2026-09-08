@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -5908,12 +5909,134 @@ func initFromBase64TestCase() []tcTemp {
 
 func TestFromBase64(t *testing.T) {
 	testCases := initFromBase64TestCase()
+	// Keep NULL and malformed rows between valid rows: each row is independent.
+	rows := []struct {
+		input, want         string
+		inputNull, wantNull bool
+	}{
+		{input: "YQ==", want: "a"},
+		{input: "YWI=", want: "ab"},
+		{inputNull: true, wantNull: true},
+		{input: "YWJj", want: "abc"},
+		{input: "invalid!", wantNull: true},
+		{input: "Y Q\t=\r=\n", want: "a"},
+		{input: "", want: ""},
+		{input: "YQ", wantNull: true},
+		{input: "AAEC/w==", want: "\x00\x01\x02\xff"},
+		{input: " \t\r\n", want: ""},
+		{input: "YQ==Yg==", wantNull: true},
+		{input: "YQ\v\f\xa0==", want: "a"},
+		{input: "YQ\u00a0==", wantNull: true},
+		{input: "YQ====", wantNull: true},
+		{input: strings.Repeat("YWJj", 32), want: strings.Repeat("abc", 32)},
+		{input: "YWJj", want: "abc"},
+	}
+	inputs, wants := make([]string, len(rows)), make([]string, len(rows))
+	inputNulls, wantNulls := make([]bool, len(rows)), make([]bool, len(rows))
+	for i, row := range rows {
+		inputs[i] = row.input
+		wants[i] = row.want
+		inputNulls[i] = row.inputNull
+		wantNulls[i] = row.wantNull
+	}
+	testCases = append(testCases, tcTemp{
+		info:   "padding, whitespace, invalid and NULL rows preserve batch cardinality",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), inputs, inputNulls)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, wants, wantNulls),
+	}, tcTemp{
+		info:   "empty batch",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{}, nil),
+	}, tcTemp{
+		info:   "constant padded input",
+		inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"YQ=="}, nil)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{"a"}, nil),
+	})
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestFromBase64SelectionAndReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Cross both input/output inline-storage boundaries so aliasing is observable.
+	values := []string{" " + strings.Repeat("YWJj", 32), "YWI=", "YWJj"}
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)},
+		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), FromBase64)
+	t.Cleanup(func() {
+		for _, v := range tc.parameters {
+			v.Free(proc.Mp())
+		}
+		tc.result.Free()
+	})
+	for _, scenario := range []struct {
+		mask  *FunctionSelectList
+		nulls [3]bool
+	}{
+		{mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, nulls: [3]bool{true, false, false}},
+		{mask: &FunctionSelectList{AllNull: true}, nulls: [3]bool{true, true, true}},
+		{mask: nil, nulls: [3]bool{false, false, false}},
+	} {
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		require.NoError(t, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, scenario.mask))
+		result := tc.result.GetResultVector()
+		require.Equal(t, len(values), result.Length())
+		for i, want := range []string{strings.Repeat("abc", 32), "ab", "abc"} {
+			masked := scenario.nulls[i]
+			require.Equal(t, masked, result.IsNull(uint64(i)))
+			if !masked {
+				require.Equal(t, want, result.GetStringAt(i))
+			}
+			require.Equal(t, values[i], tc.parameters[0].GetStringAt(i), "input must remain immutable")
+		}
+	}
+}
+
+func BenchmarkFromBase64(b *testing.B) {
+	for _, size := range []int{12, 1024} {
+		for _, whitespace := range []bool{false, true} {
+			b.Run(fmt.Sprintf("bytes=%d/whitespace=%t", size, whitespace), func(b *testing.B) {
+				proc := testutil.NewProcess(b)
+				encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'a'}, size))
+				if whitespace {
+					encoded = " \t" + encoded + "\r\n"
+				}
+				values := make([]string, 128)
+				for i := range values {
+					values[i] = encoded
+				}
+				tc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)},
+					NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), FromBase64)
+				defer tc.parameters[0].Free(proc.Mp())
+				defer tc.result.Free()
+				// Reject deceptively fast implementations that return early or
+				// produce NULL instead of decoding every whitespace-bearing row.
+				require.NoError(b, tc.result.PreExtendAndReset(tc.fnLength))
+				require.NoError(b, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil))
+				require.Equal(b, len(values), tc.result.GetResultVector().Length())
+				for i := range values {
+					require.False(b, tc.result.GetResultVector().IsNull(uint64(i)))
+					require.Equal(b, strings.Repeat("a", size), tc.result.GetResultVector().GetStringAt(i))
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(size * len(values)))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
+						b.Fatal(err)
+					}
+					if err := FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 

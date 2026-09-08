@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,6 +38,87 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReadDirHiddenPaths(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	contents := map[string]string{
+		".data/part-1.csv":     "1\n",
+		".data/part-2.csv":     "22\n",
+		".data/.part-3.csv":    "333\n",
+		"visible/part-1.csv":   "4\n",
+		"visible/.inner/a.csv": "55\n",
+		".top.csv":             "6\n",
+	}
+	for name, data := range contents {
+		file := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(file), 0700))
+		require.NoError(t, os.WriteFile(file, []byte(data), 0600))
+	}
+	require.NoError(t, os.Symlink(filepath.Join(root, ".data"), filepath.Join(root, ".link")))
+	fs, err := fileservice.NewLocalETLFS("etl", root)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	for _, pathType := range []struct{ name, prefix string }{{"absolute", root}, {"named ETL", "etl:"}} {
+		t.Run(pathType.name, func(t *testing.T) {
+			prefix := pathType.prefix
+			for _, tc := range []struct {
+				name, pattern string
+				want          []string
+			}{
+				{"literal hidden directory", ".data/part-1.csv", []string{".data/part-1.csv"}},
+				{"glob below hidden directory", ".data/part-*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"explicit hidden glob", ".data/.part-*.csv", []string{".data/.part-3.csv"}},
+				{"literal hidden file", ".top.csv", []string{".top.csv"}},
+				{"ordinary glob omits hidden directories", "*/part-*.csv", []string{"visible/part-1.csv"}},
+				{"ordinary glob omits hidden files", ".data/*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"hidden directory after glob", "*/.inner/*.csv", []string{"visible/.inner/a.csv"}},
+				{"dot glob traverses hidden directories", ".d*/part-1.csv", []string{".data/part-1.csv"}},
+				{"missing literal directory", ".missing/part-*.csv", nil},
+				{"missing literal file", ".data/.missing.csv", nil},
+				{"directory is not a file", ".data", nil},
+				{"file is not a directory", ".top.csv/*", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+						Filepath: filepath.Join(prefix, tc.pattern),
+					}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+					files, sizes, err := ReadDir(param)
+					require.NoError(t, err)
+					require.Len(t, files, len(tc.want))
+					require.Len(t, sizes, len(files))
+					got := make(map[string]int64)
+					for i, file := range files {
+						got[file] = sizes[i]
+					}
+					want := make(map[string]int64)
+					for _, file := range tc.want {
+						want[filepath.Join(prefix, file)] = int64(len(contents[file]))
+					}
+					require.Equal(t, want, got)
+				})
+			}
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: filepath.Join(prefix, ".link", "part-1.csv"),
+			}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+			files, sizes, err := ReadDir(param)
+			require.NoError(t, err)
+			require.Equal(t, []string{param.Filepath}, files)
+			require.Equal(t, []int64{2}, sizes)
+			param.Filepath = filepath.Join(prefix, ".data", "[")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, path.ErrBadPattern)
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			param.Ctx = cancelled
+			param.Filepath = filepath.Join(prefix, ".data", "part-*.csv")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+	_, err = os.Stat(filepath.Join(root, ".missing"))
+	require.True(t, os.IsNotExist(err), "read-only discovery must not create a missing directory")
+}
 
 func TestSplitPlanConjunctionKeepsSharedVolatileMemoRoot(t *testing.T) {
 	memo := func(id int32) *plan.Expr {
