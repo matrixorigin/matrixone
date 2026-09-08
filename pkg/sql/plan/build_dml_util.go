@@ -1533,7 +1533,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							colPos := childAggPos[i]
 							colRelPos := aggTag
 							if colPos < 0 {
-								colPos = childGroupPos[i]
 								if localCombined {
 									colRelPos = 0
 								} else {

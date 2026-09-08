@@ -92,6 +92,7 @@ func TestIssue28308AffectedRowsExcludeForeignKeySideEffects(t *testing.T) {
 
 		deleteStmt, err := conn.PrepareContext(ctx, "delete from cascade_parent where id = ?")
 		require.NoError(t, err)
+		defer deleteStmt.Close()
 		result, err := deleteStmt.ExecContext(ctx, 2)
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
@@ -100,8 +101,6 @@ func TestIssue28308AffectedRowsExcludeForeignKeySideEffects(t *testing.T) {
 		var rowCount int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select row_count()").Scan(&rowCount))
 		require.Equal(t, int64(1), rowCount, "ROW_COUNT() after prepared DELETE")
-		require.NoError(t, deleteStmt.Close())
-
 		exec("create table self_cascade (id int primary key, parent_id int, " +
 			"foreign key (parent_id) references self_cascade(id) on delete cascade)")
 		exec("insert into self_cascade values (1, null), (2, 1), (3, 2)")
