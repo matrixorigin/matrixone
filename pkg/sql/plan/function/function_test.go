@@ -410,7 +410,7 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: UUID_TO_BIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireRet: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
 		},
 		{
 			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
