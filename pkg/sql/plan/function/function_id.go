@@ -1145,6 +1145,7 @@ var functionIdRegister = map[string]int32{
 	"json_length":                    JSON_LENGTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge":                     JSON_MERGE_PRESERVE,
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,

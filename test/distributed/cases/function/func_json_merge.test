@@ -45,6 +45,27 @@ select json_merge_preserve('[1,2]', 'true');
 select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
 select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
 
+-- JSON_MERGE is the deprecated compatibility alias of JSON_MERGE_PRESERVE.
+select json_merge('[1,2]', '[true,false]');
+select json_merge('{"a":1}', '{"a":2}', '{"b":3}');
+select json_merge('{"a":1}', null) is null,
+       json_type(json_merge('{"a":1}', null));
+show warnings;
+
+-- PREPARE warns once; a schema-triggered EXECUTE replan stays silent.
+drop table if exists json_merge_prepare_docs;
+create table json_merge_prepare_docs (doc json);
+insert into json_merge_prepare_docs values ('{"a":1}');
+prepare json_merge_ps from 'select json_merge(doc, ''{"b":2}'') from json_merge_prepare_docs';
+show warnings;
+execute json_merge_ps;
+show warnings;
+alter table json_merge_prepare_docs add column extra int;
+execute json_merge_ps;
+show warnings;
+deallocate prepare json_merge_ps;
+drop table json_merge_prepare_docs;
+
 -- JSON and VARCHAR inputs may be mixed.
 select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
 select json_merge_preserve(json_object('a', 1), '{"a":2}');
@@ -89,5 +110,7 @@ insert into json_merge_docs values
 
 select id, json_merge_patch(doc, patch_doc) from json_merge_docs order by id;
 select id, json_merge_preserve(doc, preserve_doc) from json_merge_docs order by id;
+select id, json_merge(doc, preserve_doc) from json_merge_docs order by id;
+show warnings;
 
 drop table json_merge_docs;

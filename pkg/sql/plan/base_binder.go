@@ -3844,6 +3844,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			e, err = bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		}
 		if err == nil {
+			if strings.EqualFold(name, "json_merge") {
+				appendJSONMergeWarning(b.GetContext(), astExpr)
+			}
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
 					if source == nil || i >= len(fn.Args) {
@@ -3891,6 +3894,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
+			if strings.EqualFold(name, "json_merge") {
+				appendJSONMergeWarning(b.GetContext(), astExpr)
+			}
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}

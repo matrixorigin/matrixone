@@ -107,6 +107,40 @@ select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
 select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
 ➤ json_merge_preserve({"a":"b","c":"d"}, {"a":["x","y"]})[-1,2147483647,0]  𝄀
 {"a": ["b", "x", "y"], "c": "d"}
+select json_merge('[1,2]', '[true,false]');
+➤ json_merge([1,2], [true,false])[-1,2147483647,0]  𝄀
+[1, 2, true, false]
+select json_merge('{"a":1}', '{"a":2}', '{"b":3}');
+➤ json_merge({"a":1}, {"a":2}, {"b":3})[-1,2147483647,0]  𝄀
+{"a": [1, 2], "b": 3}
+select json_merge('{"a":1}', null) is null,
+json_type(json_merge('{"a":1}', null));
+➤ json_merge({"a":1}, null) is null[-7,1,0]  ¦  json_type(json_merge({"a":1}, null))[12,-1,0]  𝄀
+1  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+drop table if exists json_merge_prepare_docs;
+create table json_merge_prepare_docs (doc json);
+insert into json_merge_prepare_docs values ('{"a":1}');
+prepare json_merge_ps from 'select json_merge(doc, ''{"b":2}'') from json_merge_prepare_docs';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+execute json_merge_ps;
+➤ json_merge(doc, {"b":2})[-1,2147483647,0]  𝄀
+{"a": 1, "b": 2}
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+alter table json_merge_prepare_docs add column extra int;
+execute json_merge_ps;
+➤ json_merge(doc, {"b":2})[-1,2147483647,0]  𝄀
+{"a": 1, "b": 2}
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+deallocate prepare json_merge_ps;
+drop table json_merge_prepare_docs;
 select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
 ➤ json_merge_patch(cast({"a":1} as json), {"b":2})[-1,2147483647,0]  𝄀
 {"a": 1, "b": 2}
@@ -165,4 +199,13 @@ select id, json_merge_preserve(doc, preserve_doc) from json_merge_docs order by 
 2  ¦  [1, 2, 3, 4]  𝄀
 3  ¦  [null, 1]  𝄀
 4  ¦  null
+select id, json_merge(doc, preserve_doc) from json_merge_docs order by id;
+➤ id[4,32,0]  ¦  json_merge(doc, preserve_doc)[-1,2147483647,0]  𝄀
+1  ¦  {"a": [1, 2], "nested": {"x": 1, "z": 3}}  𝄀
+2  ¦  [1, 2, 3, 4]  𝄀
+3  ¦  [null, 1]  𝄀
+4  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
 drop table json_merge_docs;
