@@ -248,4 +248,4 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-设计门禁已关闭：`fengttt` 的 review `5126100008` 覆盖获批 checkpoint；当前 conformance head 为 `55f98a6c63`，仅包含测试 fixture、main 合并与索引检查回归测试，不改变已获批运行时语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+设计门禁已关闭：`fengttt` 的 review `5126100008` 覆盖获批 checkpoint；当前 conformance head 为 `14c30f495921071a961c9c87cf0cd059bdfce637`。获批 head 之后的变更仅包含测试 fixture、main 合并、索引幂等检查/回归测试，以及对上游 deep-existential 构建常量的恢复，不改变已获批 View metadata 运行时语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。

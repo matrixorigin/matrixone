@@ -1714,6 +1714,36 @@ func TestTaskMetadataIndexUpgradeReadsRelationDefinition(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("all three existing indexes skip rerun", func(t *testing.T) {
+		definitions := map[string]string{
+			"SHOW CREATE TABLE `mo_task`.`sql_task`":       "create table sql_task (account_id int, key idx_account_id(account_id))",
+			"SHOW CREATE TABLE `mo_task`.`sql_task_run`":   "create table sql_task_run (account_id int, key idx_account_id(account_id))",
+			"SHOW CREATE TABLE `mo_task`.`sys_async_task`": "create table sys_async_task (task_parent_id varchar(64), key idx_task_parent_id(task_parent_id))",
+		}
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			ddl, ok := definitions[sql]
+			require.True(t, ok, "unexpected upgrade SQL: %s", sql)
+			return newShowCreateTableResult(t, "task_table", ddl), nil
+		})
+		for _, entry := range []*versions.UpgradeEntry{
+			&addSQLTaskAccountIndex,
+			&addSQLTaskRunAccountIndex,
+			&addAsyncTaskParentIndex,
+		} {
+			require.NoError(t, entry.Upgrade(txn, 0))
+		}
+		require.ElementsMatch(t, []string{
+			"SHOW CREATE TABLE `mo_task`.`sql_task`",
+			"SHOW CREATE TABLE `mo_task`.`sql_task_run`",
+			"SHOW CREATE TABLE `mo_task`.`sys_async_task`",
+		}, executed)
+		for _, sql := range executed {
+			require.NotContains(t, strings.ToLower(sql), "create index")
+		}
+	})
 }
 
 func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
