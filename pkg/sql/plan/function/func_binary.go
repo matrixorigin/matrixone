@@ -5338,6 +5338,47 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 		}
 	}
+	allIntegers := true
+	for _, input := range inputs {
+		if !input.IsIntOrUint() && input.Oid != types.T_any {
+			allIntegers = false
+			break
+		}
+	}
+	if allIntegers {
+		return newCheckResultWithSuccess(13)
+	}
+	// DECIMAL comparisons must remain exact. Choose a common decimal storage
+	// family, but retain each operand's scale so no value is rounded during
+	// overload resolution.
+	hasDecimal := false
+	decimalInputs := true
+	for _, input := range inputs {
+		if input.Oid.IsDecimal() {
+			hasDecimal = true
+		} else if !input.Oid.IsInteger() && input.Oid != types.T_any {
+			decimalInputs = false
+		}
+	}
+	if hasDecimal && decimalInputs {
+		target := types.New(types.T_decimal128, 38, 0)
+		if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		castTypes := make([]types.T, len(inputs))
+		targetTypes := make([]types.Type, len(inputs))
+		for i, input := range inputs {
+			castTypes[i] = target.Oid
+			targetTypes[i] = target
+			targetTypes[i].Scale = input.Scale
+		}
+		if c, _ := tryToMatch(inputs, castTypes); c != matchFailed {
+			if target.Oid == types.T_decimal256 {
+				return newCheckResultWithCast(12, targetTypes)
+			}
+			return newCheckResultWithCast(11, targetTypes)
+		}
+	}
 	castTypes := make([]types.T, len(inputs))
 	targetTypes := make([]types.Type, len(inputs))
 	for j := 0; j < len(inputs); j++ {
@@ -5352,6 +5393,117 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(10, targetTypes)
 	}
 	return newCheckResultWithSuccess(10)
+}
+
+func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	getters := make([]func(uint64) (uint64, bool), len(ivecs))
+	for i, vec := range ivecs {
+		getters[i] = fieldIntegerGetter(vec)
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(getters); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := getters[0](i)
+			v2, null2 := getters[j](i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](vec)
+		return func(i uint64) (uint64, bool) { return p.GetValue(i) }
+	default:
+		panic("FIELD integer overload received non-integer vector")
+	}
+}
+
+func FieldDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal128](ivecs, result, length, func(x, y types.Decimal128, sx, sy int32) bool {
+		return types.CompareDecimal128WithScale(x, y, sx, sy) == 0
+	})
+}
+
+func FieldDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal256](ivecs, result, length, decimal256Equal)
+}
+
+type fieldDecimalType interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func fieldDecimalValues[T fieldDecimalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, equal func(T, T, int32, int32) bool) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(ivecs); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if equal(v1, v2, fs[0].GetType().Scale, fs[j].GetType().Scale) {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256Equal(x, y types.Decimal256, scaleX, scaleY int32) bool {
+	if scaleX == scaleY {
+		return x == y
+	}
+	if scaleX < scaleY {
+		x, err := x.Scale(scaleY - scaleX)
+		return err == nil && x == y
+	}
+	y, err := y.Scale(scaleX - scaleY)
+	return err == nil && x == y
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
