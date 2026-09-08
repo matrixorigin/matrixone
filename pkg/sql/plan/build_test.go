@@ -161,6 +161,25 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name:       "pick composite values parameters",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((?, ?)) when conflict accept'",
+			paramCount: 2,
+		},
+		{
+			name:       "pick composite values mixed literal parameter",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((1, ?)) when conflict accept'",
+			paramCount: 1,
+		},
+		{
+			name:       "pick multiple composite values parameters",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((?, ?), (?, ?)) when conflict accept'",
+			paramCount: 4,
+		},
+		{
+			name: "pick subquery question mark string literal",
+			sql:  "prepare stmt from 'data branch pick branch into base keys(select ''?'' from branch) when conflict accept'",
+		},
+		{
 			name: "delete table",
 			sql:  "prepare stmt from 'data branch delete table branch'",
 		},
@@ -182,6 +201,12 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 			require.Equal(t, tt.paramCount, len(prepare.GetParamTypes()))
 		})
 	}
+}
+
+func TestPrepareDataBranchRejectsSubqueryParameters(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt from 'data branch pick branch into base keys(select id from branch where id = ?) when conflict accept'")
+	require.ErrorContains(t, err, "prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
 }
 
 func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {

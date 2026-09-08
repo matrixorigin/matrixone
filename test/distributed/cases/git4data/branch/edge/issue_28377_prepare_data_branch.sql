@@ -56,6 +56,41 @@ execute pick_subquery_stmt;
 select * from pick_dst order by id;
 deallocate prepare pick_subquery_stmt;
 
+-- Composite PK parameter markers must be counted and bound in tuple order.
+create table composite_base(id int, shard varchar(20), v varchar(20), primary key(id, shard));
+insert into composite_base values (1, 'base-a', 'base'), (2, 'base-b', 'base');
+data branch create table composite_pick_src from composite_base;
+data branch create table composite_pick_dst from composite_base;
+insert into composite_pick_src values (3, 'bound', 'composite-parameters'), (4, 'mixed', 'literal-parameter'), (5, 'first', 'tuple-first'), (6, 'second', 'tuple-second');
+
+prepare pick_composite_parameters_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys((?, ?)) when conflict accept';
+set @pick_composite_id = 3;
+set @pick_composite_shard = 'bound';
+execute pick_composite_parameters_stmt using @pick_composite_id, @pick_composite_shard;
+select * from composite_pick_dst order by id, shard;
+deallocate prepare pick_composite_parameters_stmt;
+
+-- The marker order spans each component of each value tuple.
+prepare pick_composite_multiple_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys((?, ?), (?, ?)) when conflict accept';
+set @pick_first_id = 5;
+set @pick_first_shard = 'first';
+set @pick_second_id = 6;
+set @pick_second_shard = 'second';
+execute pick_composite_multiple_stmt using @pick_first_id, @pick_first_shard, @pick_second_id, @pick_second_shard;
+select * from composite_pick_dst order by id, shard;
+deallocate prepare pick_composite_multiple_stmt;
+
+prepare pick_composite_mixed_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys((4, ?)) when conflict accept';
+set @pick_composite_shard = 'mixed';
+execute pick_composite_mixed_stmt using @pick_composite_shard;
+select * from composite_pick_dst order by id, shard;
+deallocate prepare pick_composite_mixed_stmt;
+
+-- KEYS subqueries are executed as internal SQL and do not have an execution
+-- parameter binding path, so PREPARE must reject their markers explicitly.
+-- @regex("prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers",true)
+prepare pick_subquery_parameter_stmt from 'data branch pick composite_pick_src into composite_pick_dst keys(select id, shard from composite_pick_src where id = ?) when conflict accept';
+
 create database issue_28377_source;
 create table issue_28377_source.db_base(id int primary key, v varchar(20));
 insert into issue_28377_source.db_base values (1, 'database-branch');

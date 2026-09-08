@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -176,32 +177,72 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 // query plan for resetPreparePlan to inspect.
 func dataBranchPickPrepareParamTypes(ctx CompilerContext, stmt tree.Statement) ([]int32, error) {
 	pick, ok := stmt.(*tree.DataBranchPick)
-	if !ok || pick.Keys == nil || pick.Keys.Type != tree.PickKeysValues {
+	if !ok || pick.Keys == nil {
+		return nil, nil
+	}
+
+	if pick.Keys.Type == tree.PickKeysSubquery {
+		if dataBranchPickSubqueryHasParams(pick.Keys.Select) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(),
+				"prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+		}
+		return nil, nil
+	}
+	if pick.Keys.Type != tree.PickKeysValues {
 		return nil, nil
 	}
 
 	paramTypes := make([]int32, 0, len(pick.Keys.KeyExprs))
 	for _, expr := range pick.Keys.KeyExprs {
-		param, ok := unwrapDataBranchPickParam(expr)
-		if !ok {
-			continue
-		}
-		paramTypes = append(paramTypes, int32(types.T_varchar))
-		if param.Offset != len(paramTypes) {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
+		if err := collectDataBranchPickValueParamTypes(ctx, expr, &paramTypes); err != nil {
+			return nil, err
 		}
 	}
 	return paramTypes, nil
 }
 
-func unwrapDataBranchPickParam(expr tree.Expr) (*tree.ParamExpr, bool) {
-	for {
-		paren, ok := expr.(*tree.ParenExpr)
-		if !ok {
-			param, ok := expr.(*tree.ParamExpr)
-			return param, ok
+// Value keys are materialized recursively: the outer expression list holds
+// rows and each tuple holds its primary-key components. Collect parameter
+// metadata in that same lexical order so its positions match execution.
+func collectDataBranchPickValueParamTypes(
+	ctx CompilerContext,
+	expr tree.Expr,
+	paramTypes *[]int32,
+) error {
+	switch expr := expr.(type) {
+	case *tree.ParenExpr:
+		return collectDataBranchPickValueParamTypes(ctx, expr.Expr, paramTypes)
+	case *tree.Tuple:
+		for _, elem := range expr.Exprs {
+			if err := collectDataBranchPickValueParamTypes(ctx, elem, paramTypes); err != nil {
+				return err
+			}
 		}
-		expr = paren.Expr
+	case *tree.ParamExpr:
+		if expr.Offset != len(*paramTypes)+1 {
+			return moerr.NewInternalError(ctx.GetContext(), "offset not match")
+		}
+		*paramTypes = append(*paramTypes, int32(types.T_varchar))
+	}
+	return nil
+}
+
+func dataBranchPickSubqueryHasParams(selectStmt *tree.Select) bool {
+	if selectStmt == nil {
+		return false
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	selectStmt.Format(fmtCtx)
+	scanner := mysql.NewScanner(dialect.MYSQL, fmtCtx.String())
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case mysql.VALUE_ARG:
+			return true
+		case 0, mysql.LEX_ERROR:
+			return false
+		}
 	}
 }
 

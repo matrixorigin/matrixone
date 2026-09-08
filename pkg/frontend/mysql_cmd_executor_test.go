@@ -8559,6 +8559,24 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name:       "data branch pick composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 2,
+		},
+		{
+			name:       "data branch pick composite mixed literal parameter",
+			sql:        "data branch pick branch into base keys((1, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name:       "data branch pick multiple composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?), (?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 4,
+		},
+		{
 			name: "data branch delete table",
 			sql:  "data branch delete table branch",
 			want: &tree.DataBranchDeleteTable{},
