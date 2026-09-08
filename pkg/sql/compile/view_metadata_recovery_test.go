@@ -1130,11 +1130,17 @@ func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
 		proc.Ctx = context.WithValue(proc.Ctx, tree.CloneLevelCtxKey{}, level)
 		exec := &viewMetadataCleanupRecordingExecutor{}
 		installViewMetadataTestExecutor(t, proc, exec)
+		ctrl := gomock.NewController(t)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+		proc.Base.TxnOperator = txnOperator
 		c := &Compile{proc: proc, pn: &planpb.Plan{}}
 
 		require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+		require.Greater(t, len(exec.sqls), len(viewMetadataRequireRevalidationSQL()))
+		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls[:len(viewMetadataRequireRevalidationSQL())])
 		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
+		require.Contains(t, exec.sqls[4], "d.source_relation_id in (9,0)")
 
 		exec.sqls = nil
 		require.NoError(t, c.refreshViewsAfterRelationMutation("db", "src", 9, 10))
