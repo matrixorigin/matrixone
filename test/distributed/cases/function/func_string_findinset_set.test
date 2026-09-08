@@ -1,0 +1,36 @@
+#FIND_IN_SET on SET uses SET declaration order, not the rendered label order.
+DROP TABLE IF EXISTS find_in_set_set_28221;
+CREATE TABLE find_in_set_set_28221 (
+    id INT PRIMARY KEY,
+    v SET('z','a','m')
+);
+INSERT INTO find_in_set_set_28221 VALUES
+    (1, 'z'), (2, 'a'), (3, 'm'), (4, 'z,a'),
+    (5, 'a,m'), (6, 'z,a,m'), (7, ''), (8, NULL);
+
+SELECT id, v, FIND_IN_SET('a', v) AS a_pos,
+       FIND_IN_SET('m', v) AS m_pos
+FROM find_in_set_set_28221 ORDER BY id;
+
+SELECT id, FIND_IN_SET('a', v) AS derived_pos
+FROM (SELECT id, v FROM find_in_set_set_28221) AS d ORDER BY id;
+
+DROP VIEW IF EXISTS find_in_set_set_view_28221;
+CREATE VIEW find_in_set_set_view_28221 AS
+SELECT id, v FROM find_in_set_set_28221;
+SELECT id, FIND_IN_SET('a', v) AS view_pos
+FROM find_in_set_set_view_28221 ORDER BY id;
+
+# An explicit cast intentionally opts into ordinary comma-list semantics.
+SELECT id, FIND_IN_SET('a', CAST(v AS CHAR)) AS cast_pos
+FROM find_in_set_set_28221 WHERE id IN (2, 4, 5, 6) ORDER BY id;
+
+PREPARE find_in_set_set_stmt_28221 FROM
+    'SELECT id, FIND_IN_SET(?, v) AS prepared_pos
+     FROM find_in_set_set_28221 ORDER BY id';
+SET @find_in_set_set_needle_28221 = 'a';
+EXECUTE find_in_set_set_stmt_28221 USING @find_in_set_set_needle_28221;
+DEALLOCATE PREPARE find_in_set_set_stmt_28221;
+
+DROP VIEW find_in_set_set_view_28221;
+DROP TABLE find_in_set_set_28221;

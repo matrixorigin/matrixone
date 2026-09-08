@@ -107,6 +107,31 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
 }
 
+func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
+	ctx := context.Background()
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "z,a,m"}
+	display, err := makeEnumOrSetDisplayValue(ctx, &plan.Expr{Typ: setType})
+	require.NoError(t, err)
+
+	bound, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", []*plan.Expr{
+		makePlan2StringConstExprWithType("a"), display,
+	})
+	require.NoError(t, err)
+	fn := bound.GetF()
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 3)
+	require.Equal(t, int32(types.T_uint64), fn.Args[1].Typ.Id)
+	require.Empty(t, fn.Args[1].Typ.Enumvalues)
+	require.Equal(t, "z,a,m", fn.Args[2].GetLit().GetSval())
+
+	_, err = BindFuncExprImplByPlanExpr(ctx, "find_in_set", []*plan.Expr{
+		makePlan2StringConstExprWithType("a"),
+		makePlan2StringConstExprWithType("a,b"),
+		makePlan2StringConstExprWithType("not-public"),
+	})
+	require.Error(t, err)
+}
+
 // TestGeomFromTextSRIDInResultType verifies that a constant SRID argument to
 // ST_GeomFromText lands in the result type's Width (since geometry cells store
 // bare WKB and SRID lives in the type).

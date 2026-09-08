@@ -5075,6 +5075,28 @@ func TestFindInSet(t *testing.T) {
 	}
 }
 
+func TestFindInSetSetDefinition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"a", "m", "z", "a", "x", "", "", "a"},
+				[]bool{false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{2, 4, 7, 3, 7, 0, 2, 0},
+				[]bool{false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"z,a,m"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{2, 3, 1, 2, 0, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, true}),
+		FindInSet,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 // INSTR
 func initInstrTestCase() []tcTemp {
 	cases := []struct {
