@@ -2094,6 +2094,29 @@ func numericFunctionHasSelectiveContext(name string) bool {
 	}
 }
 
+// mysqlNumericPrefixBitwiseArg identifies textual operands of numeric bitwise
+// operators. MySQL consumes the leading decimal integer and evaluates its
+// unsigned 64-bit bit pattern; binary string families must continue through
+// their bytewise overloads. The existing comparison-cast overload keeps the
+// plan wire contract stable for older CN executors.
+func mysqlNumericPrefixBitwiseArg(name string, idx, argCount int, source, target types.Type) bool {
+	if source.Oid != types.T_char && source.Oid != types.T_varchar && source.Oid != types.T_text {
+		return false
+	}
+	if !target.Oid.IsInteger() || idx < 0 || idx >= argCount {
+		return false
+	}
+	if name == "unary_tilde" {
+		return idx == 0 && argCount == 1
+	}
+	switch name {
+	case "&", "|", "^", "<<", ">>":
+		return idx < 2 && argCount == 2
+	default:
+		return false
+	}
+}
+
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
 	if b.ctx == nil {
 		return Type{}, false
@@ -5301,15 +5324,31 @@ func bindFuncExprImplByPlanExpr(
 	var argsCastType []types.Type
 
 	// get function definition
+	lookupTypes := argsType
+	if name == "json_quote" && len(args) == 1 {
+		switch {
+		case args[0].GetP() != nil:
+			// PREPARE metadata uses MySQL's maximum VARCHAR character bound. This
+			// synthetic lookup type must not become an execution cast: the direct
+			// ParamRef lets execute-time rebinding consume the complete value.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)}
+		case isNullExpr(args[0]):
+			// A static NULL has zero input characters, so JSON_QUOTE adds only the
+			// two framing quotes to its nullable result bound.
+			lookupTypes = []types.Type{types.NewWithCharset(
+				types.T_varchar, 0, 0, types.CharsetUTF8)}
+		}
+	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
 	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(
-			ctx, name, argsType, stringDomainModes)
+			ctx, name, lookupTypes, stringDomainModes)
 	} else {
-		fGet, err = function.GetFunctionByName(ctx, name, argsType)
+		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
 	if err != nil {
 		if name == "between" {
@@ -5730,6 +5769,8 @@ func bindFuncExprImplByPlanExpr(
 				typ := makePlan2Type(&castType)
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else {
 					args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
@@ -7839,7 +7880,10 @@ func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, e
 		return nil, err
 	}
 	quoted.Typ.NotNullable = expr.Typ.NotNullable
-	return quoted, nil
+	return makePlan2CastExpr(ctx, quoted, plan.Type{
+		Id:          int32(types.T_json),
+		NotNullable: expr.Typ.NotNullable,
+	})
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
