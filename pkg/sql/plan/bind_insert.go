@@ -5131,14 +5131,12 @@ func (builder *QueryBuilder) buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*plan.Expr, colCount)
-	valueExprs := make([][]*plan.Expr, colCount)
 	var valueBindCtx *BindContext
 	if allowSubquery {
 		valueBindCtx = NewBindContext(builder, bindCtx)
 	}
 	appendValueExpr := func(colIdx int, expr *plan.Expr) {
 		rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: expr})
-		valueExprs[colIdx] = append(valueExprs[colIdx], expr)
 	}
 
 	for i, colName := range colNames {
@@ -5303,11 +5301,24 @@ func (builder *QueryBuilder) buildValueScan(
 		projectList[i] = expr
 	}
 
-	for i := range valueExprs {
-		for _, expr := range valueExprs[i] {
-			if hasSubquery(expr) {
-				return builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+	if allowSubquery {
+		hasAnySubquery := false
+		for _, col := range rowsetData.Cols {
+			for _, row := range col.Data {
+				hasAnySubquery = hasAnySubquery || hasSubquery(row.Expr)
 			}
+		}
+		if hasAnySubquery {
+			// Build the column-major view only for the relational lowering. The
+			// ordinary RowsetData path keeps a single set of expression slices.
+			valueExprs := make([][]*plan.Expr, len(rowsetData.Cols))
+			for colIdx, col := range rowsetData.Cols {
+				valueExprs[colIdx] = make([]*plan.Expr, len(col.Data))
+				for rowIdx, row := range col.Data {
+					valueExprs[colIdx][rowIdx] = row.Expr
+				}
+			}
+			return builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
 		}
 	}
 
@@ -5339,9 +5350,9 @@ func (builder *QueryBuilder) buildValueScan(
 // buildValueScanWithSubqueries lowers value rows that contain subqueries into
 // ordinary relational expressions. RowsetData is evaluated without an input
 // relation, so it cannot host the joins produced by scalar-subquery
-// flattening. Each row therefore gets a one-row input and projection; the
-// resulting rows are combined before the normal INSERT/REPLACE source-cast
-// path consumes them. The common literal-only path remains RowsetData-based.
+// flattening. Each subquery row therefore gets a one-row input and projection;
+// literal rows share one compact RowsetData branch. The resulting rows are
+// combined before the normal INSERT/REPLACE source-cast path consumes them.
 func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	bindCtx *BindContext,
 	colNames []string,
@@ -5352,8 +5363,28 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	}
 
 	rowCount := len(valueExprs[0])
+	carryOrdinal := rowCount > 1
+	ordinalPos := len(colNames)
+	projectWidth := ordinalPos
+	if carryOrdinal {
+		projectWidth++
+	}
 	branches := make([]int32, 0, rowCount)
+	literalRows := make([]int, 0, rowCount)
+
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		rowHasSubquery := false
+		for colIdx := range colNames {
+			if rowIdx >= len(valueExprs[colIdx]) {
+				return 0, moerr.NewInternalError(builder.GetContext(), "value expression rows are inconsistent")
+			}
+			rowHasSubquery = rowHasSubquery || hasSubquery(valueExprs[colIdx][rowIdx])
+		}
+		if !rowHasSubquery {
+			literalRows = append(literalRows, rowIdx)
+			continue
+		}
+
 		rowCtx := NewBindContext(builder, bindCtx)
 		rowCtx.hasSingleRow = true
 		projectTag := builder.genNewBindTag()
@@ -5363,43 +5394,97 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		// relation. It supplies cardinality without introducing a dummy column
 		// that projection pruning could reduce to an invalid empty rowset.
 		dummyID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, rowCtx)
-
-		// Keep the original VALUES position in an internal column. The column is
-		// removed after sorting the UNION ALL, before the normal INSERT/REPLACE
-		// source-cast path consumes the rows.
-		ordinalPos := len(colNames)
-		projectListLen := ordinalPos
-		if rowCount > 1 {
-			projectListLen++
-		}
-		projectList := make([]*plan.Expr, projectListLen)
+		projectList := make([]*plan.Expr, projectWidth)
 		for colIdx := range colNames {
-			if rowIdx >= len(valueExprs[colIdx]) {
-				return 0, moerr.NewInternalError(builder.GetContext(), "value expression rows are inconsistent")
-			}
 			var err error
 			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, valueExprs[colIdx][rowIdx], rowCtx)
 			if err != nil {
 				return 0, err
 			}
 		}
-		if rowCount > 1 {
+		if carryOrdinal {
 			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
 		}
-
-		rowCtx.headings = make([]string, projectListLen)
+		rowCtx.headings = make([]string, projectWidth)
 		rowCtx.projects = projectList
 		rowCtx.results = projectList
 		for colIdx := range colNames {
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
-		if rowCount > 1 {
+		if carryOrdinal {
 			rowCtx.headings[ordinalPos] = "_values_ordinal"
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
 			ProjectList:  projectList,
 			Children:     []int32{dummyID},
+			BindingTags:  []int32{projectTag},
+			NotCacheable: true,
+		}, rowCtx))
+	}
+
+	// Literal-only rows share one RowsetData branch. This keeps a single scalar
+	// subquery from turning every other VALUES row into an independent scheduled
+	// branch while the ordinal still restores the original SQL order.
+	if len(literalRows) > 0 {
+		rowCtx := NewBindContext(builder, bindCtx)
+		lastTag := builder.genNewBindTag()
+		rowsetData := &plan.RowsetData{Cols: make([]*plan.ColData, projectWidth), RowCount: int32(len(literalRows))}
+		valueScanTableDef := &plan.TableDef{TblId: 0, Name: "", Cols: make([]*plan.ColDef, projectWidth)}
+		for colIdx := range colNames {
+			rowsetData.Cols[colIdx] = &plan.ColData{}
+			for _, rowIdx := range literalRows {
+				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: valueExprs[colIdx][rowIdx]})
+			}
+			valueScanTableDef.Cols[colIdx] = &plan.ColDef{
+				ColId: 0,
+				Name:  fmt.Sprintf("column_%d", colIdx),
+				Typ:   valueExprs[colIdx][literalRows[0]].Typ,
+			}
+		}
+		if carryOrdinal {
+			rowsetData.Cols[ordinalPos] = &plan.ColData{}
+			for _, rowIdx := range literalRows {
+				rowsetData.Cols[ordinalPos].Data = append(rowsetData.Cols[ordinalPos].Data, &plan.RowsetExpr{
+					Expr: MakePlan2Int64ConstExprWithType(int64(rowIdx)),
+				})
+			}
+			valueScanTableDef.Cols[ordinalPos] = &plan.ColDef{
+				ColId: 0,
+				Name:  "_values_ordinal",
+				Typ:   MakePlan2Int64ConstExprWithType(0).Typ,
+			}
+		}
+		nodeID, _ := uuid.NewV7()
+		scanID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_VALUE_SCAN,
+			RowsetData:  rowsetData,
+			TableDef:    valueScanTableDef,
+			BindingTags: []int32{lastTag},
+			Uuid:        nodeID[:],
+		}, rowCtx)
+		projectTag := builder.genNewBindTag()
+		projectList := make([]*plan.Expr, projectWidth)
+		for colIdx := range projectList {
+			projectList[colIdx] = &plan.Expr{
+				Typ:  valueScanTableDef.Cols[colIdx].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+			}
+		}
+		rowCtx.projectTag = projectTag
+		rowCtx.headings = make([]string, projectWidth)
+		rowCtx.projects = projectList
+		rowCtx.results = projectList
+		for colIdx := range colNames {
+			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		}
+		if carryOrdinal {
+			rowCtx.headings[ordinalPos] = "_values_ordinal"
+		}
+		branches = append(branches, builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_PROJECT,
+			ProjectList:  projectList,
+			Children:     []int32{scanID},
 			BindingTags:  []int32{projectTag},
 			NotCacheable: true,
 		}, rowCtx))
@@ -5414,7 +5499,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	lastTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 	for _, rightID := range branches[1:] {
 		rightNode := builder.qry.Nodes[rightID]
-		projectList := make([]*plan.Expr, len(colNames)+1)
+		projectList := make([]*plan.Expr, projectWidth)
 		unionTag := builder.genNewBindTag()
 		for colIdx := range projectList {
 			projectList[colIdx] = &plan.Expr{
@@ -5434,8 +5519,8 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	}
 
 	unionCtx.projectTag = lastTag
-	unionCtx.headings = make([]string, len(colNames)+1)
-	unionCtx.projects = make([]*plan.Expr, len(colNames)+1)
+	unionCtx.headings = make([]string, projectWidth)
+	unionCtx.projects = make([]*plan.Expr, projectWidth)
 	unionCtx.results = unionCtx.projects
 	for colIdx := range unionCtx.projects {
 		if colIdx < len(colNames) {
@@ -5457,8 +5542,8 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		Children: []int32{lastNodeID},
 		OrderBy: []*plan.OrderBySpec{{
 			Expr: &plan.Expr{
-				Typ:  builder.qry.Nodes[lastNodeID].ProjectList[len(colNames)].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(len(colNames))}},
+				Typ:  builder.qry.Nodes[lastNodeID].ProjectList[ordinalPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(ordinalPos)}},
 			},
 			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
 		}},

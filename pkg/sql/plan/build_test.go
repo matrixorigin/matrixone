@@ -5346,7 +5346,180 @@ func TestReplaceScalarSubqueriesInValuesAndSet(t *testing.T) {
 
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept (deptno, dname, loc) VALUES ((SELECT MAX(n_nationkey) FROM nation), 'first', 'x'), ((SELECT MIN(n_nationkey) FROM nation), 'last', 'y')")
 	require.NoError(t, err)
-	require.True(t, queryHasNodeType(logicPlan.GetQuery(), plan.Node_SORT), "multi-row subquery values must restore source order")
+	query := logicPlan.GetQuery()
+	const ordinalPos = int32(3)
+	valuesSortID := int32(-1)
+	for nodeID, node := range query.Nodes {
+		if node == nil || node.NodeType != plan.Node_SORT || len(node.Children) != 1 || len(node.OrderBy) != 1 {
+			continue
+		}
+		childID := node.Children[0]
+		if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID].NodeType != plan.Node_UNION_ALL {
+			continue
+		}
+		orderCol := node.OrderBy[0].Expr.GetCol()
+		if orderCol != nil && orderCol.ColPos == ordinalPos {
+			valuesSortID = int32(nodeID)
+			break
+		}
+	}
+	require.NotEqual(t, int32(-1), valuesSortID, "VALUES ordinal sort must directly consume the source UNION ALL")
+	valuesSort := query.Nodes[valuesSortID]
+	require.Equal(t, plan.OrderBySpec_ASC|plan.OrderBySpec_INTERNAL, valuesSort.OrderBy[0].Flag)
+	valuesUnion := query.Nodes[valuesSort.Children[0]]
+	require.Len(t, valuesUnion.ProjectList, int(ordinalPos)+1)
+	require.Len(t, valuesUnion.Children, 2)
+	for ordinal, childID := range valuesUnion.Children {
+		child := query.Nodes[childID]
+		require.Greater(t, len(child.ProjectList), int(ordinalPos))
+		require.NotNil(t, child.ProjectList[ordinalPos].GetLit())
+		require.Equal(t, int64(ordinal), child.ProjectList[ordinalPos].GetLit().GetI64Val())
+	}
+	ordinalDropped := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 || node.Children[0] != valuesSortID {
+			continue
+		}
+		ordinalDropped = true
+		for _, projectExpr := range node.ProjectList {
+			walkPlanExpr(projectExpr, func(expr *plan.Expr) {
+				if col := expr.GetCol(); col != nil {
+					require.NotEqual(t, ordinalPos, col.ColPos, "internal VALUES ordinal must not reach DML columns")
+				}
+			})
+		}
+	}
+	require.True(t, ordinalDropped)
+
+	containsNode := func(rootID, targetID int32) bool {
+		visited := make(map[int32]struct{})
+		var visit func(int32) bool
+		visit = func(nodeID int32) bool {
+			if nodeID == targetID {
+				return true
+			}
+			if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+				return false
+			}
+			if _, ok := visited[nodeID]; ok {
+				return false
+			}
+			visited[nodeID] = struct{}{}
+			for _, childID := range query.Nodes[nodeID].Children {
+				if visit(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		return visit(rootID)
+	}
+	containsDedup := func(rootID int32) bool {
+		visited := make(map[int32]struct{})
+		var visit func(int32) bool
+		visit = func(nodeID int32) bool {
+			if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+				return false
+			}
+			if _, ok := visited[nodeID]; ok {
+				return false
+			}
+			visited[nodeID] = struct{}{}
+			node := query.Nodes[nodeID]
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+				node.DedupJoinCtx != nil && node.DedupJoinCtx.DedupBuildKeepLast {
+				return true
+			}
+			for _, childID := range node.Children {
+				if visit(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		return visit(rootID)
+	}
+	orderStep, arbitrationStep := -1, -1
+	for step, rootID := range query.Steps {
+		if containsNode(rootID, valuesSortID) {
+			orderStep = step
+		}
+		if containsDedup(rootID) {
+			arbitrationStep = step
+		}
+	}
+	require.NotEqual(t, -1, orderStep, "VALUES order boundary must be materialized in a query step")
+	require.NotEqual(t, -1, arbitrationStep, "REPLACE plan must contain keep-last arbitration")
+	require.Less(t, orderStep, arbitrationStep, "VALUES order must be restored before keep-last arbitration")
+}
+
+func makeReplaceValuesWithSingleSubquery(rowCount int) string {
+	var rows strings.Builder
+	for row := 0; row < rowCount; row++ {
+		if row > 0 {
+			rows.WriteByte(',')
+		}
+		if row == rowCount/2 {
+			rows.WriteString("((SELECT MAX(n_nationkey) FROM nation), 'subquery', 'x')")
+		} else {
+			fmt.Fprintf(&rows, "(%d, 'literal', 'x')", row+1000)
+		}
+	}
+	return "REPLACE INTO dept (deptno, dname, loc) VALUES " + rows.String()
+}
+
+func TestReplaceScalarSubqueryLargeValuesBatchesLiterals(t *testing.T) {
+	const (
+		rowCount     = 1000
+		maxPlanNodes = 48
+	)
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, makeReplaceValuesWithSingleSubquery(rowCount))
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.LessOrEqual(t, len(query.Nodes), maxPlanNodes,
+		"one subquery must not expand every literal VALUES row into a scheduled branch")
+
+	unionAllCount := 0
+	literalBatchRows := int32(0)
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			unionAllCount++
+			require.Len(t, node.Children, 2, "source UNION ALL must have one subquery and one literal batch")
+		}
+		if node.RowsetData != nil && node.RowsetData.RowCount > literalBatchRows {
+			literalBatchRows = node.RowsetData.RowCount
+		}
+	}
+	require.Equal(t, 1, unionAllCount)
+	require.Equal(t, int32(rowCount-1), literalBatchRows)
+}
+
+func BenchmarkReplaceScalarSubqueryLargeValuesPlan(b *testing.B) {
+	sqlText := makeReplaceValuesWithSingleSubquery(1000)
+	var nodeCount, sourceBranches int
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		mock := NewMockOptimizer(true)
+		stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sqlText, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		built, err := BuildPlan(mock.CurrentContext(), stmts[0], false)
+		stmts[0].Free()
+		if err != nil {
+			b.Fatal(err)
+		}
+		nodeCount = len(built.GetQuery().Nodes)
+		sourceBranches = 1
+		for _, node := range built.GetQuery().Nodes {
+			if node.NodeType == plan.Node_UNION_ALL {
+				sourceBranches++
+			}
+		}
+	}
+	b.ReportMetric(float64(nodeCount), "nodes/op")
+	b.ReportMetric(float64(sourceBranches), "source-branches/op")
 }
 
 func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {

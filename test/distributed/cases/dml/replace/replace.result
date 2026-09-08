@@ -763,16 +763,16 @@ create table t_replace_subquery_source (id int primary key, v int);
 insert into t_replace_subquery_target values (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
 insert into t_replace_subquery_source values (1, 101), (2, 202), (4, 404);
 delete from t_replace_subquery_target;
-replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) + sleep(1) from t_replace_subquery_source), 'slow-first'), (1, (select min(v) from t_replace_subquery_source), 'fast-last');
+replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) from t_replace_subquery_source), 'first'), (1, (select min(v) from t_replace_subquery_source), 'last');
 select row_count();
 row_count()
 1
 select id, v, note from t_replace_subquery_target order by id;
 id    v    note
-1    101    fast-last
+1    101    last
 delete from t_replace_subquery_target;
 insert into t_replace_subquery_target values (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
-replace into t_replace_subquery_target (id, v, note) values (10, (select max(v) + sleep(1) from t_replace_subquery_source), 'same-note'), (11, (select min(v) from t_replace_subquery_source), 'same-note');
+replace into t_replace_subquery_target (id, v, note) values (10, (select max(v) from t_replace_subquery_source), 'same-note'), (11, (select min(v) from t_replace_subquery_source), 'same-note');
 select id, v, note from t_replace_subquery_target where note = 'same-note';
 id    v    note
 11    101    same-note
@@ -813,6 +813,19 @@ id    v    note
 2    404    single-subquery
 3    null    empty-subquery
 deallocate prepare ps_replace_subquery_values;
+prepare ps_replace_subquery_multi_values from 'replace into t_replace_subquery_target (id, v, note) values (1, (select max(v) from t_replace_subquery_source where id <= ?), "prepared-first"), (1, (select min(v) from t_replace_subquery_source where id <= ?), "prepared-last")';
+set @replace_subquery_max_param = 4;
+set @replace_subquery_min_param = 2;
+execute ps_replace_subquery_multi_values using @replace_subquery_max_param, @replace_subquery_min_param;
+select row_count();
+row_count()
+3
+select id, v, note from t_replace_subquery_target order by id;
+id    v    note
+1    101    prepared-last
+2    404    single-subquery
+3    null    empty-subquery
+deallocate prepare ps_replace_subquery_multi_values;
 prepare ps_replace_subquery from 'replace into t_replace_subquery_target set id = 1, v = (select max(v) from t_replace_subquery_source where id <= ?), note = "prepared"';
 set @replace_subquery_param = 2;
 execute ps_replace_subquery using @replace_subquery_param;
