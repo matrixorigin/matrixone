@@ -55,6 +55,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	if parent != nil {
+		bc.existentialBlock = parent.existentialBlock
+		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.cteName = parent.cteName

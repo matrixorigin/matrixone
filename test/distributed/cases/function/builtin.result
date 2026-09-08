@@ -254,7 +254,8 @@ select b from t1_cot_safe where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
 270.0  𝄀
 180.0
 select cot(0);
-Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cot(0)'
+➤ cot(0)[8,54,0]  𝄀
+null
 drop table if exists t1_cot_nested_safe;
 drop table if exists t1_cot_safe;
 drop table if exists t1;
