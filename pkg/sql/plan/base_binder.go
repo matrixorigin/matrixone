@@ -2117,6 +2117,41 @@ func mysqlNumericPrefixBitwiseArg(name string, idx, argCount int, source, target
 	}
 }
 
+// mysqlNumericPrefixFunctionArg identifies builtin arguments where MySQL
+// converts a textual value by consuming its leading decimal number. The
+// planner uses the existing comparison-cast overload for these conversions so
+// the serialized plan remains executable by older CNs; binary string families
+// are intentionally excluded.
+func mysqlNumericPrefixFunctionArg(name string, idx, argCount int, source, target types.Type) bool {
+	if source.Oid != types.T_char && source.Oid != types.T_varchar && source.Oid != types.T_text {
+		return false
+	}
+	if !target.Oid.IsInteger() && !target.Oid.IsFloat() && !target.Oid.IsDecimal() {
+		return false
+	}
+
+	switch strings.ToLower(name) {
+	case "left", "right", "lpad", "rpad", "repeat":
+		return idx == 1 && argCount >= 2
+	case "space":
+		return idx == 0 && argCount == 1
+	case "substring", "substr", "mid":
+		return (idx == 1 || idx == 2) && idx < argCount
+	case "insert":
+		return (idx == 1 || idx == 2) && idx < argCount
+	case "locate":
+		return idx == 2 && argCount == 3
+	case "substring_index":
+		return idx == 2 && argCount == 3
+	case "elt", "make_set":
+		return idx == 0 && argCount >= 2
+	case "export_set":
+		return (idx == 0 || idx == 4) && idx < argCount
+	default:
+		return false
+	}
+}
+
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
 	if b.ctx == nil {
 		return Type{}, false
@@ -5770,7 +5805,8 @@ func bindFuncExprImplByPlanExpr(
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
-				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) {
+				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) ||
+					mysqlNumericPrefixFunctionArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else {
 					args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
