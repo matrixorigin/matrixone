@@ -709,7 +709,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
-%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type ctas_conflict_opt
 %type <str> iceberg_namespace_value iceberg_option_key iceberg_option_value iceberg_ref_name
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
@@ -10370,6 +10370,11 @@ copy_grants_opt:
         $$ = true
     }
 
+ctas_conflict_opt:
+    /* empty */ { $$ = "" }
+    | IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -10486,9 +10491,9 @@ create_table_stmt:
         t.AsSource = $9
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_opt AS select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
         }
@@ -10497,12 +10502,13 @@ create_table_stmt:
         t.Temporary = $2
         t.IfNotExists = $4
         t.Table = *$5
-        t.AsSource = $7
+        t.CTASConflict = $6
+        t.AsSource = $8
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_opt AS select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
         }
@@ -10512,7 +10518,8 @@ create_table_stmt:
         t.IfNotExists = $4
         t.Table = *$5
         t.Defs = $7
-        t.AsSource = $10
+        t.CTASConflict = $10
+        t.AsSource = $11
         $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
