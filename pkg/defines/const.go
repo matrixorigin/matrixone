@@ -91,7 +91,8 @@ const (
 	MORPCVersion53     int64 = 53 // ordered-stream distributed Top-N merge
 	MORPCVersion54     int64 = 54 // catalog-authenticated proxy cache reuse
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
-	MORPCLatestVersion       = MORPCVersion55
+	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
+	MORPCLatestVersion       = MORPCVersion56
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

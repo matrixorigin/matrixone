@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1393,8 +1394,8 @@ func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
 		sql        string
 		wantOffset uint64
 	}{
-		{name: "session offset", sql: "create table t(id int auto_increment)", wantOffset: 9},
-		{name: "zero keeps session offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 9},
+		{name: "session offset does not affect DDL", sql: "create table t(id int auto_increment)", wantOffset: 0},
+		{name: "zero keeps default offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 0},
 		{name: "nonzero overrides session offset", sql: "create table t(id int auto_increment) auto_increment = 100", wantOffset: 99},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5216,6 +5217,54 @@ func TestCreateSingleTable(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	outPutPlan(logicPlan, true, t)
+}
+
+func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create cluster table cluster_replay (
+			id int not null,
+			payload varchar(20),
+			primary key (id, account_id)
+		)`)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	// The engine persists CREATE CLUSTER TABLE as a SystemClusterRel table.
+	createTable.TableDef.TableType = catalog.SystemClusterRel
+	createSQL, stmt, err := ConstructCreateTableSQL(
+		mock.CurrentContext(), createTable.GetTableDef(), nil, false, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	defer stmt.Free()
+
+	// SHOW CREATE exposes the physical account_id column, so only internal
+	// replay may accept the generated DDL.
+	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	require.ErrorContains(t, err,
+		"the attribute account_id in the cluster table can not be defined directly by the user")
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	replayedPlan, err := runOneStmt(internalMock, t, createSQL)
+	require.NoError(t, err)
+
+	accountID := FindColumn(
+		replayedPlan.GetDdl().GetCreateTable().GetTableDef().GetCols(),
+		util.GetClusterTableAttributeName(),
+	)
+	require.NotNil(t, accountID)
+	require.NotNil(t, accountID.GetDefault())
+	require.False(t, accountID.GetDefault().GetNullAbility())
+	require.NotNil(t, accountID.GetDefault().GetExpr())
+	require.Equal(t, uint32(catalog.System_Account),
+		accountID.GetDefault().GetExpr().GetLit().GetU32Val())
 }
 
 func TestCreateTableAsSelect(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"slices"
@@ -3301,6 +3302,87 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"unmarked exclusive targets retain owner-side range escalation")
 }
 
+func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceID   uint64
+		scanID     uint64
+		tableCnt   float64
+		lockOutcnt float64
+		want       bool
+	}{
+		{
+			name:       "target scan repairs underestimated lock cardinality",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       true,
+		},
+		{
+			name:       "small target remains row scoped",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   3,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "unrelated large scan cannot widen target lock",
+			sourceID:   42,
+			scanID:     99,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "non-finite target estimate fails closed",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   math.Inf(1),
+			lockOutcnt: 1,
+			want:       false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 3,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			target := &plan.LockTarget{Mode: lockpb.LockMode_Exclusive}
+			builder := &QueryBuilder{
+				compCtx:                         &mock.ctxt,
+				fullTableUpdateSourceTableID:    test.sourceID,
+				hasFullTableUpdateSourceTableID: true,
+				fullTableUpdateLockTargets:      map[*plan.LockTarget]struct{}{target: {}},
+				qry: &plan.Query{Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						TableDef: &plan.TableDef{TblId: test.scanID},
+						Stats:    &plan.Stats{TableCnt: test.tableCnt},
+					},
+					{
+						NodeType:    plan.Node_LOCK_OP,
+						Stats:       &plan.Stats{Outcnt: test.lockOutcnt},
+						LockTargets: []*plan.LockTarget{target},
+					},
+				}},
+			}
+
+			applyLockTableFallback(builder)
+			require.Equal(t, test.want, target.LockTable)
+		})
+	}
+}
+
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	catalog.MarkTableDefTemporary(mock.ctxt.tables["nation"])
@@ -3662,6 +3744,143 @@ func TestInsertIgnoreWithMultipleUniqueConstraintsUsesCoordinatedDedup(t *testin
 	require.Equal(t, 1, coordinated)
 	require.Zero(t, legacyIgnoreDedups,
 		"independent per-key IGNORE joins would discard fallback rows before all constraints are known")
+}
+
+func TestInsertIgnoreAutoIncrementReorderSkipsConstrainedTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// The final generated primary key is assigned after the row-level filters.
+	// A CHECK on that value must therefore keep the established path until the
+	// assignment is moved before constraint evaluation.
+	addPositiveCheck(t, mock, "dept", "deptno")
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (dname, loc) VALUES ('Sales', 'NY')")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PRE_INSERT_UK ||
+			!node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			continue
+		}
+		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"ordered auto-increment reassignment must not run after CHECK evaluation")
+	}
+}
+
+func TestInsertIgnoreAutoIncrementReorderKeepsAuxiliaryColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parts  []string
+		params string
+		check  bool
+	}{
+		{"composite", []string{"dname", "loc"}, "", false},
+		{"prefix", []string{"dname"}, `{"prefix_lengths":"dname:2"}`, false},
+		{"composite_with_check", []string{"dname", "loc"}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["dept"]
+			tableDef.Cols[0].Typ.AutoIncr = true
+			tableDef.Indexes[0].Parts = tc.parts
+			tableDef.Indexes[0].IndexAlgoParams = tc.params
+			if tc.check {
+				addPositiveCheck(t, mock, "dept", "loc")
+			}
+			p, err := runOneStmt(mock, t,
+				"INSERT IGNORE INTO dept (dname, loc) VALUES ('Sales', 'NY'), ('Sales', 'NY'), ('Eng', 'SF')")
+			require.NoError(t, err)
+			found := false
+			for _, node := range p.GetQuery().Nodes {
+				ctx := node.GetPreInsertUkCtx()
+				if !ctx.GetAutoIncrementReorder() {
+					continue
+				}
+				found = true
+				child := p.GetQuery().Nodes[node.Children[0]]
+				require.Equal(t, int32(types.T_bool), child.ProjectList[ctx.AutoIncrementGeneratedColumn].Typ.Id)
+				require.Less(t, ctx.AutoIncrementOutputColumn, ctx.OutputColumns)
+				require.Equal(t, tableDef.Cols[0].Typ.Id, node.ProjectList[ctx.AutoIncrementOutputColumn].Typ.Id)
+			}
+			require.True(t, found)
+		})
+	}
+}
+
+func TestInsertIgnoreAutoIncrementReorderIsEnabledForPlainTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	tableDef.Cols[0].Typ.AutoIncr = true
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc) VALUES (NULL, 'Sales', 'NY'), (2, 'HR', 'London'), (NULL, 'Eng', 'SF')")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			found = true
+			require.True(t, node.PreInsertUkCtx.GetAutoIncrementReorder())
+		}
+	}
+	require.True(t, found)
+}
+
+func TestInsertIgnoreAutoIncrementProvenanceNameDoesNotCollideWithUserColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	require.NotNil(t, tableDef)
+
+	// This table intentionally has no AUTO_INCREMENT column, but the user column
+	// uses the historical internal marker spelling.  Planner metadata must not be
+	// inferred from colName2Idx, otherwise this legal schema is treated as an
+	// ordered AUTO_INCREMENT plan and the non-boolean user column fails at runtime.
+	tableDef.Cols[0].Typ.AutoIncr = false
+	markerName := "__mo_auto_increment_generated"
+	markerPos := int32(len(tableDef.Cols) - 1)
+	tableDef.Cols = append(tableDef.Cols, nil)
+	copy(tableDef.Cols[markerPos+1:], tableDef.Cols[markerPos:])
+	tableDef.Cols[markerPos] = &plan.ColDef{
+		ColId: 999,
+		Name:  markerName,
+		Typ:   plan.Type{Id: int32(types.T_varchar), Width: 32},
+	}
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc, __mo_auto_increment_generated) "+
+			"VALUES (1, 'Sales', 'NY', 'user data')")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder())
+		}
+	}
+}
+
+func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	tableDef.Cols[0].Typ.AutoIncr = true
+	tableDef.Indexes[0].Parts = []string{"deptno", "dname"}
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept (deptno, dname, loc) VALUES (NULL, 'Sales', 'NY')")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PRE_INSERT_UK ||
+			!node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			continue
+		}
+		found = true
+		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"a unique index containing the reassigned primary key must keep the established path")
+	}
+	require.True(t, found)
 }
 
 func TestInsertIgnoreSingleUniqueConstraintKeepsExistingDedupPath(t *testing.T) {

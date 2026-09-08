@@ -1356,7 +1356,7 @@ func NormalizeGeometryForStorage(proc *process.Process, payload []byte, columnSu
 		return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
 	}
 	if float32Column {
-		return encodeGeometryPayloadFloat32(wkt), nil
+		return encodeGeometryPayloadFloat32(wkt)
 	}
 	return encodeGeometryPayload(wkt, 0, false), nil
 }
