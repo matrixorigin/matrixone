@@ -81,6 +81,12 @@ func TestAreaGrowthAdmissionPreservesCleanup(t *testing.T) {
 			}
 			require.NoError(t, AppendBytes(src, bytes.Repeat([]byte("b"), tc.payload), false, mp))
 			oldArea := dst.GetArea()
+			oldBytes := bytes.Clone(oldArea)
+			oldLength := dst.Length()
+			oldRows := make([][]byte, oldLength)
+			for i := range oldRows {
+				oldRows[i] = bytes.Clone(dst.GetBytesAt(i))
+			}
 			oldUsed := state.account.Snapshot().Used
 			areaLost := false
 			var err error
@@ -102,13 +108,30 @@ func TestAreaGrowthAdmissionPreservesCleanup(t *testing.T) {
 						oldArea == nil, len(oldArea), cap(oldArea), unsafe.SliceData(oldArea),
 						dst.GetArea() == nil, len(dst.GetArea()), cap(dst.GetArea()), unsafe.SliceData(dst.GetArea()))
 				}
-				if !bytes.Equal(oldArea, dst.GetArea()) {
+				if !bytes.Equal(oldBytes, dst.GetArea()) {
 					t.Errorf("rejected growth changed owned bytes: before=%d after=%d", len(oldArea), len(dst.GetArea()))
 				}
 				require.Equal(t, oldUsed, state.account.Snapshot().Used)
+				if tc.method == "one" {
+					// UnionOne advances length before building varlena; this
+					// control checks ownership, not atomic append semantics.
+					require.Equal(t, oldLength+1, dst.Length())
+				} else {
+					require.Equal(t, oldLength, dst.Length())
+				}
 			} else {
 				require.NoError(t, err)
+				require.Equal(t, oldLength+1, dst.Length())
 				require.Equal(t, src.GetBytesAt(0), dst.GetBytesAt(dst.Length()-1))
+			}
+			// A lost Area is already a failure; avoid dereferencing its invalid
+			// varlena offsets so the production cleanup oracle still executes.
+			if !areaLost {
+				for i, want := range oldRows {
+					if !bytes.Equal(want, dst.GetBytesAt(i)) {
+						t.Errorf("row %d changed after append (denied=%t)", i, tc.denied)
+					}
+				}
 			}
 			dst.Free(mp)
 			dstFreed = true
@@ -119,6 +142,9 @@ func TestAreaGrowthAdmissionPreservesCleanup(t *testing.T) {
 			suspended := state.registry.AdmissionSuspended()
 			next, nextErr := state.registry.Open(1 << 20)
 			t.Logf("after Free: used=%d owner=%d site=%d live=%d suspended=%v error=%v next_admission=%v", remaining, snapshot.LiveOwner, snapshot.LiveSite, snapshot.LiveAllocations, suspended, terminalErr, nextErr)
+			if remaining != 0 || snapshot.LiveAllocations != 0 {
+				t.Errorf("production cleanup retained allocations: account=%d live=%d", remaining, snapshot.LiveAllocations)
+			}
 			if remaining > 0 && areaLost {
 				// The unpatched implementation loses the vector's slice header
 				// on a failed grow. The alias is retained solely to clean up the

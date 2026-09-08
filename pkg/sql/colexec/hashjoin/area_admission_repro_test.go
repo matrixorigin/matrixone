@@ -126,6 +126,9 @@ func TestHashJoinAreaAdmissionTerminalCleanup(t *testing.T) {
 			suspended := registry.AdmissionSuspended()
 			next, nextErr := registry.Open(1 << 20)
 			t.Logf("call=%v terminal=%v used=%d owner=%d site=%d live=%d budget=%d suspended=%v next_admission=%v", callErr, terminalErr, snapshot.Used, snapshot.LiveOwner, snapshot.LiveSite, snapshot.LiveAllocations, generation.Used(), suspended, nextErr)
+			if snapshot.Used != 0 || snapshot.LiveAllocations != 0 || generation.Used() != 0 {
+				t.Errorf("production cleanup retained allocations: account=%d live=%d budget=%d", snapshot.Used, snapshot.LiveAllocations, generation.Used())
+			}
 			if snapshot.Used > 0 && areaLost {
 				// The unpatched implementation discarded the Vector Area
 				// header. Reclaim the retained alias only after recording the

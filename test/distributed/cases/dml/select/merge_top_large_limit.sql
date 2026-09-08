@@ -2,11 +2,12 @@
 
 DROP TABLE IF EXISTS merge_top_large_src;
 DROP TABLE IF EXISTS merge_top_large_dst;
-CREATE TABLE merge_top_large_src (id BIGINT PRIMARY KEY, payload VARCHAR(64));
-CREATE TABLE merge_top_large_dst (id BIGINT, payload VARCHAR(64));
+CREATE TABLE merge_top_large_src (id BIGINT PRIMARY KEY, payload VARCHAR(128));
+CREATE TABLE merge_top_large_dst (id BIGINT, payload VARCHAR(128));
 INSERT INTO merge_top_large_src
-SELECT result, CONCAT('payload-', result) FROM generate_series(1, 20000) g;
--- Force a multi-scope AP plan; the large LIMIT must use Top -> MergeOrder -> Limit.
+SELECT result, CONCAT(REPEAT('x', 64), 'payload-', result) FROM generate_series(1, 20000) g;
+-- Wide-varlen success-path coverage. Budget rejection is tested separately
+-- under test/distributed/isolated/area_admission with an explicit CN cap.
 SET SESSION optimizer_hints = 'execType=2';
 INSERT INTO merge_top_large_dst
 SELECT id, payload FROM merge_top_large_src ORDER BY id DESC LIMIT 17000;
