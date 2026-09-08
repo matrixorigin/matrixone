@@ -1357,11 +1357,11 @@ func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *test
 			want: types.T_text,
 		},
 		{
-			name: "null keeps prepared domain",
+			name: "null keeps static source domain",
 			value: ParamValue{
 				SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 			},
-			want: types.T_text,
+			want: types.T_varbinary,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

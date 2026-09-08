@@ -29,7 +29,8 @@ func stringDomainMode(vec *vector.Vector) (binary, perRow bool) {
 	if vec.HasBinaryStringRows() {
 		return false, true
 	}
-	return types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary || vec.GetIsBinaryString(), false
+	return types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary ||
+		vec.GetIsBinaryString() || vec.GetIsBin(), false
 }
 
 func binaryStringAt(vec *vector.Vector, row int, uniformBinary, perRow bool) bool {

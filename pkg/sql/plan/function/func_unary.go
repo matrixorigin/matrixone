@@ -778,6 +778,12 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint64](result)
 	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null := param.GetStrValue(row)
 		if null {
 			if err := rs.Append(0, true); err != nil {

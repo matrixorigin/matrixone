@@ -674,10 +674,10 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion49)
 			_, err = encodeRemoteScope(scope, proc)
-			require.ErrorContains(t, err, "require MORPC protocol version 53",
+			require.ErrorContains(t, err, "require MORPC protocol version 57",
 				"sender must reject every changed function ID")
 			_, err = decodeScope(data, proc, true, nil)
-			require.ErrorContains(t, err, "require MORPC protocol version 53",
+			require.ErrorContains(t, err, "require MORPC protocol version 57",
 				"receiver must reject every changed function ID")
 
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)

@@ -1038,7 +1038,7 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 
 	proc.Base.SessionInfo.AutoIncrementIncrement = 3
 	proc.Base.SessionInfo.AutoIncrementOffset = 2
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
 	_, _, err = convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
 	require.ErrorContains(t, err, "requires MORPC protocol version 56")
 	require.ErrorContains(t,

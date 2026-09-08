@@ -4036,6 +4036,12 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
+			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
+			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
+			// the binary default until a numeric execution advances its category.
+			return
+		}
 		if name == "cast" && isExplicitPreparedCast(expr) {
 			// The user-selected cast owns the parameter domain. Its direct marker
 			// does not require runtime specialization, but a nested expression can
@@ -6022,16 +6028,17 @@ func replaceParamValsWithSelection(
 			runtimeStringDomain = param.RuntimeStringDomain
 			// Materialize only a non-NULL binary string domain. NULL retains the
 			// prepared marker type, while text sources keep the TEXT transport type.
-			if param.Value != nil {
-				switch {
-				case param.HasSourceType &&
-					types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
-					stringDomainType = param.SourceType
-					hasStringDomainType = true
-				case param.IsBinaryString || param.RuntimeStringDomain == types.RuntimeStringBinary:
-					stringDomainType = types.T_varbinary.ToType()
-					hasStringDomainType = true
-				}
+			switch {
+			case param.HasSourceType &&
+				types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
+				// A typed NULL still owns its assignment-time VARBINARY/BLOB type;
+				// RuntimeStringDomain may independently override row semantics.
+				stringDomainType = param.SourceType
+				hasStringDomainType = true
+			case param.Value != nil &&
+				(param.IsBinaryString || param.RuntimeStringDomain == types.RuntimeStringBinary):
+				stringDomainType = types.T_varbinary.ToType()
+				hasStringDomainType = true
 			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)

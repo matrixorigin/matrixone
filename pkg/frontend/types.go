@@ -810,7 +810,14 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	runtimeCompile.SetIsPrepare(true)
+	// AP scopes contain execution-specific placement and scan state. Cache only
+	// the specialized logical plan and leave the AP compile statement-owned.
+	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
+		runtimeCompile = nil
+	}
+	if runtimeCompile != nil {
+		runtimeCompile.SetIsPrepare(true)
+	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
