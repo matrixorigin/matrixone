@@ -10663,7 +10663,7 @@ func inheritViewMetadataRevalidation(
 	serviceID string,
 	accountID uint32,
 ) error {
-	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(ctx, bh); err != nil {
 		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
 			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
 			return nil
@@ -11442,25 +11442,22 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
-	// watch and cancel
-	// TODO use context.AfterFunc in go1.21
 	funcCtx, cancel := context.WithCancel(execCtx.reqCtx)
-	defer cancel()
-	go func() {
-		defer loadLocalReader.Close()
-
-		<-funcCtx.Done()
-	}()
-
 	// write to pipe
 	loadLocalErrGroup := new(errgroup.Group)
+	defer func() {
+		cancel()
+		_ = loadLocalReader.Close()
+		// Also join on file-service panic before session state can be reused.
+		_ = loadLocalErrGroup.Wait()
+	}()
 	loadLocalErrGroup.Go(func() error {
 		param := &tree.ExternParam{
 			ExParamConst: tree.ExParamConst{
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ses, execCtx, param, loadLocalWriter, loadLocalReader)
+		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter, loadLocalReader)
 	})
 
 	// read from pipe and upload
@@ -11477,6 +11474,9 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 	fileService := getPu(ses.GetService()).FileService
 	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
 	err := fileService.Write(execCtx.reqCtx, ioVector)
+	if err != nil {
+		cancel()
+	}
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err

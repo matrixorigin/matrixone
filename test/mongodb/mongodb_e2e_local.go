@@ -202,6 +202,11 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		return err
 	}
 	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+filterQuery+"' and measurement > 0", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-filter-residual")
+	if err := expectScalar(ctx, db,
 		"select __mo_query from mongodb_ci.events where __mo_query = '"+filterQuery+"'", filterQuery); err != nil {
 		return err
 	}
@@ -252,6 +257,30 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		return err
 	}
 	r.Cases = append(r.Cases, "explicit-reducing-aggregation-pipeline")
+
+	sortQuery := `{"pipeline":[{"$sort":{"_id":-1}},{"$limit":1}]}`
+	if err := expectScalar(ctx, db,
+		"select mongo_id from mongodb_ci.events where __mo_query = '"+sortQuery+"'",
+		"64b000000000000000000005"); err != nil {
+		return err
+	}
+	initialUnwindQuery := `{"pipeline":[{"$unwind":"$site_id"}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+initialUnwindQuery+"'", "5"); err != nil {
+		return err
+	}
+	unwindQuery := `{"pipeline":[{"$set":{"fanout":["$site_id","$device_id"]}},{"$unwind":"$fanout"}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindQuery+"'", "10"); err != nil {
+		return err
+	}
+	unwindOptionsQuery := `{"pipeline":[{"$set":{"fanout":[]}},{"$unwind":{"path":"$fanout","includeArrayIndex":"fanout_index","preserveNullAndEmptyArrays":true}}]}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+unwindOptionsQuery+"'", "5"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-sort-and-unwind-pipeline")
+
 	if err := expectExplainRedacted(ctx, db,
 		"explain select device_id,event_count from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"' and event_count >= 1",
 		[]string{"operation=aggregate", "query_digest=", "event_count"},
@@ -268,6 +297,18 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 	} {
 		if err := expectQueryFailure(ctx, db,
 			"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+rejected+"'", "is not allowed"); err != nil {
+			return err
+		}
+	}
+	for _, rejected := range []struct {
+		query string
+		want  string
+	}{
+		{query: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "$sort requires 1 to 32 fields"},
+		{query: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
+	} {
+		if err := expectQueryFailure(ctx, db,
+			"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+rejected.query+"'", rejected.want); err != nil {
 			return err
 		}
 	}

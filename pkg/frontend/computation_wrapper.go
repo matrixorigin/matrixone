@@ -897,6 +897,16 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+		return true
+	default:
+		return false
+	}
+}
+
 func applyBinaryDirectResultDecimalTypes(
 	ctx context.Context,
 	paramVals []any,

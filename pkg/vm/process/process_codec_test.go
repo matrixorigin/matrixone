@@ -95,6 +95,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
+		AutoIncrementIncrement:              7,
+		AutoIncrementOffset:                 4,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -150,6 +152,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
 			SqlMode:                             "STRICT_ALL_TABLES",
+			AutoIncrementIncrement:              7,
+			AutoIncrementOffset:                 4,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -158,6 +162,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
+		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
+		require.Equal(t, uint64(4), info.AutoIncrementOffset)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -327,6 +333,9 @@ func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32,
+		types.T_bool, types.T_bit, types.T_enum, types.T_geometry, types.T_geometry32, types.T_uuid,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	}
 	params := proc.GetPrepareParams()
 	for params.Length() < len(concreteTypes) {
@@ -334,9 +343,10 @@ func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
 	}
 	kinds := make([]vector.PrepareParamKind, len(concreteTypes))
 	for i := range kinds {
-		kinds[i] = vector.PrepareParamInteger
+		var supported bool
+		kinds[i], supported = vector.PrepareParamKindForType(concreteTypes[i])
+		require.True(t, supported)
 	}
-	kinds[len(kinds)-1] = vector.PrepareParamFloat
 	binaryString := make([]bool, len(concreteTypes))
 	binaryString[1] = true
 	proc.SetPrepareParamsWithTypedMeta(
@@ -595,6 +605,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
+	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
@@ -742,6 +754,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
+	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))

@@ -367,6 +367,7 @@ type PrepareStmt struct {
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
 	jsonComparisonParamPositions []int32
+	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose

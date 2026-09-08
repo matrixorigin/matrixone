@@ -141,7 +141,7 @@ func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
 	_, err := ses.snapshotUserDefinedVars(context.Background())
 	require.ErrorContains(t, err, "require MORPC protocol version 53")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion55)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
 	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, uint32(types.RuntimeStringText), snapshot[0].RuntimeStringDomain)
