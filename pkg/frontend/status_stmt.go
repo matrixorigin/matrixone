@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -54,6 +55,7 @@ func grantDatabaseOwnershipAfterCreate(
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
+	var loadLocalWaited bool
 	var columns []interface{}
 	execCtx.persistentDropTableTargets = nil
 
@@ -219,33 +221,54 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		runBegin := time.Now()
 		if st, ok := execCtx.stmt.(*tree.Load); ok {
 			if st.Local {
+				// The LOCAL stream belongs to this accepted ingress execution.
+				// Create it only after compile/placement succeeds so a fail-closed
+				// scheduling decision cannot leave an unattached pipe behind.
+				reader, writer := io.Pipe()
+				uploadCtx, stopUpload := context.WithCancel(execCtx.reqCtx)
+				execCtx.proc.Base.LoadLocalReader = reader
+				execCtx.loadLocalWriter = writer
+				defer func() {
+					// Abort network I/O as well as pipe I/O before joining on
+					// runner error/panic. A client need not ever send upload EOF.
+					stopUpload()
+					if closeErr := reader.Close(); closeErr != nil {
+						ses.Error(execCtx.reqCtx,
+							"processLoadLocal goroutine failed",
+							zap.Error(closeErr))
+					}
+					// The statement executor is recovered above this function. Join
+					// the upload owner here as well so a runner panic cannot leave it
+					// using session or ExecCtx state after statement cleanup begins.
+					if !loadLocalWaited {
+						if waitErr := loadLocalErrGroup.Wait(); waitErr != nil {
+							ses.Error(execCtx.reqCtx,
+								"processLoadLocal goroutine failed",
+								zap.Error(waitErr))
+						}
+					}
+					if execCtx.proc.Base.LoadLocalReader == reader {
+						execCtx.proc.Base.LoadLocalReader = nil
+					}
+					if execCtx.loadLocalWriter == writer {
+						execCtx.loadLocalWriter = nil
+					}
+				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter, execCtx.proc.GetLoadLocalReader())
+					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer, reader)
 				})
 			}
 		}
 
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
-			if loadLocalErrGroup != nil { // release resources
-				err2 := execCtx.proc.Base.LoadLocalReader.Close()
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-			}
 			return
 		}
 
 		if loadLocalErrGroup != nil {
-			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
+			err = loadLocalErrGroup.Wait()
+			loadLocalWaited = true
+			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
 		}
