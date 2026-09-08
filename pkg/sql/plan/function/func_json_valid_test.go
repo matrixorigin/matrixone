@@ -1137,6 +1137,88 @@ func TestJsonSchemaReachableReferenceBudgetIgnoresDefinitionContainment(t *testi
 	require.Contains(t, err.Error(), mysqlJSONSchemaExpansionWorkReason)
 }
 
+func TestJsonSchemaScalarPropertyValuesReturnSchemaError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	functions := []struct {
+		name string
+		ret  types.Type
+		fn   fEvalFn
+	}{
+		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
+		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+	}
+	values := []string{`null`, `false`, `1`, `"text"`}
+	for _, function := range functions {
+		for _, value := range values {
+			t.Run(function.name+"/"+value, func(t *testing.T) {
+				schema := fmt.Sprintf(`{"properties":{"x":%s}}`, value)
+				tc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{schema}, []bool{false}),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, []bool{false}),
+					},
+					NewFunctionTestResult(function.ret, false, nil, nil), function.fn)
+				require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+				err := tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+			})
+		}
+	}
+}
+
+func TestJsonSchemaIDAliasesCannotRebindLocalReferences(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	functions := []struct {
+		name string
+		ret  types.Type
+		fn   fEvalFn
+	}{
+		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
+		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+	}
+	for _, idKey := range []string{"id", "$id"} {
+		t.Run(idKey, func(t *testing.T) {
+			schemaValue := map[string]any{
+				"$ref": "#/$defs/safe",
+				"$defs": map[string]any{
+					"safe":     map[string]any{"type": "integer"},
+					"redirect": map[string]any{idKey: "#/$defs/safe", "$ref": "#/$defs/safe"},
+				},
+			}
+			schemaBytes, err := json.Marshal(schemaValue)
+			require.NoError(t, err)
+			schema, err := types.ParseSliceToByteJson(schemaBytes)
+			require.NoError(t, err)
+			compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+			require.NoError(t, err)
+			result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+			require.NoError(t, err)
+			require.True(t, result.Valid())
+
+			schemaText := string(schemaBytes)
+			for _, function := range functions {
+				t.Run(function.name, func(t *testing.T) {
+					var wanted any
+					if function.name == "json_schema_valid" {
+						wanted = []bool{true}
+					} else {
+						wanted = []string{mustJsonBinaryString(t, `{"valid":true}`)}
+					}
+					tc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{schemaText}, []bool{false}),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
+						},
+						NewFunctionTestResult(function.ret, false, wanted, []bool{false}), function.fn)
+					s, info := tc.Run()
+					require.True(t, s, info)
+				})
+			}
+		})
+	}
+}
+
 func TestJsonSchemaLocalReferenceErrors(t *testing.T) {
 	tests := []struct {
 		name   string

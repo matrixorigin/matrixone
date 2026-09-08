@@ -3249,6 +3249,12 @@ func normalizeMySQLDraft4Schema(schema any) {
 		return
 	}
 
+	// Local references are resolved against physical JSON Pointers before the
+	// gojsonschema loader sees the document. Remove id aliases here so the
+	// loader cannot rebind a physical pointer to a different schema object.
+	delete(obj, "id")
+	delete(obj, "$id")
+
 	if ref, ok := obj["$ref"]; ok {
 		if _, ok := ref.(string); !ok {
 			delete(obj, "$ref")
@@ -3260,7 +3266,7 @@ func normalizeMySQLDraft4Schema(schema any) {
 	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMinimum", "minimum")
 	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMaximum", "maximum")
 
-	for _, key := range []string{"properties", "patternProperties", "definitions"} {
+	for _, key := range []string{"properties", "patternProperties", "definitions", "$defs"} {
 		normalizeMySQLDraft4NamedSchemas(obj[key])
 	}
 	if dependencies, ok := obj["dependencies"].(map[string]any); ok {

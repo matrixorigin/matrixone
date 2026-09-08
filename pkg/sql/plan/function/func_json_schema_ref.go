@@ -560,9 +560,12 @@ func mysqlScanEffectiveSchemaRefs(ctx context.Context, fnName string, index *mys
 		children := mysqlEffectiveSchemaChildren(item.pointer, object)
 		node := index.nodes[item.pointer]
 		for _, child := range children {
+			if _, ok := index.nodes[child.pointer]; !ok {
+				continue
+			}
 			node.evaluationEdges = append(node.evaluationEdges, child.pointer)
+			stack = append(stack, child)
 		}
-		stack = append(stack, children...)
 	}
 	return effectiveTargets, nil
 }
@@ -580,6 +583,9 @@ func mysqlEffectiveSchemaChildren(pointer string, object map[string]any) []mysql
 		}
 		sort.Strings(keys)
 		for _, name := range keys {
+			if !mysqlJSONSchemaIsContainer(value[name]) {
+				continue
+			}
 			children = append(children, mysqlEffectiveSchemaPending{
 				pointer: mysqlJSONPointerPath(pointer, key, name), value: value[name],
 			})
