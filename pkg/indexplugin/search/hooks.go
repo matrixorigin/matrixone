@@ -50,6 +50,9 @@ type Request struct {
 	// HasMembershipFilter distinguishes an exact empty key set from the
 	// absence of a runtime membership predicate (for example RF PASS).
 	HasMembershipFilter bool
+	// MembershipFilterRequired means candidate limiting is only semantically
+	// valid after this exact membership predicate has been applied.
+	MembershipFilterRequired bool
 	// CollectExplainDiagnostics is enabled only for standalone scalar scans.
 	// Correlated APPLY executes one reader per provider row and must not retain
 	// per-round diagnostics with unbounded outer-row cardinality.

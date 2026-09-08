@@ -2749,7 +2749,24 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
+		comp, err = createCompile(
+			execCtx,
+			executionSes,
+			executionProc,
+			executionSes.GetDatabaseName(),
+			false,
+			originSQL,
+			originSQL,
+			&schedulingSQLMode,
+			saveStmt,
+			prepareControl.Plan,
+			&prepareTs,
+			false,
+			owner.GetOutputCallback(execCtx),
+			true,
+			nil,
+			nil,
+		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err

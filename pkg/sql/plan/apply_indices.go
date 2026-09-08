@@ -707,7 +707,7 @@ func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
 	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
 	for _, multi := range indexes {
 		p, ok := indexplugin.Get(multi.IndexAlgo)
-		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
@@ -948,6 +948,9 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, bool, error) {
+	if vecCtx == nil {
+		return nodeID, false, nil
+	}
 	if vecCtx.projNode == nil && idxColMap == nil {
 		// A sort-anchored rewrite publishes its column remap through idxColMap — that is
 		// the only way ancestors learn the CTE's distance column became the index score.
@@ -995,7 +998,8 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 		// plugin-registered algo) through the vector ANN rewrite
 		// path. indexplugin.Get alone is not sufficient — fulltext
 		// is plugin-registered too.
-		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
+			!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
@@ -1981,6 +1985,10 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 	return builder.detectVectorGuardForContext(builder.buildVectorSortContextFromSort(sortNode))
 }
 
+func vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
+	return vecCtx == nil || !vecCtx.hasMembership || algo == catalog.MoIndexIvfFlatAlgo.ToString()
+}
+
 func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return nil
@@ -2006,7 +2014,7 @@ func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortConte
 	// explicit predicate keeps that boundary even if the upstream
 	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multi.IndexAlgo)
