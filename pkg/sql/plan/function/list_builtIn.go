@@ -1105,6 +1105,36 @@ var supportedStringBuiltIns = []FuncNew{
 					return FieldNumber[float64]
 				},
 			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FieldDecimal128
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FieldDecimal256
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FieldInteger
+				},
+			},
 		},
 	},
 
