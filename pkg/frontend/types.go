@@ -391,8 +391,8 @@ type PrepareStmt struct {
 	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
-	// ParamRefs, so equivalent values reuse the compile without embedding the
-	// preceding execution's literal.
+	// ParamRefs rather than the preceding execution's literals. Only TP plans
+	// retain a compile; AP plans rebuild statement-owned scan state and topology.
 	runtimeSpecializationKey string
 	runtimePlan              *plan.Plan
 	runtimeCompile           *compile.Compile
@@ -815,7 +815,16 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	runtimeCompile.SetIsPrepare(true)
+	// Match compileQuery's prepare-time eligibility: AP scopes contain
+	// execution-specific placement and scan state that Reset cannot rebuild.
+	// Keep the specialized logical plan, but leave the AP compile with its
+	// ordinary statement owner for execution and release.
+	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
+		runtimeCompile = nil
+	}
+	if runtimeCompile != nil {
+		runtimeCompile.SetIsPrepare(true)
+	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
