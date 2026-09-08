@@ -2684,6 +2684,27 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
 }
 
+func TestNullableFixedWidthMarshalDoesNotCastAsVarlena(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{11, 22, 33}, []bool{false, true, false}, mp))
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	size, err := vec.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), size)
+	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, []int64{11, 0, 33}, MustFixedColNoTypeCheck[int64](decoded))
+	require.True(t, decoded.IsNull(1))
+}
+
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())

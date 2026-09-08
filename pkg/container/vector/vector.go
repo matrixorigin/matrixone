@@ -4555,7 +4555,8 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		}
 	}
 	normalizeNullVarlen := false
-	if !canonicalVarlen && v.HasNull() && dataLength%types.VarlenaSize == 0 {
+	if !canonicalVarlen && isVarlenaMarshalType(v.typ.Oid) &&
+		v.HasNull() && dataLength%types.VarlenaSize == 0 {
 		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
 		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
 			for index, descriptor := range descriptors {

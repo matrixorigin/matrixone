@@ -652,7 +652,11 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 				window, err = sourceVector.WindowByLogicalRowsWithAllocation(0, rows, mp, selection)
 			}
 			if err == nil {
-				snapshot, err = window.Dup(mp)
+				if selection == nil {
+					snapshot, err = window.CloneToFlatCompact(mp)
+				} else {
+					snapshot, err = window.CloneToFlatCompactWithAllocation(mp, selection)
+				}
 				window.Free(mp)
 			}
 		}
