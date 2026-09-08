@@ -5331,6 +5331,9 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
+			if r == types.T_bit {
+				return newCheckResultWithSuccess(8)
+			}
 			if i < 2 {
 				return newCheckResultWithSuccess(0)
 			} else {
@@ -5346,6 +5349,8 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 	if allIntegers {
+		// MySQL's integer comparison uses the 64-bit representation, including
+		// signed/unsigned combinations. An SQL cast to INT64 would reject UINT64_MAX.
 		return newCheckResultWithSuccess(13)
 	}
 	// DECIMAL comparisons must remain exact. Choose a common decimal storage
@@ -5362,8 +5367,11 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	if hasDecimal && decimalInputs {
 		target := types.New(types.T_decimal128, 38, 0)
-		if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		for _, input := range inputs {
+			if input.Oid == types.T_decimal256 {
+				target = types.New(types.T_decimal256, 65, 0)
+				break
+			}
 		}
 		castTypes := make([]types.T, len(inputs))
 		targetTypes := make([]types.Type, len(inputs))
@@ -5423,6 +5431,9 @@ func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _
 }
 
 func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }
+	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)

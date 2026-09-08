@@ -78,6 +78,21 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				sql:  "select field(18446744073709551615, -1, 18446744073709551615)",
 				want: 1,
 			},
+			{
+				name: "equal different scales",
+				sql:  "select field(cast(1.20 as decimal(4,2)), cast(1.2 as decimal(3,1)), cast(1.20 as decimal(4,2)))",
+				want: 1,
+			},
+			{
+				name: "null mixed integer candidate",
+				sql:  "select field(cast(1 as unsigned), null, cast(1 as signed))",
+				want: 2,
+			},
+			{
+				name: "null decimal search",
+				sql:  "select field(null, cast(1.2 as decimal(4,2)), cast(1.20 as decimal(4,2)))",
+				want: 0,
+			},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
