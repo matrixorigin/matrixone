@@ -51,11 +51,11 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 			substring_index('a,b,c,d', ',', cast(-1.5 as decimal(4,1)))`)
 		require.NoError(t, err)
 		require.True(t, rows.Next())
-		var a, b, c string
-		require.NoError(t, rows.Scan(&a, &b, &c))
+		var a, b, result string
+		require.NoError(t, rows.Scan(&a, &b, &result))
 		require.Equal(t, "a", a)
 		require.Equal(t, "a,b", b)
-		require.Equal(t, "c,d", c)
+		require.Equal(t, "c,d", result)
 		require.NoError(t, rows.Close())
 
 		_, err = db.ExecContext(ctx, "create table counts (n decimal(4,1))")
