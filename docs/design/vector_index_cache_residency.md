@@ -709,10 +709,14 @@ latter is what makes it safe to run. They are presented together because merging
 
 - **Unit and race.** Focused adaptive `-race -count=N` on the concurrency paths
   plus a full owning-package race run; a stress test interleaves loads with
-  eviction. Every governor fix carries a control run proving the test fails on the
+  eviction. The owning package set is also clean at `-count=2`, which is what
+  catches a test leaking process-global state into the next iteration.
+  Every governor fix carries a control run proving the test fails on the
   pre-fix code — e.g. the idle-victim claim blocks 5.01s before and passes in
   0.21s after; the admission reservation admits 8 of 8 arrivals against a budget
-  for one, before.
+  for one, before; reserve's ordering control reports an arrival seeing fewer
+  predecessors than it has; and the CDC tail sizing probe panics instead of
+  degrading when its recover is removed.
 - **Upgrade.** A real embedded-cluster test drives the public
   `HandleTenantUpgrade`: it builds a legacy-shaped metadata table, asserts the
   current-shape write **fails**, runs the upgrade, and requires the write to
@@ -783,6 +787,33 @@ VRAM sampled across the run — a CPU fallback would be a flat line:
 
 A 1M-row wiki_all run (f32) loads and queries cagra, ivfpq and hnsw with **zero
 admission refusals**, and `build_ts`/`nrow` were read back from the live metadata.
+
+**Re-run after the accounting fixes** (CDC overflow charged at Preload, the delete
+id-map charged to the host budget, one probe for both device budgets), on a binary
+built from that head:
+
+A subset of `gpu_cases`, chosen for the paths this branch touches -- not the whole
+suite (34 + 15 cases). 141 statements, all passing:
+
+| case | from |
+|---|---|
+| `vector_gpu_index_cache_size` | `gpu_cases/vector` |
+| `vector_gpu_negative`, `vector_gpu_edge` | `gpu_cases/vector` |
+| `vector_cagra`, `vector_ivfpq` | `gpu_cases/vector` |
+| `vector_cagra_replicated`, `vector_cagra_sharded` | `gpu_cases/vector` |
+| `vector_cagra_snapshot`, `vector_ivfpq_snapshot` | `gpu_cases/pessimistic_transaction/vector` |
+
+Also verified live on that binary: a CDC flush writes its `cdc_tail:<n>` row with
+the frame's size, `build_ts` and checksum, `MATCH` answers from both the base and
+the tail, and `gpu_mode` 0 and 1 agree on all of it (hnsw and cagra create, search,
+CDC, cap set/reset, and the created metadata shape).
+
+**Not covered by this run.** The suites exercise these paths but do not FORCE the
+states the accounting fixes address: an already-resident entry plus concurrent
+CDC-only arrivals contending for one budget, or a measured host-byte delta across
+generations from the id-map charge. Those are covered at the unit seam
+(`CdcTailRowsUpperBound`, `sumDeviceCapacity`, and the reservation-ordering
+control), and a GPU performance acceptance run remains outstanding.
 
 **Why `-n`.** mo-tester compares result-set *metadata* as well as values unless
 `-n` is given. Without it, `vector_cagra_replicated` and `vector_cagra_sharded`
