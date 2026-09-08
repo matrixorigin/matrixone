@@ -28,19 +28,22 @@ import (
 func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
 	const rows = 8192
 	tests := []struct {
-		name  string
-		value []byte
+		name   string
+		value  []byte
+		nullAt int
 	}{
-		{name: "inline_15", value: bytes.Repeat([]byte{'i'}, 15)},
-		{name: "long_49", value: bytes.Repeat([]byte{'l'}, 49)},
+		{name: "inline_15_owned", value: bytes.Repeat([]byte{'i'}, 15), nullAt: -1},
+		{name: "long_49_owned", value: bytes.Repeat([]byte{'l'}, 49), nullAt: -1},
+		{name: "inline_15_one_null", value: bytes.Repeat([]byte{'i'}, 15), nullAt: rows / 2},
+		{name: "long_49_one_null", value: bytes.Repeat([]byte{'l'}, 49), nullAt: rows / 2},
 	}
 
 	for _, test := range tests {
 		b.Run(test.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			vec := NewVec(types.T_varchar.ToType())
-			for range rows {
-				if err := AppendBytes(vec, test.value, false, mp); err != nil {
+			for row := 0; row < rows; row++ {
+				if err := AppendBytes(vec, test.value, row == test.nullAt, mp); err != nil {
 					vec.Free(mp)
 					b.Fatal(err)
 				}

@@ -4458,14 +4458,15 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 // MarshalBinaryPlan is a validated snapshot of one Vector's wire layout. It
 // lets batch writers size once and encode once.
 type MarshalBinaryPlan struct {
-	vector          *Vector
-	size            int
-	dataLength      uint32
-	areaLength      uint32
-	nullLength      uint32
-	canonicalVarlen bool
-	canonicalOffset []uint32
-	canonicalFirst  []bool
+	vector               *Vector
+	size                 int
+	dataLength           uint32
+	areaLength           uint32
+	nullLength           uint32
+	canonicalVarlen      bool
+	normalizedVarlenData []byte
+	canonicalOffset      []uint32
+	canonicalFirst       []bool
 }
 
 func (p MarshalBinaryPlan) Size() int {
@@ -4553,6 +4554,18 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 			areaLength += uint64(length)
 		}
 	}
+	normalizeNullVarlen := false
+	if !canonicalVarlen && v.HasNull() && dataLength%types.VarlenaSize == 0 {
+		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
+		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
+			for index, descriptor := range descriptors {
+				if v.IsNull(uint64(index)) && !descriptor.IsSmall() {
+					normalizeNullVarlen = true
+					break
+				}
+			}
+		}
+	}
 	nullLength := uint64(v.nsp.MarshalSize())
 	if dataLength > maxWireBuffer ||
 		areaLength > maxWireBuffer ||
@@ -4568,15 +4581,31 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 			"vector marshal size exceeds platform limit",
 		)
 	}
+	var normalizedVarlenData []byte
+	if normalizeNullVarlen {
+		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
+		normalizedVarlenData = make([]byte, int(dataLength))
+		copy(normalizedVarlenData, v.data[:dataLength])
+		normalizedDescriptors := unsafe.Slice(
+			(*types.Varlena)(unsafe.Pointer(&normalizedVarlenData[0])),
+			len(descriptors),
+		)
+		for index := range normalizedDescriptors {
+			if v.IsNull(uint64(index)) {
+				normalizedDescriptors[index] = types.Varlena{}
+			}
+		}
+	}
 	return MarshalBinaryPlan{
-		vector:          v,
-		size:            int(total),
-		dataLength:      uint32(dataLength),
-		areaLength:      uint32(areaLength),
-		nullLength:      uint32(nullLength),
-		canonicalVarlen: canonicalVarlen,
-		canonicalOffset: canonicalOffset,
-		canonicalFirst:  canonicalFirst,
+		vector:               v,
+		size:                 int(total),
+		dataLength:           uint32(dataLength),
+		areaLength:           uint32(areaLength),
+		nullLength:           uint32(nullLength),
+		canonicalVarlen:      canonicalVarlen,
+		normalizedVarlenData: normalizedVarlenData,
+		canonicalOffset:      canonicalOffset,
+		canonicalFirst:       canonicalFirst,
 	}, nil
 }
 
@@ -4594,15 +4623,15 @@ func isVarlenaMarshalType(oid types.T) bool {
 
 // requiresCanonicalVarlenMarshal keeps the original bulk wire image for an
 // ordinary owned vector whose area layout has already been proven safe. A
-// borrowed/aliased area, a window retaining a larger source area, or NULL rows
-// still takes the canonical path so offsets, payload reachability, and stale
-// NULL descriptors are validated and normalized before they are written.
+// borrowed/aliased area or a window retaining a larger source area still takes
+// the canonical path so offsets and payload reachability are validated before
+// they are written. Ordinary nullable vectors stay on the bulk path; stale
+// non-small NULL descriptors are normalized by PrepareMarshalBinary.
 func (v *Vector) requiresCanonicalVarlenMarshal(dataLength uint64) bool {
 	if !isVarlenaMarshalType(v.typ.Oid) || dataLength == 0 {
 		return false
 	}
-	return v.HasNull() ||
-		v.AreaBackingKind() != OwnedMPoolUnique ||
+	return v.AreaBackingKind() != OwnedMPoolUnique ||
 		!v.VarlenaAreaIsDisjoint()
 }
 
@@ -4654,7 +4683,11 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 				}
 			}
 		} else {
-			if err := writeVectorMarshalBytes(w, v.data[:p.dataLength]); err != nil {
+			data := v.data[:p.dataLength]
+			if p.normalizedVarlenData != nil {
+				data = p.normalizedVarlenData
+			}
+			if err := writeVectorMarshalBytes(w, data); err != nil {
 				return err
 			}
 		}
