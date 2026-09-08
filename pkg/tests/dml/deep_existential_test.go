@@ -112,17 +112,24 @@ func TestDeepExistentialMultiCN(t *testing.T) {
 			})
 		}
 		t.Run("cancel streamed output and reuse", func(t *testing.T) {
-			queryCtx, cancelQuery := context.WithCancel(ctx)
-			defer cancelQuery()
-			rows, err := db.QueryContext(queryCtx, "select o.id, repeat('x',128) from ot o where "+and)
-			require.NoError(t, err)
-			require.True(t, rows.Next())
-			// Cancel only after observing an actual row from the running
-			// distributed query, without sleeping or racing query startup.
-			cancelQuery()
-			if err := rows.Close(); err != nil {
-				require.ErrorIs(t, err, context.Canceled)
-			}
+			func() {
+				queryCtx, cancelQuery := context.WithCancel(ctx)
+				defer cancelQuery()
+				rows, err := db.QueryContext(queryCtx, "select o.id, repeat('x',128) from ot o where "+and)
+				require.NoError(t, err)
+				defer func() {
+					if err := rows.Close(); err != nil {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+					if err := rows.Err(); err != nil {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+				}()
+				require.True(t, rows.Next())
+				// Cancel only after observing an actual row from the running
+				// distributed query, without sleeping or racing query startup.
+				cancelQuery()
+			}()
 			execSQLDB(t, ctx, db, "use `"+name+"`")
 			var got int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from ot o where "+and).Scan(&got))
