@@ -545,29 +545,40 @@ func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int6
 		if sorted {
 			return vector.VarlenBinarySearchOffsetByValFactory(t.values)(source)
 		}
-		const linearKeys = 8
-		if len(t.values) <= linearKeys {
+		if len(t.values) <= readFilterLinearKeys {
 			return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
 		}
 		// Only the needles are sorted. In particular, tombstone PK columns
 		// follow rowid order and cannot be binary-searched. Reuse the already
-		// owned/sorted needles instead of doing rows*keys comparisons or
-		// allocating another lookup structure for every block. Keep a short
+		// owned needles instead of doing rows*keys comparisons or allocating
+		// another lookup structure for every block. Keep a short
 		// linear prefix so frequently matching early keys retain the old
 		// constant-time best case instead of paying log(keys) for every row.
+		tail := t.values[readFilterLinearKeys:]
+		if t.exactTail != nil {
+			tail = t.exactTail.values
+		}
+		minLen, maxLen := len(tail[0]), len(tail[len(tail)-1])
 		col, area := vector.MustVarlenaRawData(source)
 		var rows []int64
 		for row := 0; row < source.Length(); row++ {
 			value := col[row].GetByteSlice(area)
 			found := false
-			for _, needle := range t.values[:linearKeys] {
+			for _, needle := range t.values[:readFilterLinearKeys] {
 				if bytes.Equal(needle, value) {
 					found = true
 					break
 				}
 			}
-			if !found {
-				_, found = slices.BinarySearchFunc(t.values[linearKeys:], value, bytes.Compare)
+			if !found && len(value) >= minLen && len(value) <= maxLen {
+				// Equality can reject unequal lengths without reading payloads.
+				// Preserve that property for long common prefixes, including
+				// absent lengths inside the min/max range of mixed-length keys.
+				if minLen == maxLen {
+					_, found = slices.BinarySearchFunc(tail, value, bytes.Compare)
+				} else {
+					_, found = slices.BinarySearchFunc(tail, value, compareReadFilterExactValues)
+				}
 			}
 			if found {
 				rows = append(rows, int64(row))

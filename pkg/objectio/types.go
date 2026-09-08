@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"slices"
 
@@ -49,6 +50,8 @@ type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
 type readFilterSearchKind uint8
 
+const readFilterLinearKeys = 8
+
 const (
 	readFilterSearchExact readFilterSearchKind = iota
 	readFilterSearchPrefix
@@ -60,11 +63,19 @@ const (
 
 type readFilterSearchTerm struct {
 	kind   readFilterSearchKind
+	closed bool
+	hint   uint8
 	values [][]byte
 	lb     []byte
 	ub     []byte
-	closed bool
-	hint   uint8
+	// exactTail is needed only when the byte-ordered tail is not also ordered
+	// by length. Keeping it optional avoids enlarging ordinary EQ terms.
+	exactTail *readFilterExactTail
+}
+
+type readFilterExactTail struct {
+	// Only these slice headers are copied; payloads belong to the term's values.
+	values [][]byte
 }
 
 // ReadFilterSearch is an immutable search description for a single varlen
@@ -160,8 +171,32 @@ func newReadFilterSearch(oid types.T, term readFilterSearchTerm) *ReadFilterSear
 		}
 		slices.SortFunc(copied, bytes.Compare)
 		term.values = copied
+		if term.kind == readFilterSearchExact && len(copied) > readFilterLinearKeys {
+			tail := copied[readFilterLinearKeys:]
+			// Equal-length keys are already in the required byte order. Avoid
+			// another allocation/sort unless the length order actually differs.
+			if !slices.IsSortedFunc(tail, func(a, b []byte) int {
+				return cmp.Compare(len(a), len(b))
+			}) {
+				tail = slices.Clone(tail)
+				// The original byte order is already correct within each length.
+				// Stable length-only sorting preserves it without rereading long
+				// common prefixes while constructing the secondary order.
+				slices.SortStableFunc(tail, func(a, b []byte) int {
+					return cmp.Compare(len(a), len(b))
+				})
+				term.exactTail = &readFilterExactTail{values: tail}
+			}
+		}
 	}
 	return &ReadFilterSearch{oid: oid, terms: []readFilterSearchTerm{term}}
+}
+
+func compareReadFilterExactValues(a, b []byte) int {
+	if order := cmp.Compare(len(a), len(b)); order != 0 {
+		return order
+	}
+	return bytes.Compare(a, b)
 }
 
 // CombineReadFilterSearch combines disjunct terms. All inputs must target the

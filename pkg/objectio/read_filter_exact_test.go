@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,95 @@ func TestReadFilterExactUnsortedMembership(t *testing.T) {
 				}
 				require.Equal(t, want, search.search(vec, false))
 				require.Equal(t, want, search.search(vec, false), "reuse must not consume or reorder search state")
+			})
+		}
+	}
+}
+
+func TestReadFilterExactLengthOrdering(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	for _, oid := range []types.T{types.T_varchar, types.T_varbinary} {
+		for _, shape := range []string{"uniform", "increasing", "decreasing", "interleaved", "empty"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, shape), func(t *testing.T) {
+				count := 16
+				if shape == "interleaved" {
+					count = 32
+				}
+				prefix := bytes.Repeat([]byte{'a'}, 32)
+				needles := make([][]byte, count)
+				members := make(map[string]struct{}, count)
+				vec := vector.NewVec(oid.ToType())
+				defer vec.Free(mp)
+				for i := range needles {
+					suffixLen := 0
+					if shape == "increasing" {
+						suffixLen = 2 * i
+					} else if shape == "decreasing" {
+						suffixLen = 2 * (count - i)
+					} else if shape == "interleaved" {
+						suffixLen = 2 * (i % 3)
+					}
+					if shape != "empty" {
+						needles[i] = append([]byte(fmt.Sprintf("%s%02d", prefix, i)), bytes.Repeat([]byte{'x'}, suffixLen)...)
+					}
+					members[string(needles[i])] = struct{}{}
+				}
+				for i := count - 1; i >= 0; i-- {
+					require.NoError(t, vector.AppendBytes(vec, needles[i], false, mp))
+				}
+				// Exact duplicates plus shorter, longer, in-range absent lengths,
+				// same-length nonmembers and arbitrary binary bytes.
+				for _, value := range [][]byte{nil, needles[count-1], prefix,
+					append(bytes.Clone(prefix), []byte("99x")...),
+					append(bytes.Clone(prefix), []byte("99")...),
+					append(bytes.Clone(prefix), bytes.Repeat([]byte{'x'}, 13)...),
+					append(bytes.Clone(prefix), bytes.Repeat([]byte{'x'}, 21)...),
+					append(bytes.Clone(prefix), bytes.Repeat([]byte{'x'}, 20)...),
+					bytes.Repeat([]byte{'a'}, 128), {0, 255}} {
+					require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+				}
+				search := NewReadFilterSearch(oid, needles)
+				term := &search.terms[0]
+				require.Equal(t, shape == "decreasing" || shape == "interleaved",
+					term.exactTail != nil,
+					"only allocate a secondary order when the existing headers cannot be reused")
+				for _, needle := range needles {
+					clear(needle)
+				}
+				combined := CombineReadFilterSearch(search, search)
+				for _, sorted := range []bool{false, true} {
+					t.Run(fmt.Sprintf("sorted=%t", sorted), func(t *testing.T) {
+						if sorted {
+							vec.InplaceSort()
+						}
+						var want []int64
+						for row := 0; row < vec.Length(); row++ {
+							if _, ok := members[string(vec.GetBytesAt(row))]; ok {
+								want = append(want, int64(row))
+							}
+						}
+						require.Equal(t, want, search.search(vec, sorted))
+						require.Equal(t, want, combined.search(vec, sorted))
+						payload, err := vec.MarshalBinary()
+						require.NoError(t, err)
+						encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+							Type: IOET_ColData, Version: IOET_ColumnData_V2,
+						})...)
+						encoded = append(encoded, payload...)
+						data, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+						require.NoError(t, err)
+						defer data.Release()
+						probe := &validatedVectorBytesProbe{
+							backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope(),
+						}
+						got, err := SearchCachedVector(fileservice.IOEntry{CachedData: probe}, combined, sorted)
+						require.NoError(t, err)
+						require.Equal(t, want, got)
+						require.Zero(t, probe.bytesCalls.Load(), "search must not clone the sealed backing")
+					})
+				}
 			})
 		}
 	}
@@ -136,6 +226,96 @@ func BenchmarkReadFilterExactSearch(b *testing.B) {
 					b.Run("linear", func(b *testing.B) {
 						run(b, func() []int64 { return linear(vec) })
 					})
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkReadFilterExactKeyLengths(b *testing.B) {
+	for _, count := range []int{9, 16, 64} {
+		for _, prefixLen := range []int{16, 256, 2048} {
+			for _, shape := range []string{"uniform", "gap", "present-length"} {
+				b.Run(fmt.Sprintf("keys=%d/prefix=%d/%s", count, prefixLen, shape), func(b *testing.B) {
+					mp := mpool.MustNewZero()
+					defer mpool.DeleteMPool(mp)
+					vec := vector.NewVec(types.T_varchar.ToType())
+					defer vec.Free(mp)
+					prefix := string(bytes.Repeat([]byte{'a'}, prefixLen))
+					needles := make([][]byte, count)
+					members := make(map[string]struct{}, count)
+					for i := range needles {
+						width := 8
+						if shape == "present-length" {
+							width = 4
+						}
+						needles[i] = []byte(fmt.Sprintf("%s%0*d", prefix, width, i))
+						if shape == "gap" {
+							needles[i] = append(needles[i], bytes.Repeat([]byte{'x'}, (i%2)*8)...)
+						} else if shape == "present-length" {
+							needles[i] = append(needles[i], bytes.Repeat([]byte{'x'}, 2*(i%5))...)
+						}
+						members[string(needles[i])] = struct{}{}
+					}
+					const rows = 1024
+					var want []int64
+					for row := 0; row < rows; row++ {
+						width := 4
+						if shape == "gap" {
+							width = 12
+						}
+						value := []byte(fmt.Sprintf("%s%0*d", prefix, width, (row*31)%rows))
+						if row < count {
+							// Actual hits keep the block eligible and cover every
+							// early-key and length-ordered-tail candidate.
+							value = needles[count-1-row]
+						}
+						if _, ok := members[string(value)]; ok {
+							want = append(want, int64(row))
+						}
+						require.NoError(b, vector.AppendBytes(vec, value, false, mp))
+					}
+					search := NewReadFilterSearch(types.T_varchar, needles)
+					linear := vector.VarlenLinearSearchOffsetByValFactory(needles)
+					run := func(b *testing.B, find func() []int64) {
+						require.Equal(b, want, find())
+						b.ReportAllocs()
+						b.ResetTimer()
+						for i := 0; i < b.N; i++ {
+							if got := find(); len(got) != len(want) {
+								b.Fatalf("matched %d rows, want %d", len(got), len(want))
+							}
+						}
+					}
+					b.Run("current", func(b *testing.B) {
+						run(b, func() []int64 { return search.search(vec, false) })
+					})
+					b.Run("linear", func(b *testing.B) { run(b, func() []int64 { return linear(vec) }) })
+				})
+			}
+		}
+	}
+}
+
+func BenchmarkReadFilterExactConstruction(b *testing.B) {
+	for _, count := range []int{1, 16, 4096} {
+		for _, mixed := range []bool{false, true} {
+			b.Run(fmt.Sprintf("keys=%d/mixed=%t", count, mixed), func(b *testing.B) {
+				needles := make([][]byte, count)
+				for i := range needles {
+					width := 8
+					if mixed {
+						width += 2 * (i % 3)
+					}
+					needles[i] = []byte(fmt.Sprintf("key-%0*d", width, i))
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					search := NewReadFilterSearch(types.T_varchar, needles)
+					if len(search.terms[0].values) != count {
+						b.Fatal("lost search keys")
+					}
 				}
 			})
 		}
