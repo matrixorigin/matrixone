@@ -28,6 +28,7 @@ func TestExplainFormatJSONGrammarAndRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"EXPLAIN FORMAT=JSON SELECT 1",
 		"explain format = 'json' select 1",
+		"EXPLAIN FORMAT = \"JSON\" SELECT 1",
 		"EXPLAIN (FORMAT JSON) SELECT 1",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)

@@ -23,6 +23,10 @@ explain format=json with c as (select id from t) select * from c;
 -- @regex("(?s)matrixone.*operator.*Window",true)
 explain format=json select id, row_number() over (order by id) as rn from t;
 
+-- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
+-- @regex("(?s)query_block.*matrixone.*schema_version",true)
+explain (analyze false, format json) select * from t;
+
 -- Explain-only DML must not run the write pipeline.
 -- @regex("(?s)matrixone.*statement_type.*UPDATE",true)
 explain format=json update t set v = 99 where id = 1;
