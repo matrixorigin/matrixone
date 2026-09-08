@@ -1136,8 +1136,16 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				return nil, false, err
 			}
 			if ctxDone {
+				if spec.MustApply {
+					if cause := context.Cause(s.Proc.Ctx); cause != nil {
+						return nil, false, cause
+					}
+					return nil, false, moerr.NewInternalErrorf(
+						c.proc.Ctx, "required runtime filter %d wait was canceled", spec.Tag)
+				}
 				return nil, false, nil
 			}
+			requiredSatisfied := false
 			for i := range msgs {
 				msg, ok := msgs[i].(message.RuntimeFilterMessage)
 				if !ok {
@@ -1145,22 +1153,36 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				}
 				switch msg.Typ {
 				case message.RuntimeFilter_PASS:
+					if spec.MustApply {
+						return nil, false, moerr.NewInternalErrorf(
+							c.proc.Ctx, "required runtime filter %d is unavailable: producer returned PASS", spec.Tag)
+					}
 					continue
 				case message.RuntimeFilter_DROP:
 					return nil, true, nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{spec: spec, expr: inExpr})
+					requiredSatisfied = true
 				case message.RuntimeFilter_UNIQUEJOINKEYS:
 					if spec.UseMembershipFilter {
+						if spec.MustApply && len(msg.Data) == 0 {
+							return nil, false, moerr.NewInternalErrorf(
+								c.proc.Ctx, "required runtime filter %d has an empty key payload", spec.Tag)
+						}
 						runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{
 							spec: spec,
 							data: append([]byte(nil), msg.Data...),
 						})
+						requiredSatisfied = true
 					}
 
 					// TODO: implement BETWEEN expression
 				}
+			}
+			if spec.MustApply && !requiredSatisfied {
+				return nil, false, moerr.NewInternalErrorf(
+					c.proc.Ctx, "required runtime filter %d did not provide an exact payload", spec.Tag)
 			}
 		}
 	}
@@ -2019,7 +2041,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, moerr.NewNotSupportedNoCtxf("vector index algorithm %q has no scan reader", spec.GetIndex().GetIndexAlgo())
 	}
 
-	membership, hasMembership := vectorScanMembershipFilter(runtimeFilters)
+	membership, hasMembership, membershipRequired := vectorScanMembershipFilter(runtimeFilters)
 	currentSnapshot := timestamp.Timestamp{}
 	if s.Proc != nil && s.Proc.GetTxnOperator() != nil {
 		currentSnapshot = s.Proc.GetTxnOperator().Txn().SnapshotTS
@@ -2030,7 +2052,8 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	req, hasQuery, err := vectorscan.RequestFromScalar(spec, identity, membership, hasMembership)
+	req, hasQuery, err := vectorscan.RequestFromScalar(
+		spec, identity, membership, hasMembership, membershipRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -2044,22 +2067,23 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	return []engine.Reader{reader}, nil
 }
 
-func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool) {
+func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool, bool) {
 	for _, runtimeFilter := range runtimeFilters {
 		hasMembership := runtimeFilter.spec != nil && runtimeFilter.spec.UseMembershipFilter
+		membershipRequired := runtimeFilter.spec != nil && runtimeFilter.spec.MustApply
 		if len(runtimeFilter.data) > 0 {
-			return append([]byte(nil), runtimeFilter.data...), hasMembership
+			return append([]byte(nil), runtimeFilter.data...), hasMembership, membershipRequired
 		}
 		fn := runtimeFilter.expr.GetF()
 		if fn == nil || len(fn.Args) != 2 || fn.Args[1].GetVec() == nil {
 			if hasMembership {
-				return nil, true
+				return nil, true, membershipRequired
 			}
 			continue
 		}
-		return append([]byte(nil), fn.Args[1].GetVec().GetData()...), hasMembership
+		return append([]byte(nil), fn.Args[1].GetVec().GetData()...), hasMembership, membershipRequired
 	}
-	return nil, false
+	return nil, false, false
 }
 
 func (s Scope) TypeName() string {

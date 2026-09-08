@@ -73,6 +73,9 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if spec == nil || spec.Index == nil || spec.SourceTable == nil {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan is missing source or index metadata")
 	}
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat required membership filter is unavailable")
+	}
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
@@ -276,6 +279,7 @@ func (r *planReader) initialize() error {
 	sqlproc.RelationScanner = r.scanner
 	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
 	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	sqlproc.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:        ivfUint64Expr(r.req.CandidateBudget),
 		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},
@@ -637,7 +641,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		relData,
 		1,
 		txnOffset,
-		req.IndexParam != nil && !req.PostFilterTopOnly,
+		req.IndexParam != nil && (!req.PostFilterTopOnly || req.FilterBeforeTopK),
 		engine.Policy_CheckAll,
 		req.FilterHint,
 	)
@@ -667,14 +671,19 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		}
 	}()
 	var earlyColumns []int
-	if req.PostFilterTopOnly {
-		// Storage Top-K has its own bounded vector path. Late materialization is
-		// only for the exact-filter-first fallback that deliberately disables it.
+	if req.FilterBeforeTopK {
+		// Filtered storage Top-K needs only predicate inputs. Primary keys and
+		// projected INCLUDE columns that do not participate in the predicate
+		// are materialized for the final K rows, not every candidate.
+		earlyColumns = relationPredicateColumns(req.Columns, req.Filter)
+	} else if req.PostFilterTopOnly {
+		// Exact predicates must be evaluated from narrow scalar columns before
+		// the local fallback reads embeddings.
 		earlyColumns = relationFilterEarlyColumns(tableDef, req.Columns, req.Filter)
 	}
 
 	for _, reader := range readers {
-		if !req.PostFilterTopOnly {
+		if !req.PostFilterTopOnly && !req.FilterBeforeTopK {
 			reader.SetIndexParam(req.IndexParam)
 		}
 		for {
@@ -686,9 +695,23 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				end           bool
 				readErr       error
 				filterApplied bool
+				topKApplied   bool
 			)
 			if filterExecutor != nil && len(earlyColumns) > 0 {
-				if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
+				if topReader, ok := reader.(engine.FilteredTopKReader); ok && req.FilterBeforeTopK {
+					end, topKApplied, readErr = topReader.ReadWithFilterAndTopK(
+						ctx,
+						req.Columns,
+						earlyColumns,
+						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+						},
+						req.IndexParam,
+						s.proc.Mp(),
+						bat,
+					)
+					filterApplied = true
+				} else if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
 					end, readErr = lateReader.ReadWithFilter(
 						ctx,
 						req.Columns,
@@ -714,6 +737,12 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				bat.Clean(s.proc.Mp())
 				break
 			}
+			if topKApplied && !bat.IsEmpty() && len(bat.Vecs) != len(req.Columns)+1 {
+				bat.Clean(s.proc.Mp())
+				return res, moerr.NewInternalErrorNoCtxf(
+					"filtered storage Top-K returned %d vectors, expected %d",
+					len(bat.Vecs), len(req.Columns)+1)
+			}
 			if filterExecutor != nil && !filterApplied && !bat.IsEmpty() {
 				if readErr = filterRelationBatch(s.proc, filterExecutor, bat); readErr != nil {
 					bat.Clean(s.proc.Mp())
@@ -731,14 +760,14 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				continue
 			}
 			res.Batches = append(res.Batches, bat)
-			if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly); ok && resultRowCount(res.Batches) > 2*vectorTopLimit {
+			if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok && resultRowCount(res.Batches) > 2*vectorTopLimit {
 				if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
 					return res, err
 				}
 			}
 		}
 	}
-	if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly); ok {
+	if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok {
 		if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
 			return res, err
 		}
@@ -837,6 +866,26 @@ func relationFilterEarlyColumns(
 		return nil
 	}
 	return early
+}
+
+// relationPredicateColumns returns exactly the output columns referenced by
+// the exact residual. Filter-before-TopK readers can postpone every other
+// column until the bounded winner set is known.
+func relationPredicateColumns(columns []string, filter *plan.Expr) []int {
+	if filter == nil || len(columns) < 2 {
+		return nil
+	}
+	referenced := make(map[int32]struct{})
+	if !collectRelationFilterColumns(filter, int32(len(columns)), referenced) ||
+		len(referenced) == 0 || len(referenced) >= len(columns) {
+		return nil
+	}
+	earlyColumns := make([]int, 0, len(referenced))
+	for pos := range referenced {
+		earlyColumns = append(earlyColumns, int(pos))
+	}
+	sort.Ints(earlyColumns)
+	return earlyColumns
 }
 
 func collectRelationFilterColumns(expr *plan.Expr, columnCount int32, columns map[int32]struct{}) bool {

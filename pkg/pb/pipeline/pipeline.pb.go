@@ -5667,7 +5667,7 @@ type PrepareParamInfo struct {
 	IsBin          []bool   `protobuf:"varint,5,rep,packed,name=is_bin,json=isBin,proto3" json:"is_bin,omitempty"`
 	IsBinaryString []bool   `protobuf:"varint,6,rep,packed,name=is_binary_string,json=isBinaryString,proto3" json:"is_binary_string,omitempty"`
 	StringSources  []uint32 `protobuf:"varint,7,rep,packed,name=string_sources,json=stringSources,proto3" json:"string_sources,omitempty"`
-	// Explicit per-parameter runtime string domains; gated by MORPC v50.
+	// Explicit per-parameter runtime string domains; gated by MORPC v57.
 	RuntimeStringDomains []uint32 `protobuf:"varint,8,rep,packed,name=runtime_string_domains,json=runtimeStringDomains,proto3" json:"runtime_string_domains,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

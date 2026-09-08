@@ -1027,7 +1027,12 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 		return plan2.Type{}, nil
 	}
 	if tcc.execCtx != nil {
-		if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+			tcc.execCtx.reqCtx, varName,
+		); ok {
+			if hasDeclaredType {
+				return declaredType, nil
+			}
 			return inferUserDefinedVarType(value), nil
 		}
 	}

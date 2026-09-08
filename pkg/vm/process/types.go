@@ -461,6 +461,7 @@ type BaseProcess struct {
 	LoadLocalReader                     *io.PipeReader
 	Aicm                                *defines.AutoIncrCacheManager
 	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableTypeFunc             func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
 	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
 	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
@@ -733,6 +734,16 @@ func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableTypeFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error),
+) {
+	proc.Base.resolveVariableTypeFunc = f
+}
+
+func (proc *Process) GetResolveVariableTypeFunc() func(string, bool, bool) (plan.Type, error) {
+	return proc.Base.resolveVariableTypeFunc
 }
 
 func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {

@@ -416,6 +416,7 @@ func doComQueryInBack(
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
 	}
+	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)

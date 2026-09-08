@@ -135,6 +135,26 @@ execute typed_binary_null_stmt using @typed_binary_null, @typed_binary_null,
                                      @typed_binary_null, @typed_binary_null;
 deallocate prepare typed_binary_null_stmt;
 
+-- Exercise SQL EXECUTE parameters in a real MULTICN scan. The assignment type of
+-- @binary_value is VARBINARY, while @selected_text has a binary common static
+-- type but an explicit text row domain. The remote CN must preserve both axes.
+create table remote_prepare_source (id bigint primary key);
+insert into remote_prepare_source select result from generate_series(1, 80000) g;
+set @flush_result = mo_ctl('dn', 'flush',
+                           'binary_string_function_semantics.remote_prepare_source');
+set @remote_stats = '{"table_cnt":5000000,"block_number":640,"accurate_object_number":40,"approx_object_number":40,"ndv_map":{"id":5000000}}';
+set @patched_stats = (select table_cnt
+                      from table_stats('binary_string_function_semantics.remote_prepare_source',
+                                       'patch', @remote_stats) g);
+-- @regex("(?i)ap query plan on multicn", true)
+explain select sum(char_length(@binary_value)), sum(@binary_value like '____')
+from remote_prepare_source;
+prepare remote_domain_stmt from
+    'select sum(char_length(?)), sum(? like ''____'') from remote_prepare_source';
+execute remote_domain_stmt using @binary_value, @binary_value;
+execute remote_domain_stmt using @selected_text, @selected_text;
+deallocate prepare remote_domain_stmt;
+
 -- A valid late wildcard alignment must not be rejected by a performance guard.
 select concat(repeat(_binary 'a', 8998), _binary 'bxc')
        like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')

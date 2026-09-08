@@ -1731,36 +1731,30 @@ func (v *Vector) prepareOrdinaryBinaryStringAppend(rows int, mp *mpool.MPool) er
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
-	if err := v.prepareOrdinaryStringSourceAppend(rows, mp); err != nil {
+	return v.prepareAppendMetadata(rows, types.StringSourceExpression, mp)
+}
+
+func (v *Vector) prepareAppendMetadata(rows int, source types.StringSource, mp *mpool.MPool) error {
+	if err := v.prepareStringSourceAppend(rows, source, mp); err != nil {
 		return err
 	}
 	if err := v.prepareOrdinaryAppend(rows, mp); err != nil {
 		return err
 	}
-	if rows > 0 && v.stringSources == nil && v.stringSource != types.StringSourceExpression {
-		if v.length == 0 {
-			v.stringSource = types.StringSourceExpression
-		} else {
-			sources, owner, err := v.allocateStringSources(v.length+rows, mp)
-			if err != nil {
-				return err
-			}
-			for row := 0; row < v.length; row++ {
-				sources[row] = v.stringSource
-			}
-			v.releaseStringSources()
-			v.stringSource = types.StringSourceExpression
-			v.stringSources = sources[:v.length]
-			v.stringSourcesMP = owner
-		}
+	if rows > 0 && v.length == 0 && v.stringSources == nil {
+		v.stringSource = source
 	}
 	return v.prepareOrdinaryBinaryStringAppend(rows, mp)
 }
 
 func (v *Vector) prepareOrdinaryStringSourceAppend(rows int, mp *mpool.MPool) error {
+	return v.prepareStringSourceAppend(rows, types.StringSourceExpression, mp)
+}
+
+func (v *Vector) prepareStringSourceAppend(rows int, source types.StringSource, mp *mpool.MPool) error {
 	var summary stringSourceAppendSummary
 	if rows > 0 {
-		summary.observe(types.StringSourceExpression)
+		summary.observe(source)
 	}
 	return v.preflightStringSourceAppend(v.length+rows, summary, mp)
 }
@@ -1769,6 +1763,12 @@ func (v *Vector) prepareOrdinaryStringSourceAppend(rows int, mp *mpool.MPool) er
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
 func (v *Vector) setLengthAfterExtend(n int) {
+	v.setLengthAfterExtendWithSource(n, types.StringSourceExpression, true)
+}
+
+// Known-source appends cannot make an already mixed vector uniform. Publish
+// their final provenance without a normalization scan or a temporary source.
+func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource, normalize bool) {
 	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if v.prepareParamKinds != nil {
 		if metadataLength > cap(v.prepareParamKinds) {
@@ -1787,11 +1787,21 @@ func (v *Vector) setLengthAfterExtend(n int) {
 		oldLength := len(v.stringSources)
 		v.stringSources = v.stringSources[:metadataLength]
 		if metadataLength > oldLength {
-			clear(v.stringSources[oldLength:])
+			if source == types.StringSourceExpression {
+				clear(v.stringSources[oldLength:])
+			} else {
+				for row := oldLength; row < metadataLength; row++ {
+					v.stringSources[row] = source
+				}
+			}
 		}
-		if !v.preflightStringSourceReady {
+		if normalize && !v.preflightStringSourceReady {
 			v.normalizeStringSources()
+		} else if !normalize {
+			v.stringSource = types.StringSourceExpression
 		}
+	} else if !normalize {
+		v.stringSource = source
 	}
 	v.length = n
 }
@@ -9177,6 +9187,51 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 	return appendOneBytes(vec, val, isNull, mp)
 }
 
+// AppendFixedWithStringSource publishes a value and its known provenance in
+// one append, without temporarily introducing Expression provenance.
+func AppendFixedWithStringSource[T any](vec *Vector, val T, isNull bool, source types.StringSource, mp *mpool.MPool) (err error) {
+	if vec.IsConst() || mp == nil || !source.Valid() {
+		return moerr.NewInvalidInputNoCtx("invalid known-source vector append")
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, 1)
+		}
+	}()
+	return appendOneFixedWithSource(vec, val, isNull, &source, mp)
+}
+
+// AppendBytesWithStringSource is the varlena (and generic NULL) counterpart of
+// AppendFixedWithStringSource. Area allocation failures roll back the append.
+func AppendBytesWithStringSource(vec *Vector, val []byte, isNull bool, source types.StringSource, mp *mpool.MPool) error {
+	if vec.IsConst() || mp == nil || !source.Valid() {
+		return moerr.NewInvalidInputNoCtx("invalid known-source vector append")
+	}
+	return appendOneBytesWithSource(vec, val, isNull, &source, mp)
+}
+
+func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSource, mp *mpool.MPool) error {
+	if source == nil {
+		if isNull {
+			return v.prepareOrdinaryStringSourceAppend(1, mp)
+		}
+		return v.prepareOrdinaryAppendMetadata(1, mp)
+	}
+	if isNull {
+		return v.prepareStringSourceAppend(1, *source, mp)
+	}
+	return v.prepareAppendMetadata(1, *source, mp)
+}
+
+func (v *Vector) publishSingleAppend(source *types.StringSource) {
+	if source == nil {
+		v.setLengthAfterExtend(v.length + 1)
+	} else {
+		v.setLengthAfterExtendWithSource(v.length+1, *source, false)
+	}
+}
+
 func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([]byte) error) (err error) {
 	if vec.IsConst() || size < 0 || mp == nil {
 		return moerr.NewInternalErrorNoCtx("invalid direct varlena append")
@@ -9349,6 +9404,10 @@ func AppendArrayList[T types.ArrayElement](vec *Vector, ws [][]T, isNulls []bool
 }
 
 func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
+	return appendOneFixedWithSource(vec, val, isNull, nil, mp)
+}
+
+func appendOneFixedWithSource[T any](vec *Vector, val T, isNull bool, source *types.StringSource, mp *mpool.MPool) error {
 	if vec.typ.IsVarlen() && !isNull {
 		// Generic fixed appends can install an arbitrary varlena descriptor.
 		vec.areaDisjoint = false
@@ -9360,15 +9419,11 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
-	if isNull {
-		if err := vec.prepareOrdinaryStringSourceAppend(1, mp); err != nil {
-			return err
-		}
-	} else if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+	if err := vec.prepareSingleAppendMetadata(isNull, source, mp); err != nil {
 		return err
 	}
 	length := vec.length
-	vec.setLengthAfterExtend(vec.length + 1)
+	vec.publishSingleAppend(source)
 	if isNull {
 		if vec.typ.IsVarlen() {
 			// Reused data capacity can contain a stale descriptor. Keep null rows
@@ -9385,7 +9440,11 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	return nil
 }
 
-func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) (err error) {
+func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
+	return appendOneBytesWithSource(vec, val, isNull, nil, mp)
+}
+
+func appendOneBytesWithSource(vec *Vector, val []byte, isNull bool, source *types.StringSource, mp *mpool.MPool) (err error) {
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -9395,7 +9454,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) (err 
 		// AppendBytes is also the generic null append used by expression
 		// evaluation. Let appendOneFixed size the slot from vec.typ instead of
 		// treating every null as a varlena descriptor.
-		return appendOneFixed(vec, va, true, mp)
+		return appendOneFixedWithSource(vec, va, true, source, mp)
 	} else {
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
@@ -9403,14 +9462,14 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) (err 
 				vec.RollbackAppend(checkpoint, 1)
 			}
 		}()
-		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+		if err = vec.prepareSingleAppendMetadata(false, source, mp); err != nil {
 			return err
 		}
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
-		return appendOneOwnedVarlena(vec, va, mp)
+		return appendOneOwnedVarlenaWithSource(vec, va, source, mp)
 	}
 }
 
@@ -9475,11 +9534,15 @@ func appendOneOwnedVarlena(
 	value types.Varlena,
 	mp *mpool.MPool,
 ) error {
+	return appendOneOwnedVarlenaWithSource(vec, value, nil, mp)
+}
+
+func appendOneOwnedVarlenaWithSource(vec *Vector, value types.Varlena, source *types.StringSource, mp *mpool.MPool) error {
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
 	index := vec.length
-	vec.setLengthAfterExtend(vec.length + 1)
+	vec.publishSingleAppend(source)
 	toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[index] = value
 	return nil
 }

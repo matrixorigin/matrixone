@@ -858,11 +858,32 @@ func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
 }
 
 func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T) {
-	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{uint32(types.RuntimeStringText)})
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	metadata := []uint32{uint32(types.RuntimeStringText)}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion56)
+	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
 	require.ErrorContains(t, err, "protocol version 57")
-	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 1, []uint32{3})
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion57)
+	decoded, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
+	require.NoError(t, err)
+	require.Equal(t, metadata, decoded)
+	decoded[0] = uint32(types.RuntimeStringBinary)
+	require.Equal(t, uint32(types.RuntimeStringText), metadata[0],
+		"the receiver must own an independent runtime-domain generation")
+
+	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("", 1, []uint32{3})
 	require.ErrorContains(t, err, "invalid runtime string domain")
-	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("old-peer", 2, []uint32{uint32(types.RuntimeStringText)})
+	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("", 2, metadata)
 	require.ErrorContains(t, err, "metadata length")
 }
 

@@ -648,15 +648,34 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
-func TestToIntervalCharRegistered(t *testing.T) {
+func TestToIntervalStringTypesRegistered(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
-		types.T_char.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, int32(TO_INTERVAL), fn.fid)
-	require.Equal(t, types.T_int64, fn.retType.Oid)
+	for _, stringType := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(stringType.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+				stringType.ToType(),
+				types.T_int64.ToType(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(TO_INTERVAL), fn.fid)
+			require.Equal(t, types.T_int64, fn.retType.Oid)
+		})
+	}
+
+	// GetFunctionByName validates the resolver result. Instantiate the TEXT
+	// overload too, so the registration's runtime factory cannot silently
+	// diverge from the CHAR/VARCHAR factories.
+	var textOverload *overload
+	for i := range allSupportedFunctions[TO_INTERVAL].Overloads {
+		candidate := &allSupportedFunctions[TO_INTERVAL].Overloads[i]
+		if len(candidate.args) == 2 && candidate.args[0] == types.T_text &&
+			candidate.args[1] == types.T_int64 {
+			textOverload = candidate
+			break
+		}
+	}
+	require.NotNil(t, textOverload)
+	require.NotNil(t, textOverload.newOp())
 }
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {

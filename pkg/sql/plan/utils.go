@@ -792,27 +792,6 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
-func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
-	if col1 == nil || col2 == nil {
-		return false
-	}
-	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {
-		return false
-	}
-
-	fnName1 := expr1.GetF().Func.ObjName
-	fnName2 := expr2.GetF().Func.ObjName
-	if fnName1 == ">" || fnName1 == ">=" {
-		return fnName2 == "<" || fnName2 == "<="
-	}
-	if fnName1 == "<" || fnName1 == "<=" {
-		return fnName2 == ">" || fnName2 == ">="
-	}
-	return false
-}
-
 func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
@@ -4690,6 +4669,21 @@ func collectPreparedJSONComparisonParamPositions(
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		functionName := impl.F.GetFunc().GetObjName()
+		// Constructor value arguments also consume concrete prepared metadata.
+		// Do not mark OBJECT keys, modifier documents or paths: their legacy
+		// string conversion is a separate contract from JSON scalar values.
+		if positions != nil {
+			for i, arg := range impl.F.Args {
+				valueArg := functionName == "json_array" ||
+					(functionName == "json_object" && i%2 == 1) ||
+					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace" || functionName == "json_array_append") && i >= 2 && i%2 == 0)
+				if valueArg {
+					if param := arg.GetP(); param != nil {
+						positions[param.Pos] = struct{}{}
+					}
+				}
+			}
+		}
 		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
 			if positions != nil {
 				if param := impl.F.Args[0].GetP(); param != nil {

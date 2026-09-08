@@ -6611,6 +6611,97 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
+// Binary SUBSTRING uses byte offsets. Routing binary values through the text
+// implementation would decode invalid bytes as RuneError and could expand a
+// nominal 511-byte result beyond the planner's bound.
+func binarySubstringStartOffset(length int, start int64) (int, bool) {
+	if start > 0 {
+		offset := start - 1
+		if offset >= int64(length) {
+			return 0, false
+		}
+		return int(offset), true
+	}
+	if start < 0 {
+		if start < -int64(length) {
+			return 0, false
+		}
+		return length + int(start), true
+	}
+	return 0, false
+}
+
+func SubStringBinaryWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(v[offset:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if l <= 0 {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int64(len(v) - offset)
+		end := len(v)
+		if l < remaining {
+			end = offset + int(l)
+		}
+		if err = rs.AppendBytes(v[offset:end], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])

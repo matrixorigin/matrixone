@@ -2758,7 +2758,24 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
+		comp, err = createCompile(
+			execCtx,
+			executionSes,
+			executionProc,
+			executionSes.GetDatabaseName(),
+			false,
+			originSQL,
+			originSQL,
+			&schedulingSQLMode,
+			saveStmt,
+			prepareControl.Plan,
+			&prepareTs,
+			false,
+			owner.GetOutputCallback(execCtx),
+			true,
+			nil,
+			nil,
+		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2791,6 +2808,8 @@ func createPrepareStmtInSession(
 		cloneSQL:         cloneSQL,
 		protocolVersion:  protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
+			prepareControl.Plan),
+		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
@@ -5531,6 +5550,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// ROW_COUNT() builtin can read it.
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)

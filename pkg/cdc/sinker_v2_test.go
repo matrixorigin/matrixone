@@ -341,7 +341,10 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 	t.Run("InvalidBatchCommand_CleansUp", func(t *testing.T) {
 		mp, err := mpool.NewMPool("invalid-command-cleanup", 0, mpool.NoFixed)
 		require.NoError(t, err)
-		defer mpool.DeleteMPool(mp)
+		defer func() {
+			require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+			mpool.DeleteMPool(mp)
+		}()
 
 		cmd := NewInsertBatchCommand(
 			&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
@@ -691,7 +694,10 @@ func TestMysqlSinker2_ConsumerExitUnblocksAndRejectsCommands(t *testing.T) {
 func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	t.Run("SuccessfulInsert", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -729,11 +735,12 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		// Create batch
 		bat := batch.NewWithSize(2)
+		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
 		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp))
 		bat.SetRowCount(1)
 
 		fromTs := types.BuildTS(100, 0)
@@ -786,11 +793,12 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		// Create batch
 		bat := batch.NewWithSize(2)
+		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
 		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 
-		vector.AppendFixed(bat.Vecs[0], int32(2), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(2), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp))
 		bat.SetRowCount(1)
 
 		fromTs := types.BuildTS(100, 0)
@@ -804,6 +812,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 		err = sinker.handleInsertBatch(ctx, cmd)
 
 		assert.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
@@ -881,7 +890,10 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 func TestMysqlSinker2_SinkEarlyReturnCleansData(t *testing.T) {
 	mp, err := mpool.NewMPool("test_sink_cleanup", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1164,6 +1176,55 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.False(t, dbTblInfo.IdChanged, "IdChanged should be reset")
 		assert.NoError(t, mock.ExpectationsWereMet())
 		sinker.Close()
+	})
+
+	t.Run("SuccessPath_QuotesRawIdentifiersAndPreservesUniqueIndex", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		for range 4 {
+			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+
+		quotedDef := &plan.TableDef{
+			Name:   "bmsql_source", // Enables the existing bounded SQL recorder seam.
+			DbName: "source_db",
+			Cols: []*plan.ColDef{
+				{Name: "id`pk", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: false}},
+				{Name: "name`col", Typ: plan.Type{Id: int32(types.T_varchar)}, Default: &plan.Default{NullAbility: true}},
+			},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id`pk"}},
+			Name2ColIndex: map[string]int32{"id`pk": 0, "name`col": 1},
+			Indexes: []*plan.IndexDef{{
+				IndexName: "uk`name",
+				Parts:     []string{"name`col"},
+				Unique:    true,
+			}},
+		}
+		info := &DbTableInfo{SinkDbName: "sink`db", SinkTblName: "sink`table", IdChanged: true}
+		sink, err := CreateMysqlSinker2(
+			context.Background(),
+			UriInfo{SinkTyp: CDCSinkType_MySQL, User: "u", Password: "p", Ip: "127.0.0.1", Port: 3306},
+			1, "task-1", info, nil, quotedDef, 0, time.Second, NewCdcActiveRoutine(), 1024*1024, CDCDefaultSendSqlTimeout,
+		)
+		require.NoError(t, err)
+		sinker := sink.(*mysqlSinker2)
+		defer sinker.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+		require.False(t, info.IdChanged)
+		require.Len(t, sinker.executor.debugTxnRecorder.txnSQL, 4)
+		require.Equal(t, "CREATE DATABASE IF NOT EXISTS `sink``db`", sinker.executor.debugTxnRecorder.txnSQL[0])
+		require.Equal(t, "USE `sink``db`", sinker.executor.debugTxnRecorder.txnSQL[1])
+		require.Equal(t, "DROP TABLE IF EXISTS `sink``table`", sinker.executor.debugTxnRecorder.txnSQL[2])
+		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[3], "CREATE TABLE IF NOT EXISTS `sink``db`.`sink``table`")
+		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[3], "UNIQUE KEY `uk``name` (`name``col`)")
+		require.Equal(t, "REPLACE INTO `sink``db`.`sink``table` VALUES ", string(sinker.builder.insertStem))
 	})
 
 	t.Run("NewExecutorFails", func(t *testing.T) {
@@ -1450,6 +1511,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "cluster table is not supported")
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ExternalTableNotSupported", func(t *testing.T) {
@@ -1507,6 +1569,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "external table is not supported")
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ConcurrentCreation", func(t *testing.T) {
@@ -1589,7 +1652,6 @@ func TestCreateMysqlSinker2(t *testing.T) {
 
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 
 		sinkUri := UriInfo{
 			SinkTyp:  CDCSinkType_MySQL,
@@ -1619,10 +1681,8 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			CDCDefaultSendSqlTimeout,
 		)
 
-		// Should handle nil tableDef gracefully
-		if err == nil {
-			assert.NotNil(t, sinker)
-			sinker.Close()
-		}
+		require.Error(t, err)
+		require.Nil(t, sinker)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
