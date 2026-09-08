@@ -113,9 +113,13 @@ func formattedStringByteBound(typ types.Type) stringResultBound {
 	case types.T_uint64, types.T_bit:
 		width = 20
 	case types.T_float32:
-		width = 15
-	case types.T_float64:
+		// floatToBytes uses fixed notation for values in [1e-13, 1e15).
+		// Keep room for the sign, the decimal point, leading fractional
+		// zeroes, and the maximum exact FLOAT32 digits.
 		width = 24
+	case types.T_float64:
+		// See FLOAT32 above. DOUBLE needs up to 17 exact significant digits.
+		width = 32
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width <= 0 {
 			return unknownStringResultBound()
