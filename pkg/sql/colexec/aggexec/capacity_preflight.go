@@ -1060,6 +1060,11 @@ func (ae *aggExec) preflightFixedDistinctBatchFillArgs(
 	batch.reset()
 	admission := &ae.distinctFixedAdmission
 	for i, group := range groups {
+		// Preserve the complete input mapping, including duplicates, NULL rows,
+		// and GroupNotMatched.  `publish` is the separate publication bitmap;
+		// leaving non-publishing entries at zero makes a valid admission plan
+		// fail its exact-input check and needlessly repeats all decode/probe work.
+		admission.groups[i] = group
 		if group == GroupNotMatched {
 			continue
 		}
@@ -1206,56 +1211,63 @@ func (ae *aggExec) preflightBatchMergeArgs(
 	}
 	// A merge destination may already contain published fixed-index keys when
 	// a later work unit is admitted. Converting that representation to a
-	// skiplist would require a second copy, so small hard-account destinations
-	// use the spill-friendly legacy path from the beginning. Fill admission can
-	// still fall back safely while the state is empty.
+	// skiplist would require a second copy, so only empty fixed states may be
+	// disabled when a small hard account cannot admit the index. Published
+	// states retain their representation and use the fixed merge plan below.
 	mergeFixedAllowed := ae.allocation == nil || ae.allocation.account == nil ||
 		ae.allocation.account.Snapshot().Limit >= distinctFixedIndexMinAccountLimit
 	if !mergeFixedAllowed {
 		ae.disableEmptyDistinctFixedStates()
 	}
-	if mergeFixedAllowed {
-		if width := distinctFixedKeyWidth(&ae.aggInfo); width > 0 &&
-			distinctFixedKeyWidth(&other.aggInfo) == width {
-			fixedReady := true
-			for i, group := range groups {
-				if group == GroupNotMatched {
-					continue
-				}
-				x, _, target, err := ae.validatePreflightTarget(group)
-				if err != nil {
-					return err
-				}
-				otherX, otherY := other.getXY(uint64(offset + i))
-				if otherX < 0 || otherX >= len(other.state) ||
-					int(otherY) >= int(other.state[otherX].length) {
-					return mpool.ErrAllocationAccountInvariant
-				}
-				if target == nil || !target.distinctFixedDeferred ||
-					!other.state[otherX].distinctFixedDeferred {
-					fixedReady = false
-					break
-				}
-				xState := ae.preflightStateAt(x)
-				if xState == nil || xState.distinctKeyWidth != width {
-					fixedReady = false
-					break
-				}
+	if width := distinctFixedKeyWidth(&ae.aggInfo); width > 0 &&
+		distinctFixedKeyWidth(&other.aggInfo) == width {
+		// Keep the fast aggregate plan when every mapped target is fixed.  A
+		// source may still be a legacy skiplist state (for example after a
+		// small-account fallback or an older spill restore); the merge path below
+		// imports those fixed-width payloads into the target index directly.
+		fixedReady := true
+		for i, group := range groups {
+			if group == GroupNotMatched {
+				continue
 			}
-			if fixedReady {
-				err := ae.preflightFixedDistinctBatchMergeArgs(other, offset, groups)
-				if errors.Is(err, mpool.ErrAllocationAccountCapacity) &&
-					ae.disableEmptyDistinctFixedStates() {
-					return ae.preflightBatchMergeArgs(other, offset, groups)
-				}
+			x, _, target, err := ae.validatePreflightTarget(group)
+			if err != nil {
 				return err
 			}
+			otherX, otherY := other.getXY(uint64(offset + i))
+			if otherX < 0 || otherX >= len(other.state) ||
+				int(otherY) >= int(other.state[otherX].length) {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if target == nil || !target.distinctFixedDeferred {
+				fixedReady = false
+				break
+			}
+			xState := ae.preflightStateAt(x)
+			if xState == nil || xState.distinctKeyWidth != width {
+				fixedReady = false
+				break
+			}
+			source := &other.state[otherX]
+			if source.distinctFixedDeferred && source.distinctKeyWidth != width {
+				fixedReady = false
+				break
+			}
+		}
+		if fixedReady {
+			err := ae.preflightFixedDistinctBatchMergeArgs(other, offset, groups)
+			if errors.Is(err, mpool.ErrAllocationAccountCapacity) &&
+				ae.disableEmptyDistinctFixedStates() {
+				return ae.preflightBatchMergeArgs(other, offset, groups)
+			}
+			return err
 		}
 	}
 	var needs [hashmap.UnitLimit]argumentChunkCapacity
 	needCount := 0
 	var progress [hashmap.UnitLimit]argumentTargetProgress
 	progressCount := 0
+	var fixedPlan distinctFixedPreflightPlan
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -1269,12 +1281,47 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			int(otherY) >= int(other.state[otherX].length) {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		var upper [kAggArgPrefixSz]byte
-		binary.BigEndian.PutUint16(upper[:], y+1)
+		if ae.isDistinct && state.distinctFixedDeferred {
+			source := &other.state[otherX]
+			if distinctFixedKeyWidth(&other.aggInfo) != state.distinctKeyWidth {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if source.distinctFixedDeferred &&
+				source.distinctKeyWidth != state.distinctKeyWidth {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			// BatchMerge will use the target fixed index for both fixed and
+			// legacy source states. Reserve that representation here rather than
+			// reserving the target's compatibility skiplist arena.
+			if err := fixedPlan.addN(
+				x, uint64(source.argCnt[otherY])); err != nil {
+				return err
+			}
+			continue
+		}
+		sourceState := &other.state[otherX]
 		var targetIter *arenaskl.Iterator
 		var targetKey []byte
 		var targetOK bool
-		err = other.state[otherX].iter(otherY, func(key []byte) error {
+		targetStarted := false
+		if ae.isDistinct {
+			if state == nil || state.argSkl == nil {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if sourceState.distinctFixedDeferred {
+				// Fixed-index iteration is newest-first, so it cannot share the
+				// ordered target cursor used by legacy skiplists.  Membership
+				// checks for this source representation stay exact below.
+			} else {
+				if sourceState.argSkl == nil {
+					return mpool.ErrAllocationAccountInvariant
+				}
+				var upper [kAggArgPrefixSz]byte
+				binary.BigEndian.PutUint16(upper[:], y+1)
+				targetIter = state.argSkl.NewIter(nil, upper[:])
+			}
+		}
+		err = sourceState.iter(otherY, func(key []byte) error {
 			if len(key) < kAggArgPrefixSz {
 				return mpool.ErrAllocationAccountInvariant
 			}
@@ -1285,15 +1332,24 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
-				if targetIter == nil {
-					targetIter = state.argSkl.NewIter(nil, upper[:])
-					targetOK, targetKey, _ = targetIter.SeekGE(candidate)
-				}
-				for targetOK && bytes.Compare(targetKey, candidate) < 0 {
-					targetOK, targetKey, _ = targetIter.Next()
-				}
-				if targetOK && bytes.Equal(targetKey, candidate) {
-					return nil
+				if sourceState.distinctFixedDeferred {
+					// Fixed-index iteration is reverse insertion order, so use
+					// exact target membership rather than an ordered cursor.
+					if state.argSkl.Contains(candidate) {
+						return nil
+					}
+				} else {
+					if !targetStarted {
+						targetOK, targetKey, _ = targetIter.SeekGE(candidate)
+						targetStarted = true
+					} else if targetOK {
+						for targetOK && bytes.Compare(targetKey, candidate) < 0 {
+							targetOK, targetKey, _ = targetIter.Next()
+						}
+					}
+					if targetOK && bytes.Equal(targetKey, candidate) {
+						return nil
+					}
 				}
 				// A merge work unit can map several source groups into the same
 				// target group. The target skiplist is immutable until admission,
@@ -1309,9 +1365,24 @@ func (ae *aggExec) preflightBatchMergeArgs(
 						int(earlierY) >= int(other.state[earlierX].length) {
 						return mpool.ErrAllocationAccountInvariant
 					}
+					earlierState := &other.state[earlierX]
+					if earlierState.distinctFixedDeferred {
+						_, value, ok := decodeDistinctFixedKey(
+							key, earlierState.distinctKeyWidth)
+						if !ok {
+							return mpool.ErrAllocationAccountInvariant
+						}
+						if earlierState.distinctIndex.lookup(earlierY, value) {
+							return nil
+						}
+						continue
+					}
+					if earlierState.argSkl == nil {
+						return mpool.ErrAllocationAccountInvariant
+					}
 					binary.BigEndian.PutUint16(
 						candidate[:kAggArgPrefixSz], earlierY)
-					if other.state[earlierX].argSkl.Contains(candidate) {
+					if earlierState.argSkl.Contains(candidate) {
 						return nil
 					}
 				}
@@ -1343,6 +1414,9 @@ func (ae *aggExec) preflightBatchMergeArgs(
 		if err != nil {
 			return err
 		}
+	}
+	if err := fixedPlan.apply(ae); err != nil {
+		return err
 	}
 	return ae.applyArgumentChunkCapacity(&needs, needCount)
 }
@@ -1409,6 +1483,11 @@ func (ae *aggExec) preflightFixedDistinctBatchMergeArgs(
 		if y >= uint16(len(state.argCnt)) ||
 			int(otherY) >= len(other.state[otherX].argCnt) {
 			return mpool.ErrAllocationAccountInvariant
+		}
+		if other.state[otherX].argCnt[otherY] >
+			math.MaxUint32-state.argCnt[y] {
+			return moerr.NewInternalErrorNoCtx(
+				"agg mergeArgs: too many distinct arguments")
 		}
 		if err := reserve(x, uint64(other.state[otherX].argCnt[otherY])); err != nil {
 			return err

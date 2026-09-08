@@ -1187,24 +1187,19 @@ func (ag *aggState) insertPreparedArg(
 }
 
 func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
-	if info.isDistinct && ag.distinctFixedDeferred && other != nil &&
-		other.distinctFixedDeferred && ag.distinctKeyWidth == other.distinctKeyWidth {
-		if y >= uint16(len(ag.argCnt)) || otherY >= uint16(len(other.argCnt)) ||
-			other.argCnt[otherY] > math.MaxUint32-ag.argCnt[y] {
-			return moerr.NewInternalErrorNoCtx(
-				"agg mergeArgs: too many distinct arguments")
+	if info.isDistinct && ag.distinctFixedDeferred && ag.distinctKeyWidth > 0 {
+		if other == nil {
+			return mpool.ErrAllocationAccountInvariant
 		}
-		added, err := ag.distinctIndex.mergeInto(
-			mp, ag.allocation, y, &other.distinctIndex, otherY)
-		if added > math.MaxUint32-ag.argCnt[y] {
-			return moerr.NewInternalErrorNoCtx(
-				"agg mergeArgs: too many distinct arguments")
+		if other.distinctFixedDeferred &&
+			ag.distinctKeyWidth == other.distinctKeyWidth {
+			return ag.mergeFixedDistinctArgs(mp, y, other, otherY)
 		}
-		ag.argCnt[y] += added
-		if err != nil {
-			return err
-		}
-		return nil
+		// A fixed target can receive a legacy source when the source was
+		// created under a smaller account or restored from the compatibility
+		// skiplist representation.  Keep the target's representation stable and
+		// import the source's fixed-width payloads directly into its index.
+		return ag.mergeLegacyDistinctArgsIntoFixed(mp, y, other, otherY)
 	}
 	var inserter arenaskl.Inserter
 	merge := func(k []byte) error {
@@ -1241,6 +1236,77 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		return other.iterInputOrder(mp, otherY, merge)
 	}
 	return other.iter(otherY, merge)
+}
+
+// mergeFixedDistinctArgs imports a source fixed index without rebuilding the
+// compatibility key or re-entering the skiplist wrapper for every value.
+func (ag *aggState) mergeFixedDistinctArgs(
+	mp *mpool.MPool,
+	y uint16,
+	other *aggState,
+	otherY uint16,
+) error {
+	if y >= uint16(len(ag.argCnt)) || otherY >= uint16(len(other.argCnt)) ||
+		other.argCnt[otherY] > math.MaxUint32-ag.argCnt[y] {
+		return moerr.NewInternalErrorNoCtx(
+			"agg mergeArgs: too many distinct arguments")
+	}
+	added, err := ag.distinctIndex.mergeInto(
+		mp, ag.allocation, y, &other.distinctIndex, otherY)
+	if added > math.MaxUint32-ag.argCnt[y] {
+		return moerr.NewInternalErrorNoCtx(
+			"agg mergeArgs: too many distinct arguments")
+	}
+	ag.argCnt[y] += added
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// mergeLegacyDistinctArgsIntoFixed converts the source's compatibility
+// skiplist keys back to their fixed-width payload and publishes them directly
+// into the target index.  Preflight reserves an upper bound based on the source
+// argument count, so valid inputs do not allocate at publication time.
+func (ag *aggState) mergeLegacyDistinctArgsIntoFixed(
+	mp *mpool.MPool,
+	y uint16,
+	other *aggState,
+	otherY uint16,
+) error {
+	if ag == nil || other == nil || ag.distinctKeyWidth <= 0 ||
+		other.argSkl == nil ||
+		y >= uint16(len(ag.argCnt)) || otherY >= uint16(len(other.argCnt)) ||
+		other.argCnt[otherY] > math.MaxUint32-ag.argCnt[y] {
+		return moerr.NewInternalErrorNoCtx(
+			"agg mergeArgs: too many distinct arguments")
+	}
+	var added uint32
+	err := other.iter(otherY, func(key []byte) error {
+		_, value, ok := decodeDistinctFixedKey(key, ag.distinctKeyWidth)
+		if !ok {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		duplicate, err := ag.distinctIndex.prepare(
+			mp, ag.allocation, y, value)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return nil
+		}
+		if err := ag.distinctIndex.insert(y, value); err != nil {
+			return err
+		}
+		added++
+		return nil
+	})
+	if added > math.MaxUint32-ag.argCnt[y] {
+		return moerr.NewInternalErrorNoCtx(
+			"agg mergeArgs: too many distinct arguments")
+	}
+	ag.argCnt[y] += added
+	return err
 }
 
 func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
@@ -2461,6 +2527,31 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			off += len(raw)
 		}
 		if err := state.insertPreparedArg(ae.mp, y, key, distinct); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bulkFillDistinctArgs keeps the direct aggregate API safe for full vectors.
+// The batch-local DISTINCT admission tables intentionally use one bounded
+// hashmap.UnitLimit work unit; callers of BulkFill are not required to split
+// their vectors before entering this layer.
+func (ae *aggExec) bulkFillDistinctArgs(
+	groupIndex int,
+	vectors []*vector.Vector,
+) error {
+	if ae == nil || len(vectors) == 0 || vectors[0] == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	length := vectors[0].Length()
+	var groups [hashmap.UnitLimit]uint64
+	for i := range groups {
+		groups[i] = uint64(groupIndex + 1)
+	}
+	for offset := 0; offset < length; offset += hashmap.UnitLimit {
+		n := min(hashmap.UnitLimit, length-offset)
+		if err := ae.batchFillArgs(offset, groups[:n], vectors, true); err != nil {
 			return err
 		}
 	}
