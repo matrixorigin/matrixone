@@ -134,6 +134,8 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 		`null`,
 		`[]`,
 		`{"Action":"output","Package":"example/issues","Test":"TestIssue","Output":"    MO_UT_SETUP fixture=issue26875 phase=database-create duration=100ms status=error\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster5","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=service-start duration=3s status=ready wait=2s hold=5s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-release duration=1ms status=ready wait=2s hold=5s admission_released=true\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster6","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=admission-acquire duration=100ms status=ready wait=100ms hold=100ms\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=service-start duration=4s status=ready wait=100ms hold=4.1s\n"}`,
 		"not json",
 	}, "\n")
 	if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
@@ -156,6 +158,9 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	}
 	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
 		t.Fatalf("missing setup error summary: %s", text)
+	}
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=2 admission_wait(total=2.10s max=2.00s) service_start(total=7.00s max=4.00s) admission_hold_observed_max=5.00s admission_unreleased=1") {
+		t.Fatalf("missing embedded cluster diagnosis: %s", text)
 	}
 }
 
