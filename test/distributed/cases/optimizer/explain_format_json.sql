@@ -6,7 +6,7 @@ create table t(id int primary key, v int);
 insert into t values (1, 10), (2, 20);
 
 -- The SQL result is one row containing a JSON document with both contracts.
--- @regex("(?s)query_block.*select_id.*matrixone.*schema_version.*table_name.*issue_28301\\.t",true)
+-- @regex("(?s)query_block.*select_id.*matrixone.*schema_version.*table_name.*issue_28301[.]t",true)
 explain format=json select * from t where id = 1;
 
 -- Parenthesized and quoted forms share the same normalized option path.
@@ -38,11 +38,7 @@ explain format=json insert into t values (3, 30);
 -- @regex("(?s)matrixone.*statement_type.*INSERT",true)
 explain format=json replace into t values (3, 30);
 select count(*) as cnt from t;
-cnt
-2
 select v from t where id = 1;
-v
-10
 
 -- SQL prepared execution uses the same one-column JSON result contract.
 prepare e28301 from 'explain format=json select * from t';
