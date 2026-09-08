@@ -739,6 +739,10 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 			gi.Destroy()
 			return err
 		}
+		// The map ensure_id_index materialised stays resident for the index's life and the
+		// native claim covering its allocation was already released, so the cache budget only
+		// sees it if it is charged here.
+		idx.HostComponentBytes += int64(gi.Len()) * vimemory.HostIDMapBytesPerRow
 	}
 
 	idx.Index = gi

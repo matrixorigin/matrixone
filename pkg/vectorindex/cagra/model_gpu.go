@@ -749,13 +749,18 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	// idempotent and silently no-ops on pkids the cuvs id_map doesn't know
 	// (e.g. a row that was inserted post-build and now lives only in
 	// OverflowPkids — that case is handled at search time).
-	// The first delete materialises id_to_index_ for every row, which is claimed
-	// where it happens (index_base.hpp, ensure_id_index).
+	// The FIRST delete materialises id_to_index_ for every row of the index and it stays
+	// resident for the index's life (index_base.hpp, ensure_id_index). The native side reserves
+	// that allocation and releases the claim as soon as it succeeds, so nothing downstream is
+	// still tracking it -- charging it to the cache budget is this side's job, or the governor
+	// evicts against a host figure short by 40 bytes per row on every generation that ever
+	// replayed a delete.
 	if len(idx.DeletedPkids) > 0 && gi.Len() > 0 {
 		if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
 			gi.Destroy()
 			return err
 		}
+		idx.HostComponentBytes += int64(gi.Len()) * vimemory.HostIDMapBytesPerRow
 	}
 
 	idx.Index = gi

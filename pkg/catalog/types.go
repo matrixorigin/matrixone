@@ -656,6 +656,14 @@ const (
 	// These are the names. The per-algo constants below alias them, so the shared shape is a
 	// compile-time fact and a divergence has to be written deliberately (replace an alias with
 	// its own literal) instead of happening by omission.
+	// The three vector-index STORAGE tables share one column set for the same reason as the
+	// metadata tables below: one shape, three namespaces, and any cross-namespace reference
+	// works only while the strings happen to coincide.
+	IndexStorage_TblCol_Index_Id = "index_id"
+	IndexStorage_TblCol_Chunk_Id = "chunk_id"
+	IndexStorage_TblCol_Data     = "data"
+	IndexStorage_TblCol_Tag      = "tag"
+
 	IndexMetadata_TblCol_Index_Id  = "index_id"
 	IndexMetadata_TblCol_Timestamp = "timestamp"
 	IndexMetadata_TblCol_Checksum  = "checksum"
@@ -671,10 +679,10 @@ const (
 	Hnsw_TblType_Storage  = "hnsw_index"
 
 	// HNSW Storage - Column names
-	Hnsw_TblCol_Storage_Index_Id = "index_id"
-	Hnsw_TblCol_Storage_Chunk_Id = "chunk_id"
-	Hnsw_TblCol_Storage_Data     = "data"
-	Hnsw_TblCol_Storage_Tag      = "tag"
+	Hnsw_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Hnsw_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Hnsw_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Hnsw_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// HNSW Metadata - Column names
 	Hnsw_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
@@ -692,10 +700,10 @@ const (
 	Cagra_TblType_Storage  = "cagra_index"
 
 	// CAGRA Storage - Column names
-	Cagra_TblCol_Storage_Index_Id = "index_id"
-	Cagra_TblCol_Storage_Chunk_Id = "chunk_id"
-	Cagra_TblCol_Storage_Data     = "data"
-	Cagra_TblCol_Storage_Tag      = "tag"
+	Cagra_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Cagra_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Cagra_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Cagra_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// CAGRA Metadata - Column names
 	Cagra_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
@@ -713,10 +721,10 @@ const (
 	Ivfpq_TblType_Storage  = "ivfpq_index"
 
 	// IVF-PQ Storage - Column names
-	Ivfpq_TblCol_Storage_Index_Id = "index_id"
-	Ivfpq_TblCol_Storage_Chunk_Id = "chunk_id"
-	Ivfpq_TblCol_Storage_Data     = "data"
-	Ivfpq_TblCol_Storage_Tag      = "tag"
+	Ivfpq_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Ivfpq_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Ivfpq_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Ivfpq_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// IVF-PQ Metadata - Column names
 	Ivfpq_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id

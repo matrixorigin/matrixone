@@ -1284,3 +1284,59 @@ func TestReserveIsVisibleToEveryArrivalBehindIt(t *testing.T) {
 				"one was in line but unpublished, and two loads can be seated against one budget", seq, seq-1)
 	}
 }
+
+// The aggregate device budget and the per-card map must come from ONE probe.
+//
+// Probed separately they can disagree: the aggregate succeeds, the per-card call fails, and its
+// error is dropped -- leaving a nil map while readiness latches true. enforceDevicePlacement
+// reads an empty map as "no per-card capacity to bound" and returns immediately, so placement
+// enforcement is off for the life of the process, and aggregate capacity does not protect a
+// crowded individual card. Derived from one answer, that state cannot be constructed.
+func TestDeviceBudgetsComeFromOneProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		perCard map[int]int64
+	}{
+		{"no cards", nil},
+		{"one card", map[int]int64{0: 4 << 30}},
+		{"several cards", map[int]int64{0: 4 << 30, 1: 8 << 30, 2: 1 << 30}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, sumDeviceCapacity(tc.perCard), sumDeviceCapacity(tc.perCard),
+				"stable")
+			var want int64
+			for _, v := range tc.perCard {
+				want += v
+			}
+			if len(tc.perCard) == 0 {
+				require.Zero(t, sumDeviceCapacity(tc.perCard),
+					"no cards means no device arena, not a one-byte one")
+				return
+			}
+			require.Equal(t, want, sumDeviceCapacity(tc.perCard),
+				"the arena is exactly what the cards add up to; a separate probe could say otherwise")
+		})
+	}
+
+	// A probe that fails must not latch: the next call retries, and a later success is kept.
+	g := (&VectorIndexCache{}).gov()
+	g.defaultLimitMu.Lock()
+	g.defaultLimitDeviceReady = false
+	g.defaultLimitMu.Unlock()
+
+	g.defaultLimitMu.Lock()
+	g.ensureDeviceLimitsLocked()
+	readyAfterProbe := g.defaultLimitDeviceReady
+	err := g.defaultLimitDeviceErr
+	perCard := g.defaultLimitPerCard
+	device := g.defaultLimit.device
+	g.defaultLimitMu.Unlock()
+
+	if err != nil {
+		require.False(t, readyAfterProbe, "a failed probe must be retried, not remembered")
+		return
+	}
+	require.True(t, readyAfterProbe)
+	require.Equal(t, sumDeviceCapacity(perCard), device,
+		"the memoized aggregate is the fold of the memoized per-card map, always")
+}

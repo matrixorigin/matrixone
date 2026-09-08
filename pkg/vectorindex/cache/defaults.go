@@ -59,14 +59,23 @@ func automaticDeviceCapacity(countDevices func() (int, error), totalMem func(int
 	if err != nil {
 		return 0, err
 	}
+	return sumDeviceCapacity(perCard), nil
+}
+
+// sumDeviceCapacity folds a per-card budget into the arena-wide one. The aggregate is DERIVED
+// from the per-card map and never probed separately: two probes can disagree -- one succeeding
+// and the other failing -- and a caller holding an aggregate with no per-card map skips
+// placement enforcement entirely (enforceDevicePlacement treats an empty map as "nothing to
+// bound"). One source, one failure mode.
+func sumDeviceCapacity(perCard map[int]int64) int64 {
+	if len(perCard) == 0 {
+		return 0
+	}
 	var total int64
 	for _, share := range perCard {
 		total += min(share, maxRepresentableBudget-total)
 	}
-	if len(perCard) == 0 {
-		return 0, nil
-	}
-	return max(total, 1), nil
+	return max(total, 1)
 }
 
 // automaticDeviceCapacityPerCard is the derived budget for EACH GPU.
@@ -113,18 +122,7 @@ func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
 	host, herr := automaticHostLimit(system.MemoryTotal(), system.CgroupMemoryLimit())
 	g.defaultLimit.host = host
 	g.defaultLimitHostErr = herr
-	if !g.defaultLimitDeviceReady {
-		device, derr := automaticDeviceLimit()
-		g.defaultLimit.device = device
-		g.defaultLimitDeviceErr = derr
-		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
-		// Memoize the ANSWER, not the failure. Capacity does not change at runtime, so a
-		// successful probe is worth keeping forever -- but latching an error would turn one
-		// unlucky probe into a CN that refuses every device load for the rest of its life,
-		// with no way back short of a restart. A retry costs one CUDA call on the next cold
-		// miss, and only on a GPU build: a non-GPU build answers (0, nil) and never lands here.
-		g.defaultLimitDeviceReady = derr == nil
-	}
+	g.ensureDeviceLimitsLocked()
 	return g.defaultLimit, g.defaultLimitHostErr, g.defaultLimitDeviceErr
 }
 
@@ -133,10 +131,30 @@ func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
 func (g *VectorIndexGovernor) devicePerCardCaps() map[int]int64 {
 	g.defaultLimitMu.Lock()
 	defer g.defaultLimitMu.Unlock()
-	if !g.defaultLimitDeviceReady {
-		g.defaultLimit.device, g.defaultLimitDeviceErr = automaticDeviceLimit()
-		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
-		g.defaultLimitDeviceReady = g.defaultLimitDeviceErr == nil
-	}
+	g.ensureDeviceLimitsLocked()
 	return g.defaultLimitPerCard
+}
+
+// ensureDeviceLimitsLocked probes the GPUs ONCE and derives both budgets from that one answer.
+// Caller holds defaultLimitMu.
+//
+// One probe, not two. Probing the aggregate and the per-card map separately lets them disagree:
+// the aggregate succeeds, the per-card call fails, and a discarded error leaves a nil map while
+// readiness latches true. enforceDevicePlacement reads an empty map as "no per-card capacity to
+// bound" and returns immediately, so placement enforcement is silently off for the life of the
+// process -- and aggregate capacity does not protect a crowded individual card.
+//
+// Memoize the ANSWER, not the failure. Capacity does not change at runtime, so a successful
+// probe is worth keeping forever; latching an ERROR would turn one unlucky probe into a CN that
+// refuses every device load until it restarts. A retry costs one CUDA call on the next cold
+// miss, and only on a GPU build -- a non-GPU build answers (nil, nil) and derives 0.
+func (g *VectorIndexGovernor) ensureDeviceLimitsLocked() {
+	if g.defaultLimitDeviceReady {
+		return
+	}
+	perCard, err := automaticDeviceLimitPerCard()
+	g.defaultLimitPerCard = perCard
+	g.defaultLimit.device = sumDeviceCapacity(perCard)
+	g.defaultLimitDeviceErr = err
+	g.defaultLimitDeviceReady = err == nil
 }

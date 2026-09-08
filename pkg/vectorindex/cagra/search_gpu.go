@@ -37,13 +37,17 @@ import (
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
 type CagraSearch[B, Q cuvs.VectorType] struct {
-	Idxcfg        vectorindex.IndexConfig
-	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*CagraModel[B, Q]
-	MultiIndex    *cuvs.MultiGpuCagra[B, Q]  // built once in Load; nil until indexes are loaded
-	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
-	Devices       []int
-	ThreadsSearch int64
+	Idxcfg     vectorindex.IndexConfig
+	Tblcfg     vectorindex.IndexTableConfig
+	Indexes    []*CagraModel[B, Q]
+	MultiIndex *cuvs.MultiGpuCagra[B, Q]  // built once in Load; nil until indexes are loaded
+	Overflow   cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
+	// overflowRowsEstimate is the tail's row count read from its metadata rows at Preload, so
+	// admission can reserve the overflow's VRAM BEFORE Load allocates it. Superseded by the
+	// real count once Overflow exists.
+	overflowRowsEstimate int64
+	Devices              []int
+	ThreadsSearch        int64
 
 	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a
 	// REBUILD/MERGE bumps MAX(metadata.timestamp); a CDC append bumps the (CdcTailId,tag=1)
@@ -193,6 +197,15 @@ func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err != nil {
 		return err
 	}
+	// Size the CDC overflow from the tail's metadata rows, BEFORE anything is allocated. Without
+	// this a generation whose rows all arrived by CDC measures 0 at Preload, so admission
+	// reserves nothing and Load allocates its VRAM unreserved -- and no post-load pass can undo
+	// an allocation. A read failure leaves the estimate at 0: the pre-existing behaviour, not a
+	// refused load.
+	if rows, rerr := sqlexec.CdcTailRowsUpperBound(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable,
+		s.Tblcfg.IndexTable, s.overflowVectorBytes()); rerr == nil {
+		s.overflowRowsEstimate = rows
+	}
 	if len(indexes) > 0 {
 		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
 		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
@@ -285,27 +298,35 @@ func (s *CagraSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
 // reclaimed. The element type mirrors buildOverflow: the index storage Q when cuVS brute
 // force can store it, else the base B.
 //
-// Counts from the POST-LOAD capture only: buildOverflow runs inside Load, so at Preload the
-// overflow does not exist and contributes 0. The steady-state charge is right and the entry
-// is evictable; makeRoom just does not reserve ahead of it, and the post-load enforce pass
-// brings the arena back under cap. Same shape as an hnsw generation whose nrow predates the
-// column.
-//
-// To reserve ahead, size it from the tag=1 chunk frame headers (n_inserts + n_upserts, see
-// cuvs.UnframeCdcChunk) -- but do NOT add a second read of the tail: Load already reads it in
-// full via loadCdcTail, so a Preload counter must either hand that read down to Load or scan
-// only the 28-byte frame prefixes. Reading the tail twice per cache miss costs more than the
-// reservation is worth.
+// Charged from Preload, not only after Load. buildOverflow runs inside Load, so before it the
+// real count does not exist -- and a generation whose rows all arrived by CDC would measure 0,
+// admission would reserve nothing, and Load would allocate the VRAM unreserved. Post-load
+// enforcement cannot undo an allocation that already happened, so the estimate has to come
+// first: the tail's per-frame metadata rows carry nrow, which sums to the tail's record count
+// without reading the tail at all (see sqlexec.CdcTailRowsUpperBound). The estimate counts
+// deletes, which the overflow does not hold, so it is an upper bound -- the safe direction --
+// and the real count replaces it the moment Overflow exists.
 func (s *CagraSearch[B, Q]) overflowDeviceBytes() int64 {
-	if s.Overflow == nil {
+	rows := s.overflowRowsEstimate
+	if s.Overflow != nil {
+		// Built: the real count replaces the estimate, which counted deletes it does not hold.
+		rows = int64(s.Overflow.Len())
+	}
+	if rows <= 0 {
 		return 0
 	}
+	return rows * s.overflowVectorBytes()
+}
+
+// overflowVectorBytes is the device width of ONE overflow vector. The element type mirrors
+// buildOverflow: the index storage Q when cuVS brute force can store it, else the base B.
+func (s *CagraSearch[B, Q]) overflowVectorBytes() int64 {
 	elem := int64(util.UnsafeSizeOf[B]())
 	switch cuvs.GetQuantization[Q]() {
 	case cuvs.F32, cuvs.F16:
 		elem = int64(util.UnsafeSizeOf[Q]())
 	}
-	return int64(s.Overflow.Len()) * int64(s.Idxcfg.CuvsCagra.Dimensions) * elem
+	return int64(s.Idxcfg.CuvsCagra.Dimensions) * elem
 }
 
 // IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps
