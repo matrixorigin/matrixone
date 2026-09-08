@@ -541,6 +541,204 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 	}
 }
 
+func evaluatePreparedIntervalProjection(
+	t *testing.T,
+	cw *TxnComputationWrapper,
+	runtimePlan *plan.Plan,
+) (int64, bool) {
+	t.Helper()
+	query := runtimePlan.GetQuery()
+	require.NotNil(t, query)
+	require.NotEmpty(t, query.Steps)
+	project := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Len(t, project.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(cw.proc, project.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, result.GetType().Oid)
+	if result.GetNulls().Contains(0) {
+		return 0, true
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](result, 0), false
+}
+
+func TestSQLPreparedDateIntervalMarkerExecutesAcrossValues(t *testing.T) {
+	type execution struct {
+		value    any
+		want     int64
+		wantNull bool
+	}
+	for scenarioIndex, scenario := range []struct {
+		name       string
+		query      string
+		executions []execution
+	}{
+		{
+			name:  "date add second switches numeric text null and invalid",
+			query: "select timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval ? second))",
+			executions: []execution{
+				{value: int64(3), want: 3},
+				{value: int64(-3), want: -3},
+				{value: nil, wantNull: true},
+				{value: "4", want: 4},
+				{value: "not-an-interval", wantNull: true},
+				{value: int64(5), want: 5},
+			},
+		},
+		{
+			name:  "date sub day second composite and invalid",
+			query: "select timestampdiff(second, '2026-01-01', date_sub('2026-01-01', interval ? day_second))",
+			executions: []execution{
+				{value: "1 02:03:04", want: -93784},
+				{value: "1 02:03:04:05", wantNull: true},
+				{value: "0 00:00:01", want: -1},
+			},
+		},
+		{
+			name:  "date add year month composite and invalid",
+			query: "select timestampdiff(month, '2026-01-01', date_add('2026-01-01', interval ? year_month))",
+			executions: []execution{
+				{value: "1-2", want: 14},
+				{value: "1-2-3", wantNull: true},
+				{value: "0-1", want: 1},
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(27320+scenarioIndex), scenario.query)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			execCtx.input.isBinaryProtExecute = false
+			cw.binaryPrepare = false
+			execPlan := &plan.Execute{
+				Name: prepareStmt.Name,
+				Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "interval_value"}}}},
+			}
+			cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+
+			for executionIndex, execution := range scenario.executions {
+				require.NoError(t, ses.SetUserDefinedVar("interval_value", execution.value, ""))
+				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+					execCtx, ses, cw, execPlan, "")
+				require.NoError(t, err, "execution %d", executionIndex)
+				got, gotNull := evaluatePreparedIntervalProjection(t, cw, runtimePlan)
+				require.Equal(t, execution.wantNull, gotNull, "execution %d", executionIndex)
+				if !gotNull {
+					require.Equal(t, execution.want, got, "execution %d", executionIndex)
+				}
+				if owned && executionStmt != nil {
+					executionStmt.Free()
+				}
+				after, marshalErr := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, marshalErr)
+				require.Equal(t, cachedPlan, after, "execution %d mutated the cached plan", executionIndex)
+			}
+		})
+	}
+}
+
+func TestCOMStmtPreparedDateIntervalMarkerExecutesAcrossWireTypes(t *testing.T) {
+	type execution struct {
+		packet    func(*MysqlProtocolImpl) []byte
+		want      int64
+		wantNull  bool
+		paramNull bool
+	}
+	for scenarioIndex, scenario := range []struct {
+		name       string
+		query      string
+		executions []execution
+	}{
+		{
+			name:  "date sub second switches integer text null and invalid",
+			query: "select timestampdiff(second, '2026-01-01', date_sub('2026-01-01', interval ? second))",
+			executions: []execution{
+				{packet: func(*MysqlProtocolImpl) []byte { return buildLongLongExecutePacket(3, false) }, want: -3},
+				{packet: func(*MysqlProtocolImpl) []byte { return buildLongLongExecutePacket(^uint64(2), false) }, want: 3},
+				{packet: func(*MysqlProtocolImpl) []byte { return buildNullExecutePacket(defines.MYSQL_TYPE_NULL) }, wantNull: true, paramNull: true},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "4")
+				}, want: -4},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "not-an-interval")
+				}, wantNull: true},
+				{packet: func(*MysqlProtocolImpl) []byte { return buildLongLongExecutePacket(5, false) }, want: -5},
+			},
+		},
+		{
+			name:  "date add day second composite and invalid",
+			query: "select timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval ? day_second))",
+			executions: []execution{
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "1 02:03:04")
+				}, want: 93784},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "1 02:03:04:05")
+				}, wantNull: true},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "0 00:00:01")
+				}, want: 1},
+			},
+		},
+		{
+			name:  "date sub year month composite and invalid",
+			query: "select timestampdiff(month, '2026-01-01', date_sub('2026-01-01', interval ? year_month))",
+			executions: []execution{
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "1-2")
+				}, want: -14},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "1-2-3")
+				}, wantNull: true},
+				{packet: func(proto *MysqlProtocolImpl) []byte {
+					return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "0-1")
+				}, want: -1},
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(27330+scenarioIndex), scenario.query)
+			proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, scenario.query)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+				scratchPrepare.Close()
+			}()
+			cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+
+			for executionIndex, execution := range scenario.executions {
+				require.NoError(t, proto.ParseExecuteData(
+					execCtx.reqCtx, cw.proc, prepareStmt, execution.packet(proto), 0))
+				require.Equal(t, execution.paramNull, prepareStmt.params.GetNulls().Contains(0),
+					"execution %d protocol NULL state", executionIndex)
+				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err, "execution %d", executionIndex)
+				got, gotNull := evaluatePreparedIntervalProjection(t, cw, runtimePlan)
+				require.Equal(t, execution.wantNull, gotNull, "execution %d", executionIndex)
+				if !gotNull {
+					require.Equal(t, execution.want, got, "execution %d", executionIndex)
+				}
+				if owned && executionStmt != nil {
+					executionStmt.Free()
+				}
+				after, marshalErr := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, marshalErr)
+				require.Equal(t, cachedPlan, after, "execution %d mutated the cached plan", executionIndex)
+				prepareStmt.clearBinaryParamState(cw.proc)
+			}
+		})
+	}
+}
+
 func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 	const query = "select regexp_instr(?, ?, 2), regexp_replace(?, ?, ?, 1, 0), " +
 		"regexp_instr(regexp_substr(?, ?), ?, 1)"
