@@ -123,9 +123,9 @@ const (
 	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
 	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
 	ErrCharacterSetMismatch uint16 = 20330
-	// Keep this distinct from ErrCharacterSetMismatch because both errors are
-	// serialized through the internal error code.
-	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20331
+	// Keep this distinct from ErrInvalidJSONCharset and ErrCharacterSetMismatch
+	// because all three errors are serialized through the internal error code.
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20332
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
