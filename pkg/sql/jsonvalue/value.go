@@ -33,6 +33,31 @@ const (
 
 type GeometryConverter func([]byte) (bytejson.ByteJson, error)
 
+// FromBinary converts a resolved binary SQL value to the opaque JSON scalar
+// used by MySQL-compatible JSON constructors and comparisons. The field
+// subtype is part of the value's comparison domain, so prepared values must
+// use this same conversion when their concrete type metadata is available.
+func FromBinary(
+	ctx context.Context,
+	protocolVersion int64,
+	oid types.T,
+	payload []byte,
+) (bytejson.ByteJson, error) {
+	fieldType := uint8(0)
+	switch oid {
+	case types.T_binary:
+		fieldType = mysqlTypeString
+	case types.T_varbinary:
+		fieldType = mysqlTypeVarchar
+	case types.T_blob:
+		fieldType = mysqlTypeBlob
+	default:
+		return bytejson.ByteJson{}, moerr.NewInvalidInputf(
+			ctx, "unsupported binary type for JSON conversion: %s", oid.String())
+	}
+	return bytejson.NewMySQLOpaque(protocolVersion, fieldType, payload)
+}
+
 // FromVector converts one resolved SQL value to the scalar representation used
 // inside MySQL-compatible JSON constructors. Prepared TEXT provenance is
 // resolved by the caller before entering this type-driven conversion.
@@ -103,11 +128,11 @@ func FromVector(
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
 		return typed(bytejson.TpCodeDecimal, value.Format(typ.Scale)), nil
 	case types.T_binary:
-		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeString, v.GetBytesAt(row))
+		return FromBinary(ctx, protocolVersion, typ.Oid, v.GetBytesAt(row))
 	case types.T_varbinary:
-		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeVarchar, v.GetBytesAt(row))
+		return FromBinary(ctx, protocolVersion, typ.Oid, v.GetBytesAt(row))
 	case types.T_blob:
-		return bytejson.NewMySQLOpaque(protocolVersion, mysqlTypeBlob, v.GetBytesAt(row))
+		return FromBinary(ctx, protocolVersion, typ.Oid, v.GetBytesAt(row))
 	case types.T_year:
 		return uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), nil
 	case types.T_bit:

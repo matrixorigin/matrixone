@@ -1,0 +1,34 @@
+drop table if exists member_binary_constructor;
+create table member_binary_constructor (
+b binary(3),
+b_other binary(3),
+v varbinary(3),
+v_other varbinary(3),
+bl blob,
+bl_other blob,
+bits bit(9),
+bits_other bit(9)
+);
+insert into member_binary_constructor values
+(0x000102, 0x000103, 0x000102, 0x000103, 0x000102, 0x000103, 266, 267);
+select
+b member of (json_array(b)) as binary_match,
+b member of (json_array(b_other)) as binary_nonmatch,
+null member of (json_array(b)) as binary_null,
+v member of (json_array(v)) as varbinary_match,
+v member of (json_array(v_other)) as varbinary_nonmatch,
+bl member of (json_array(bl)) as blob_match,
+bl member of (json_array(bl_other)) as blob_nonmatch,
+bits member of (json_array(bits)) as bit_match,
+bits member of (json_array(bits_other)) as bit_nonmatch
+from member_binary_constructor;
+➤ binary_match[-5,64,0]  ¦  binary_nonmatch[-5,64,0]  ¦  binary_null[-5,64,0]  ¦  varbinary_match[-5,64,0]  ¦  varbinary_nonmatch[-5,64,0]  ¦  blob_match[-5,64,0]  ¦  blob_nonmatch[-5,64,0]  ¦  bit_match[-5,64,0]  ¦  bit_nonmatch[-5,64,0]  𝄀
+1  ¦  0  ¦  null  ¦  1  ¦  0  ¦  1  ¦  0  ¦  1  ¦  0
+set @member_binary_value = 0x000102;
+prepare member_binary_constructor_stmt from
+'select cast(? as binary(3)) member of (json_array(cast(? as binary(3)))) as prepared_binary_match';
+execute member_binary_constructor_stmt using @member_binary_value, @member_binary_value;
+➤ prepared_binary_match[-5,64,0] 𝄀
+1
+deallocate prepare member_binary_constructor_stmt;
+drop table member_binary_constructor;

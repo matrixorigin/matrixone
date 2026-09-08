@@ -35,6 +35,7 @@ func preparedJSONMemberOfScalarValue(
 	kind vector.PrepareParamKind,
 	paramType types.T,
 	binaryString bool,
+	protocolVersion int64,
 ) (any, error) {
 	switch paramType {
 	case types.T_bit:
@@ -56,7 +57,8 @@ func preparedJSONMemberOfScalarValue(
 	case types.T_uuid:
 		return string(value), nil
 	default:
-		return PreparedJSONScalarValue(ctx, value, kind, paramType, binaryString)
+		return PreparedJSONScalarValue(
+			ctx, value, kind, paramType, binaryString, protocolVersion)
 	}
 }
 
@@ -244,6 +246,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 			kind,
 			paramType,
 			operand.parameter.GetIsBinaryStringAt(int(row)),
+			jsonSessionProtocolVersion(proc),
 		)
 	} else if operand.parameter.GetType().Oid == types.T_year {
 		// YEAR is stored as a temporal SQL type, but MEMBER OF compares its

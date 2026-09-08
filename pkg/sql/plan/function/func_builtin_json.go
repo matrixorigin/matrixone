@@ -52,13 +52,18 @@ func PreparedJSONScalarValue(
 	kind vector.PrepareParamKind,
 	paramType types.T,
 	binaryString bool,
+	protocolVersion int64,
 ) (any, error) {
-	if binaryString || paramType == types.T_binary ||
-		paramType == types.T_varbinary || paramType == types.T_blob {
+	if paramType == types.T_binary || paramType == types.T_varbinary ||
+		paramType == types.T_blob {
+		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, value)
+	}
+	if binaryString {
 		return newTypedByteJson(bytejson.TpCodeOpaque, string(value)), nil
 	}
 	if paramType != types.T_any {
-		scalar, err := preparedTextToJSONValueWithType(ctx, string(value), paramType)
+		scalar, err := preparedTextToJSONValueWithType(
+			ctx, string(value), paramType, protocolVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -78,6 +83,7 @@ func preparedTextToJSONValueWithType(
 	ctx context.Context,
 	value string,
 	paramType types.T,
+	protocolVersion int64,
 ) (any, error) {
 	parseSigned := func(bitSize int) (int64, error) {
 		parsed, err := strconv.ParseInt(value, 10, bitSize)
@@ -163,7 +169,7 @@ func preparedTextToJSONValueWithType(
 	case types.T_char, types.T_varchar, types.T_text, types.T_enum, types.T_geometry:
 		return value, nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		return newTypedByteJson(bytejson.TpCodeOpaque, value), nil
+		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, []byte(value))
 	default:
 		return nil, moerr.NewInternalErrorf(
 			ctx, "unsupported prepared parameter type %s", paramType.String())
@@ -208,7 +214,8 @@ func normalizeJsonComparisonParam(
 			}
 		} else {
 			encoded, err := encodeJsonComparisonParamWithMetadata(
-				proc.Ctx, value, kind, paramType, parameters[0].GetIsBinaryStringAt(0))
+				proc.Ctx, value, kind, paramType,
+				parameters[0].GetIsBinaryStringAt(0), jsonSessionProtocolVersion(proc))
 			if err != nil {
 				return err
 			}
@@ -256,7 +263,8 @@ func normalizeJsonComparisonParam(
 		}
 
 		encoded, err := encodeJsonComparisonParamWithMetadata(
-			proc.Ctx, value, kind, paramType, parameters[0].GetIsBinaryStringAt(int(i)))
+			proc.Ctx, value, kind, paramType,
+			parameters[0].GetIsBinaryStringAt(int(i)), jsonSessionProtocolVersion(proc))
 		if err != nil {
 			return err
 		}
@@ -283,7 +291,8 @@ func encodeJsonComparisonParam(
 	value []byte,
 	kind vector.PrepareParamKind,
 ) ([]byte, error) {
-	return encodeJsonComparisonParamWithMetadata(ctx, value, kind, types.T_any, false)
+	return encodeJsonComparisonParamWithMetadata(
+		ctx, value, kind, types.T_any, false, bytejson.MySQLOpaqueProtocolVersion)
 }
 
 func encodeJsonComparisonParamWithMetadata(
@@ -292,8 +301,10 @@ func encodeJsonComparisonParamWithMetadata(
 	kind vector.PrepareParamKind,
 	paramType types.T,
 	binaryString bool,
+	protocolVersion int64,
 ) ([]byte, error) {
-	scalar, err := PreparedJSONScalarValue(ctx, value, kind, paramType, binaryString)
+	scalar, err := PreparedJSONScalarValue(
+		ctx, value, kind, paramType, binaryString, protocolVersion)
 	if err != nil {
 		return nil, err
 	}
