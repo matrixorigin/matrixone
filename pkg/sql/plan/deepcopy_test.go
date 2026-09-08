@@ -157,6 +157,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 		NotOnPk:             true,
 		UseMembershipFilter: true,
 		ScalarPredicate:     true,
+		MustApply:           true,
 		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
 		ProbeType: &planpb.Type{
 			Id:         4,
@@ -178,6 +179,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
 	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
 	require.True(t, cloned.ScalarPredicate)
+	require.True(t, cloned.MustApply)
 	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
 	require.Equal(t, source.ProbeType, cloned.ProbeType)
 	require.NotSame(t, source.ProbeType, cloned.ProbeType)

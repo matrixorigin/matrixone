@@ -1151,6 +1151,12 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	for _, name := range []string{
+		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
+		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
+	} {
+		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
+	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
@@ -1195,6 +1201,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "invalid IPv4 address", fid: INET_ATON, argCount: 1},
+		{name: "invalid binary IP length", fid: INET6_NTOA, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
