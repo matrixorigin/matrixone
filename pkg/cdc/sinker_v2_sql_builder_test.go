@@ -110,6 +110,21 @@ func TestNewCDCStatementBuilder(t *testing.T) {
 	})
 }
 
+func TestCDCStatementBuilder_QuotesUpsertIdentifiers(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "quoted_table",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "a`b", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "a`b": 1},
+	}
+	builder, err := NewCDCStatementBuilder("db", "quoted_table", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+	assert.Equal(t, " ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`a``b`=VALUES(`a``b`);", string(builder.buildInsertSuffix()))
+}
+
 func TestCDCStatementBuilder_BuildInsertSQL(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)

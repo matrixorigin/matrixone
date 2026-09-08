@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -336,13 +337,14 @@ func (b *CDCStatementBuilder) buildInsertSuffix() []byte {
 	suffix := make([]byte, 0, 32*len(b.insertColNames)+1)
 	suffix = append(suffix, " ON DUPLICATE KEY UPDATE "...)
 	for i, name := range b.insertColNames {
+		quotedName := strings.ReplaceAll(name, "`", "``")
 		if i > 0 {
 			suffix = append(suffix, ',')
 		}
 		suffix = append(suffix, '`')
-		suffix = append(suffix, name...)
+		suffix = append(suffix, quotedName...)
 		suffix = append(suffix, "`=VALUES(`"...)
-		suffix = append(suffix, name...)
+		suffix = append(suffix, quotedName...)
 		suffix = append(suffix, "`)"...)
 	}
 	suffix = append(suffix, ';')
