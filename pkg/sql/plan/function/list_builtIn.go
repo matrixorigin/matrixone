@@ -106,6 +106,22 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+// Decimal epochs must reach the exact decimal overload. The generic numeric
+// cast costs tie decimal-to-float with decimal widening and pick the first
+// overload, losing both decimal digits and declared fractional precision.
+func fromUnixTimeTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 0 && inputs[0].Oid.IsDecimal() {
+		for i, candidate := range overloads {
+			if len(candidate.args) == len(inputs) && candidate.args[0] == types.T_decimal256 {
+				matched := fixedTypeMatch(overloads[i:i+1], inputs)
+				matched.idx = i
+				return matched
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 func fromUnixTimeReturnType(parameters []types.Type) types.Type {
 	scale := int32(0)
 	if len(parameters) > 0 {
@@ -122,7 +138,7 @@ func fromUnixTimeReturnType(parameters []types.Type) types.Type {
 			}
 		}
 	}
-	return types.T_datetime.ToTypeWithScale(scale)
+	return types.New(types.T_datetime, scale, scale)
 }
 
 func concatReturnType(parameters []types.Type) types.Type {
@@ -9763,7 +9779,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
-				retType:    fromUnixTimeReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeAdd
 				},
@@ -9954,7 +9972,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
-				retType:    fromUnixTimeReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[2]
+				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
 				},
@@ -10013,7 +10033,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
-				retType:    fromUnixTimeReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeSub
 				},
@@ -10160,7 +10182,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: FROM_UNIXTIME,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fromUnixTimeTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -10174,9 +10196,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeUint64
 				},
@@ -10184,9 +10204,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeFloat64
 				},
@@ -10194,9 +10212,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeDecimal256
 				},
@@ -11041,6 +11057,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 				newOp: func() executeLogicOfOverload {
 					return builtInStrToTime
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 6, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInStrToDatetime
 				},
 			},
 		},

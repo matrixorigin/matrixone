@@ -3749,7 +3749,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
-			b.GetContext(), name, args, false, nil, findInSetInternalArgs)
+			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
@@ -4345,7 +4345,7 @@ func bindFuncExprAndConstFoldInternal(
 		return nil, err
 	}
 	retExpr, err := bindFuncExprImplByPlanExpr(
-		ctx, name, args, descendFunctions, nil, allowInternalFunctionArgs)
+		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -4906,11 +4906,12 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, false)
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
+	originalBoundExpr *Expr,
 	name string,
 	args []*Expr,
 	stringDomainModes []function.StringDomainCheckMode,
@@ -4923,7 +4924,7 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes, true)
+		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -4932,6 +4933,7 @@ func bindFuncExprImplByPlanExpr(
 	args []*Expr,
 	descendFunctions bool,
 	stringDomainModes []function.StringDomainCheckMode,
+	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
@@ -5048,7 +5050,8 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	case "date_add", "date_sub":
-		if len(args) == 3 && isBoundDateFunctionArgs(args) {
+		if preparedDateFunctionArgs(originalBoundExpr, name, args) {
+			args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
 			break
 		}
 		// rewrite date_add/date_sub function
@@ -5304,26 +5307,26 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 	case "str_to_date", "to_date":
-		if len(args) == 3 && isBoundStrToDateArgs(args) {
+		if preparedStrToDateArgs(originalBoundExpr, name, args) {
+			if len(args) == 3 {
+				args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
+			}
 			break
 		}
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 
-		if types.T(args[1].Typ.Id).IsMySQLString() {
-			var tp = types.T_date
-			var fsp int
-			if exprC := args[1].GetLit(); exprC != nil {
-				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, fsp = ExtractToDateReturnType(sval.Sval)
-			}
-			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
-
-		} else if args[1].Typ.Id == int32(types.T_any) {
-			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
-		} else {
+		if !types.T(args[1].Typ.Id).IsMySQLString() && args[1].Typ.Id != int32(types.T_any) {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if exprC := args[1].GetLit(); exprC != nil && !exprC.Isnull {
+			sval, ok := exprC.Value.(*plan.Literal_Sval)
+			if !ok {
+				return nil, moerr.NewInvalidArg(ctx, name+" format", args[1])
+			}
+			tp, fsp := ExtractToDateReturnType(sval.Sval)
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
@@ -5994,6 +5997,15 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
+	// Temporal precision is also the display width stored in derived schemas.
+	// Keep the two metadata fields aligned after unit-dependent refinement.
+	switch name {
+	case "date_add", "date_sub", "timestampadd", "str_to_date", "to_date":
+		if returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time {
+			returnType.Width = returnType.Scale
+		}
+	}
+
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
@@ -6462,19 +6474,33 @@ func dateFunctionUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
 	return u, u > types.IntervalTypeInvalid && u < types.IntervalTypeMax
 }
 
-func isBoundDateFunctionArgs(args []*Expr) bool {
-	if len(args) != 3 {
+func preparedDateFunctionArgs(original *Expr, name string, args []*Expr) bool {
+	if original == nil || len(args) != 3 {
 		return false
 	}
-	_, ok := dateFunctionUnitFromPlanExpr(args[2])
+	fn := original.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, name) || len(fn.Args) != 3 {
+		return false
+	}
+	_, ok := dateFunctionUnitFromPlanExpr(fn.Args[2])
 	return ok
 }
 
-func isBoundStrToDateArgs(args []*Expr) bool {
-	if len(args) != 3 || args[2] == nil || args[2].GetLit() == nil || !args[2].GetLit().Isnull {
+func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
+	if original == nil {
 		return false
 	}
-	switch types.T(args[2].Typ.Id) {
+	fn := original.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, name) || len(fn.Args) != len(args) {
+		return false
+	}
+	if len(fn.Args) == 2 {
+		return true
+	}
+	if len(fn.Args) != 3 || fn.Args[2] == nil || fn.Args[2].GetLit() == nil || !fn.Args[2].GetLit().Isnull {
+		return false
+	}
+	switch types.T(fn.Args[2].Typ.Id) {
 	case types.T_date, types.T_datetime, types.T_time:
 		return true
 	}

@@ -3786,32 +3786,6 @@ func restoreIntervalSyntaxForCTAS(sql string) string {
 			continue
 		}
 		if !hasIntervalKeywordAt(sql, i) {
-			if hasFunctionCallAt(sql, i, "timestampadd") || hasFunctionCallAt(sql, i, "extract") {
-				name := "timestampadd"
-				if hasFunctionCallAt(sql, i, "extract") {
-					name = "extract"
-				}
-				args, next, ok := parseFunctionCallForCTAS(sql, i, name)
-				if ok && ((name == "timestampadd" && len(args) == 3) || (name == "extract" && len(args) == 2)) && isIntervalUnitToken(args[0]) {
-					out.WriteString(sql[i : i+len(name)+1])
-					out.WriteString(normalizeIntervalUnitToken(args[0]))
-					if name == "extract" {
-						out.WriteString(" from ")
-					} else {
-						out.WriteString(", ")
-						out.WriteString(restoreIntervalSyntaxForCTAS(strings.TrimSpace(args[1])))
-						out.WriteString(", ")
-					}
-					if name == "extract" {
-						out.WriteString(restoreIntervalSyntaxForCTAS(strings.TrimSpace(args[1])))
-					} else {
-						out.WriteString(restoreIntervalSyntaxForCTAS(strings.TrimSpace(args[2])))
-					}
-					out.WriteByte(')')
-					i = next
-					continue
-				}
-			}
 			out.WriteByte(sql[i])
 			i++
 			continue
@@ -3831,44 +3805,6 @@ func restoreIntervalSyntaxForCTAS(sql string) string {
 		i = next
 	}
 	return out.String()
-}
-
-func parseFunctionCallForCTAS(sql string, start int, name string) ([]string, int, bool) {
-	pos, argStart, depth := start+len(name)+1, start+len(name)+1, 1
-	var args []string
-	for pos < len(sql) {
-		switch sql[pos] {
-		case '\'', '"':
-			pos = skipQuotedStringForCTAS(sql, pos, sql[pos])
-			continue
-		case '`':
-			pos = skipBacktickIdentifierForCTAS(sql, pos)
-			continue
-		case '(':
-			depth++
-		case ',':
-			if depth == 1 {
-				args = append(args, sql[argStart:pos])
-				argStart = pos + 1
-			}
-		case ')':
-			depth--
-			if depth == 0 {
-				return append(args, sql[argStart:pos]), pos + 1, true
-			}
-		}
-		pos++
-	}
-	return nil, 0, false
-}
-
-func hasFunctionCallAt(sql string, start int, name string) bool {
-	end := start + len(name)
-	return end < len(sql) && sql[end] == '(' && strings.EqualFold(sql[start:end], name) && (start == 0 || !isSQLIdentifierByte(sql[start-1]))
-}
-
-func normalizeIntervalUnitToken(unit string) string {
-	return strings.ToLower(strings.Trim(strings.TrimSpace(unit), "`'\""))
 }
 
 func parseIntervalCall(sql string, start int) (expr string, unit string, next int, ok bool) {

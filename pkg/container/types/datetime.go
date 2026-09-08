@@ -543,6 +543,12 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 			return 0, false
 		}
 		newDate := dt + Datetime(nums)
+		// Datetime zero is 0001-01-01 00:00:00. Values below it can be
+		// misread as an in-range calendar date after integer division truncates
+		// toward zero, so reject the encoded domain before calendar conversion.
+		if newDate < 0 {
+			return 0, false
+		}
 		y, m, d, _ := newDate.ToDate().Calendar(true)
 		switch timeType {
 		case DateType:

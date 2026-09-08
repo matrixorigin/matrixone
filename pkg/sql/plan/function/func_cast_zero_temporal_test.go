@@ -410,7 +410,7 @@ func runStringTemporalCast(
 	return out
 }
 
-func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
+func TestUnixTimestampZeroValueReturnsZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
 	varcharInput := []FunctionTestInput{
@@ -428,7 +428,7 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 			fn:     builtInUnixTimestamp,
 		},
 		{
@@ -436,25 +436,25 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{types.ZeroTimestamp}, nil),
 			},
-			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{true}),
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{false}),
 			fn:     builtInUnixTimestamp,
 		},
 		{
 			name:   "varchar int64",
 			inputs: varcharInput,
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 			fn:     builtInUnixTimestampVarcharToInt64,
 		},
 		{
 			name:   "varchar float64",
 			inputs: varcharInput,
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false}),
 			fn:     builtInUnixTimestampVarcharToFloat64,
 		},
 		{
 			name:   "varchar decimal128",
 			inputs: varcharInput,
-			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{true}),
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{false}),
 			fn:     builtInUnixTimestampVarcharToDecimal128,
 		},
 	} {
@@ -462,6 +462,83 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
 			succeed, info := fcTC.Run()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	preEpoch, err := types.ParseTimestamp(time.UTC, "1969-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	epoch, err := types.ParseTimestamp(time.UTC, "1970-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	postEpoch, err := types.ParseTimestamp(time.UTC, "1970-01-01 00:00:01.500000", 6)
+	require.NoError(t, err)
+
+	stringValues := []string{
+		"2021-02-29",
+		"not-a-datetime",
+		"0000-00-00 00:00:00",
+		"1969-12-31 23:59:59.999999",
+		"1970-01-01 00:00:00.000000",
+		"1970-01-01 00:00:01.500000",
+		"",
+	}
+	stringNulls := []bool{false, false, false, false, false, false, true}
+
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "typed integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToType(),
+				[]types.Timestamp{types.ZeroTimestamp, preEpoch, epoch, postEpoch, 0},
+				[]bool{false, false, false, false, true})},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 1, 0}, []bool{false, false, false, false, true}),
+			fn: builtInUnixTimestamp,
+		},
+		{
+			name: "typed decimal",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6),
+				[]types.Timestamp{types.ZeroTimestamp, preEpoch, epoch, postEpoch, 0},
+				[]bool{false, false, false, false, true})},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{{}, {}, {}, mustDecimal128(t, "1.500000", 38, 6), {}},
+				[]bool{false, false, false, false, true}),
+			fn: builtInUnixTimestamp,
+		},
+		{
+			name:   "string integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 0, 1, 0}, []bool{false, false, false, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToInt64,
+		},
+		{
+			name:   "string float",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0, 0, 0, 0, 1.5, 0}, []bool{false, false, false, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToFloat64,
+		},
+		{
+			name:   "string decimal",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{{}, {}, {}, {}, {}, mustDecimal128(t, "1.500000", 38, 6), {}},
+				[]bool{false, false, false, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToDecimal128,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, test.inputs, test.expect, test.fn)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
 		})
 	}
 }
