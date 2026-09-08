@@ -125,7 +125,7 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 	// "nothing to account for" exit BEFORE registering a reservation, and the load is
 	// invisible to admission entirely. Counting the chunks is cheap enough to do here; see
 	// tailPeakBytes.
-	tail, err := tailPeakBytes(sqlproc, s.cfg)
+	tail, _, err := tailPeakBytes(sqlproc, s.cfg)
 	if err != nil {
 		return err
 	}

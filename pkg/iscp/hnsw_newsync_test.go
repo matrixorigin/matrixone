@@ -41,6 +41,10 @@ func TestHnswSqlWriterNewSync_SpillDirResolution(t *testing.T) {
 	require.Empty(t, resolveHostSpillDir(sqlproc), "no executor means no LOCAL route")
 
 	// An executor with no LOCAL fileservice attached is the same fallback, not a crash.
+	// Cleanup is registered BEFORE the assertion: iscpExecutors is process-global, and a failed
+	// assertion here would otherwise leave this stub registered for every later test in the
+	// package (and for the next -count=N iteration, which shares the process).
+	t.Cleanup(func() { iscpExecutors.Delete(service) })
 	iscpExecutors.Store(service, &ISCPTaskExecutor{})
 	require.Empty(t, resolveHostSpillDir(sqlproc), "an executor with a nil rootFS still falls back")
 	iscpExecutors.Delete(service)

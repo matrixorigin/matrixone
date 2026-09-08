@@ -233,7 +233,7 @@ func TestTailPeakBytesReadsTheFrameRows(t *testing.T) {
 		}
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 4096, 1)}}, nil
 	})
-	got, err := tailPeakBytes(sp, cfg)
+	got, _, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
 	require.Equal(t, int64(4096*tailLoadPeakFactor), got,
 		"every chunk is covered by a frame row, so the exact sum stands on its own")
@@ -278,7 +278,7 @@ func TestTailPeakBytesFallsBackWhenAFrameHasNoRow(t *testing.T) {
 	const chunks = 4
 	tailStub(t, mp, 0, 0, chunks) // no frame rows at all: the legacy shape
 
-	got, err := tailPeakBytes(sp, cfg)
+	got, _, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
 	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize*tailLoadPeakFactor), got,
 		"bounded from above by the chunk cap, which is the safe direction")
@@ -299,8 +299,10 @@ func TestTailPeakBytesBoundsTheChunksNoFrameRowCovers(t *testing.T) {
 	const legacyChunks = 1600
 	tailStub(t, mp, newFrameBytes, newFrameChunks, legacyChunks+newFrameChunks)
 
-	got, err := tailPeakBytes(sp, cfg)
+	got, uncovered, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
+	require.Equal(t, int64(legacyChunks), uncovered,
+		"the refusal message reports this count, so it must be the legacy chunks and not the whole tail")
 
 	want := int64(newFrameBytes+legacyChunks*vectorindex.MaxChunkSize) * tailLoadPeakFactor
 	require.Equal(t, want, got,
@@ -319,7 +321,7 @@ func TestTailPeakBytesBoundsAMissingMiddleFrame(t *testing.T) {
 	const missing = 7
 	tailStub(t, mp, covered*vectorindex.MaxChunkSize, covered, covered+missing)
 
-	got, err := tailPeakBytes(sp, cfg)
+	got, _, err := tailPeakBytes(sp, cfg)
 	require.NoError(t, err)
 	require.Equal(t, int64((covered+missing)*vectorindex.MaxChunkSize*tailLoadPeakFactor), got)
 }
@@ -331,7 +333,7 @@ func TestTailPeakBytesEdges(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		sp, mp := mockSqlProc(t)
 		tailStub(t, mp, 0, 0, 0)
-		got, err := tailPeakBytes(sp, cfg)
+		got, _, err := tailPeakBytes(sp, cfg)
 		require.NoError(t, err)
 		require.Zero(t, got)
 	})
@@ -339,7 +341,7 @@ func TestTailPeakBytesEdges(t *testing.T) {
 	t.Run("rows outliving their chunks", func(t *testing.T) {
 		sp, mp := mockSqlProc(t)
 		tailStub(t, mp, 4096, 9, 2) // more covered chunks than stored
-		got, err := tailPeakBytes(sp, cfg)
+		got, _, err := tailPeakBytes(sp, cfg)
 		require.NoError(t, err)
 		require.Equal(t, int64(4096*tailLoadPeakFactor), got,
 			"never negative, and the sum already overstates the tail")

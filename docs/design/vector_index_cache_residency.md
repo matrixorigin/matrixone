@@ -941,3 +941,23 @@ size of the frames that happen to carry rows -- a 100 MiB tail plus a new 1 MiB 
 frame rows report the chunks their bytes occupy (`ceil(filesize / MaxChunkSize)`), and the
 difference from the stored chunk count is bounded at the cap each chunk was written under. Exact
 where it can be, an upper bound where it cannot, never below what the load will hold.
+
+### 14.1 The uncovered bound is an upper bound, and it is transitional
+
+Charging every uncovered chunk at `MaxChunkSize` overstates a tail of many SMALL
+frames: a frame under 64 KiB occupies one chunk but is counted as a full one. A
+100 k-frame legacy tail holding ~200 MB can therefore be charged ~19 GB, and
+`checkTailLoadBudget` can refuse a MATCH on a CN that had room for it.
+
+This is accepted, for three reasons. The direction is the safe one — the
+alternative, believing a sum that describes part of a tail, under-reserves the
+load this budget exists to bound. It is not measurable more cheaply: the only
+exact source for an unrecorded chunk is `LENGTH(data)` on a blob column, which
+reads the entire tail off storage to answer "how big is it". And it is
+transitional rather than permanent: only chunks written before the per-frame rows
+existed are uncovered, every new flush records its frames exactly, and compaction
+rewrites the tail into frames that do — after which the figure is exact.
+
+The refusal names the uncovered chunk count and the cap it applied, so an operator
+can tell an over-estimate from a genuinely large tail, and points at the
+compaction that makes it exact.

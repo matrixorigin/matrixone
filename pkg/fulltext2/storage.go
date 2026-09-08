@@ -704,14 +704,14 @@ var (
 // read to answer "how big is it". COUNT(*) references only the predicate columns, so the blob
 // never leaves disk. That is what makes this figure cheap enough to take in Preload, where
 // admission needs it, instead of only at load time where it is too late to serialize anything.
-func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (peak int64, uncoveredChunks int64, err error) {
 	stored, coveredChunks, err := tailFrameCoverage(sqlproc, cfg)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	totalChunks, err := tailChunkCount(sqlproc, cfg)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	// COVERAGE, not "are there any rows". A tail can be described by frame rows in part and by
@@ -734,19 +734,19 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) 
 	bytes := stored
 	if uncovered > 0 {
 		if uncovered > (math.MaxInt64-bytes)/int64(vectorindex.MaxChunkSize) {
-			return math.MaxInt64, nil
+			return math.MaxInt64, uncovered, nil
 		}
 		bytes += uncovered * int64(vectorindex.MaxChunkSize)
 	}
 	if bytes <= 0 {
-		return 0, nil
+		return 0, uncovered, nil
 	}
 	// Saturate rather than wrap: a corrupt total would otherwise go negative, compare below
 	// the budget, and admit the load the check exists to refuse.
 	if bytes > math.MaxInt64/tailLoadPeakFactor {
-		return math.MaxInt64, nil
+		return math.MaxInt64, uncovered, nil
 	}
-	return bytes * tailLoadPeakFactor, nil
+	return bytes * tailLoadPeakFactor, uncovered, nil
 }
 
 // tailFrameCoverage returns the bytes the frame rows account for and how many chunks those bytes
@@ -802,18 +802,27 @@ func tailChunkCount(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error)
 // pre-allocation figure, both see room for one tail, and both then allocate. Subtracting the
 // arrivals ahead of this one is what makes the second refuse instead of joining the first.
 func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reservedAhead int64) error {
-	need, err := tailPeakBytes(sqlproc, cfg)
+	need, uncoveredChunks, err := tailPeakBytes(sqlproc, cfg)
 	if err != nil {
 		return err
 	}
 	promised := max(reservedAhead, 0)
 	avail := int64(memTotalFn())*8/10 - int64(memGolangFn()) - promised
 	if need > avail {
+		// The figure is EXACT for frames that recorded their size and an UPPER BOUND for any
+		// chunk no frame row covers -- a tail written before the rows existed is bounded at the
+		// cap each chunk was written under, which overstates a tail of many small frames. That
+		// is the safe direction, and it is not permanent: compaction rewrites the tail as frames
+		// that do record their size, after which this figure is exact. Say so, or an operator
+		// reads a number they cannot reconcile with the bytes on disk.
 		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
 			"fulltext2 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
 				"(MemoryTotal*0.8 - Go heap - %d MB promised to loads already in flight); "+
-				"compact it (ALTER ... REINDEX) or increase CN memory",
-			cfg.DbName, cfg.IndexTable, need>>20, avail>>20, promised>>20))
+				"%d of its chunks predate per-frame sizes and are counted at the %d KB chunk cap, "+
+				"so the estimate is an upper bound -- compact it (ALTER ... REINDEX), which makes "+
+				"the figure exact, or increase CN memory",
+			cfg.DbName, cfg.IndexTable, need>>20, avail>>20, promised>>20,
+			uncoveredChunks, vectorindex.MaxChunkSize>>10))
 	}
 	return nil
 }
