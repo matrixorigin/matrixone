@@ -1340,3 +1340,34 @@ func TestDeviceBudgetsComeFromOneProbe(t *testing.T) {
 	require.Equal(t, sumDeviceCapacity(perCard), device,
 		"the memoized aggregate is the fold of the memoized per-card map, always")
 }
+
+// The state the CDC-overflow fix exists for: an index is ALREADY RESIDENT and idle-unreclaimable
+// (a search is running on it), and several CDC-only generations arrive at once against a budget
+// with room for one more.
+//
+// This is not the sole-occupant case. There is somebody to protect, so the exemption does not
+// apply and the arithmetic has to hold on its own: the resident's bytes, plus the bytes every
+// arrival ahead in line has promised, against the cap. If a CDC-only arrival measured 0 -- which
+// it did before the overflow was charged at Preload -- every one of them would look free, all
+// would be admitted, and the allocations would already have happened by the time anything
+// noticed.
+func TestResidentPlusConcurrentCdcArrivalsCannotOversubscribe(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, caps{}, hostCap(250))
+
+	// 100 bytes resident and busy, so reclaim cannot free it: 150 left under the cap.
+	held := make(chan struct{})
+	defer close(held)
+	busy := "__mo_index_secondary_resident"
+	loadInto(t, c, sp, busy, 100, 0)
+	require.True(t, isResident(c, busy))
+
+	// Four CDC-only arrivals, each measuring 100. Exactly one fits in what is left.
+	admitted, refused := admitConcurrently(t, c, sp, 4, 100)
+	require.Equal(t, 1, admitted,
+		"one fits beside the resident; the budget is not multiplied by the burst width")
+	require.Equal(t, 3, refused,
+		"the rest are overload -- refused before allocating, not discovered after")
+	require.True(t, isResident(c, busy),
+		"and the resident was never evicted to seat an arrival")
+}

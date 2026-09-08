@@ -85,24 +85,37 @@ func TestCagraOverflowDeviceBytesNil(t *testing.T) {
 
 var _ = vectorindex.RuntimeConfig{}
 
-// The overflow is built inside Load, not Preload, so the pre-load reservation cannot see it.
-// This pins that timing: the governor's makeRoom charge is taken while Overflow is still nil,
-// and only the post-load capture includes it. If buildOverflow ever moves into Preload this
-// test should be updated to expect the reservation to cover it too.
-func TestCagraOverflowIsInvisibleUntilLoad(t *testing.T) {
+// The overflow is built inside Load, so its REAL size does not exist when admission decides.
+// A CDC-only generation was therefore charged 0 at Preload: the governor reserved nothing and
+// Load then allocated the VRAM unreserved, which no post-load pass can undo. The tail's own
+// metadata rows carry the row count, so Preload charges an estimate and the real count
+// supersedes it once the overflow exists.
+func TestCagraOverflowIsChargedBeforeLoad(t *testing.T) {
 	s := &CagraSearch[float32, float32]{}
 	s.Idxcfg.CuvsCagra.Dimensions = 128
 
-	// Preload's view: metadata is known, the CDC overflow is not built yet.
+	// A CDC-only generation with nothing built yet: this is exactly what makeRoom sees.
 	require.Nil(t, s.Overflow, "buildOverflow runs in Load, not Preload")
-	_, deviceAtPreload := s.GetIndexSize()
-	require.Equal(t, int64(0), deviceAtPreload,
-		"the pre-load reservation cannot include an overflow that does not exist yet")
+	s.overflowRowsEstimate = 1000 // what Preload read from the tail's metadata rows
 
-	// Load builds it; the post-load capture is what charges it.
-	s.Overflow = &stubOverflow[float32]{n: 1000}
+	_, deviceAtPreload := s.GetIndexSize()
+	require.Equal(t, int64(1000*128*4), deviceAtPreload,
+		"admission must see the overflow's bytes BEFORE Load allocates them")
+
+	// Load builds it; the real count replaces the estimate, which counted deletes the
+	// overflow does not hold.
+	s.Overflow = &stubOverflow[float32]{n: 900}
 	_, deviceAfterLoad := s.GetIndexSize()
-	require.Equal(t, int64(1000*128*4), deviceAfterLoad,
-		"the post-load capture charges the overflow, so the entry is no longer 0/0")
-	require.Greater(t, deviceAfterLoad, deviceAtPreload)
+	require.Equal(t, int64(900*128*4), deviceAfterLoad,
+		"the real count supersedes the upper bound rather than adding to it")
+}
+
+// Without an estimate -- a tail whose frames predate the metadata rows AND whose chunk count
+// could not be read -- the charge is 0, which is the behaviour that existed before the estimate.
+// It must not become a refusal.
+func TestCagraOverflowWithoutAnEstimateChargesZero(t *testing.T) {
+	s := &CagraSearch[float32, float32]{}
+	s.Idxcfg.CuvsCagra.Dimensions = 128
+	_, device := s.GetIndexSize()
+	require.Zero(t, device)
 }

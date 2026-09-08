@@ -808,12 +808,18 @@ the frame's size, `build_ts` and checksum, `MATCH` answers from both the base an
 the tail, and `gpu_mode` 0 and 1 agree on all of it (hnsw and cagra create, search,
 CDC, cap set/reset, and the created metadata shape).
 
-**Not covered by this run.** The suites exercise these paths but do not FORCE the
-states the accounting fixes address: an already-resident entry plus concurrent
-CDC-only arrivals contending for one budget, or a measured host-byte delta across
-generations from the id-map charge. Those are covered at the unit seam
-(`CdcTailRowsUpperBound`, `sumDeviceCapacity`, and the reservation-ordering
-control), and a GPU performance acceptance run remains outstanding.
+The BVT suites cover these paths but do not FORCE the states the accounting fixes
+address, so each is driven directly:
+
+| forced state | test |
+|---|---|
+| an already-resident, busy entry plus four concurrent CDC-only arrivals against a budget with room for one | `TestResidentPlusConcurrentCdcArrivalsCannotOversubscribe` — 1 admitted, 3 refused, resident never evicted. Not the sole-occupant case: there is somebody to protect, so the arithmetic stands alone |
+| a CDC-only generation sized BEFORE Load | `TestCagraOverflowIsChargedBeforeLoad` — the Preload estimate charges it, and the real count supersedes rather than adds |
+| the id-map's host delta, on a real index | `TestIdMapChargeIsNonZeroAndPerGeneration` (`-tags gpu`) — builds a real cagra index, replays a real delete through the native `ensure_id_index`, and requires a positive delta sized by the INDEX's rows; a second generation starts from its own baseline, and one that never deletes is charged nothing |
+| both device budgets from one probe | `TestDeviceBudgetsComeFromOneProbe` — the aggregate is the fold of the per-card map, and a failed probe is retried rather than latched |
+| a sizing probe on a process with no lock service | `TestCdcTailSizingSurvivesAProcessWithNoLockService` — degrades to no estimate instead of panicking the load |
+
+GPU performance acceptance remains outstanding and is tracked separately.
 
 **Why `-n`.** mo-tester compares result-set *metadata* as well as values unless
 `-n` is given. Without it, `vector_cagra_replicated` and `vector_cagra_sharded`
