@@ -1785,7 +1785,6 @@ func rejectMaterializedViewAlter(def *plan.TableDef) error {
 }
 
 const materializedViewMarkerComment = "matrixone materialized view"
-const materializedViewStateMarkerComment = "matrixone materialized view state"
 
 func materializedViewStateTableName(dbName, viewName string) string {
 	digest := sha256.Sum256([]byte(strings.ToLower(dbName) + "\x00" + strings.ToLower(viewName)))

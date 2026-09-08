@@ -269,7 +269,7 @@ func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testi
 	rows.NewBatchWithRowCount(3)
 	require.NoError(t, executor.AppendStringRows(rows, 0, []string{"first", "materialized_view_100", "last"}))
 	require.NoError(t, executor.AppendFixedRows(rows, 1, []uint64{11, 22, 33}))
-	var specs []string
+	specs := make([]string, 0, 3)
 	for _, kind := range []ConsumerType{ConsumerType_IndexSync, ConsumerType_MaterializedView, ConsumerType_IndexSync} {
 		specs = append(specs, encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
 			ConsumerType: int8(kind), DBName: "db", TableName: "original",
