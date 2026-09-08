@@ -361,32 +361,7 @@ func LoadColumnDataByTopN(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (sels []int64, dists []float64, fromCache bool, err error) {
-	if m == nil {
-		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column topn")
-	}
-	ioVectors, fromCache, err := readColumnsData(
-		ctx,
-		[]uint16{column},
-		[]types.Type{typ},
-		fs,
-		location,
-		nil,
-		m,
-		policy,
-		objectio.ShareScopedDecodedColumn,
-	)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	defer objectio.ReleaseIOVector(&ioVectors)
-
-	sels, dists, err = objectio.SearchCachedVectorTopN(
-		ctx,
-		ioVectors.Entries[0],
-		selectRows,
-		orderByLimit,
-	)
-	return sels, dists, fromCache, err
+	return objectio.ReadColumnTopN(ctx, column, typ, fs, location, selectRows, orderByLimit, m, policy)
 }
 
 // LoadColumnsDataIntoAndTopN reads residual-filter columns, the vector order

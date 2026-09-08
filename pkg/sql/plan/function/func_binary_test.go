@@ -3620,6 +3620,51 @@ func initFieldTestCase() []tcTemp {
 	}
 }
 
+func TestFieldDecimalExact(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal0 := types.New(types.T_decimal128, 20, 0)
+	decimal16 := types.New(types.T_decimal128, 20, 16)
+	cases := []struct {
+		name   string
+		typ    types.Type
+		values []types.Decimal128
+		first  []types.Decimal128
+		second []types.Decimal128
+		want   uint64
+	}{
+		{
+			name:   "integer boundary",
+			typ:    decimal0,
+			values: []types.Decimal128{{B0_63: 9007199254740993}},
+			first:  []types.Decimal128{{B0_63: 9007199254740992}},
+			second: []types.Decimal128{{B0_63: 9007199254740993}},
+			want:   2,
+		},
+		{
+			name:   "scale boundary",
+			typ:    decimal16,
+			values: []types.Decimal128{{B0_63: 10000000000000001}},
+			first:  []types.Decimal128{{B0_63: 10000000000000000}},
+			second: []types.Decimal128{{B0_63: 10000000000000001}},
+			want:   2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.values, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.first, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.second, []bool{false}),
+			}
+			fc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, []bool{false}),
+				FieldDecimal128)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestField(t *testing.T) {
 	testCases := initFieldTestCase()
 

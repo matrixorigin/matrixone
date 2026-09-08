@@ -443,6 +443,33 @@ func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T)
 	require.Equal(t, "fk_child_parent", source.GetCreateTable().FksReferToMe[0].Def.Name)
 }
 
+func TestDeepCopyDataDefinitionTruncatePreservesExecutionFields(t *testing.T) {
+	source := &planpb.DataDefinition{
+		DdlType: planpb.DataDefinition_TRUNCATE_TABLE,
+		Definition: &planpb.DataDefinition_TruncateTable{
+			TruncateTable: &planpb.TruncateTable{
+				Database:        "db",
+				Table:           "t",
+				IndexTableNames: []string{"idx_t"},
+				TableId:         42,
+				ForeignTbl:      []uint64{7, 8},
+				IsDelete:        true,
+			},
+		},
+	}
+
+	cloned := DeepCopyDataDefinition(source)
+	require.Equal(t, source, cloned)
+	require.NotSame(t, source.GetTruncateTable(), cloned.GetTruncateTable())
+
+	cloned.GetTruncateTable().ForeignTbl[0] = 99
+	cloned.GetTruncateTable().IndexTableNames[0] = "changed"
+	cloned.GetTruncateTable().TableId = 100
+	require.Equal(t, uint64(7), source.GetTruncateTable().ForeignTbl[0])
+	require.Equal(t, "idx_t", source.GetTruncateTable().IndexTableNames[0])
+	require.Equal(t, uint64(42), source.GetTruncateTable().TableId)
+}
+
 func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
 	source := &planpb.Node{
 		NodeType:               planpb.Node_FILTER,
