@@ -1,0 +1,136 @@
+drop database if exists func_ip_generated_columns;
+create database func_ip_generated_columns;
+use func_ip_generated_columns;
+drop table if exists ip_deterministic_generated;
+create table ip_deterministic_generated (
+id int primary key,
+ip_text varchar(39),
+ip_binary varbinary(16),
+ipv4_number bigint unsigned generated always as (inet_aton(ip_text)) stored,
+ipv4_text varchar(39) generated always as (inet_ntoa(ipv4_number)) stored,
+ip6_binary varbinary(16) generated always as (inet6_aton(ip_text)) stored,
+ip6_text varchar(39) generated always as (inet6_ntoa(ip_binary)) stored,
+is_ipv4 int generated always as (is_ipv4(ip_text)) stored,
+is_ipv6 int generated always as (is_ipv6(ip_text)) stored,
+is_ipv4_compat int generated always as (is_ipv4_compat(ip_binary)) stored,
+is_ipv4_mapped int generated always as (is_ipv4_mapped(ip_binary)) stored,
+key idx_ipv4_number (ipv4_number),
+key idx_is_ipv4_mapped (is_ipv4_mapped)
+);
+insert into ip_deterministic_generated (id, ip_text, ip_binary) values
+(1, '192.168.1.1', unhex('00000000000000000000ffffc0a80101')),
+(2, '2001:db8::1', unhex('20010db8000000000000000000000001')),
+(3, null, null),
+(4, 'invalid', unhex('00000000000000000000000000000001')),
+(5, '::ffff:192.0.2.1', unhex('00000000000000000000ffffc0000201')),
+(6, '::192.0.2.1', unhex('000000000000000000000000c0000201'));
+select id, ip_text, ipv4_number, ipv4_text, hex(ip6_binary), ip6_text,
+is_ipv4, is_ipv6, is_ipv4_compat, is_ipv4_mapped
+from ip_deterministic_generated order by id;
+➤ id[4,32,0]  ¦  ip_text[12,39,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  hex(ip6_binary)[12,65535,0]  ¦  ip6_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  ¦  is_ipv4_compat[4,32,0]  ¦  is_ipv4_mapped[4,32,0]  𝄀
+1  ¦  192.168.1.1  ¦  3232235777  ¦  192.168.1.1  ¦  C0A80101  ¦  192.168.1.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  2001:db8::1  ¦  null  ¦  null  ¦  20010DB8000000000000000000000001  ¦  2001:db8::1  ¦  0  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  invalid  ¦  null  ¦  null  ¦  null  ¦  ::1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
+5  ¦  ::ffff:192.0.2.1  ¦  3221225985  ¦  192.0.2.1  ¦  C0000201  ¦  192.0.2.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::c000:201  ¦  0  ¦  1  ¦  1  ¦  0
+select name, column_name
+from mo_catalog.mo_indexes as i
+join mo_catalog.mo_tables as t on i.table_id = t.rel_id
+where t.reldatabase = database()
+and t.relname = 'ip_deterministic_generated'
+and i.name in ('idx_ipv4_number', 'idx_is_ipv4_mapped')
+and i.column_name in ('ipv4_number', 'is_ipv4_mapped')
+order by name, column_name;
+➤ name[12,64,0]  ¦  column_name[12,256,0]  𝄀
+idx_ipv4_number  ¦  ipv4_number  𝄀
+idx_is_ipv4_mapped  ¦  is_ipv4_mapped
+select id from ip_deterministic_generated force index (idx_ipv4_number)
+where ipv4_number = 3232235777 order by id;
+➤ id[4,32,0]  𝄀
+1
+update ip_deterministic_generated set ip_text = '10.0.0.1' where id = 1;
+select id, ipv4_number, ipv4_text from ip_deterministic_generated
+force index (idx_ipv4_number) where ipv4_number = 167772161 order by id;
+➤ id[4,32,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  𝄀
+1  ¦  167772161  ¦  10.0.0.1
+select id from ip_deterministic_generated force index (idx_ipv4_number)
+where ipv4_number = 3232235777 order by id;
+➤ id[4,32,0]
+update ip_deterministic_generated
+set ip_binary = unhex('00000000000000000000ffffc0000201') where id = 2;
+select id from ip_deterministic_generated force index (idx_is_ipv4_mapped)
+where is_ipv4_mapped = 1 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+start transaction;
+update ip_deterministic_generated set ip_text = 'invalid' where id = 1;
+select id, ipv4_number, ipv4_text, is_ipv4, is_ipv6 from ip_deterministic_generated where id = 1;
+➤ id[4,32,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  𝄀
+1  ¦  null  ¦  null  ¦  0  ¦  0
+rollback;
+select id, ip_text, ipv4_number, ipv4_text, is_ipv4, is_ipv6
+from ip_deterministic_generated where id = 1;
+➤ id[4,32,0]  ¦  ip_text[12,39,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  𝄀
+1  ¦  10.0.0.1  ¦  167772161  ¦  10.0.0.1  ¦  1  ¦  0
+select id from ip_deterministic_generated force index (idx_ipv4_number)
+where ipv4_number = 167772161 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id, ipv4_number is null, ipv4_text is null, ip6_binary is null,
+ip6_text is null, is_ipv4 is null, is_ipv6 is null,
+is_ipv4_compat is null, is_ipv4_mapped is null
+from ip_deterministic_generated where id in (3, 4) order by id;
+➤ id[4,32,0]  ¦  ipv4_number is null[-7,1,0]  ¦  ipv4_text is null[-7,1,0]  ¦  ip6_binary is null[-7,1,0]  ¦  ip6_text is null[-7,1,0]  ¦  is_ipv4 is null[-7,1,0]  ¦  is_ipv6 is null[-7,1,0]  ¦  is_ipv4_compat is null[-7,1,0]  ¦  is_ipv4_mapped is null[-7,1,0]  𝄀
+3  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+select inet_aton('10.0.0.1'), inet_aton('invalid') is null,
+inet_ntoa(167772161), inet6_ntoa(unhex('c0a80101')),
+inet6_ntoa(unhex('01')) is null,
+is_ipv4('10.0.0.1'), is_ipv6('2001:db8::1'),
+is_ipv4_compat(unhex('000000000000000000000000c0000201')),
+is_ipv4_mapped(unhex('00000000000000000000ffffc0a80101'));
+➤ inet_aton(10.0.0.1)[-5,64,0]  ¦  inet_aton(invalid) is null[-7,1,0]  ¦  inet_ntoa(167772161)[12,65535,0]  ¦  inet6_ntoa(unhex(c0a80101))[12,65535,0]  ¦  inet6_ntoa(unhex(01)) is null[-7,1,0]  ¦  is_ipv4(10.0.0.1)[-5,64,0]  ¦  is_ipv6(2001:db8::1)[-5,64,0]  ¦  is_ipv4_compat(unhex(000000000000000000000000c0000201))[-5,64,0]  ¦  is_ipv4_mapped(unhex(00000000000000000000ffffc0a80101))[-5,64,0]  𝄀
+167772161  ¦  1  ¦  10.0.0.1  ¦  192.168.1.1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+prepare ip_conversion_reuse from 'select inet_aton(?), inet6_ntoa(?)';
+set @ip_value = '192.168.1.1', @binary_value = unhex('c0a80101');
+execute ip_conversion_reuse using @ip_value, @binary_value;
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+3232235777  ¦  192.168.1.1
+set @ip_value = 'invalid', @binary_value = unhex('01');
+execute ip_conversion_reuse using @ip_value, @binary_value;
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+null  ¦  null
+set @ip_value = null, @binary_value = null;
+execute ip_conversion_reuse using @ip_value, @binary_value;
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+null  ¦  null
+set @ip_value = '10.0.0.1', @binary_value = unhex('0a000001');
+execute ip_conversion_reuse using @ip_value, @binary_value;
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+167772161  ¦  10.0.0.1
+deallocate prepare ip_conversion_reuse;
+drop table if exists ip_nullable_generated;
+create table ip_nullable_generated (
+ip_text varchar(39) not null,
+ip_binary varbinary(16) not null,
+ipv4_number bigint unsigned generated always as (inet_aton(ip_text)) stored,
+ip6_text varchar(39) generated always as (inet6_ntoa(ip_binary)) stored
+);
+insert into ip_nullable_generated (ip_text, ip_binary) values ('invalid', unhex('01'));
+select ip_text, hex(ip_binary), ipv4_number, ip6_text from ip_nullable_generated;
+➤ ip_text[12,39,0]  ¦  hex(ip_binary)[12,65535,0]  ¦  ipv4_number[-5,64,0]  ¦  ip6_text[12,39,0]  𝄀
+invalid  ¦  01  ¦  null  ¦  null
+select column_name, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name = 'ip_nullable_generated'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
+ip_text  ¦  NO  𝄀
+ip_binary  ¦  NO  𝄀
+ipv4_number  ¦  YES  𝄀
+ip6_text  ¦  YES
+drop table ip_nullable_generated;
+drop database if exists func_ip_generated_columns;

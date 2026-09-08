@@ -55,16 +55,12 @@ select count(*) from t1;
 3
 select * from t1 into outfile '$resources/into_outfile/load_data/temp1.csv';
 truncate table t1;
-no such table temp_operations.t1
 load data infile '$resources/into_outfile/load_data/temp1.csv' into table t1 ignore 1 lines;
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
-6
+3
 select * from t1;
-➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[12,-1,0]  ¦  d[8,54,0]  𝄀
-1  ¦  [-1, -1, -1]  ¦  aaaa  ¦  1.213  𝄀
-2  ¦  [-1, -1, 0]  ¦  bbbb  ¦  11.213  𝄀
-3  ¦  [1, 1, 1]  ¦  cccc  ¦  111.213  𝄀
+➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[12,10,0]  ¦  d[8,53,31]  𝄀
 1  ¦  [-1, -1, -1]  ¦  aaaa  ¦  1.213  𝄀
 2  ¦  [-1, -1, 0]  ¦  bbbb  ¦  11.213  𝄀
 3  ¦  [1, 1, 1]  ¦  cccc  ¦  111.213
