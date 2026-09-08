@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -524,6 +525,15 @@ func (r *ArrowReader) ReadBatch(
 	if actualRows < rows {
 		rows = actualRows
 		end = start + int64(rows)
+	}
+	// This is inactive unless a test installs the fault point. It deliberately
+	// sits after range admission, decoding, and conversion, but before batch
+	// publication and the LOAD transaction can commit. A canceled statement
+	// must release the converted batch instead of publishing it after the hook.
+	objectio.WaitInjectedCtx(ctx, objectio.FJ_ArrowLoadRolloutWait)
+	if err := ctx.Err(); err != nil {
+		converted.Clean(proc.Mp())
+		return false, err
 	}
 	fileFinished := false
 	if end < record.NumRows() {

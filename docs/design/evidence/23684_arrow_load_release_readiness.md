@@ -39,12 +39,13 @@ the exact artifact must repeat the mixed-version upgrade test, including routing
 a parallel statement while an old CN is present and documenting the supported
 upgrade order.
 
-`TestArrowLoadRolloutRollbackDrain` separately stops a cluster only after an
-active large LOAD is visible. On restart with every gate disabled, the table is
-either fully committed when shutdown drained the statement or empty when it
-canceled; a partial commit is forbidden. A missing-file LOAD proves rejection
-occurs before I/O. Re-enabling local LOAD while distributed execution remains
-off makes `parallel 'true'` fall back to serial execution and commit all rows.
+`TestArrowLoadRolloutRollbackDrain` separately holds a small LOAD after range
+admission and conversion, before batch publication, then initiates cluster
+shutdown. On restart with every gate disabled, the table is either fully
+committed when shutdown drained the statement or empty when it canceled; a
+partial commit is forbidden. A missing-file LOAD proves rejection occurs before
+I/O. Re-enabling local LOAD while distributed execution remains off makes
+`parallel 'true'` fall back to serial execution and commit all rows.
 
 ## Failure and cancellation evidence
 
@@ -56,9 +57,11 @@ off makes `parallel 'true'` fall back to serial execution and commit all rows.
   local fixture can complete before an observer establishes a stable point.
 - The former 2-CN processlist-based worker-shutdown observer is not evidence:
   the local fixture can complete before an observer establishes a stable point.
-  `TestArrowLoadRolloutRollbackDrain` instead exercises cluster lifecycle with
-  an admitted statement, and its complete-or-empty assertion preserves the
-  transaction-boundary contract.
+  `TestArrowLoadRolloutRollbackDrain` now uses a deterministic single-CN,
+  test-owned post-admission boundary and its complete-or-empty assertion
+  preserves the transaction-boundary contract. This does not replace
+  topology-specific remote worker-loss/cancellation evidence; that evidence
+  remains deferred until a deterministic multi-CN fixture is available.
 - Existing File/Stream, transaction/isolation, malformed input, object-change,
   MinIO, race, fuzz, and formal distributed SQL cases remain part of the branch
   evidence described by the design and shared-substrate records.
