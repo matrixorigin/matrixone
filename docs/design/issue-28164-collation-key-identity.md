@@ -1,8 +1,8 @@
 # #28164 Collation-Aware Unique-Key Identity
 
-- Status: Design revision 2; ready for maintainer review; implementation not started
+- Status: Design revision 3; ready for maintainer review; implementation not started
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
-- Design revision: 2
+- Design revision: 3
 - Frozen baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7`
 - Scope: the complete string PK/UNIQUE identity contract; first delivery is design and baseline evidence only
 
@@ -235,7 +235,8 @@ final SQL type conversion and length enforcement
 
 The original user value remains in its base-table column. A prefix is applied to
 the value visible to that key part, not to an already encoded weight stream.
-Each part is framed with a NULL flag, domain ID, encoded length, and payload;
+Each part is framed with a NULL flag, domain-family ID, canonical parameter
+descriptor, encoded length, and payload;
 the composite key has an explicit part count. This prevents concatenation
 ambiguity such as `(a,bc)` versus `(ab,c)`.
 
@@ -251,7 +252,9 @@ offset  size  field
 7       ...   repeated part records:
               null_flag (1 byte, 0 or 1)
               type_tag (1 byte; one of the registered TypeFamily values)
-              domain_id (2 bytes)
+              domain_id (2 bytes; stable normalization-family ID)
+              parameter_length (2 bytes)
+              domain_parameters (parameter_length bytes)
               payload_length (4 bytes)
               normalized_payload (payload_length bytes)
 ```
@@ -260,47 +263,60 @@ The v2 envelope therefore has this logical shape:
 
 ```text
 magic | codec_version | part_count |
-  repeated { null_flag | type_tag | domain_id | payload_length | normalized_payload }
+  repeated { null_flag | type_tag | domain_id | parameter_length |
+             domain_parameters | payload_length | normalized_payload }
 ```
 
-`domain_id` is a registry identifier for the complete `(charset, collation,
-prefix, prefix-unit, type, width/scale, padding rule, and weight-version) tuple;
-it is not a hash and cannot be reused for a different tuple. `type_tag` must
-agree with the registry entry. A NULL part has `null_flag=1`,
+`domain_id` is a registry identifier for a normalization family, not a hash and
+not a substitute for the complete `(charset, collation, prefix, prefix-unit,
+type, width/scale, padding rule, and weight-version)` tuple. Each family fixes
+the algorithm, charset/collation, padding and weight-version policy; its
+`domain_parameters` carry every tuple field that varies per key part. The
+canonical pair `(domain_id, domain_parameters)` is therefore the complete
+domain identity. A family ID may be used for multiple parameter values only
+when its registered parameter schema validates them; a different algorithm,
+weight version, charset/collation policy, or parameter schema receives a new
+registry ID. `type_tag` must agree with the registry entry. A NULL part carries
+the same domain descriptor as a non-NULL part but has `null_flag=1`,
 `payload_length=0`, and no payload; a non-NULL empty value has `null_flag=0`
 and `payload_length=0`, so the two cases remain distinct. The codec rejects
-`part_count=0`, a flag other than 0/1, a payload length greater than
-`math.MaxUint32`, or an envelope larger than the fixed 64 MiB allocation guard
-before allocating or publishing a key. A backend with a smaller physical key
-limit rejects the key earlier with its existing key-length error. Golden
-vectors cover each header and boundary value; no Go string representation may
-leak into the format. Invalid UTF-8 and unsupported domain IDs return an error
-before a key is published.
+`part_count=0`, a flag other than 0/1, an unknown or non-canonical parameter
+descriptor, a parameter length greater than `math.MaxUint16`, a payload length
+greater than `math.MaxUint32`, or an envelope larger than the fixed 64 MiB
+allocation guard before allocating or publishing a key. A backend with a
+smaller physical key limit rejects the key earlier with its existing key-length
+error. Golden vectors cover each header, parameter schema, and boundary value;
+no Go string representation may leak into the format. Invalid UTF-8 and
+unsupported family/parameter pairs return an error before a key is published.
 
 ### 4.3 Registry, normalization, and golden vectors
 
-The registry is an append-only manifest named `collationkey/domains-v1`. Domain
-IDs are assigned once, never reused, and are interpreted identically by every
-CN, TN, rebuild worker, backup tool, and restore reader. Registry version 1 has
-the following IDs:
+The registry is an append-only manifest named `collationkey/domains-v1`. Family
+IDs are assigned once, never reused for another normalization algorithm, and
+are interpreted identically by every CN, TN, rebuild worker, backup tool, and
+restore reader. Registry version 1 has the following family IDs and parameter
+schemas:
 
-| ID | Type/domain | Frozen policy |
-| --- | --- | --- |
-| `0x0001` | text, UTF-8, general-ci | `general-ci-v1`, PAD SPACE |
-| `0x0002` | text, UTF-8, `_bin` | UTF-8 bytes, PAD SPACE |
-| `0x0003` | binary | exact bytes, no padding |
-| `0x0101` | signed integer | declared-width two's-complement bytes |
-| `0x0102` | unsigned integer | declared-width big-endian bytes |
-| `0x0103` | decimal | canonical sign/scale/coefficient encoding |
+| ID | Type/domain | Canonical parameter schema | Frozen policy |
+| --- | --- | --- | --- |
+| `0x0001` | text, UTF-8, general-ci | `u8(schema=1) \| u32(prefix) \| u8(unit=characters)` | `general-ci-v1`, PAD SPACE |
+| `0x0002` | text, UTF-8, `_bin` | `u8(schema=1) \| u32(prefix) \| u8(unit=characters)` | UTF-8 bytes, PAD SPACE |
+| `0x0003` | binary | `u8(schema=1) \| u32(prefix) \| u8(unit=bytes)` | exact bytes, no padding |
+| `0x0101` | signed integer | `u8(schema=1) \| u16(declared_width)` | declared-width two's-complement bytes |
+| `0x0102` | unsigned integer | `u8(schema=1) \| u16(declared_width)` | declared-width big-endian bytes |
+| `0x0103` | decimal | `u8(schema=1) \| u16(declared_width) \| i16(scale)` | canonical sign/scale/coefficient encoding |
 
 The manifest digest is deterministic: `SHA-256` of
 `ASCII("MOKD") || u8(registry_version) ||` the entries sorted by ID, where each
 entry is `u16(id) || u16(entry_length) || entry_bytes` in big-endian order.
-`entry_bytes` contains `type_tag`, charset, collation, prefix, prefix unit,
-width, scale, padding rule, and weight-table version. The relation metadata
+`entry_bytes` contains the `type_tag`, fixed charset/collation/padding/weight
+policy, and the canonical parameter schema plus its validation ranges; it does
+not enumerate every legal prefix or declared width. The relation metadata
 stores both `registry_version` and this 32-byte digest; a node or restore path
 rejects a mismatch before opening the relation. ID zero and IDs absent from the
-manifest are invalid.
+manifest are invalid. A decoder includes the parameter length and bytes in the
+encoded identity, validates the family schema and all ranges before reading the
+payload, and rejects a tuple that is not registered for that family.
 
 The normalized payload is defined without a dependency on a process locale:
 
@@ -327,29 +343,30 @@ The normalized payload is defined without a dependency on a process locale:
    JSON, DATALINK, and unknown types are rejected for v2 until their domains
    have a separately registered identity.
 
-5. The `type_tag` and registry ID are written into the part record before the
-   payload. A decoder checks the type/domain pair, lengths, and registry digest;
-   it never guesses a type from payload bytes.
+5. The `type_tag`, family ID, and canonical parameter descriptor are written
+   into the part record before the payload. A decoder checks the type/domain
+   pair, parameter schema and ranges, lengths, and registry digest; it never
+   guesses a type or parameter tuple from payload bytes.
 
 The following vectors are normative byte-for-byte examples. Spaces in the
 display are separators only:
 
 | Input/domain | Encoded envelope (hex) |
 | --- | --- |
-| non-NULL `"Alpha"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000014 00000041 0000004C 00000050 00000048 00000041` |
+| non-NULL `"Alpha"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 0006 010000000001 00000014 00000041 0000004C 00000050 00000048 00000041` |
 | non-NULL `"alpha"`, ID `0x0001` | identical to `"Alpha"` |
 | non-NULL `"Alpha "`, ID `0x0001` | identical to `"Alpha"` (PAD SPACE) |
-| non-NULL `"A\\0"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000008 00000041 00000000` |
-| non-NULL U+1F600, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000004 0000FFFD` |
-| non-NULL `"Alpha"`, ID `0x0002` | `4D4F4B59 02 0001 00 01 0002 00000005 416C706861` |
-| non-NULL `"Alpha "`, ID `0x0003` | `4D4F4B59 02 0001 00 02 0003 00000006 416C70686120` |
-| NULL text part, ID `0x0001` | `4D4F4B59 02 0001 01 01 0001 00000000` |
-| empty non-NULL text part, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000000` |
-| `(signed int64 1, text "A")`, IDs `0x0101,0x0001` | `4D4F4B59 02 0002 00 03 0101 00000008 0000000000000001 00 01 0001 00000004 00000041` |
+| non-NULL `"A\\0"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 0006 010000000001 00000008 00000041 00000000` |
+| non-NULL U+1F600, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 0006 010000000001 00000004 0000FFFD` |
+| non-NULL `"Alpha"`, ID `0x0002` | `4D4F4B59 02 0001 00 01 0002 0006 010000000001 00000005 416C706861` |
+| non-NULL `"Alpha "`, ID `0x0003` | `4D4F4B59 02 0001 00 02 0003 0006 010000000002 00000006 416C70686120` |
+| NULL text part, ID `0x0001` | `4D4F4B59 02 0001 01 01 0001 0006 010000000001 00000000` |
+| empty non-NULL text part, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 0006 010000000001 00000000` |
+| `(signed int64 1, text "A")`, IDs `0x0101,0x0001` | `4D4F4B59 02 0002 00 03 0101 0003 010008 00000008 0000000000000001 00 01 0001 0006 010000000001 00000004 00000041` |
 
 The one-line hex forms are obtained by removing separators; for example the
 first vector is
-`4D4F4B590200010001000100000014000000410000004C000000500000004800000041`.
+`4D4F4B5902000100010001000601000000000100000014000000410000004C000000500000004800000041`.
 The test implementation must include these vectors, the malformed-input error,
 and the maximum-part/maximum-size rejection cases before a v2 relation can be
 enabled.
@@ -574,8 +591,10 @@ snapshot would still validate stale data. The migration therefore owns a
 persisted `UniqueKeyMigrationGate` for one physical relation:
 
 ```text
-gate = { relation_id, migration_epoch, owner, phase,
-         source_schema_epoch, source_snapshot_id }
+gate = { relation_id, migration_epoch, owner, owner_incarnation, claim_token,
+         phase, phase_deadline, source_schema_epoch, source_snapshot_id,
+         temp_relation_id, publication_txn_id, replay_generation,
+         retired_replay_targets }
 phase = OPEN | DRAINING | EXCLUSIVE | PUBLISHED | ABORTED
 ```
 
@@ -594,6 +613,40 @@ commit-time gate check; if the connector or executor cannot provide that check,
 the transaction is aborted and the migration remains blocked. New write
 transactions are rejected once `DRAINING` is durable. No code path relies on
 the existing table-lock operator's pessimistic-only behavior.
+
+The owner and recovery contract is persisted with the gate. `owner` is not a
+process name: it is the tuple `(owner_uuid, owner_incarnation, claim_token)`.
+Every side effect after `EXCLUSIVE`—snapshot creation, temporary writes,
+publication, replay acknowledgement, and cleanup—must present the current
+`migration_epoch` and `claim_token`. HAKeeper's DDL recovery coordinator is the
+terminal recovery owner. It claims an expired phase with a compare-and-swap on
+`relation_id`, `migration_epoch`, `phase`, and `claim_token`, then records a new
+incarnation and token. A former owner that reconnects with a stale token may
+observe state but cannot publish, release the gate, or delete a replacement's
+temporary relation.
+
+`phase_deadline` is set for `DRAINING`, `EXCLUSIVE` acquisition, temporary
+build/validation, durable publication, and replay acknowledgement. A deadline
+never silently restores v1. Before publication, the recovery owner first
+persists `EXCLUSIVE -> ABORTED` with the temporary relation identity, then
+releases the write fence; the old relation is immediately usable while an
+idempotent cleanup owner retries deletion of the invisible temporary relation.
+After publication, recovery never writes `ABORTED` and never selects v1 again.
+It resolves `publication_txn_id` against the durable catalog/log record: a
+committed record completes or replays `PUBLISHED`, while a durable
+not-committed result permits a fenced abort and temporary cleanup. An outcome
+that is still uncertain keeps writes rejected until the log barrier makes one
+of those two results durable; retries use the same idempotency token.
+
+Replay acknowledgement has a bounded target decision. A target that misses its
+deadline is either reconnected with a new incarnation and must acknowledge the
+same `replay_generation`, or is atomically marked in `retired_replay_targets`
+by HAKeeper and fenced from v2 reads/writes. Once every non-retired target has
+acknowledged the published generation, the recovery owner releases the gate and
+hands the old relation to ordinary cleanup. A missing target is never waited on
+forever and never treated as an implicit acknowledgement; if membership cannot
+yet make the retirement decision, the relation stays `PUBLISHED` and v1 is not
+re-enabled.
 
 The operation proceeds as follows:
 
@@ -619,21 +672,26 @@ The operation proceeds as follows:
    a winner or deleting rows. Validate row coverage, encoded-key uniqueness,
    source-to-key checksums, and forced-index versus table-scan results.
 5. Atomically publish the new sidecar relation and version metadata in one
-   catalog/DDL transition, persist `PUBLISHED`, and retain the old relation
-   until the transition is durable and replay has acknowledged the same
-   generation. New writes remain rejected until the activation fence observes
-   the published relation.
-6. After restart/replay observes the committed transition, release the gate and
-   hand the old relation to the ordinary DDL cleanup owner. Garbage collection
-   is retryable and cannot make the old identity query-visible again.
+   catalog/DDL transition identified by `publication_txn_id`, persist
+   `PUBLISHED`, and retain the old relation until the transition is durable and
+   replay has acknowledged the same `replay_generation`. New writes remain
+   rejected until the activation fence observes the published relation.
+6. After restart/replay observes the committed transition, and every active
+   target has acknowledged or been fenced/retired under the recovery contract,
+   release the gate and hand the old relation to the ordinary DDL cleanup
+   owner. Garbage collection is retryable and cannot make the old identity
+   query-visible again.
 
 Failure before publication persists `ABORTED` and leaves the old relation and
-metadata usable. Failure after publication is recovered by replaying the
-committed catalog transition; the old relation is never selected as the current
-unique identity. If a capability, ingress, or transaction-mode check cannot be
-proven, the operation is rejected rather than weakening the fence. This is not
-online double-write: writes are stopped while the source snapshot is copied, so
-there is one linearization point and no divergent key format.
+metadata usable; temporary-relation cleanup is separate, idempotent, and
+retryable. Failure after publication is recovered by resolving and replaying
+the committed catalog transition; the old relation is never selected as the
+current unique identity. An uncertain publication outcome is not treated as an
+abort until the durable log barrier proves that the idempotency token did not
+commit. If a capability, ingress, or transaction-mode check cannot be proven,
+the operation is rejected rather than weakening the fence. This is not online
+double-write: writes are stopped while the source snapshot is copied, so there
+is one linearization point and no divergent key format.
 
 ## 7. End-to-end producer and consumer map
 
@@ -738,6 +796,26 @@ Extend the existing charset and ODKU cases after the executable implementation:
 9. Execute text protocol and prepared statements with the same values and
    compare affected rows and final state.
 
+### Migration state-machine acceptance
+
+The implementation must also run deterministic barrier-driven cases over the
+persisted gate; a wall-clock sleep is not an oracle:
+
+1. Kill the owner after `EXCLUSIVE` and before publication. A recovery owner
+   claims the same epoch with a new token, persists `ABORTED`, cleans the
+   invisible temporary relation idempotently, and eventually admits writes to
+   the old relation. The stale owner cannot publish or release the gate after
+   it returns.
+2. Stop the client after the publication request is durably submitted but
+   before its result is known. Recovery uses the same `publication_txn_id` and
+   log barrier to prove either `PUBLISHED` or `ABORTED`; it never exposes both
+   identities and never rolls a committed publication back to v1.
+3. Drop a replay target before its acknowledgement. The target is either
+   reconnected with a new incarnation and acknowledges `replay_generation`, or
+   HAKeeper fences and retires that incarnation. Once the remaining targets
+   acknowledge, writes are admitted under v2; the missing target cannot write
+   or be counted as an implicit acknowledgement.
+
 ### Performance and operational checks
 
 Benchmark codec ns/op, allocations, encoded-key size, and composite width before
@@ -756,7 +834,7 @@ checks remain proportional to input rows and constraints, not a full-table scan.
 | Production implementation | Not started by this design PR |
 | QA decision | Required for implementation: user-visible uniqueness, persistence, concurrency, and compatibility behavior |
 | Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
-| Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 2; maintainer approval is still pending |
+| Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 3; maintainer approval is still pending |
 
 Open review findings must be recorded against this exact revision. Any change to
 codec domains, metadata location, migration linearization, or FULLTEXT/storage
@@ -778,13 +856,15 @@ evidence, not maintainer approval.
 | r1 / 2026-09-08 | Local design review | P1: domain IDs, payload rules, type framing, and golden vectors were incomplete | Revision 2 freezes registry IDs/digest framing, type tags, string/numeric payload rules, malformed-input behavior, and normative byte vectors in Sections 4.1–4.3 | **ADDRESSED / maintainer review pending** |
 | r1 / 2026-09-08 | Local design review | P2: `0900_ai_ci` rejection was impossible to implement from normalized catalog metadata | Revision 2 selects normalized general-ci-v1 migration for the compatibility alias and rejects native/identity-preserving 0900 requests with an explicit ambiguity error in Section 3 | **ADDRESSED / maintainer review pending** |
 | r1 / 2026-09-08 | Local design review | P2: original reproduction was recorded only once | Added the three-independent-database correction run `20260909T000000Z`; the one-sample artifact remains historical and is not counted | **ADDRESSED / evidence PASS** |
-| r2 / pending | Planner/SQL owner | Equality, hash, ODKU target selection, and optimization fallback | Review Sections 2–4 and the producer/consumer table against the frozen vectors | PENDING_MAINTAINER_REVIEW |
-| r2 / pending | Storage/transaction/catalog owner | Physical key bytes, lock/commit/replay, protobuf propagation, migration fence and recovery | Review Sections 5–7 and the migration protocol | PENDING_MAINTAINER_REVIEW |
-| r2 / pending | QA/release owner | Upgrade, backup/restore, distributed capability fence, and acceptance matrix | Review Sections 5–6 and 9 before implementation PRs | PENDING_MAINTAINER_REVIEW |
+| r3 / 2026-09-09 | XuPeng-SH | P1: EXCLUSIVE/build/publication/replay could strand the persisted stop-write gate after owner loss, uncertain commit, or a missing replay target | Revision 3 defines the recovery owner, claim-and-fence token, per-phase deadlines, pre-publication abort, durable publication outcome resolution, target retirement, and deterministic barrier-driven acceptance cases in Section 6 and Section 9 | **ADDRESSED / maintainer review pending** |
+| r3 / 2026-09-09 | XuPeng-SH | P2: immutable domain IDs were declared complete tuples but the frozen registry had no identities for widths, scales, or prefixes | Revision 3 makes IDs normalization families and encodes/validates canonical per-part parameters in the v2 envelope; the family schema and parameter pair form the complete identity, with updated golden vectors in Sections 4.2–4.3 | **ADDRESSED / maintainer review pending** |
+| r3 / pending | Planner/SQL owner | Equality, hash, ODKU target selection, and optimization fallback | Review Sections 2–4 and the producer/consumer table against the frozen vectors | PENDING_MAINTAINER_REVIEW |
+| r3 / pending | Storage/transaction/catalog owner | Physical key bytes, lock/commit/replay, protobuf propagation, migration fence and recovery | Review Sections 5–7 and the migration protocol | PENDING_MAINTAINER_REVIEW |
+| r3 / pending | QA/release owner | Upgrade, backup/restore, distributed capability fence, and acceptance matrix | Review Sections 5–6 and 9 before implementation PRs | PENDING_MAINTAINER_REVIEW |
 
-Revision 2 closes the local design findings and is complete enough to start a
-separately reviewed implementation series. It is marked ready for maintainer
-review, not approved: the named owners must still record acceptance or new
-findings against this revision before production code is written. The baseline
-reproduction is evidence of the current defect only; `production_fix` and
-`qa_acceptance` remain not implemented/not run.
+Revision 3 closes the currently recorded local design findings and is complete
+enough to start a separately reviewed implementation series. It is marked
+ready for maintainer review, not approved: the named owners must still record
+acceptance or new findings against this revision before production code is
+written. The baseline reproduction is evidence of the current defect only;
+`production_fix` and `qa_acceptance` remain not implemented/not run.
