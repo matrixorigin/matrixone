@@ -54,7 +54,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioMerger *IOMerger
+	ioMerger     *IOMerger
+	decodedReads *decodedReadRegistry
 
 	parallelMode ParallelMode
 }
@@ -302,48 +303,9 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			zap.Any("fs-name", s.name),
 		)
 	}
-
-	// memory cache
-	if config.MemoryCapacity != nil &&
-		*config.MemoryCapacity > DisableCacheCapacity {
-		s.memCache = NewMemCache(
-			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-			&config.CacheCallbacks,
-			s.perfCounterSets,
-			s.name,
-		)
-		logutil.Info("fileservice: memory cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("capacity", config.MemoryCapacity),
-		)
+	if s.memCache != nil {
+		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
-
-	// disk cache
-	if config.DiskCapacity != nil &&
-		*config.DiskCapacity > DisableCacheCapacity &&
-		config.DiskPath != nil {
-		var err error
-		s.diskCache, err = NewDiskCache(
-			ctx,
-			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
-			s.perfCounterSets,
-			true,
-			nil,
-			s.name,
-		)
-		if err != nil {
-			return err
-		}
-		if s.memCache != nil {
-			s.diskCache.memoryCache = s.memCache.cache
-		}
-		logutil.Info("fileservice: disk cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("config", config),
-		)
-	}
-
 	return nil
 }
 
@@ -630,8 +592,15 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	// A merge leader must not wake its waiters until successful cache updates
-	// have completed. Cache updates are deferred below, so register this defer
+	var finishDecode func()
+	var decodePrepared bool
+	defer func() {
+		if finishDecode != nil {
+			finishDecode()
+		}
+	}()
+	// A merge leader must not wake its waiters until caller-visible cache work
+	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
 	var finishMerge func()
 	defer func() {
@@ -721,6 +690,13 @@ read_memory_cache:
 	}
 
 read_disk_cache:
+	if !decodePrepared {
+		decodePrepared = true
+		finishDecode, err = s.prepareSharedDecode(vector)
+		if err != nil {
+			return err
+		}
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -1539,11 +1515,18 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
-	if s.memCache != nil {
-		s.memCache.Close(ctx)
+	closeCaches := func() {
+		if s.memCache != nil {
+			s.memCache.Close(ctx)
+		}
+		if s.diskCache != nil {
+			s.diskCache.Close(ctx)
+		}
 	}
-	if s.diskCache != nil {
-		s.diskCache.Close(ctx)
+	if s.decodedReads != nil {
+		s.decodedReads.close(closeCaches)
+	} else {
+		closeCaches()
 	}
 }
 
