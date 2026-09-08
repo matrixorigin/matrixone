@@ -485,6 +485,13 @@ func TestSendPrepareResponseForExplainUsesExplainColumn(t *testing.T) {
 				return plan2.GetPhyPlanTitle(query, false)
 			},
 		},
+		{
+			name: "explain json",
+			sql:  "explain format=json select ?",
+			expectedTitle: func(_ *planPb.Query) string {
+				return "EXPLAIN"
+			},
+		},
 	}
 
 	for i, tc := range testCases {
@@ -540,6 +547,27 @@ func TestRebuildPreparedExplainAnalyzeKeepsExplainColumn(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), rebuiltColumns[0].Typ.Id)
 	require.Equal(t, plan2.GetPlanTitle(rebuiltPlan.GetQuery(), false), rebuiltColumns[0].Name)
 	require.Equal(t, rebuiltColumns[0].Name, rebuiltColumns[0].OriginName)
+}
+
+func TestRebuildPreparedExplainJSONKeepsExplainColumn(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 109, "explain format=json select 1")
+	defer prepareStmt.Close()
+
+	var rebuiltColumns []*planPb.ColDef
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(_ context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+		rebuiltColumns = columns
+		return [][]byte{[]byte("explain-column")}, nil
+	}
+
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+	_, rebuiltPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Len(t, rebuiltColumns, 1)
+	require.Equal(t, int32(types.T_varchar), rebuiltColumns[0].Typ.Id)
+	require.Equal(t, "EXPLAIN", rebuiltColumns[0].Name)
+	require.Equal(t, rebuiltColumns[0].Name, rebuiltColumns[0].OriginName)
+	require.NotNil(t, rebuiltPlan.GetQuery())
 }
 
 func TestCompileOutputCallbackSuppressesExplainPipelineRows(t *testing.T) {
