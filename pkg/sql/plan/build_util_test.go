@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -934,6 +935,73 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
 	require.NoError(t, err)
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
+}
+
+func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name             string
+		expr             string
+		baseColumn       string
+		baseSQLType      string
+		baseType         plan.Type
+		generatedSQLType string
+		generatedType    plan.Type
+	}{
+		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
+		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},
+		{name: "inet6_ntoa", expr: "inet6_ntoa(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
+		{name: "is_ipv4", expr: "is_ipv4(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv6", expr: "is_ipv6(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv4_compat", expr: "is_ipv4_compat(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv4_mapped", expr: "is_ipv4_mapped(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(
+				"create table t (%s %s, g %s generated always as (%s) stored)",
+				tc.baseColumn, tc.baseSQLType, tc.generatedSQLType, tc.expr,
+			)
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+
+			var genCol *tree.ColumnTableDef
+			for _, def := range createTable.Defs {
+				if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+					genCol = cd
+				}
+			}
+			require.NotNil(t, genCol)
+
+			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
+			require.NoError(t, err)
+			require.NotNil(t, gen)
+		})
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table t (ip_text varchar(39), g bigint unsigned generated always as (inet_aton(uuid())) stored)", 1)
+	require.NoError(t, err)
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	var genCol *tree.ColumnTableDef
+	for _, def := range createTable.Defs {
+		if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+			genCol = cd
+		}
+	}
+	require.NotNil(t, genCol)
+	_, err = buildGeneratedExpr(
+		genCol,
+		plan.Type{Id: int32(types.T_uint64)},
+		[]*ColDef{{Name: "ip_text", Typ: plan.Type{Id: int32(types.T_varchar), Width: 39}}},
+		proc,
+	)
+	require.ErrorContains(t, err, "non-deterministic function 'uuid'")
 }
 
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
