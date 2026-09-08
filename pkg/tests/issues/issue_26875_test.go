@@ -45,11 +45,11 @@ func TestIssue26875ForeignKeyActions(t *testing.T) {
 		databaseStarted := time.Now()
 		dbName := createIssue26875Database(t, ctx, conn)
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=database-create-and-select duration=%s", time.Since(databaseStarted))
+		defer dropIssue26875Database(t, conn, dbName)
 
 		selectStarted := time.Now()
 		mustExec(t, ctx, conn2, fmt.Sprintf("use `%s`", dbName))
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=second-connection-select duration=%s", time.Since(selectStarted))
-		defer dropIssue26875Database(t, conn, dbName)
 
 		// The scenarios only use uniquely prefixed tables and do not change
 		// session or global settings, so sharing this database keeps them

@@ -129,6 +129,10 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	report := strings.Join([]string{
 		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=2s status=ready\n"}`,
 		`{"Action":"output","Package":"example/cluster","Test":"TestCluster2","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=500ms status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster3","Output":"    MO_UT_SETUP fixture=shared-cluster phase=slow-start duration=1m2.5s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster4","Output":"    MO_UT_SETUP fixture=shared-cluster phase=hour-start duration=1h2m3s status=ready\n"}`,
+		`null`,
+		`[]`,
 		`{"Action":"output","Package":"example/issues","Test":"TestIssue","Output":"    MO_UT_SETUP fixture=issue26875 phase=database-create duration=100ms status=error\n"}`,
 		"not json",
 	}, "\n")
@@ -143,6 +147,12 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	text := string(output)
 	if !strings.Contains(text, "fixture=shared-cluster phase=cluster-start count=2 total=2.50s max=2.00s") {
 		t.Fatalf("missing cumulative setup summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=slow-start count=1 total=1.04m max=1.04m") {
+		t.Fatalf("missing compound duration summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=hour-start count=1 total=62.05m max=62.05m") {
+		t.Fatalf("missing hour duration summary: %s", text)
 	}
 	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
 		t.Fatalf("missing setup error summary: %s", text)

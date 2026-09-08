@@ -26,8 +26,11 @@ from typing import Dict, List, Optional, Tuple
 
 
 FIELD_RE = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s]+)")
-DURATION_RE = re.compile(r"^(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>ns|µs|us|ms|s|m)$")
+DURATION_COMPONENT_RE = re.compile(
+    r"(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>h|ms|us|µs|ns|m|s)"
+)
 UNIT_SECONDS = {
+    "h": 60.0 * 60.0,
     "ns": 1e-9,
     "µs": 1e-6,
     "us": 1e-6,
@@ -38,10 +41,18 @@ UNIT_SECONDS = {
 
 
 def duration_seconds(value: str) -> Optional[float]:
-    match = DURATION_RE.fullmatch(value)
-    if match is None:
+    """Parse the compound format emitted by time.Duration.String."""
+    if not value:
         return None
-    return float(match.group("value")) * UNIT_SECONDS[match.group("unit")]
+    offset = 0
+    total = 0.0
+    while offset < len(value):
+        match = DURATION_COMPONENT_RE.match(value, offset)
+        if match is None:
+            return None
+        total += float(match.group("value")) * UNIT_SECONDS[match.group("unit")]
+        offset = match.end()
+    return total
 
 
 def format_duration(seconds: float) -> str:
@@ -63,6 +74,8 @@ def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
                 continue
             output = event.get("Output")
             if not isinstance(output, str):
