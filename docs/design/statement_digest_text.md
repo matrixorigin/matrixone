@@ -1,7 +1,7 @@
 # `STATEMENT_DIGEST_TEXT` compatibility design
 
 - Status: proposed; implementation review blocked pending independent design approval
-- Design revision: v2 (2026-09-07)
+- Design revision: v4 (2026-09-08; SQL-mode fallback and encoding-error contract)
 - Owning issue: [matrixorigin/matrixone#23025](https://github.com/matrixorigin/matrixone/issues/23025)
 - Implementation PR: [matrixorigin/matrixone#27990](https://github.com/matrixorigin/matrixone/pull/27990)
 - Compatibility target: MySQL 8.0.42 behavior, with the MySQL 8.4 documented SQL surface
@@ -176,7 +176,14 @@ ordinary unsupported scanner tokens fail rather than disappear silently.
 ### 5.4 SQL mode
 
 `sql_mode` is read from the session resolver for each invocation, with session
-metadata as the fallback. Relevant modes include:
+metadata as the fallback, through the shared process-level resolver. A nonempty
+resolved string takes precedence. An empty frontend value explicitly clears the
+mode; an empty value from a retained non-frontend resolver preserves a captured
+nonempty snapshot. Missing resolvers, resolver errors, and non-string values
+also preserve the snapshot. The explicit-empty transport sentinel is retained
+when forwarding and translated to an empty string only at the digest scanner
+boundary. This keeps local background and remote execution consistent without
+preventing a frontend session from clearing its mode. Relevant modes include:
 
 - `ANSI_QUOTES`: double quotes delimit identifiers, including quoted user
   variables, rather than string values;
@@ -217,8 +224,9 @@ Two distinct internal MatrixOne errors map to MySQL's digest errors:
 
 | Condition | MySQL code | Observable text policy |
 |---|---:|---|
-| parser failure for a direct text SQL literal | 3676 | include the parser diagnostic |
+| parser failure for a direct text SQL literal with valid UTF-8 | 3676 | include the parser diagnostic |
 | parser failure for an expression, prepared marker, column/variable value, binary-origin value, or geometry | 3677 | generic message only |
+| malformed UTF-8 in any evaluated non-NULL argument, including a direct text literal | 3677 | generic message only, before parser diagnostics |
 
 The execution vector carries `StringSource` provenance. `StringSourceLiteral`
 is the only origin that can disclose details. A constant vector can also come
@@ -278,17 +286,17 @@ codes mapped to existing MySQL codes 3676 and 3677, and two additive protobuf
 fields in pipeline `SessionInfo`. It changes no catalog, disk, backup, or
 replication format.
 
-MORPC version 56 is the capability boundary for remotely executing function ID
+MORPC version 59 is the capability boundary for remotely executing function ID
 579 with its setting snapshot. Both the sender and decoded-owner boundary walk
 every expression owner. A pipeline containing this function is rejected with
 `ErrNotSupported` before remote execution when the oldest-live service protocol
-is absent or below v56. Ordinary pipelines remain wire-compatible because the
+is absent or below v59. Ordinary pipelines remain wire-compatible because the
 new fields are additive. This explicit rejection is the routing contract; the
 implementation does not silently execute with an older worker or promise an
 automatic coordinator retry.
 
 No persisted generated expression can contain the function because it is
-registered as non-deterministic. Rolling back below v56 makes new senders stop
+registered as non-deterministic. Rolling back below v59 makes new senders stop
 remote execution through the same protocol fence. Rolling back all nodes
 restores the prior `function not supported` behavior and requires no data
 migration or cleanup. Values already present in an in-flight protobuf are
@@ -362,12 +370,13 @@ forwarding.
 | basic token normalization | parser table tests | BVT `SELECT 1`, identifiers, values, lists |
 | parser admission | empty, comments, malformed, multiple statements, marker after truncation | BVT disclosed literal errors |
 | literal/expression confidentiality | literal, folded expression, nested function, mixed-source vector, masked row | prepared marker returns 3677; nested call returns 3677 |
+| encoding confidentiality | malformed UTF-8 in text literals and binary inputs always returns 3677; valid UTF-8 controls | malformed bytes never disclose parser context |
 | binary/geometry boundary | valid and malformed BINARY/VARBINARY/BLOB; GEOMETRY/GEOMETRY32; binary provenance on text OID | `_binary` and `CAST AS BINARY` valid controls |
 | runtime registration | `CannotFold` and `IsRealTimeRelated` | generated-column rejection |
 | runtime settings | statement generation cache; child sharing; resolver fallback/range/type table | SQL mode changed and restored; prepared plan reused |
 | distributed setting snapshot | encode/decode/re-encode at 0/default/custom; absent/malformed controls; resolver-free evaluation | one-CN public result plus multi-CN CI topology |
-| mixed-version fence | function ID 579 in plan and instruction owners; v55 rejects on encode and decode, v56 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
-| SQL modes | ANSI quotes, pipes, hint quoting | quoted user-variable identifier under `ANSI_QUOTES` |
+| mixed-version fence | function ID 579 in plan and instruction owners; v58 rejects on encode and decode, v59 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
+| SQL modes | ANSI quotes, pipes, hint quoting; retained empty resolver vs frontend clear; error/type/nil/sentinel fallback; repeated forwarding | quoted user-variable identifier under `ANSI_QUOTES` |
 | alias compatibility | keyword/function aliases plus identifier controls | canonical function-alias BVT row |
 | delimiter boundary | simple/compound, one/multiple internal statements, with/without terminal delimiter | simple and compound BVT results |
 | length boundary | 0/1/exact token/identifier limits; internal vs terminal semicolon budget | differential long statement at configured limit |
@@ -391,7 +400,7 @@ head:
 - zero unresolved correctness findings against every invariant above;
 - passing `moerr`, MySQL parser, planner generated-expression, and function
   owning-package tests, using the repository CGo wrapper where required;
-- passing process snapshot/codec and sender/receiver MORPC v55/v56 capability
+- passing process snapshot/codec and sender/receiver MORPC v58/v59 capability
   tests, including zero and repeated-forward controls;
 - passing exact distributed SQL case in normal comparison mode, including
   result-file review and same-instance cleanup/repeat evidence;
@@ -399,7 +408,7 @@ head:
 - a complete delivery diff with no generated, temporary, credential, container,
   or unrelated artifacts.
 
-Design-review record for v2:
+Design-review record for v4:
 
 - Trigger: more than 500 production lines and a new public SQL compatibility
   contract.
