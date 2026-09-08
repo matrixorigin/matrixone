@@ -16,7 +16,7 @@ implementation plus the minimal reusable safety substrate it requires:
   COW/materialization fallback, and statement-capacity accounting;
 - transactional LOAD binding/conversion, FileService conditional reads, and
   worker-side admission before I/O; and
-- an additive, MORPC v56-gated remote pipeline representation.
+- an additive, MORPC v57-gated remote pipeline representation.
 
 This scope does not authorize a deployment to turn on the feature. The shipped
 configuration defaults `enabled`, `s3-enabled`, and `distributed-enabled` to
@@ -45,7 +45,7 @@ commits through the normal LOAD transaction path or releases its ranges,
 capacity, Arrow backing, and vectors without publishing partial data. A
 conditional object range is admitted only after both reading and the provider
 `Close` complete successfully. The remote payload is sent and accepted only by
-v56 peers; v55 and older peers reject it.
+v57 peers; v56 and older peers reject it.
 
 The shared substrate is deliberately bounded to these consumers. It does not
 confer policy authority on `arrowipc` or `arrowbridge`: FileService retains
@@ -77,7 +77,7 @@ rollback for borrowed backing without changing SQL semantics.
 
 The exact behavioral contract and tests are defined in the versioned
 [`Arrow LOAD design`](../23684_arrow_load_design.md): configuration/planner and
-worker gate coverage, v55/v56 predecessor/current protocol coverage,
+worker gate coverage, v56/v57 predecessor/current protocol coverage,
 conditional-close failure cleanup, record/dictionary window bounds, public
 File/Stream and multi-CN paths, rollback, and cancellation. The release
 readiness record carries the remaining evidence matrix rather than presenting

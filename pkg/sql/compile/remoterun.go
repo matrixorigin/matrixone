@@ -2411,7 +2411,7 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 		}
 		if proc == nil || !supportsRemoteArrowLoadPipeline(proc.GetService()) {
 			return moerr.NewNotSupportedNoCtx(
-				"Arrow LOAD remote execution requires MORPC protocol version 56",
+				"Arrow LOAD remote execution requires MORPC protocol version 57",
 			)
 		}
 	}

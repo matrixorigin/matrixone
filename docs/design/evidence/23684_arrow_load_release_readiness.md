@@ -1,6 +1,6 @@
 # #23684 Arrow LOAD release-readiness evidence
 
-Review date: 2026-09-06. Rebased base: `up/main@f3e1599c7268`. The versioned
+Review date: 2026-09-08. Rebased base: `up/main@ffabe501da00`. The versioned
 [Arrow LOAD design](../23684_arrow_load_design.md) defines the protocol,
 ownership, rollout, and acceptance contracts. This record covers
 the local release rehearsal; it does not claim cloud-provider or human-owner
