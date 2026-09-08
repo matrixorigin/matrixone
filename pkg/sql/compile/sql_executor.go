@@ -291,6 +291,32 @@ type txnExecutor struct {
 	database string
 }
 
+func (exec *txnExecutor) newCompile(
+	proc *process.Process,
+	stmt tree.Statement,
+	sql string,
+	receiveAt time.Time,
+) *Compile {
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmt,
+		false,
+		nil,
+		receiveAt,
+	)
+	// Every statement compiled here belongs to the txnExecutor's transaction.
+	// Borrowing the frontend session must not turn constituent temporary DDL
+	// (for example ALTER COPY CREATE/DROP) into an independent session txn.
+	c.temporaryDDLInExecutorTxn = true
+	return c
+}
+
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
@@ -505,19 +531,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	c := NewCompile(
-		exec.s.addr,
-		exec.getDatabase(),
-		sql,
-		"",
-		"",
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil,
-		receiveAt,
-	)
+	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()

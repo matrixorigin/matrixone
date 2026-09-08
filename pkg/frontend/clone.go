@@ -400,13 +400,26 @@ func restartCloneDatabaseTargetLockTxn(ctx context.Context, bh BackgroundExec) (
 	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); locked {
 		return false, nil
 	}
-	if err := bh.Exec(ctx, "rollback;"); err != nil {
-		return false, err
-	}
-	if err := bh.Exec(ctx, "begin;"); err != nil {
+	if err := restartOwnedCloneDatabaseTargetLockTxn(ctx, bh); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func restartOwnedCloneDatabaseTargetLockTxn(ctx context.Context, bh BackgroundExec) error {
+	if err := bh.Exec(ctx, "rollback;"); err != nil {
+		return err
+	}
+	if err := bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	// The caller entered the lineage lifecycle before taking the target key.
+	// Re-enter it after replacing the owned transaction so the retry cannot
+	// continue with target/catalog locks but without the leading gate.
+	if err := lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
+	return nil
 }
 
 func newDataBranchCloneLockProcess(
@@ -812,10 +825,11 @@ func handleCloneTable(
 	}
 
 	if bh == nil {
-		// do not open another transaction,
-		// if the clone already executed within a transaction.
-		if bh, deferred, err = getBackExecutor(
-			reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+		// Public clone owns this transaction. Admit it before source/target
+		// resolution because nested restore DDL can cross both lineage and
+		// view-metadata lifecycle gates.
+		if bh, deferred, err = getCloneMutationExecutor(
+			reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
 		); err != nil {
 			return
 		}
@@ -1074,7 +1088,7 @@ func handleCloneDatabaseWithSource(
 			// re-checks the target with that fresh snapshot.
 			options[0].cloneSnapshotUsesBackgroundTxn = true
 		}
-		if bh, deferred, err = getBackExecutorWithTxnHandler(reqCtx, ses, options...); err != nil {
+		if bh, deferred, err = getCloneMutationExecutor(reqCtx, ses, true, options...); err != nil {
 			return
 		}
 

@@ -1137,6 +1137,52 @@ func TestIsCloneDatabaseTargetLockRetry(t *testing.T) {
 	require.False(t, isCloneDatabaseTargetLockRetry(errors.New("not retryable")))
 }
 
+func TestRestartOwnedCloneDatabaseTargetLockTxnReentersLifecycle(t *testing.T) {
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	for _, test := range []struct {
+		name      string
+		failedSQL string
+		wantSQLs  []string
+	}{
+		{
+			name:     "success",
+			wantSQLs: []string{"rollback;", "begin;", gateSQL},
+		},
+		{
+			name:      "rollback failure",
+			failedSQL: "rollback;",
+			wantSQLs:  []string{"rollback;"},
+		},
+		{
+			name:      "begin failure",
+			failedSQL: "begin;",
+			wantSQLs:  []string{"rollback;", "begin;"},
+		},
+		{
+			name:      "lifecycle failure",
+			failedSQL: gateSQL,
+			wantSQLs:  []string{"rollback;", "begin;", gateSQL},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			wantErr := errors.New("restart failed")
+			if test.failedSQL != "" {
+				bh.sql2err[test.failedSQL] = wantErr
+			}
+
+			err := restartOwnedCloneDatabaseTargetLockTxn(context.Background(), bh)
+			if test.failedSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, wantErr)
+			}
+			require.Equal(t, test.wantSQLs, bh.executedSqls)
+		})
+	}
+}
+
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
 		Tenant: &plan.SnapshotTenant{TenantID: 1001},

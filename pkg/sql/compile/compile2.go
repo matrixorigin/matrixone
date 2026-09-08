@@ -1028,6 +1028,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
 		return e
 	}
+	// Sequence functions update Process-local CURRVAL/LASTVAL state while the
+	// statement executes. Those values are published only after a successful
+	// statement, so restore the attempt-entry baseline before rebuilding the
+	// retry generation. Otherwise a rolled-back value can change LASTVAL or
+	// CURRVAL on the retry even when the retried plan never calls that sequence.
+	c.restoreSequenceStatementState()
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
@@ -1101,6 +1107,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
 	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)
