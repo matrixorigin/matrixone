@@ -4778,6 +4778,109 @@ func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
 	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
 }
 
+func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
+	for i, tc := range []struct {
+		name, query string
+	}{
+		{"binary", "select cast(? as binary(3)) member of (json_array(cast(x'000102' as binary(3))))"},
+		{"varbinary", "select cast(? as varbinary(3)) member of (json_array(cast(x'000102' as varbinary(3))))"},
+		{"binary_filter", "select 1 where cast(? as binary(3)) member of (json_array(cast(x'000102' as binary(3))))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(170+i), tc.query)
+			defer prepared.Close()
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ioses.Close() })
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+			proto.SetSession(ses)
+			// Decode a real binary EXECUTE and use production execute-time
+			// metadata preparation, rather than installing vector sidecars.
+			// Rebinding the same prepared plan must not retain the first value.
+			for _, input := range []struct {
+				value string
+				want  int64
+			}{{string([]byte{0, 1, 2}), 1}, {string([]byte{0, 1, 3}), 0}, {string([]byte{0, 1, 2}), 1}} {
+				got, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto,
+					buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, input.value))
+				require.NoError(t, err)
+				require.Equal(t, input.want, got)
+			}
+		})
+	}
+}
+
+func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+		t.Run(constructor, func(t *testing.T) {
+			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
+				t.Run(fmt.Sprint(version), func(t *testing.T) {
+					rt := moruntime.ServiceRuntime("")
+					old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+					defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+					ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 180, "select "+constructor)
+					defer prepared.Close()
+					setSessionAlloc("", NewLeakCheckAllocator())
+					ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+					require.NoError(t, err)
+					defer ioses.Close()
+					proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+					proto.SetSession(ses)
+					for _, input := range []struct {
+						value string
+						null  bool
+					}{{value: "ab"}, {value: "cd"}, {null: true}, {value: "ab"}} {
+						packet := buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, input.value)
+						if input.null {
+							packet = buildNullExecutePacket(defines.MYSQL_TYPE_BLOB)
+						}
+						require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepared, packet, 0))
+						_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+						if owned && stmt != nil {
+							defer stmt.Free()
+						}
+						require.NoError(t, err)
+						query := runtimePlan.GetQuery()
+						expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+						executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
+						require.NoError(t, err)
+						result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+						if version == defines.MORPCVersion51 && !input.null {
+							require.ErrorContains(t, err, "MORPC protocol version 52")
+						} else {
+							require.NoError(t, err)
+							if constructor == "json_array_append('[]', '$', ?)" && input.null {
+								require.True(t, result.IsNull(0), "ARRAY_APPEND keeps its SQL NULL value contract")
+								executor.Free()
+								prepared.clearBinaryParamState(cw.proc)
+								continue
+							}
+							want := "[\"base64:type252:YWI=\"]"
+							if input.value == "cd" {
+								want = "[\"base64:type252:Y2Q=\"]"
+							}
+							if input.null {
+								want = "[null]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+								want = "{\"k\": " + want[1:len(want)-1] + "}"
+							}
+							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())
+						}
+						executor.Free()
+						// ExecRequest clears the binary parameter vector after each
+						// COM_STMT_EXECUTE, including execution errors. Mirror that
+						// production boundary before testing the next NULL rebind.
+						prepared.clearBinaryParamState(cw.proc)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 117, "select ? member of ('[18446744073709551615]')")

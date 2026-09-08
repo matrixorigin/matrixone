@@ -128,7 +128,7 @@ json_type(json_extract(json_array(uid), $[0]))
 STRING
 select json_type(json_extract(json_array(yr), '$[0]')) from jtt where yr is not null;
 json_type(json_extract(json_array(yr), $[0]))
-STRING
+INTEGER
 select json_type(json_extract(json_array(bin), '$[0]')) from jtt where bin is not null;
 json_type(json_extract(json_array(bin), $[0]))
 BLOB
