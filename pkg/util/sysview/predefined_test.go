@@ -500,6 +500,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// VIEWS must not execute a second SQL-level regexp grammar for catalog rows.
 	assert.Contains(t, InformationSchemaViewsDDL, "mo_view_definition(tbl.viewdef)")
 	assert.Contains(t, InformationSchemaViewsDDL, "mo_view_check_option(tbl.viewdef)")
+	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
 	// Installing the upgrade view must not hide a real pre-upgrade viewdef that
 	// lacks the frozen field. The internal parser compatibility function supplies
 	// its SELECT definition without depending on lifecycle activation.
