@@ -270,6 +270,12 @@ func (c *Compile) FreezeResultMetadata() {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	// Reset only supports the TP topology admitted by prepare-time compilation.
+	// AP scan state and worker placement belong to one execution; updating the
+	// transaction offset cannot make them valid for another execution.
+	if !c.IsTpQuery() {
+		return cantCompileForPrepareErr
+	}
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
 			return err
@@ -505,6 +511,7 @@ func (c *Compile) clear() {
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 
+	c.execType = plan2.ExecTypeTP
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
@@ -1843,7 +1850,14 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		nodeCopy := plan2.DeepCopyNode(node)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileExternScanWithPlanNodeID(nodeCopy, curNodeIdx)
+		if nodeCopy.ExternScan != nil && nodeCopy.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
+			// Mongo query configuration removes the synthetic __mo_query
+			// selector from FilterList. Keep that mutation on the same
+			// compile-owned node that supplies the residual filter below.
+			ss, err = c.compileExternScanWithPlanNodeIDAndIsolation(nodeCopy, curNodeIdx, false)
+		} else {
+			ss, err = c.compileExternScanWithPlanNodeID(nodeCopy, curNodeIdx)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2710,6 +2724,17 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID int32) ([]*Scope, error) {
+	return c.compileExternScanWithPlanNodeIDAndIsolation(node, planNodeID, true)
+}
+
+// compileExternScanWithPlanNodeIDAndIsolation lets compilePlanScope reuse its
+// compile-owned copy while keeping direct callers protected from MongoDB plan
+// hydration mutating a cached logical plan.
+func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
+	node *plan.Node,
+	planNodeID int32,
+	isolateMongoPlan bool,
+) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -2727,7 +2752,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		// mapping to the physical projection. Keep that mutation isolated even
 		// when this helper is called outside compilePlanScope, because a prepared
 		// execution may otherwise hand us its cached logical plan directly.
-		executionNode := plan2.DeepCopyNode(node)
+		executionNode := node
+		if isolateMongoPlan {
+			executionNode = plan2.DeepCopyNode(node)
+		}
 		if err := c.configureMongoUserQuery(executionNode); err != nil {
 			return nil, err
 		}
@@ -7340,6 +7368,19 @@ func supportsRemoteStatementLastInsertID(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion26
+}
+
+func supportsRemoteAutoIncrementSessionOptions(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion56
 }
 
 func supportsRemoteUpdateChangedRows(service string) bool {
