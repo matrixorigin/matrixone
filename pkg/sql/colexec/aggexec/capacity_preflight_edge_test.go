@@ -570,10 +570,11 @@ func TestAccountedArgumentGrowthFailurePreservesPublishedState(t *testing.T) {
 }
 
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
+	bitBytesType := types.New(types.T_varbinary, MaxBitwiseAggregateOperandBytes, 0)
 	tests := []aggregateAllocationTestCase{
 		{name: "any", id: AggIdOfAny, params: []types.Type{types.T_varchar.ToType()}},
 		{name: "bit-fixed", id: AggIdOfBitAnd, params: []types.Type{types.T_int64.ToType()}},
-		{name: "bit-bytes", id: AggIdOfBitOr, params: []types.Type{types.T_varbinary.ToType()}},
+		{name: "bit-bytes", id: AggIdOfBitOr, params: []types.Type{bitBytesType}},
 		{name: "min-fixed", id: AggIdOfMin, params: []types.Type{types.T_int64.ToType()}},
 		{name: "max-by", id: AggIdOfMaxBy, params: []types.Type{
 			types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
@@ -680,6 +681,7 @@ func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
 
 func TestConcreteAggregatePreflightWinnerAndMergePaths(t *testing.T) {
 	long := strings.Repeat("x", types.VarlenaInlineSize+8)
+	bitBytesType := types.New(types.T_varbinary, MaxBitwiseAggregateOperandBytes, 0)
 	jsonValue := func(t *testing.T, value any) []byte {
 		t.Helper()
 		bj, err := bytejson.CreateByteJSONWithCheck(value)
@@ -811,9 +813,9 @@ func TestConcreteAggregatePreflightWinnerAndMergePaths(t *testing.T) {
 		},
 		{
 			name: "bit-bytes", id: AggIdOfBitOr,
-			params: []types.Type{types.T_varbinary.ToType()},
+			params: []types.Type{bitBytesType},
 			build: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				vec := vector.NewVec(types.T_varbinary.ToType())
+				vec := vector.NewVec(bitBytesType)
 				for _, value := range [][]byte{{0}, {1, 2}, {2, 1}, {3, 3}} {
 					require.NoError(t, vector.AppendBytes(vec, value, false, mp))
 				}

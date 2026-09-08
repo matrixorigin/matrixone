@@ -1827,3 +1827,73 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
 }
+
+func TestAlterTemporaryTablePlan(t *testing.T) {
+	for _, tc := range []struct {
+		option string
+		copy   bool
+	}{
+		{"ADD COLUMN extra INT DEFAULT 7", true},
+		{"DROP COLUMN v", true},
+		{"MODIFY COLUMN v BIGINT", true},
+		{"RENAME COLUMN v TO value_col", false},
+		{"RENAME TO renamed", false},
+	} {
+		t.Run(tc.option, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer()
+			source := mock.ctxt.tables["auto_incr_t"]
+			source.IsTemporary = true
+			source.TableType = catalog.SystemTemporaryTable
+			source.Name = "__mo_tmp_physical_source"
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t "+tc.option)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.True(t, alter.TableDef.IsTemporary)
+			require.Equal(t, "auto_incr_t", alter.TableDef.Name)
+			require.Equal(t, "__mo_tmp_physical_source", source.Name, "planner must not mutate resolved metadata")
+			if tc.copy {
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.Contains(t, alter.CreateTmpTableSql, "CREATE TEMPORARY TABLE")
+				require.LessOrEqual(t, len(alter.CopyTableDef.Name), 64)
+				require.Contains(t, alter.InsertTmpDataSql, "`auto_incr_t`")
+			} else {
+				require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			}
+		})
+	}
+}
+
+func TestAlterTemporaryTableKeepsUnsupportedColumnOperationsClosed(t *testing.T) {
+	mock := newAutoIncrementAlterOptimizer()
+	source := mock.ctxt.tables["auto_incr_t"]
+	source.IsTemporary = true
+	source.TableType = catalog.SystemTemporaryTable
+
+	_, err := buildSingleStmt(mock, t,
+		"ALTER TABLE constraint_test.auto_incr_t CHANGE COLUMN v value_col BIGINT")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), "%v", err)
+}
+
+func TestAlterTemporaryTableRenameDestination(t *testing.T) {
+	for _, temporaryDestination := range []bool{false, true} {
+		t.Run(fmt.Sprintf("temporary=%v", temporaryDestination), func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer()
+			source := mock.ctxt.tables["auto_incr_t"]
+			source.IsTemporary = true
+			source.TableType = catalog.SystemTemporaryTable
+			destination := DeepCopyTableDef(source, true)
+			destination.Name = "destination"
+			destination.IsTemporary = temporaryDestination
+			mock.ctxt.tables["destination"] = destination
+			mock.ctxt.objects["destination"] = &ObjectRef{SchemaName: "constraint_test", ObjName: "destination"}
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t RENAME TO destination")
+			if temporaryDestination {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists), "%v", err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "destination", p.GetDdl().GetAlterTable().Actions[0].GetAlterName().NewName)
+				require.Empty(t, p.GetDdl().GetAlterTable().UpdateFkSqls)
+			}
+		})
+	}
+}
