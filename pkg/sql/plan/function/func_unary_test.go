@@ -4442,6 +4442,79 @@ func TestSpace(t *testing.T) {
 	}
 }
 
+func TestSpaceHonorsStringLimitAndNegativeCount(t *testing.T) {
+	require.Len(t, mustFillSpaceNumber(t, uint64(MaxAllowedValue)), MaxAllowedValue)
+	require.Empty(t, mustFillSpaceNumber(t, int64(-1)))
+	_, err := FillSpaceNumber(uint64(MaxAllowedValue + 1))
+	require.Error(t, err)
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8000, 8001, 10000},
+				[]bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{strings.Repeat(" ", 8000), strings.Repeat(" ", 8001), strings.Repeat(" ", 10000)},
+			[]bool{false, false, false}),
+		SpaceNumber[uint64],
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+}
+
+func mustFillSpaceNumber(t *testing.T, value any) string {
+	t.Helper()
+	var result string
+	var err error
+	switch value := value.(type) {
+	case uint64:
+		result, err = FillSpaceNumber(value)
+	case int64:
+		result, err = FillSpaceNumber(value)
+	default:
+		t.Fatalf("unsupported test value type %T", value)
+	}
+	require.NoError(t, err)
+	return result
+}
+
+func TestSpaceDecimalUsesMySQLRounding(t *testing.T) {
+	decimalType := types.New(types.T_decimal64, 8, 1)
+	values := make([]types.Decimal64, 0, 5)
+	for _, value := range []string{"1.4", "1.5", "1.9", "-1.5", "0.5"} {
+		decimal, err := types.ParseDecimal64(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
+	}
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimalType, values, []bool{false, false, false, false, false}),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{" ", "  ", "  ", "", " "},
+			[]bool{false, false, false, false, false},
+		),
+		SpaceDecimal64,
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+
+	resolved, err := GetFunctionByName(context.Background(), "space", []types.Type{decimalType})
+	require.NoError(t, err)
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	require.Empty(t, targets)
+}
+
 func initToTimeCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	d2, _ := types.ParseDatetime("2022-01-01 16:22:44", 6)
