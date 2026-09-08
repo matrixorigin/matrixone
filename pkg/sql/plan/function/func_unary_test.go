@@ -3646,14 +3646,111 @@ func initJsonQuoteTestCase() []tcTemp {
 			info: "test json quote",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"key:v", "sdfsdf", ""},
-					[]bool{false, false, true}),
+					[]string{"key:v", "sdfsdf", "", "\x00\x01\x1f", "\b\f\n\r\t", "a\\\"b", "\x7f", "你好"},
+					[]bool{false, false, true, false, false, false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_json.ToType(), false,
-				[]string{"\f\u0005key:v", "\f\u0006sdfsdf", ""},
-				[]bool{false, false, true}),
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{`"key:v"`, `"sdfsdf"`, "", `"\u0000\u0001\u001f"`, `"\b\f\n\r\t"`, `"a\\\"b"`, "\"\x7f\"", `"你好"`},
+				[]bool{false, false, true, false, false, false, false, false}),
 		},
 	}
+}
+
+func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string([]byte{0xff})}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+		JsonQuote)
+	s, _ := tc.Run()
+	require.False(t, s)
+}
+
+func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		data []string
+	}{
+		{name: "binary ascii", typ: types.New(types.T_binary, 3, 0), data: []string{"abc"}},
+		{name: "varbinary ascii", typ: types.New(types.T_varbinary, 3, 0), data: []string{"abc"}},
+		{name: "blob ascii", typ: types.T_blob.ToType(), data: []string{"abc"}},
+		{name: "binary invalid utf8", typ: types.New(types.T_varbinary, 1, 0), data: []string{string([]byte{0xff})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ftc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.typ, tc.data, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				JsonQuote)
+			succeed, info := ftc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	t.Run("typed binary NULL remains NULL", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			JsonQuote)
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("mixed runtime domains", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+			JsonQuote)
+		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("masked binary row is not evaluated", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ftc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", `"text"`}, []bool{true, false}),
+			JsonQuote).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{false, true},
+		})
+		require.NoError(t, ftc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
+		succeed, info := ftc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
+func TestJsonQuoteReturnType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	literal, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
+		types.NewWithCharset(types.T_varchar, 3, 0, types.CharsetUTF8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4Bin), literal.GetReturnType())
+
+	_, err = GetFunctionByName(proc.Ctx, "json_quote", []types.Type{types.T_any.ToType()})
+	require.Error(t, err, "T_any cannot identify either a prepared parameter or SQL NULL")
+
+	unboundedText, err := GetFunctionByName(proc.Ctx, "json_quote", []types.Type{
+		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8MB4Bin), unboundedText.GetReturnType())
 }
 
 func TestJsonQuote(t *testing.T) {
