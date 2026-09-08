@@ -131,6 +131,13 @@ type aggState struct {
 	length     int32
 	capacity   int32
 	allocation *AllocationAccount
+	// distinctKeyWidth enables the exact fixed-width deferred DISTINCT state.
+	// When enabled, the index is the membership/iteration source and the
+	// skiplist remains available for legacy/fallback states. A small hard-account
+	// merge destination may disable the empty optional index before publication.
+	distinctKeyWidth      int
+	distinctFixedDeferred bool
+	distinctIndex         distinctFixedIndex
 	// vecs are for agg state.
 	vecs []*vector.Vector
 	// MarshalerUnmarshaler, for state entries.
@@ -177,6 +184,9 @@ func (ag *aggState) initWithAllocation(
 	ag.length = l
 	ag.capacity = c
 	ag.allocation = allocation
+	ag.distinctKeyWidth = distinctFixedIndexWidth(info, int(c))
+	ag.distinctFixedDeferred = ag.distinctKeyWidth > 0
+	ag.distinctIndex.groupLimit = int(c)
 
 	var err error
 	if !info.saveArg {
@@ -292,6 +302,22 @@ func (ag *aggState) writeStateArg(
 			err := ag.iterInputOrder(mp, uint16(i), func(k []byte) error {
 				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
 					return err
+				}
+				xcnt++
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		} else if ag.distinctFixedDeferred {
+			err := ag.iter(uint16(i), func(k []byte) error {
+				value := k[kAggArgPrefixSz:]
+				n, err := writer.Write(value)
+				if err != nil {
+					return err
+				}
+				if n != len(value) {
+					return io.ErrShortWrite
 				}
 				xcnt++
 				return nil
@@ -844,29 +870,48 @@ func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other
 		}
 		ag.length += end - start
 	} else {
-		for i := start; i < end; i++ {
-			ag.argCnt[ag.length] = other.argCnt[i]
-			var lkb, ukb [kAggArgPrefixSz]byte
-			lk := lkb[:]
-			uk := ukb[:]
-			binary.BigEndian.PutUint16(lk, uint16(i))
-			binary.BigEndian.PutUint16(uk, uint16(i+1))
-			it := other.argSkl.NewIter(lk, uk)
-			for ok, k, value := it.SeekGE(lk); ok; ok, k, value = it.Next() {
-				kcpy, err := ag.resizeArgScratch(mp, len(k))
+		if info.isDistinct && ag.distinctFixedDeferred && other.distinctFixedDeferred &&
+			ag.distinctKeyWidth == other.distinctKeyWidth {
+			for i := start; i < end; i++ {
+				targetY := uint16(ag.length)
+				ag.argCnt[targetY] = 0
+				added, err := ag.distinctIndex.mergeInto(
+					mp, ag.allocation, targetY, &other.distinctIndex, uint16(i))
 				if err != nil {
-					it.Close()
 					return 0, err
 				}
-				copy(kcpy, k)
-				binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], uint16(ag.length))
-				if err := ag.insertArgValue(mp, kcpy, value); err != nil {
-					it.Close()
-					return 0, err
+				if added > math.MaxUint32-ag.argCnt[targetY] {
+					return 0, moerr.NewInternalErrorNoCtx(
+						"agg appendFromStateArg: too many distinct arguments")
 				}
+				ag.argCnt[targetY] += added
+				ag.length++
 			}
-			it.Close()
-			ag.length++
+		} else {
+			for i := start; i < end; i++ {
+				ag.argCnt[ag.length] = other.argCnt[i]
+				var lkb, ukb [kAggArgPrefixSz]byte
+				lk := lkb[:]
+				uk := ukb[:]
+				binary.BigEndian.PutUint16(lk, uint16(i))
+				binary.BigEndian.PutUint16(uk, uint16(i+1))
+				it := other.argSkl.NewIter(lk, uk)
+				for ok, k, value := it.SeekGE(lk); ok; ok, k, value = it.Next() {
+					kcpy, err := ag.resizeArgScratch(mp, len(k))
+					if err != nil {
+						it.Close()
+						return 0, err
+					}
+					copy(kcpy, k)
+					binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], uint16(ag.length))
+					if err := ag.insertArgValue(mp, kcpy, value); err != nil {
+						it.Close()
+						return 0, err
+					}
+				}
+				it.Close()
+				ag.length++
+			}
 		}
 	}
 	return end, nil
@@ -927,6 +972,43 @@ func (ag *aggState) insertArgValueWithInserter(
 	if ag.argSkl == nil {
 		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
+	var (
+		distinctIndexKey  uint64
+		distinctIndexGrp  uint16
+		distinctIndexUsed bool
+	)
+	if ag.distinctKeyWidth > 0 {
+		var ok bool
+		distinctIndexGrp, distinctIndexKey, ok = decodeDistinctFixedKey(kbuf, ag.distinctKeyWidth)
+		if !ok && ag.distinctFixedDeferred {
+			// A deferred fixed-width state has no skiplist source of truth:
+			// iterators, merge, and spill read the index directly.  Falling back
+			// to the empty compatibility skiplist for a malformed/retyped payload
+			// would publish argCnt without publishing an index key and silently
+			// lose the value at the next boundary.
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if ok {
+			distinctIndexUsed = true
+			duplicate, err := ag.distinctIndex.prepare(
+				mp, ag.allocation, distinctIndexGrp, distinctIndexKey)
+			if err != nil {
+				return err
+			}
+			if duplicate {
+				return arenaskl.ErrRecordExists
+			}
+			if ag.distinctFixedDeferred {
+				return ag.distinctIndex.insert(distinctIndexGrp, distinctIndexKey)
+			}
+		}
+	}
+	publish := func(err error) error {
+		if err == nil && distinctIndexUsed && !ag.distinctFixedDeferred {
+			return ag.distinctIndex.insert(distinctIndexGrp, distinctIndexKey)
+		}
+		return err
+	}
 	if ag.allocation != nil {
 		if uint64(len(kbuf)) > math.MaxUint32 ||
 			uint64(len(value)) > math.MaxUint32 {
@@ -943,9 +1025,9 @@ func (ag *aggState) insertArgValueWithInserter(
 		if used <= math.MaxUint64-required &&
 			used+required <= uint64(ag.argSkl.Arena().Capacity()) {
 			if inserter != nil {
-				return inserter.AddWithPlan(ag.argSkl, kbuf, value, plan)
+				return publish(inserter.AddWithPlan(ag.argSkl, kbuf, value, plan))
 			}
-			return ag.argSkl.AddWithPlan(kbuf, value, plan)
+			return publish(ag.argSkl.AddWithPlan(kbuf, value, plan))
 		}
 		// Admission deliberately reserves no capacity for a DISTINCT key that is
 		// already present. Confirm that case before growing; doing this only at a
@@ -963,9 +1045,9 @@ func (ag *aggState) insertArgValueWithInserter(
 			// GrowArena relocates the backing buffer, so cached node pointers no
 			// longer refer to the current arena.
 			*inserter = arenaskl.Inserter{}
-			return inserter.AddWithPlan(ag.argSkl, kbuf, value, plan)
+			return publish(inserter.AddWithPlan(ag.argSkl, kbuf, value, plan))
 		}
-		return ag.argSkl.AddWithPlan(kbuf, value, plan)
+		return publish(ag.argSkl.AddWithPlan(kbuf, value, plan))
 	}
 
 	nodeSize, err := aggregateArgumentNodeSize(
@@ -980,7 +1062,7 @@ func (ag *aggState) insertArgValueWithInserter(
 		return list.Add(kbuf, value)
 	}
 	if err := add(ag.argSkl); err != arenaskl.ErrArenaFull {
-		return err
+		return publish(err)
 	}
 
 	// arena is full, we need to grow the arena. Grow by at least kAggArgArenaSize,
@@ -1032,7 +1114,7 @@ func (ag *aggState) insertArgValueWithInserter(
 	ag.argbuf = argBuf
 	ag.argSkl = newArgSkl
 	mp.Free(oldArgBuf)
-	return nil
+	return publish(nil)
 }
 
 func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool) error {
@@ -1104,6 +1186,25 @@ func (ag *aggState) insertPreparedArg(
 }
 
 func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
+	if info.isDistinct && ag.distinctFixedDeferred && other != nil &&
+		other.distinctFixedDeferred && ag.distinctKeyWidth == other.distinctKeyWidth {
+		if y >= uint16(len(ag.argCnt)) || otherY >= uint16(len(other.argCnt)) ||
+			other.argCnt[otherY] > math.MaxUint32-ag.argCnt[y] {
+			return moerr.NewInternalErrorNoCtx(
+				"agg mergeArgs: too many distinct arguments")
+		}
+		added, err := ag.distinctIndex.mergeInto(
+			mp, ag.allocation, y, &other.distinctIndex, otherY)
+		if added > math.MaxUint32-ag.argCnt[y] {
+			return moerr.NewInternalErrorNoCtx(
+				"agg mergeArgs: too many distinct arguments")
+		}
+		ag.argCnt[y] += added
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	var inserter arenaskl.Inserter
 	merge := func(k []byte) error {
 		kcpy, err := ag.resizeArgScratch(mp, len(k))
@@ -1142,6 +1243,28 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 }
 
 func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
+	if ag.distinctFixedDeferred {
+		if int(idx) >= len(ag.argCnt) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		// Empty fixed-index rows are valid before the first key is admitted.
+		// Their optional index columns are intentionally unallocated; callers
+		// such as spill drains and generic merge fallback still iterate every
+		// physical group row and must observe an empty stream, not an error.
+		if ag.argCnt[idx] == 0 {
+			return nil
+		}
+		if len(ag.distinctIndex.groupHead) == 0 {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		width := ag.distinctKeyWidth
+		var encoded [kAggArgPrefixSz + 8]byte
+		binary.BigEndian.PutUint16(encoded[:kAggArgPrefixSz], idx)
+		return ag.distinctIndex.forEach(idx, func(value uint64) error {
+			binary.LittleEndian.PutUint64(encoded[kAggArgPrefixSz:], value)
+			return fn(encoded[:kAggArgPrefixSz+width])
+		})
+	}
 	var lkb, ukb [kAggArgPrefixSz]byte
 	lk := lkb[:]
 	uk := ukb[:]
@@ -1218,6 +1341,9 @@ func aggPayloadFromKey(info *aggInfo, k []byte) []byte {
 }
 
 func (ag *aggState) free(mp *mpool.MPool) {
+	ag.distinctIndex.free(mp)
+	ag.distinctKeyWidth = 0
+	ag.distinctFixedDeferred = false
 	if cap(ag.argCnt) > 0 {
 		mpool.FreeSlice(mp, ag.argCnt)
 	}
@@ -1250,10 +1376,11 @@ func (ag *aggState) free(mp *mpool.MPool) {
 type aggExec struct {
 	mp *mpool.MPool
 	aggInfo
-	chunkSize  int
-	state      []aggState
-	standby    []aggState
-	allocation *AllocationAccount
+	chunkSize              int
+	state                  []aggState
+	standby                []aggState
+	allocation             *AllocationAccount
+	distinctFixedAdmission distinctFixedAdmissionPlan
 }
 
 func (ae *aggExec) finalizeStringSourcePreflights(groups []uint64) {
@@ -1955,6 +2082,7 @@ func (ae *aggExec) Size() int64 {
 }
 
 func (ae *aggExec) Free() {
+	ae.distinctFixedAdmission.reset()
 	for _, st := range ae.state {
 		st.free(ae.mp)
 	}
@@ -1997,6 +2125,25 @@ func copyCanonicalDistinctArgument(dst []byte, vec *vector.Vector, row int) int 
 	return copy(dst, vec.GetRawBytesAt(row))
 }
 
+func distinctFixedValue(vec *vector.Vector, row, width int) (uint64, error) {
+	if vec == nil || row < 0 || width <= 0 || width > 8 {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
+		if size != width {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		return 0, nil
+	}
+	raw := vec.GetRawBytesAt(row)
+	if len(raw) != width {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	var padded [8]byte
+	copy(padded[:], raw)
+	return binary.LittleEndian.Uint64(padded[:]), nil
+}
+
 func distinctArgumentRowsEqual(vec *vector.Vector, left, right int) bool {
 	leftZero := false
 	if _, ok := canonicalDistinctArgumentSize(vec, left); ok {
@@ -2031,7 +2178,153 @@ func (ag *aggState) fillDistinctVectorArg(
 	return ag.insertPreparedArg(mp, y, k, true)
 }
 
+func (ae *aggExec) fixedDistinctBatchWidth(groups []uint64, vec *vector.Vector) int {
+	if ae == nil || vec == nil || !ae.isDistinct || !ae.saveArg {
+		return 0
+	}
+	width := distinctFixedKeyWidth(&ae.aggInfo)
+	if width == 0 {
+		return 0
+	}
+	for _, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y := ae.getXY(group - 1)
+		if x < 0 || x >= len(ae.state) {
+			return 0
+		}
+		state := &ae.state[x]
+		if int(y) >= int(state.capacity) || !state.distinctFixedDeferred ||
+			state.distinctKeyWidth != width {
+			return 0
+		}
+	}
+	return width
+}
+
+func (ae *aggExec) batchFillFixedDistinctArgs(
+	offset int,
+	groups []uint64,
+	vec *vector.Vector,
+	width int,
+) error {
+	if ae.distinctFixedAdmission.matches(offset, groups, vec) {
+		plan := &ae.distinctFixedAdmission
+		plan.valid = false
+		for i, group := range groups {
+			if !plan.publish[i] {
+				continue
+			}
+			x, y := ae.getXY(group - 1)
+			if x < 0 || x >= len(ae.state) {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			state := &ae.state[x]
+			if state.distinctKeyWidth != width ||
+				int(y) >= int(state.capacity) {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if state.argCnt[y] == math.MaxUint32 {
+				return moerr.NewInternalErrorNoCtx(
+					"agg fillArg: too many distinct arguments")
+			}
+			if err := state.distinctIndex.insert(y, plan.values[i]); err != nil {
+				return err
+			}
+			state.argCnt[y]++
+		}
+		return nil
+	}
+	ae.distinctFixedAdmission.reset()
+	var batch distinctFixedBatch
+	batch.reset()
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y := ae.getXY(group - 1)
+		if x < 0 || x >= len(ae.state) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		state := &ae.state[x]
+		row, err := preflightPhysicalRow(vec, offset+i)
+		if err != nil {
+			return err
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		value, err := distinctFixedValue(vec, row, width)
+		if err != nil {
+			return err
+		}
+		if batch.seenOrInsert(group, value) {
+			continue
+		}
+		duplicate, err := state.distinctIndex.prepare(
+			ae.mp, state.allocation, y, value)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			continue
+		}
+		if state.argCnt[y] == math.MaxUint32 {
+			return moerr.NewInternalErrorNoCtx(
+				"agg fillArg: too many distinct arguments")
+		}
+		if err := state.distinctIndex.insert(y, value); err != nil {
+			return err
+		}
+		state.argCnt[y]++
+	}
+	return nil
+}
+
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
+	if distinct && len(vectors) == 1 {
+		if width := ae.fixedDistinctBatchWidth(groups, vectors[0]); width > 0 {
+			return ae.batchFillFixedDistinctArgs(
+				offset, groups, vectors[0], width)
+		}
+	}
+	// BatchFill is fed UnitLimit-sized immutable work units. DISTINCT values
+	// that repeat inside one unit are guaranteed to be duplicates for the same
+	// aggregate group, so avoid probing the resident skiplist for every copy.
+	// Keep the tiny linear path for duplicate-heavy units and promote to the
+	// bounded open-addressing table only when the unit has more representatives.
+	var linear distinctArgumentLinearBatch
+	var hashed distinctArgumentBatch
+	hashedReady := false
+	seenDistinct := func(row int) (bool, error) {
+		if !distinct {
+			return false, nil
+		}
+		if hashedReady {
+			return hashed.seenOrInsert(groups, vectors, offset, row)
+		}
+		duplicate, err := linear.seen(groups, vectors, offset, row)
+		if err != nil || duplicate {
+			return duplicate, err
+		}
+		if linear.insertUnique(row) {
+			return false, nil
+		}
+		for i := uint16(0); i < linear.count; i++ {
+			duplicate, err = hashed.seenOrInsert(
+				groups, vectors, offset, int(linear.rows[i]))
+			if err != nil {
+				return false, err
+			}
+			if duplicate {
+				return false, mpool.ErrAllocationAccountInvariant
+			}
+		}
+		hashedReady = true
+		return hashed.seenOrInsert(groups, vectors, offset, row)
+	}
+
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -2046,6 +2339,13 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				return err
 			}
 			if vectors[0].IsNull(uint64(row)) {
+				continue
+			}
+			duplicate, err := seenDistinct(i)
+			if err != nil {
+				return err
+			}
+			if duplicate {
 				continue
 			}
 			x, y := ae.getXY(group - 1)
@@ -2078,6 +2378,13 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			}
 		}
 		if hasNull {
+			continue
+		}
+		duplicate, err := seenDistinct(i)
+		if err != nil {
+			return err
+		}
+		if duplicate {
 			continue
 		}
 
@@ -2174,6 +2481,26 @@ func (ae *aggExec) batchMergeArgs(next *aggExec, offset int, groups []uint64, di
 
 func (ag *aggState) checkArgsSkl() {
 	if ag.argSkl == nil {
+		return
+	}
+	if ag.distinctFixedDeferred {
+		for i := range ag.length {
+			if ag.argCnt[i] == 0 {
+				continue
+			}
+			var count uint32
+			if err := ag.distinctIndex.forEach(uint16(i), func(uint64) error {
+				count++
+				return nil
+			}); err != nil {
+				panic(err)
+			}
+			if count != ag.argCnt[i] {
+				panic(moerr.NewInternalErrorNoCtxf(
+					"invalid fixed distinct count: %d for y: %d, expected: %d",
+					count, i, ag.argCnt[i]))
+			}
+		}
 		return
 	}
 
