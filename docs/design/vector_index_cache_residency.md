@@ -592,7 +592,14 @@ transaction as the chunks it describes, so an index's recorded coverage can neve
 disagree with what it actually stores — which a watermark read from elsewhere
 (`mo_iscp_log`) cannot promise across multiple CNs.
 
-Each row carries the frame's `filesize` and the `build_ts` the flush applied. That
+Each row carries the frame's `checksum`, its `filesize`, and the `build_ts` the flush applied.
+The checksum is not recomputed: `FrameCdcChunk` seals every chunk with a CRC32 in its footer, so
+the row records what is already there. One chunk stores that chunk's CRC; a flush spanning
+several stores the CRC over their CRCs in chunk order, which changes if any chunk's content
+changes, if one goes missing, or if they come back reordered -- the cross-chunk binding no
+per-chunk footer can provide. Plain hex, no algorithm tag: a reader reaches the column through
+the row's `index_id`, so it already knows it holds a tail frame, and the chunk count selects
+between the two rules. That
 is what makes tail sizing cheap and exact: summing `filesize` over the rows reads
 metadata only, where `SUM(LENGTH(data))` would project the blob column and read the
 entire tail off storage just to measure it. §14 covers what happens when the rows
