@@ -1006,7 +1006,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if err = lockRestoreLineageOwnerLifecycle(ctx, bh, stmt.Level); err != nil {
 		return stats, err
 	}
-	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
 		return stats, err
 	}
 

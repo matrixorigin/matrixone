@@ -866,6 +866,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 
+	subscription, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+
 	tblName := stmt.TableName.GetTableName()
 	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
 	if err != nil {
@@ -878,11 +883,15 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
 	if obj.PubInfo != nil {
-		sub := &SubscriptionMeta{
-			AccountId: obj.PubInfo.GetTenantId(),
+		if subscription == nil {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.GetTenantId(),
+				DbName:    obj.SchemaName,
+				SubName:   dbName,
+			}
 		}
 		dbName = obj.SchemaName
-		ctx.SetQueryingSubscription(sub)
+		ctx.SetQueryingSubscription(subscription)
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()

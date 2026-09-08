@@ -232,6 +232,12 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	if output, ok := s.RootOp.(*connector.Connector); ok &&
+		output.Reg != nil && output.Reg.OrderedStream &&
+		!supportsDistributedOrderedTop(proc.GetService()) {
+		return nil, false, nil, false, moerr.NewNotSupportedNoCtx(
+			"distributed ordered Top-N requires MORPC protocol version 53")
+	}
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)

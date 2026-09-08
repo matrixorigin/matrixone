@@ -58,6 +58,9 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	} else {
 		mergeTop.OpAnalyzer.Reset()
 	}
+	if mergeTop.OrderedStreams {
+		return mergeTop.prepareStream(proc)
+	}
 
 	// limit executor
 	if mergeTop.ctr.limitExecutor == nil {
@@ -116,6 +119,9 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (
 		err = mergeTopTerminalCapacityError(proc.Ctx, err)
 	}()
 	analyzer := mergeTop.OpAnalyzer
+	if mergeTop.OrderedStreams {
+		return mergeTop.callStream(proc, analyzer)
+	}
 
 	result = vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
