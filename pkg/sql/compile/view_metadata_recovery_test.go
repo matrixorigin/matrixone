@@ -1227,8 +1227,9 @@ func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		exec := &viewMetadataCleanupRecordingExecutor{}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
-		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
-			persistViewDependencies(nil, "db", nil))
+		available, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).viewMetadataRefreshAvailable()
+		require.NoError(t, err)
+		require.True(t, available)
 		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
 		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
 	})
@@ -1265,10 +1266,11 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 			exec := &viewMetadataCleanupRecordingExecutor{}
 			installViewMetadataTestExecutor(t, proc, exec)
 			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Len(t, exec.sqls, 4)
-			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
-			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-			require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
+			markers := viewMetadataRequireRevalidationSQL()
+			require.Len(t, exec.sqls, len(markers)+2)
+			require.Equal(t, markers, exec.sqls[:len(markers)])
+			require.Contains(t, exec.sqls[len(markers)], "delete from mo_catalog.mo_view_dependencies")
+			require.Contains(t, exec.sqls[len(markers)+1], "delete from mo_catalog.mo_view_refresh")
 		})
 	}
 }
