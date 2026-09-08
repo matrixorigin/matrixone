@@ -27,6 +27,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+// AutoIncrementOptions are the statement-scoped AUTO_INCREMENT controls.
+//
+// The allocator owns globally disjoint ranges of the underlying unit-step
+// sequence.  These options only select the values in that range which belong
+// to the current session's series; they must never mutate AutoColumn.Step or
+// any shared cache state.
+type AutoIncrementOptions struct {
+	Increment uint64
+	Offset    uint64
+}
+
+func (o AutoIncrementOptions) isDefault() bool {
+	return o.Increment == 1 && o.Offset == 1
+}
+
+// IsDefault reports whether the normalized options select the ordinary
+// unit-step series. It is exported for remote-protocol compatibility checks;
+// callers should normalize values before relying on the result.
+func (o AutoIncrementOptions) IsDefault() bool {
+	return o.isDefault()
+}
+
+// NormalizeAutoIncrementOptions applies the same safe defaults used by the
+// frontend variables.  A zero value can occur for old remote process payloads
+// and background processes which have no session resolver.  MySQL ignores an
+// offset greater than the increment, so use the default residue in that case.
+func NormalizeAutoIncrementOptions(increment, offset uint64) AutoIncrementOptions {
+	if increment == 0 {
+		increment = 1
+	}
+	if offset == 0 || offset > increment {
+		offset = 1
+	}
+	return AutoIncrementOptions{Increment: increment, Offset: offset}
+}
+
+type autoIncrementOptionsKey struct{}
+
+// WithAutoIncrementOptions attaches statement-scoped AUTO_INCREMENT
+// semantics to the execution context.  Keeping this state in context avoids
+// widening the public service interface and therefore keeps existing remote
+// and test implementations source-compatible.
+func WithAutoIncrementOptions(ctx context.Context, increment, offset uint64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, autoIncrementOptionsKey{}, NormalizeAutoIncrementOptions(increment, offset))
+}
+
+func AutoIncrementOptionsFromContext(ctx context.Context) AutoIncrementOptions {
+	if ctx != nil {
+		if options, ok := ctx.Value(autoIncrementOptionsKey{}).(AutoIncrementOptions); ok {
+			return NormalizeAutoIncrementOptions(options.Increment, options.Offset)
+		}
+	}
+	return NormalizeAutoIncrementOptions(1, 1)
+}
+
 // GetAutoIncrementService get increment service from process level runtime
 func GetAutoIncrementService(sid string) AutoIncrementService {
 	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.AutoIncrementService)

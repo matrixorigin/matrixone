@@ -47,6 +47,7 @@ func TestRefreshSessionAuthRequiresProtocolVersion54(t *testing.T) {
 	// against it: TestMethodVersionsNeverExceedTheLatestProtocol checks the property it was
 	// reaching for and needs no edit when the version moves.
 	assert.Equal(t, defines.MORPCVersion54, methodVersions[query.CmdMethod_RefreshSessionAuth])
+	assert.GreaterOrEqual(t, defines.MORPCLatestVersion, methodVersions[query.CmdMethod_RefreshSessionAuth])
 }
 
 // No method may require a protocol NEWER than the newest one that exists: no peer could ever

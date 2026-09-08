@@ -430,6 +430,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "2")
 	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
@@ -522,6 +523,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-residual",
 		"explicit-filter-and-query-column",
 		"explicit-reducing-aggregation-pipeline",
 		"explicit-sort-and-unwind-pipeline",
