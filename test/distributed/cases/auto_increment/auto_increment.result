@@ -23,6 +23,30 @@ id    val
 1    1
 2    2
 drop table auto_increment_zero;
+drop table if exists auto_increment_signed_manual;
+create table auto_increment_signed_manual(id bigint auto_increment primary key, u int unique);
+insert into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+id	u
+-1	10
+1	20
+100	30
+101	40
+select last_insert_id();
+last_insert_id()
+1
+truncate table auto_increment_signed_manual;
+insert ignore into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+id	u
+-1	10
+1	20
+100	30
+101	40
+select last_insert_id();
+last_insert_id()
+1
+drop table auto_increment_signed_manual;
 Drop table if exists auto_increment02;
 Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
 Insert into auto_increment02 values();
@@ -672,25 +696,27 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-10
+1
 drop table auto_increment17;
 create table auto_increment17(col1 int auto_increment) auto_increment = 0;
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-10
+1
 drop table auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
 col1
-100
+1
 drop table auto_increment17;
 set auto_increment_offset = 1;
 drop table if exists auto_increment_alter;
@@ -741,14 +767,86 @@ id
 501
 drop table auto_increment_alter_copy;
 drop table if exists auto_increment_alter_add_empty;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment_alter_add_empty(v int);
 alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+set auto_increment_offset = 1;
 insert into auto_increment_alter_add_empty(v) values (1);
 select * from auto_increment_alter_add_empty;
 v    id
-1    10
+1    1
 drop table auto_increment_alter_add_empty;
+drop table if exists auto_increment_session_ddl_alter;
+drop table if exists auto_increment_session_ddl_create;
+drop table if exists auto_increment_session_ddl_explicit;
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+create table auto_increment_session_ddl_alter(v int);
+alter table auto_increment_session_ddl_alter add column id bigint auto_increment, algorithm = copy;
+create table auto_increment_session_ddl_create(id bigint auto_increment, v int);
+create table auto_increment_session_ddl_explicit(id bigint auto_increment, v int) auto_increment = 100;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_ddl_alter(v) values (0);
+insert into auto_increment_session_ddl_create(v) values (0);
+insert into auto_increment_session_ddl_explicit(v) values (0);
+select id from auto_increment_session_ddl_alter;
+id
+1
+select id from auto_increment_session_ddl_create;
+id
+1
+select id from auto_increment_session_ddl_explicit;
+id
+100
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment.auto_increment_session_ddl_alter(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_create(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1), (2), (3);
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_alter where v > 0;
+count(*)    min(id) > 1    max(id) - min(id)
+3    1    2
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_create where v > 0;
+count(*)    min(id) > 1    max(id) - min(id)
+3    1    2
+select count(*), min(id) > 100, max(id)-min(id) from auto_increment.auto_increment_session_ddl_explicit where v > 0;
+count(*)    min(id) > 100    max(id) - min(id)
+3    1    2
+drop table auto_increment_session_ddl_alter;
+drop table auto_increment_session_ddl_create;
+drop table auto_increment_session_ddl_explicit;
+drop table if exists auto_increment_session_series;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+create table auto_increment_session_series(id bigint auto_increment primary key, v int);
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+insert into auto_increment_session_series(v) values (1), (2), (3);
+select id, v from auto_increment_session_series order by id;
+id    v
+2    1
+5    2
+8    3
+select last_insert_id();
+last_insert_id()
+2
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_series(v) values (4);
+select count(*) from auto_increment_session_series where v = 4 and id > 8;
+count(*)
+1
+set auto_increment_increment = 4;
+set auto_increment_offset = 3;
+insert into auto_increment.auto_increment_session_series(v) values (5), (6), (7);
+select count(*), min(id) % 4, max(id) - min(id), min(id) > 8
+from auto_increment.auto_increment_session_series where v >= 5;
+count(*)    min(id) % 4    max(id) - min(id)    min(id) > 8
+3    3    8    1
+drop table auto_increment_session_series;
+set auto_increment_increment = 1;
 set auto_increment_offset = 1;
 drop table if exists auto_increment_alter_rename;
 create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);
@@ -805,6 +903,67 @@ select min(id), max(id), count(*) from auto_increment_multi_batch;
 min(id)    max(id)    count(*)
 1    20000    20000
 drop table auto_increment_multi_batch;
+drop table if exists auto_increment_ignore_aux;
+create table auto_increment_ignore_aux(id bigint auto_increment primary key, a varchar(10), b int check(b>0), c varchar(10), unique key uk_ab(a,b), unique key uk_c(c(2)));
+insert ignore into auto_increment_ignore_aux(a,b,c) values ('aa',1,'xy1'),('aa',1,'zz1'),('bb',2,'xy2'),('bb',2,'zz2');
+select id,a,b,c from auto_increment_ignore_aux order by id;
+id    a    b    c
+1    aa    1    xy1
+2    bb    2    zz2
+select last_insert_id();
+last_insert_id()
+1
+select id from auto_increment_ignore_aux force index(uk_ab) where a='bb' and b=2;
+id
+2
+select id from auto_increment_ignore_aux force index(uk_c) where c='zz2';
+id
+2
+drop table auto_increment_ignore_aux;
+drop table if exists auto_increment_ignore_irregular;
+create table auto_increment_ignore_irregular(id bigint auto_increment primary key, uk int, g int check(g>=0), body varchar(100), unique key uq(uk,g), index mi using master(body), fulltext fi(body));
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'alpha'),(1,0,'beta'),(2,0,'gamma');
+select id,uk,body from auto_increment_ignore_irregular order by id;
+id    uk    body
+1    1    alpha
+2    2    gamma
+select last_insert_id();
+last_insert_id()
+1
+select id from auto_increment_ignore_irregular where match(body) against('gamma' in boolean mode);
+id
+2
+select id from auto_increment_ignore_irregular where match(body) against('beta' in boolean mode);
+id
+select id from auto_increment_ignore_irregular force index(mi) where body='gamma';
+id
+2
+select id from auto_increment_ignore_irregular force index(mi) where body='beta';
+id
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'rejected'),(4,-1,'rejected');
+insert ignore into auto_increment_ignore_irregular(uk,g,body) select uk,g,body from auto_increment_ignore_irregular where false;
+select count(*) from auto_increment_ignore_irregular;
+count(*)
+2
+select id from auto_increment_ignore_irregular where match(body) against('rejected' in boolean mode);
+id
+begin;
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (4,0,'rollback');
+rollback;
+select id from auto_increment_ignore_irregular where match(body) against('rollback' in boolean mode);
+id
+select id from auto_increment_ignore_irregular force index(mi) where body='rollback';
+id
+drop table auto_increment_ignore_irregular;
+drop table if exists auto_increment_ignore_manual_index;
+create table auto_increment_ignore_manual_index(id bigint primary key, body varchar(100), fulltext fi(body));
+insert ignore into auto_increment_ignore_manual_index values (1,'alpha'),(1,'beta'),(2,'gamma');
+select id from auto_increment_ignore_manual_index where match(body) against('gamma' in boolean mode);
+id
+2
+select id from auto_increment_ignore_manual_index where match(body) against('beta' in boolean mode);
+id
+drop table auto_increment_ignore_manual_index;
 drop table if exists auto_increment_manual_result;
 create table auto_increment_manual_result(id bigint auto_increment primary key, v int);
 insert into auto_increment_manual_result(v) values (1);

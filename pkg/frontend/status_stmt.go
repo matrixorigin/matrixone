@@ -390,6 +390,15 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if res.lastInsertId != 0 {
 				ses.SetLastInsertID(res.lastInsertId)
 			}
+		case *tree.Replace:
+			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
+			// but it has its own AST node and therefore must publish the generated
+			// value explicitly.  In particular, a delete-then-insert replacement
+			// must make the inserted row's id visible to LAST_INSERT_ID().
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 		case *tree.MultiInsert:
 			// A multi-table INSERT has one PRE_INSERT per target, each publishing
 			// its generated key through the same statement-wide coordinator, which
