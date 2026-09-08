@@ -153,6 +153,30 @@ func TestBuildSQLJSONPlanUsesBoundTableAlias(t *testing.T) {
 	require.Equal(t, "alias", decoded.QueryBlock.Table.TableName)
 }
 
+func TestBuildSQLJSONPlanDoesNotTreatQualifiedPhysicalNameAsAlias(t *testing.T) {
+	data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   7,
+			NodeType: plan.Node_TABLE_SCAN,
+			TableDef: &plan.TableDef{DbName: "db", Name: "source", Cols: []*plan.ColDef{sqlJSONTestColumn("id")}},
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "db.source.id"}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	var decoded struct {
+		QueryBlock struct {
+			Table *sqlJSONTable `json:"table"`
+		} `json:"query_block"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, "db.source", decoded.QueryBlock.Table.TableName)
+}
+
 func TestBuildSQLJSONPlanPreservesCommonNodeSemantics(t *testing.T) {
 	query := &plan.Query{
 		StmtType: plan.Query_SELECT,
