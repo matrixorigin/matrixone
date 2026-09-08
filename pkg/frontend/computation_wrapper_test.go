@@ -4580,6 +4580,39 @@ func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
 	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
 }
 
+func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
+	for i, tc := range []struct {
+		name, query string
+	}{
+		{"binary", "select cast(? as binary(3)) member of (json_array(cast(x'000102' as binary(3))))"},
+		{"varbinary", "select cast(? as varbinary(3)) member of (json_array(cast(x'000102' as varbinary(3))))"},
+		{"binary_filter", "select 1 where cast(? as binary(3)) member of (json_array(cast(x'000102' as binary(3))))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(170+i), tc.query)
+			defer prepared.Close()
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ioses.Close() })
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+			proto.SetSession(ses)
+			// Decode a real binary EXECUTE and use production execute-time
+			// metadata preparation, rather than installing vector sidecars.
+			// Rebinding the same prepared plan must not retain the first value.
+			for _, input := range []struct {
+				value string
+				want  int64
+			}{{string([]byte{0, 1, 2}), 1}, {string([]byte{0, 1, 3}), 0}, {string([]byte{0, 1, 2}), 1}} {
+				got, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto,
+					buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, input.value))
+				require.NoError(t, err)
+				require.Equal(t, input.want, got)
+			}
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 117, "select ? member of ('[18446744073709551615]')")

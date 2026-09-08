@@ -264,12 +264,23 @@ func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
 		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
 	largeEncoded, isNull := vector.GenerateFunctionStrParameter(largeArray).GetStrValue(0)
 	require.False(t, isNull)
+	// A single probe deliberately takes the linear path even for a large
+	// array. Use enough independently evaluated rows to select the index.
+	values := make([]string, 32)
+	expected := make([]int64, len(values))
+	for i := range values {
+		values[i] = other
+		if i%2 == 0 {
+			values[i], expected[i] = raw, 1
+		}
+	}
+	require.True(t, jsonOverlapShouldPrepareScalar(len(largeInputs), len(values)))
 	runJSONMemberOfCase(t,
 		[]FunctionTestInput{
-			tests[0].makeLeft([]string{raw}, nil),
+			tests[0].makeLeft(values, nil),
 			NewFunctionTestConstInput(types.T_json.ToType(), []string{string(largeEncoded)}, nil),
 		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil))
+		NewFunctionTestResult(types.T_int64.ToType(), false, expected, nil))
 }
 
 func TestJSONMemberOfConstructorBitValuePreservesDomain(t *testing.T) {
