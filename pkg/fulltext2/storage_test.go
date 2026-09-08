@@ -393,3 +393,26 @@ func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
 	require.Contains(t, meta, "'cdc_tail:1'", "once nobody can misread it, the row is written")
 	require.Contains(t, meta, "4242")
 }
+
+// The frame's metadata row carries the CRC the frame was SEALED with, read back from its footer
+// rather than recomputed, so the tail is verifiable from the catalog the way a base sub-index is.
+// An empty checksum column would have made the row unable to detect a corrupted tail at all.
+func TestTailFrameRowCarriesTheFramesChecksum(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_tail_checksum"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+
+	sp, _ := mockSqlProc(t)
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10, Checksum: 0xfeedface}}
+	sqls, _ := TailFramesInsertSqlsAt(sp, cfg, 3, frames, 99)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Contains(t, meta, "crc32:feedface",
+		"the row records the frame's own CRC, labelled so it is not mistaken for the base rows' md5")
+	require.Contains(t, meta, "'cdc_tail:3'")
+}

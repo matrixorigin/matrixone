@@ -122,6 +122,27 @@ func FrameCdcChunk(records, header []byte, nInserts, nDeletes, nUpserts uint32) 
 	return out
 }
 
+// CdcChunkChecksum returns the CRC32 a framed chunk already carries in its footer, without
+// decoding the body. FrameCdcChunk computed it over the whole frame at seal, so a caller that
+// wants to RECORD the checksum (the tail's metadata row) pays nothing to read it back and does
+// not hash the bytes a second time.
+//
+// The footer is not at a fixed offset from the end -- it is followed by a reserved region and a
+// trailing magic -- so its position is derived from the header the same way UnframeCdcChunk
+// derives it. Returns false for anything too short to be a frame.
+func CdcChunkChecksum(framed []byte) (uint32, bool) {
+	if len(framed) < cdcFrameOverhead {
+		return 0, false
+	}
+	rlen := binary.LittleEndian.Uint32(framed[20:24])
+	hlen := binary.LittleEndian.Uint32(framed[24:28])
+	footerOff := cdcHeaderSize + int(hlen) + int(rlen)
+	if footerOff+4 > len(framed) {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint32(framed[footerOff : footerOff+4]), true
+}
+
 // UnframeCdcChunk validates the frame and returns the record bytes plus
 // the header bytes (both aliased into framed) and the per-op counts
 // (inserts, deletes, upserts) recorded at frame time. Returns an error
@@ -369,8 +390,24 @@ func CdcAppendEventsSql(
 	recordSizes []int,
 	colMetaJSON string,
 ) ([]string, error) {
+	sqls, _, err := CdcAppendEventsSqlChecksummed(tblcfg, indexId, startChunkId, records, recordSizes, colMetaJSON)
+	return sqls, err
+}
+
+// CdcAppendEventsSqlChecksummed is CdcAppendEventsSql, also returning the CRC32 each emitted
+// chunk was sealed with, in chunk order. A flush spans as many chunks as its records need, so a
+// caller recording ONE metadata row for the flush gets every chunk's checksum rather than a
+// guess about which one represents it.
+func CdcAppendEventsSqlChecksummed(
+	tblcfg vectorindex.IndexTableConfig,
+	indexId string,
+	startChunkId int64,
+	records []byte,
+	recordSizes []int,
+	colMetaJSON string,
+) ([]string, []uint32, error) {
 	if len(records) == 0 || len(recordSizes) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var headerBytes []byte
 	if colMetaJSON != "" {
@@ -381,12 +418,13 @@ func CdcAppendEventsSql(
 	maxPayload := vectorindex.MaxChunkSize - cdcFrameOverhead - len(headerBytes)
 	if maxPayload <= 0 {
 		// colMetaJSON alone consumes the whole chunk budget — caller bug.
-		return nil, moerr.NewInternalErrorNoCtxf(
+		return nil, nil, moerr.NewInternalErrorNoCtxf(
 			"cdc: chunk header (%d bytes) leaves no room for records in a %d-byte chunk (overhead %d)",
 			len(headerBytes), vectorindex.MaxChunkSize, cdcFrameOverhead)
 	}
 	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable))
 	var sqls []string
+	sums := make([]uint32, 0, 4)
 	var values []string
 	chunkId := startChunkId
 
@@ -407,7 +445,7 @@ func CdcAppendEventsSql(
 			// fails loudly instead of dropping rows that would never enter the
 			// index. Practically unreachable: it needs a vector dimension above
 			// ~16K (record = 9 + 4*dim + includeBytes must exceed maxPayload).
-			return nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"cdc: record %d (%d bytes) exceeds the per-chunk payload budget of %d bytes",
 				i, recordSizes[i], maxPayload)
 		}
@@ -427,6 +465,9 @@ func CdcAppendEventsSql(
 			recOff += recordSizes[k]
 		}
 		framed := FrameCdcChunk(records[off:off+used], headerBytes, nInserts, nDeletes, nUpserts)
+		if sum, ok := CdcChunkChecksum(framed); ok {
+			sums = append(sums, sum)
+		}
 		values = append(values, fmt.Sprintf("('%s', %d, unhex('%s'), %d)",
 			indexId, chunkId, hex.EncodeToString(framed), vectorindex.Tag_CdcEvents))
 		chunkId++
@@ -440,7 +481,7 @@ func CdcAppendEventsSql(
 	if len(values) > 0 {
 		sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
 	}
-	return sqls, nil
+	return sqls, sums, nil
 }
 
 // CdcLoadEventsSql formats the SELECT that returns every tag=1 chunk for the

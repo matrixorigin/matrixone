@@ -254,7 +254,7 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	// uses it when no tag=0 sub-index is loaded; with a sub-index
 	// loaded the search prefers the model tar's colMetaJSON, so the
 	// redundancy is harmless.
-	sqls, serr := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	sqls, chunkSums, serr := cuvscdc.CdcAppendEventsSqlChecksummed(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
 	if serr == nil && len(sqls) > 0 {
 		// One metadata row for the frame this flush wrote, keyed by the chunk id it starts
 		// at, carrying its byte length, its record count, and the base-table version it
@@ -274,7 +274,8 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 				catalog.Ivfpq_TblCol_Metadata_Build_Ts)
 		if provenance {
 			sqls = append(sqls, catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
-				[]string{catalog.IndexMetadataRow(provenance, vectorindex.TailFrameMetaId(nextId), "",
+				[]string{catalog.IndexMetadataRow(provenance, vectorindex.TailFrameMetaId(nextId),
+					vectorindex.CdcChunkSetChecksum(chunkSums),
 					time.Now().UnixMicro(), int64(len(s.pendingRecords)),
 					int64(len(s.pendingSizes)), s.buildTS)}))
 		}

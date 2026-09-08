@@ -320,8 +320,13 @@ func tailFrameMetaSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkI
 	values := make([]string, 0, min(len(frames), maxInsertTuples))
 	chunkId := startChunkId
 	for _, f := range frames {
+		// The frame's own CRC32, read back from the footer it was sealed with -- so a tail
+		// frame is verifiable from the catalog like a base sub-index. Rendered through the
+		// shared renderer, which labels the algorithm: the base rows put an MD5 in this same
+		// column, and only a self-describing value tells a reader which it is holding.
+		checksum := vectorindex.CdcChunkSetChecksum([]uint32{f.Checksum})
 		values = append(values, fmt.Sprintf("(%s, %d, %s, %d, %d, %d, %d)",
-			sqlquote.String(TailFrameMetaId(chunkId)), now, sqlquote.String(""),
+			sqlquote.String(TailFrameMetaId(chunkId)), now, sqlquote.String(checksum),
 			int64(f.FrameLen), chunkId, 0, buildTS))
 		chunkId += int64((f.FrameLen + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
 		if len(values) == maxInsertTuples {

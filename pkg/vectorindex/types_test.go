@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"strings"
 )
 
 func TestValidDistributionMode(t *testing.T) {
@@ -85,4 +86,25 @@ func TestCdc(t *testing.T) {
 	js, err = cdc.ToJson()
 	require.NoError(t, err)
 	require.Equal(t, js, `{"cdc":[]}`)
+}
+
+// The checksum column carries an MD5 for base sub-index rows and a CRC for tail frames, so the
+// value has to say which it is -- a reader that assumes one and gets the other silently compares
+// nonsense. The set form also has to change when the chunks do, or it verifies nothing.
+func TestCdcChunkSetChecksumIsSelfDescribing(t *testing.T) {
+	require.Empty(t, CdcChunkSetChecksum(nil), "nothing to describe")
+	require.Empty(t, CdcChunkSetChecksum([]uint32{}))
+
+	one := CdcChunkSetChecksum([]uint32{0xdeadbeef})
+	require.Equal(t, "crc32:deadbeef", one, "a single chunk is comparable to its own footer CRC")
+
+	set := CdcChunkSetChecksum([]uint32{1, 2, 3})
+	require.True(t, strings.HasPrefix(set, "crc32set:"), "several chunks fold, and say so: %s", set)
+	require.NotEqual(t, one, set)
+
+	require.NotEqual(t, set, CdcChunkSetChecksum([]uint32{3, 2, 1}),
+		"order is part of what it covers: chunks replayed out of order are not the same tail")
+	require.NotEqual(t, set, CdcChunkSetChecksum([]uint32{1, 2, 4}),
+		"and a changed chunk must change it")
+	require.Equal(t, set, CdcChunkSetChecksum([]uint32{1, 2, 3}), "stable for the same input")
 }

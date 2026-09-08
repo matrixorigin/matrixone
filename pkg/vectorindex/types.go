@@ -15,12 +15,14 @@
 package vectorindex
 
 import (
+	"encoding/binary"
 	"fmt"
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
+	"hash/crc32"
 )
 
 // QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
@@ -503,4 +505,30 @@ func SimulateDevices(devices []int, n int64) []int {
 	sim := make([]int, n)
 	// all zeros -> every logical rank maps to physical device 0
 	return sim
+}
+
+// CdcChunkSetChecksum renders the checksum recorded on a CDC tail frame's metadata row.
+//
+// A flush spans as many chunks as its records need, and the row describes all of them, so the
+// value is self-describing about what it covers:
+//
+//	crc32:<hex>     one chunk — the CRC32 that chunk was sealed with, comparable directly
+//	crc32set:<hex>  several — the CRC32 over their CRCs, in chunk order, which changes if any
+//	                chunk's content or their order does
+//	(empty)         nothing to describe
+//
+// The prefix matters because the base sub-index rows put an MD5 in this same column. One column
+// carrying two algorithms is only safe if a reader can tell which one it is holding.
+func CdcChunkSetChecksum(sums []uint32) string {
+	switch len(sums) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("crc32:%08x", sums[0])
+	}
+	buf := make([]byte, 4*len(sums))
+	for i, s := range sums {
+		binary.LittleEndian.PutUint32(buf[i*4:], s)
+	}
+	return fmt.Sprintf("crc32set:%08x", crc32.ChecksumIEEE(buf))
 }
