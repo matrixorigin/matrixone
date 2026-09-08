@@ -516,14 +516,14 @@ func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
 			name:   "string integer",
 			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0, 0, 0, 0, 0, 1, 0}, []bool{true, true, true, false, false, false, true}),
+				[]int64{0, 0, 0, 0, 0, 1, 0}, []bool{false, false, true, false, false, false, true}),
 			fn: builtInUnixTimestampVarcharToInt64,
 		},
 		{
 			name:   "string float",
 			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0, 0, 0, 0, 1.5, 0}, []bool{true, true, true, false, false, false, true}),
+				[]float64{0, 0, 0, 0, 0, 1.5, 0}, []bool{false, false, true, false, false, false, true}),
 			fn: builtInUnixTimestampVarcharToFloat64,
 		},
 		{
@@ -531,7 +531,7 @@ func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
 			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
 			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
 				[]types.Decimal128{{}, {}, {}, {}, {}, mustDecimal128(t, "1.500000", 38, 6), {}},
-				[]bool{true, true, true, false, false, false, true}),
+				[]bool{false, false, true, false, false, false, true}),
 			fn: builtInUnixTimestampVarcharToDecimal128,
 		},
 	} {

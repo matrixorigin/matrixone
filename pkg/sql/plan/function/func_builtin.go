@@ -2646,12 +2646,12 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func mustTimestamp(loc *time.Location, s string) types.Timestamp {
+func parseTimestampForUnix(loc *time.Location, s string) (types.Timestamp, bool) {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = types.ZeroTimestamp
+		return types.ZeroTimestamp, true
 	}
-	return ts
+	return ts, false
 }
 
 func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2665,7 +2665,13 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			timestamp, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(0, false); err != nil {
+					return err
+				}
+				continue
+			}
 			val := timestamp.Unix()
 			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
@@ -2699,7 +2705,13 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(0, false); err != nil {
+					return err
+				}
+				continue
+			}
 			unix := val.UnixToFloat()
 			if val == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
@@ -2732,7 +2744,13 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			timestamp, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(d, false); err != nil {
+					return err
+				}
+				continue
+			}
 			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(d, true); err != nil {
 					return err
