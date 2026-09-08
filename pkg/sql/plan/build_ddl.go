@@ -2339,11 +2339,6 @@ func buildCreateTable(
 		return nil, err
 	}
 
-	v, ok := getAutoIncrementOffsetFromVariables(ctx)
-	if ok {
-		createTable.TableDef.AutoIncrOffset = v
-	}
-
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -6898,16 +6893,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 		return nil, err
 	}
 	return &fkData, nil
-}
-
-func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
-	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
-	if err == nil {
-		if offset, ok := v.(int64); ok && offset > 1 {
-			return uint64(offset - 1), true
-		}
-	}
-	return 0, false
 }
 
 var unitDurations = map[string]time.Duration{
