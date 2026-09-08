@@ -518,12 +518,21 @@ func (g *VectorIndexGovernor) enforceDevicePlacement(incoming map[int]int64, pro
 		if !known || limit <= 0 {
 			continue
 		}
-		list, _, _, perDevice := g.snapshotResidentsByDevice(protect)
+		// PENDING FIRST, then residents -- the same order, and for the same reason, as the
+		// arena check. A finishing load becomes resident and only then drops its reservation,
+		// so reading residents first lets a load that completes between the two reads be
+		// missed by BOTH: absent from the residents snapshotted before it finished, absent
+		// from the reservations read after it let go. Its bytes are then free for the taking
+		// on a card that is actually holding them, and the per-card bound this function exists
+		// to enforce is not enforced. Reading pending first counts such a load twice, which
+		// only ever refuses too early.
+		//
 		// Arrivals ahead in line have promised bytes on this card that are not resident yet.
 		// Counting only STATUS_LOADED residents lets N concurrent loads each admit against the
 		// same apparently-empty card -- the arena check folds pendingAhead in for exactly this
 		// reason, and the per-card check has to as well.
 		ahead := g.pendingAheadOnDevice(self, device)
+		list, _, _, perDevice := g.snapshotResidentsByDevice(protect)
 		used := perDevice[device] + ahead
 		if used+want <= limit {
 			continue

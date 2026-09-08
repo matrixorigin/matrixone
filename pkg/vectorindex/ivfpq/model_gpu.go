@@ -71,6 +71,13 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	// are not interchangeable.
 	HostComponentBytes int64
 	MaxCapacity        uint64
+	// idMapCharged records that the delete id-map has already been added to
+	// HostComponentBytes. Deletes reach an index by TWO paths -- this model's own
+	// events during LoadIndex, and the shared cdc_tail replayed afterwards by the
+	// search's loadCdcTail -- and the map is built once for the WHOLE index by
+	// whichever arrives first. Charging per path would double-count it; charging in
+	// only one leaves it uncharged whenever the other is the one that fires.
+	idMapCharged bool
 
 	Idxcfg  vectorindex.IndexConfig
 	NThread uint32
@@ -742,7 +749,7 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		// The map ensure_id_index materialised stays resident for the index's life and the
 		// native claim covering its allocation was already released, so the cache budget only
 		// sees it if it is charged here.
-		idx.HostComponentBytes += int64(gi.Len()) * vimemory.HostIDMapBytesPerRow
+		idx.chargeIdMap(gi.Len())
 	}
 
 	idx.Index = gi
@@ -926,6 +933,24 @@ func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
 		return
 	}
 	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
+}
+
+// chargeIdMap adds the delete id-map's host footprint to this sub-index, once.
+//
+// The FIRST replayed delete materialises id_to_index_ for EVERY row of the index and it stays
+// resident for the index's life (cgo/cuvs/index_base.hpp, ensure_id_index). The native side
+// reserves that allocation and releases the claim as soon as it succeeds, so nothing downstream
+// tracks it -- uncharged, the governor evicts against a host figure short by 40 bytes per row.
+//
+// Deletes arrive by two paths and either can be the one that builds the map: this model's own
+// events during LoadIndex, and the SHARED cdc_tail replayed afterwards by the search's
+// loadCdcTail. Both call here; the flag makes the charge exactly once.
+func (idx *IvfpqModel[B, Q]) chargeIdMap(rows uint64) {
+	if idx.idMapCharged || rows == 0 {
+		return
+	}
+	idx.idMapCharged = true
+	idx.HostComponentBytes += int64(rows) * vimemory.HostIDMapBytesPerRow
 }
 
 // ToDeleteSql generates DELETE SQL for storage and metadata tables.

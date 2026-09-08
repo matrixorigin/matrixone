@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func twoInt64Result(mp *mpool.MPool, a, b int64) executor.Result {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	_ = vector.AppendFixed[int64](bat.Vecs[0], a, false, mp)
+	_ = vector.AppendFixed[int64](bat.Vecs[1], b, false, mp)
+	bat.SetRowCount(1)
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
 func int64Result(mp *mpool.MPool, v int64) executor.Result {
 	b := batch.NewWithSize(1)
 	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -37,31 +48,53 @@ func int64Result(mp *mpool.MPool, v int64) executor.Result {
 }
 
 // The overflow index is built INSIDE Load, so its real size does not exist when admission
-// decides. A CDC-only generation would therefore be sized at 0, reserve nothing, and allocate
-// its VRAM unreserved -- and no post-load pass can undo an allocation. The tail's own metadata
-// rows answer it without reading the tail.
-func TestCdcTailRowsUpperBoundPrefersTheFrameRows(t *testing.T) {
+// decides. A CDC-only generation sized at 0 would reserve nothing and allocate unreserved, and
+// no post-load pass can undo an allocation. These pin what the estimate must be in each state.
+
+// Fully described: every chunk is covered by a frame row, so the sum stands alone.
+func TestCdcTailRowsFullyCoveredUsesTheExactSum(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var asked []string
 	prev := runSqlForTest
 	runSqlForTest = func(_ *SqlProcess, sql string) (executor.Result, error) {
-		asked = append(asked, sql)
-		return int64Result(mp, 4096), nil
+		if strings.Contains(sql, "COUNT(*)") {
+			return int64Result(mp, 8), nil // 8 chunks stored
+		}
+		return twoInt64Result(mp, 4096, 8), nil // rows=4096 covering 8 chunks
 	}
 	t.Cleanup(func() { runSqlForTest = prev })
 
 	got, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", 512)
 	require.NoError(t, err)
-	require.Equal(t, int64(4096), got, "the frame rows' nrow sums to the tail's record count")
-	require.Len(t, asked, 1, "and it must not also pay for the chunk count")
-	require.Contains(t, asked[0], vectorindex.TailFrameMetaPrefix)
-	require.NotContains(t, asked[0], "LENGTH(", "sizing must never read the blob column")
+	require.Equal(t, int64(4096), got, "coverage is complete, so nothing is added")
 }
 
-// A tail written before the frame rows existed has none to sum. Reading the tail to count would
-// double the cost of every cache miss, so its chunk count bounds it: a chunk holds at most
-// MaxChunkSize, and a record is at least its vector.
-func TestCdcTailRowsUpperBoundFallsBackToChunks(t *testing.T) {
+// The state the review named: a pre-upgrade tail already holds rows, its tenant migrates (columns
+// added, no rows for the flushes already on disk), and ONE later flush writes a row. Summing the
+// rows reports that one flush while loadCdcTail replays everything.
+func TestCdcTailRowsBoundsChunksNoFrameRowCovers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const legacyChunks, newRows, newChunks, vecBytes = 400, 1, 1, 512
+	prev := runSqlForTest
+	runSqlForTest = func(_ *SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return int64Result(mp, legacyChunks+newChunks), nil
+		}
+		return twoInt64Result(mp, newRows, newChunks), nil
+	}
+	t.Cleanup(func() { runSqlForTest = prev })
+
+	got, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", vecBytes)
+	require.NoError(t, err)
+	perChunk := int64(vectorindex.MaxChunkSize) / vecBytes
+	require.Equal(t, int64(newRows)+legacyChunks*perChunk, got)
+	require.Equal(t, int64(1+400*128), got)
+	require.Greater(t, got, int64(50000),
+		"the legacy chunks dominate; it must not be sized at the 1 row that carries a frame row")
+}
+
+// A NARROW table has no nrow column, so the sum ERRORS. That is an ordinary rollout state, and
+// reserving zero for it is what lets a load allocate outside the budget.
+func TestCdcTailRowsFallsBackWhenTheColumnIsAbsent(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const chunks, vecBytes = 10, 512
 	prev := runSqlForTest
@@ -69,20 +102,24 @@ func TestCdcTailRowsUpperBoundFallsBackToChunks(t *testing.T) {
 		if strings.Contains(sql, "COUNT(*)") {
 			return int64Result(mp, chunks), nil
 		}
-		return int64Result(mp, 0), nil // no frame rows
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("unknown column 'nrow'")
 	}
 	t.Cleanup(func() { runSqlForTest = prev })
 
 	got, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", vecBytes)
-	require.NoError(t, err)
-	require.Equal(t, int64(chunks*vectorindex.MaxChunkSize/vecBytes), got)
-	require.Positive(t, got, "a legacy tail must not be sized at zero")
-
-	// Without a vector width the division is meaningless, so there is no bound to give.
-	got, err = CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", 0)
-	require.NoError(t, err)
-	require.Zero(t, got)
+	require.NoError(t, err, "a narrow table is a supported state, not a load failure")
+	require.Equal(t, int64(chunks)*(int64(vectorindex.MaxChunkSize)/vecBytes), got)
+	require.Positive(t, got, "it must not silently reserve zero")
 }
+
+// The overflow index is built INSIDE Load, so its real size does not exist when admission
+// decides. A CDC-only generation would therefore be sized at 0, reserve nothing, and allocate
+// its VRAM unreserved -- and no post-load pass can undo an allocation. The tail's own metadata
+// rows answer it without reading the tail.
+
+// A tail written before the frame rows existed has none to sum. Reading the tail to count would
+// double the cost of every cache miss, so its chunk count bounds it: a chunk holds at most
+// MaxChunkSize, and a record is at least its vector.
 
 // A SIZING probe must never be the thing that breaks a load. RunSql reaches the executor, which
 // PANICS rather than erroring when the process has no lock service -- a shape internal callers
@@ -96,6 +133,6 @@ func TestCdcTailSizingSurvivesAProcessWithNoLockService(t *testing.T) {
 	require.NotPanics(t, func() {
 		rows, err := CdcTailRowsUpperBound(sqlproc, "db", "meta", "store", 512)
 		require.NoError(t, err, "a probe that cannot run is not a load failure")
-		require.Zero(t, rows, "no estimate, so admission behaves as it did before the estimate")
+		require.Zero(t, rows, "every read is unreadable here, so there is no bound to give")
 	})
 }

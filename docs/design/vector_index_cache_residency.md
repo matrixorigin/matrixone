@@ -832,10 +832,13 @@ device budget exists for, and IVF-PQ at 229 MB barely touches it.
 **Zero refusals is the requirement, and it is met.** A legitimate 1M load on this
 hardware MUST NOT be refused: the governor exists to bound residency, not to make
 a workload that fits become unloadable. This run is the shipped configuration --
-both cache variables at their default 0 = unbounded -- carrying the heaviest index
-the branch is expected to hold, with the new charges active (the CDC overflow
-reserved at Preload, the delete id-map on the host budget). Neither charge turned
-a load that fits into a load that fails. That is the pass condition for this run.
+both variables at their default `0`, which per §5.1 means "size me from this
+machine" and NOT "unlimited": the budget in force was the derived one, 90% of RAM
+and 90% of each GPU's total. So the arena was bounded throughout, carrying the
+heaviest index the branch is expected to hold, with the new charges active (the
+CDC overflow reserved at Preload, the delete id-map on the host budget). Neither
+charge turned a load that fits into a load that fails. That is the pass condition
+for this run.
 
 **Build time.** The two CAGRA builds measured 157.8 s and 178.6 s, in the same
 range as the §10.3 cell (96.4-171.5 s, median 110.2) on a box running benchmarks

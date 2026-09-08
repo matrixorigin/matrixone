@@ -417,6 +417,15 @@ func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 			if err = m.Index.DeleteIds(delPkids); err != nil {
 				return err
 			}
+			// The SHARED tail's deletes build the same id_to_index_ map as a model's own
+			// deletes would, for every row of the index, and it stays resident for the
+			// index's life. This is the path a base artifact with no per-model deletes
+			// takes, so charging only in LoadIndex left the map uncharged exactly when
+			// the shared tail is what materialises it. chargeIdMap is idempotent, so an
+			// index that already paid in LoadIndex is not charged twice.
+			if len(delPkids) > 0 {
+				m.chargeIdMap(m.Index.Len())
+			}
 		}
 	}
 
