@@ -148,6 +148,11 @@ type IOEntry struct {
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.
 	CachedDataSize int64
+	// DecodeSharing is opt-in for immutable conversion results whose lifetime
+	// is scoped to this complete IOVector, including its release ticket. Its zero
+	// value disables sharing; storing it inline avoids per-read metadata allocation.
+	DecodeSharing DecodeSharing
+	decodeLease   *decodedReadLease
 	// ValidateCacheData validates a final representation received from a cache
 	// tier. The caller transfers its one input reference to a successful return;
 	// on error the caller releases the input. Implementations may return a sealed

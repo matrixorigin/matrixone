@@ -291,6 +291,13 @@ type IvfReaderParam struct{}
 // RemoteRunContext marks a pipeline executing through remote-run RPC.
 type RemoteRunContext struct{}
 
+// ImplicitCommitFromExplicitTxn marks a statement whose MySQL implicit commit
+// boundary replaced a transaction that was explicitly active before the
+// statement started.  The marker is scoped to one frontend statement and is
+// consumed by data-branch lineage admission after the fresh transaction has
+// been created.
+type ImplicitCommitFromExplicitTxn struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
