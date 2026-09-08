@@ -575,11 +575,32 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainJSONMode(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
 func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
+	if err := validateExplainJSONMode(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
+		return nil, err
+	}
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+}
+
+func validateExplainJSONMode(ctx context.Context, options []tree.OptionElem, mode string) error {
+	for _, option := range options {
+		if !strings.EqualFold(option.Name, tree.FormatOption) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(option.Value), "'")
+		value = strings.Trim(value, string('"'))
+		value = strings.ToUpper(value)
+		if value == "JSON" {
+			return moerr.NewNotSupportedf(ctx, "EXPLAIN %s FORMAT=JSON is not supported", mode)
+		}
+	}
+	return nil
 }
 
 func selectHasExportParam(stmt tree.SelectStatement) bool {
