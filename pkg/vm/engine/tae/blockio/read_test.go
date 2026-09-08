@@ -527,6 +527,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			nil,
 			nil,
 			objectio.BlockReadFilter{},
+			nil,
 			fileservice.Policy(0),
 			"late-read-test",
 			output,
@@ -606,6 +607,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			nil,
 			nil,
 			objectio.BlockReadFilter{},
+			nil,
 			fileservice.Policy(0),
 			"late-read-test",
 			output,
@@ -644,10 +646,190 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				return engine.ReaderFilterResult{Sels: sels}, nil
 			},
 			nil,
+			nil,
 		))
 		require.Equal(t, []int32{4}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
 		require.Equal(t, "payload-4", output.Vecs[1].GetStringAt(0))
 	})
+
+	output.Clean(queryMP)
+	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	colTypes := []types.Type{
+		types.T_int32.ToType(),
+		types.New(types.T_array_float32, 2, 0),
+		types.T_text.ToType(),
+	}
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(len(colTypes))
+	for pos := range colTypes {
+		input.Vecs[pos] = vector.NewVec(colTypes[pos])
+	}
+	firstCoordinates := []float32{9, 8, 1, 0, 5, 2, 3, 4}
+	for row, coordinate := range firstCoordinates {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, writeMP))
+		require.NoError(t, vector.AppendArray(input.Vecs[1], []float32{coordinate, 0}, false, writeMP))
+		require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte("payload-"+string(rune('0'+row))), false, writeMP))
+	}
+	input.SetRowCount(len(firstCoordinates))
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1, 2}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(writeMP)
+	require.Zero(t, writeMP.CurrNB())
+	mpool.DeleteMPool(writeMP)
+
+	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	output := batch.NewWithSize(len(colTypes))
+	for pos := range colTypes {
+		output.Vecs[pos] = vector.NewOffHeapVecWithType(colTypes[pos])
+	}
+	cacheVectors := containers.NewVectors(len(colTypes) + 2)
+	defer cacheVectors.Free(queryMP)
+	top := &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows, err := BlockDataReadWithFilter(
+		ctx,
+		&info,
+		&blockReadTestDataSource{deleted: []uint64{3}},
+		[]uint16{0, 1, 2},
+		colTypes,
+		-1,
+		timestamp.Timestamp{},
+		nil,
+		nil,
+		objectio.BlockReadFilter{},
+		top,
+		fileservice.Policy(0),
+		"filtered-topk-test",
+		output,
+		cacheVectors,
+		queryMP,
+		fs,
+		[]int{0},
+		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{0}, loaded)
+			require.Zero(t, bat.Vecs[1].Length(), "distance column must remain deferred until after filtering")
+			require.Zero(t, bat.Vecs[2].Length(), "payload must remain deferred until after filtering")
+			ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+			sels := make([]int64, 0, len(ids))
+			for pos, id := range ids {
+				if id >= 2 && id <= 5 {
+					sels = append(sels, int64(pos))
+				}
+			}
+			bat.Vecs[0].Shrink(sels, false)
+			bat.SetRowCount(len(sels))
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 7, preFilterRows)
+	require.Equal(t, 2, output.RowCount())
+	require.Equal(t, []int32{2, 5}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+	require.Zero(t, output.Vecs[1].Length(), "only distances, not embeddings, should escape storage Top-K")
+	require.Equal(t, "payload-2", output.Vecs[2].GetStringAt(0))
+	require.Equal(t, "payload-5", output.Vecs[2].GetStringAt(1))
+	require.Equal(t, []float64{1, 4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+
+	// A storage predicate (the centroid-prefix lookup for IVFFLAT) supplies
+	// physical block rows before the residual INCLUDE filter. This exercises
+	// the fused filter-column/vector-column ObjectIO read.
+	output.CleanOnlyData()
+	top = &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows = 0
+	err = blockDataReadWithFilter(
+		ctx, &info, nil,
+		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
+		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
+		cacheVectors, queryMP, fs, []int{0},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+			sels := make([]int64, 0, len(ids))
+			for pos, id := range ids {
+				if id >= 2 && id <= 5 {
+					sels = append(sels, int64(pos))
+				}
+			}
+			bat.Vecs[0].Shrink(sels, false)
+			bat.SetRowCount(len(sels))
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		},
+		top, &preFilterRows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 5, preFilterRows)
+	require.Equal(t, 2, output.RowCount())
+	require.Equal(t, []int32{2, 5}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+	require.Zero(t, output.Vecs[1].Length())
+	require.Equal(t, "payload-2", output.Vecs[2].GetStringAt(0))
+	require.Equal(t, "payload-5", output.Vecs[2].GetStringAt(1))
+	require.Equal(t, []float64{1, 4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+
+	// Keep storage-selected rows non-empty while the residual predicate rejects
+	// all of them. The fused read must distinguish an empty result from nil,
+	// which means "score every storage-selected row" to TopNVector.
+	output.CleanOnlyData()
+	top = &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows = 0
+	err = blockDataReadWithFilter(
+		ctx, &info, nil,
+		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
+		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
+		cacheVectors, queryMP, fs, []int{0},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			bat.Vecs[0].CleanOnlyData()
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{Sels: []int64{}}, nil
+		},
+		top, &preFilterRows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 5, preFilterRows)
+	require.True(t, output.IsEmpty())
+	for _, vec := range output.Vecs {
+		require.Zero(t, vec.Length())
+	}
+
+	output.CleanOnlyData()
+	top = &objectio.IndexReaderTopOp{
+		ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+		NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+	}
+	preFilterRows, err = BlockDataReadWithFilter(
+		ctx, &info, &blockReadTestDataSource{deleted: []uint64{3}},
+		[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
+		objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-empty-test",
+		output, cacheVectors, queryMP, fs, []int{0},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			bat.Vecs[0].CleanOnlyData()
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 7, preFilterRows)
+	require.True(t, output.IsEmpty())
+	for _, vec := range output.Vecs {
+		require.Zero(t, vec.Length())
+	}
 
 	output.Clean(queryMP)
 	require.Zero(t, queryMP.CurrNB())
@@ -795,6 +977,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		nil,
 		nil,
 		objectio.BlockReadFilter{},
+		nil,
 		fileservice.Policy(0),
 		"appendable-late-read-test",
 		lateOutput,
