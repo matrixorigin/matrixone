@@ -141,3 +141,67 @@ func TestIssue28372TableUnionIntoPlacement(t *testing.T) {
 	_, err = ParseOne(context.Background(), "table src union select 1 into @v union select 2", 1)
 	require.Error(t, err)
 }
+
+func TestIssue28373UnparenthesizedValuesQuerySources(t *testing.T) {
+	tests := []struct {
+		name  string
+		sql   string
+		check func(t *testing.T, stmt tree.Statement)
+	}{
+		{
+			name: "ctas without as",
+			sql:  "create table dst values row(1, 2), row(3, 4)",
+			check: func(t *testing.T, stmt tree.Statement) {
+				createStmt, ok := stmt.(*tree.CreateTable)
+				require.True(t, ok)
+				require.True(t, createStmt.IsAsSelect)
+				requireValuesSource(t, createStmt.AsSource)
+			},
+		},
+		{
+			name: "ctas with as",
+			sql:  "create table dst as values row(1, 2), row(3, 4)",
+			check: func(t *testing.T, stmt tree.Statement) {
+				createStmt, ok := stmt.(*tree.CreateTable)
+				require.True(t, ok)
+				require.True(t, createStmt.IsAsSelect)
+				requireValuesSource(t, createStmt.AsSource)
+			},
+		},
+		{
+			name: "ctas with target definitions",
+			sql:  "create table dst (a int, b int) as values row(1, 2), row(3, 4)",
+			check: func(t *testing.T, stmt tree.Statement) {
+				createStmt, ok := stmt.(*tree.CreateTable)
+				require.True(t, ok)
+				require.Len(t, createStmt.Defs, 2)
+				requireValuesSource(t, createStmt.AsSource)
+			},
+		},
+		{
+			name: "view",
+			sql:  "create view v as values row(1, 2), row(3, 4)",
+			check: func(t *testing.T, stmt tree.Statement) {
+				viewStmt, ok := stmt.(*tree.CreateView)
+				require.True(t, ok)
+				requireValuesSource(t, viewStmt.AsSource)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			test.check(t, stmt)
+		})
+	}
+}
+
+func requireValuesSource(t *testing.T, stmt *tree.Select) {
+	require.NotNil(t, stmt)
+	values, ok := stmt.Select.(*tree.ValuesClause)
+	require.True(t, ok)
+	require.True(t, values.RowWord)
+	require.Len(t, values.Rows, 2)
+}
