@@ -1,8 +1,8 @@
 # #28164 Collation-Aware Unique-Key Identity
 
-- Status: Design draft; implementation not started
+- Status: Design revision 2; ready for maintainer review; implementation not started
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
-- Design revision: 1
+- Design revision: 2
 - Frozen baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7`
 - Scope: the complete string PK/UNIQUE identity contract; first delivery is design and baseline evidence only
 
@@ -55,10 +55,13 @@ INSERT INTO ci VALUES (3, 'Alpha ', 30)
 
 The reported result was three rows instead of one row `(1, 'Alpha', 30)`.
 That is historical runtime evidence only until a current build is run. The
-current main baseline is frozen at
-`c51bb4ed868219af720cb5c019fb103bc1e7bcc7` and was rechecked in the companion
-run: it still leaves three rows, and a forced unique-index read returns the same
-three physical values.
+current-main baseline used for the executable evidence is frozen at
+`c51bb4ed868219af720cb5c019fb103bc1e7bcc7`. The correction run
+`artifacts/issue-28164-design/20260909T000000Z/` executes the complete sequence
+once in each of three independent databases (`r1`, `r2`, and `r3`). Every
+sample still leaves three rows, and a forced unique-index read returns the same
+three physical values as a table scan. The earlier one-database run is retained
+as historical evidence, but is not counted as the formal three-sample result.
 
 The current run also exposes a wider contract gap that must be kept separate
 from the physical-key work. `COLLATION(k)` reports `utf8mb4_general_ci`, but
@@ -148,13 +151,24 @@ remain explicit rather than silently mapped to a different one.
 | `utf8mb4_bin` / `utf8_bin` | UTF-8 text identity with PAD SPACE semantics; not a raw binary-string key | supported only after a dedicated PAD-space encoding proof |
 | `binary`, `VARBINARY`, `BINARY` | exact bytes; no case folding and no text-space reinterpretation | retain bytewise v1 behavior |
 | `CharsetLegacy=0` old text metadata | historical bytewise identity | retain and never reinterpret automatically |
-| `utf8mb4_0900_ai_ci` compatibility alias | must not be advertised as native UCA 9.0/NO PAD | reject for v2 until a native domain is specified |
+| `utf8mb4_0900_ai_ci` compatibility alias | normalize to the existing general-ci-v1 PAD SPACE domain; never advertise native UCA 9.0/NO PAD | accepted only as a normalized compatibility alias; native 0900 is rejected |
 | unsupported UCA names, JSON, DATALINK, unknown plugins | no safe key proof | reject or retain existing conservative behavior |
 
 The general-ci weight table, malformed UTF-8 policy, supplementary-plane
 handling, and key-version identifier are part of the codec version. `LOWER`,
 `RTRIM`, locale-dependent library case folding, or a process-global mutable
 collation table are not valid substitutes.
+
+The normalized-domain policy is intentional. Current MatrixOne catalog metadata
+stores `utf8mb4_0900_ai_ci` through the same `CharsetUTF8` identity as
+general-ci, so an old relation cannot be reconstructed as native UCA 9.0. An
+explicit migration therefore treats that stored identity as
+`general-ci-v1`/PAD SPACE and records that normalized domain in the new key
+metadata. A DDL request that requires native UCA 9.0, NO PAD, or preservation of
+the original 0900 declaration is rejected with an ambiguity/unsupported-domain
+error; it is never silently assigned the general-ci key. A future native 0900
+codec requires a distinct collation/domain ID and its own metadata before it can
+be enabled.
 
 ## 4. Key codec contract
 
@@ -170,11 +184,24 @@ The planned interface is:
 
 ```go
 type Domain struct {
+    Type      TypeFamily
     Charset   uint8
     Collation uint16
     Prefix    uint32 // zero means no prefix; unit is defined by Domain
     Unit      PrefixUnit // characters for text, bytes for binary
+    Width     uint16 // declared width for fixed-width numeric domains
+    Scale     int16  // declared scale for decimal domains
 }
+
+type TypeFamily uint8
+
+const (
+    Text            TypeFamily = 1
+    Binary          TypeFamily = 2
+    SignedInteger   TypeFamily = 3
+    UnsignedInteger TypeFamily = 4
+    Decimal         TypeFamily = 5
+)
 
 type Part struct {
     Domain Domain
@@ -223,6 +250,7 @@ offset  size  field
 5       2     part_count (1..16, matching the current key-part limit)
 7       ...   repeated part records:
               null_flag (1 byte, 0 or 1)
+              type_tag (1 byte; one of the registered TypeFamily values)
               domain_id (2 bytes)
               payload_length (4 bytes)
               normalized_payload (payload_length bytes)
@@ -232,12 +260,13 @@ The v2 envelope therefore has this logical shape:
 
 ```text
 magic | codec_version | part_count |
-  repeated { null_flag | domain_id | payload_length | normalized_payload }
+  repeated { null_flag | type_tag | domain_id | payload_length | normalized_payload }
 ```
 
 `domain_id` is a registry identifier for the complete `(charset, collation,
-prefix, prefix-unit, weight-version)` tuple; it is not a hash and cannot be
-reused for a different tuple. A NULL part has `null_flag=1`,
+prefix, prefix-unit, type, width/scale, padding rule, and weight-version) tuple;
+it is not a hash and cannot be reused for a different tuple. `type_tag` must
+agree with the registry entry. A NULL part has `null_flag=1`,
 `payload_length=0`, and no payload; a non-NULL empty value has `null_flag=0`
 and `payload_length=0`, so the two cases remain distinct. The codec rejects
 `part_count=0`, a flag other than 0/1, a payload length greater than
@@ -248,7 +277,84 @@ vectors cover each header and boundary value; no Go string representation may
 leak into the format. Invalid UTF-8 and unsupported domain IDs return an error
 before a key is published.
 
-### 4.3 Ordering and optimization
+### 4.3 Registry, normalization, and golden vectors
+
+The registry is an append-only manifest named `collationkey/domains-v1`. Domain
+IDs are assigned once, never reused, and are interpreted identically by every
+CN, TN, rebuild worker, backup tool, and restore reader. Registry version 1 has
+the following IDs:
+
+| ID | Type/domain | Frozen policy |
+| --- | --- | --- |
+| `0x0001` | text, UTF-8, general-ci | `general-ci-v1`, PAD SPACE |
+| `0x0002` | text, UTF-8, `_bin` | UTF-8 bytes, PAD SPACE |
+| `0x0003` | binary | exact bytes, no padding |
+| `0x0101` | signed integer | declared-width two's-complement bytes |
+| `0x0102` | unsigned integer | declared-width big-endian bytes |
+| `0x0103` | decimal | canonical sign/scale/coefficient encoding |
+
+The manifest digest is deterministic: `SHA-256` of
+`ASCII("MOKD") || u8(registry_version) ||` the entries sorted by ID, where each
+entry is `u16(id) || u16(entry_length) || entry_bytes` in big-endian order.
+`entry_bytes` contains `type_tag`, charset, collation, prefix, prefix unit,
+width, scale, padding rule, and weight-table version. The relation metadata
+stores both `registry_version` and this 32-byte digest; a node or restore path
+rejects a mismatch before opening the relation. ID zero and IDs absent from the
+manifest are invalid.
+
+The normalized payload is defined without a dependency on a process locale:
+
+1. Type conversion and declared-length enforcement happen first. A text prefix
+   counts Unicode code points and a binary prefix counts bytes. Numeric prefixes
+   are rejected. Text input must be valid UTF-8 for v2; the legacy comparator's
+   synthetic malformed-byte weights are not imported into the new format.
+2. For `general-ci-v1`, trailing ASCII U+0020 is removed, then each decoded
+   rune contributes one immutable weight from the copied
+   `utf8mb4GeneralCIWeight` table. The table is named and frozen as
+   `general-ci-v1`; it maps ASCII case variants to the same primary weight,
+   maps `É`/`é` to `0x0045`, and maps every supplementary-plane rune to
+   `0xFFFD`. Each weight is emitted as a four-byte big-endian unsigned value.
+3. For the UTF-8 `_bin` domain, trailing U+0020 bytes are removed after the
+   prefix is selected; all remaining UTF-8 bytes, including case and embedded
+   NUL, are preserved. Binary values preserve every byte, including trailing
+   spaces. Empty payloads are valid and remain distinct from NULL markers.
+4. Signed and unsigned integers use the declared fixed width and big-endian
+   two's-complement or unsigned representation. Decimal payloads contain a
+   one-byte sign (`0` for non-negative, `1` for negative), a four-byte signed
+   scale, a four-byte coefficient length, and the minimal big-endian coefficient
+   bytes. Leading coefficient zeroes and trailing decimal zeroes are removed
+   while decreasing scale; zero is always sign 0 and scale 0. Float, date/time,
+   JSON, DATALINK, and unknown types are rejected for v2 until their domains
+   have a separately registered identity.
+
+5. The `type_tag` and registry ID are written into the part record before the
+   payload. A decoder checks the type/domain pair, lengths, and registry digest;
+   it never guesses a type from payload bytes.
+
+The following vectors are normative byte-for-byte examples. Spaces in the
+display are separators only:
+
+| Input/domain | Encoded envelope (hex) |
+| --- | --- |
+| non-NULL `"Alpha"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000014 00000041 0000004C 00000050 00000048 00000041` |
+| non-NULL `"alpha"`, ID `0x0001` | identical to `"Alpha"` |
+| non-NULL `"Alpha "`, ID `0x0001` | identical to `"Alpha"` (PAD SPACE) |
+| non-NULL `"A\\0"`, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000008 00000041 00000000` |
+| non-NULL U+1F600, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000004 0000FFFD` |
+| non-NULL `"Alpha"`, ID `0x0002` | `4D4F4B59 02 0001 00 01 0002 00000005 416C706861` |
+| non-NULL `"Alpha "`, ID `0x0003` | `4D4F4B59 02 0001 00 02 0003 00000006 416C70686120` |
+| NULL text part, ID `0x0001` | `4D4F4B59 02 0001 01 01 0001 00000000` |
+| empty non-NULL text part, ID `0x0001` | `4D4F4B59 02 0001 00 01 0001 00000000` |
+| `(signed int64 1, text "A")`, IDs `0x0101,0x0001` | `4D4F4B59 02 0002 00 03 0101 00000008 0000000000000001 00 01 0001 00000004 00000041` |
+
+The one-line hex forms are obtained by removing separators; for example the
+first vector is
+`4D4F4B590200010001000100000014000000410000004C000000500000004800000041`.
+The test implementation must include these vectors, the malformed-input error,
+and the maximum-part/maximum-size rejection cases before a v2 relation can be
+enabled.
+
+### 4.4 Ordering and optimization
 
 Equality identity and ordering identity are separate contracts. The v2 payload
 must receive an ordering proof before it is used for an ordered range bound. A
@@ -276,6 +382,9 @@ the `.proto` files):
 message UniqueKeyCodecVersion {
   // 0 retains legacy/bytewise behavior; absence is also legacy.
   uint32 value = 1;
+  uint32 registry_version = 2;
+  bytes registry_digest = 3;       // exactly 32 bytes for value 2
+  uint32 max_encoded_key_bytes = 4; // fixed at 67108864 for value 2
 }
 
 // api.SchemaExtra, field 20
@@ -320,7 +429,117 @@ does not report version 2 exactly. It also rejects a write when any CN/TN or
 storage reader cannot advertise v2 capability. Existing `IndexAlgoParams.version`
 continues to mean the FULLTEXT algorithm version and is not reused.
 
-### 5.2 Catalog and plan flow
+### 5.2 Capability publication and activation fence
+
+The version message describes a relation; it is not a node capability. The next
+implementation adds a typed capability and a replicated activation record (the
+design PR does not edit `proto/*.proto`):
+
+```protobuf
+message UniqueKeyCodecCapability {
+  uint32 readable_versions = 1;       // bit n means version n is readable
+  uint32 writable_versions = 2;       // bit n means version n is writable
+  uint32 registry_version = 3;
+  bytes registry_digest = 4;           // exactly 32 bytes
+  uint32 max_encoded_key_bytes = 5;
+}
+
+message UniqueKeyCodecActivation {
+  enum Phase {
+    DISABLED = 0;
+    PREPARING = 1;
+    ENABLED = 2;
+    ABORTED = 3;
+  }
+  uint32 requested_version = 1;
+  uint32 registry_version = 2;
+  bytes registry_digest = 3;            // exactly 32 bytes
+  uint64 generation = 4;                // monotonically increasing fence
+  Phase phase = 5;
+  map<string, uint64> cn_targets = 6;   // UUID -> heartbeat generation
+  map<string, uint64> tn_targets = 7;
+}
+```
+
+For the current `proto/logservice.proto` snapshot, the typed fields are
+reserved as follows: `CNStoreHeartbeat.unique_key_codec_capability = 25`,
+`TNStoreHeartbeat.unique_key_codec_capability = 15`,
+`CNStoreInfo.unique_key_codec_capability = 27`,
+`TNStoreInfo.unique_key_codec_capability = 14`, and
+`CheckerState.unique_key_codec_activation = 19`. The implementation PR must
+recheck these numbers against its exact base before editing the proto; a used
+number is a hard stop, not an invitation to reuse another message's field.
+
+Activation is a replicated state-machine transition, not a best-effort health
+flag:
+
+1. HAKeeper records `PREPARING` with a new `generation`, the requested version,
+   registry version/digest, and the complete current CN/TN UUID target set.
+2. Every target must publish a fresh heartbeat with matching readable and
+   writable bits, registry digest, maximum key size, and an incarnation newer
+   than the preparation record. The state machine moves to `ENABLED` only after
+   all targets acknowledge the same generation. A missing, stale, mismatched, or
+   reconnected node keeps the phase in `PREPARING`; it is never treated as
+   implicitly compatible.
+3. Planner admission checks relation metadata, local capability, and the
+   activation generation. The serialized execution plan carries all three
+   values. TN commit rechecks them immediately before mutation and rejects a
+   missing/mismatched capability or generation before writing either base or
+   sidecar data.
+4. A restart or reconnect creates a new node incarnation and clears its target
+   acknowledgement. Capability loss demotes the activation to `PREPARING` and
+   rejects new v2 writes until the node is replaced or re-acknowledges. Existing
+   committed v2 data is routed only to readers advertising the exact registry;
+   an old reader is rejected or excluded, never allowed to guess from unknown
+   protobuf fields.
+5. `api.CloneExtra`, catalog-cache copies, plan deep copies, snapshot/restore,
+   and replay copy the typed fields explicitly. Unknown-field retention by
+   protobuf alone is not a compatibility mechanism because field-by-field clone
+   helpers can drop it. Compatibility tests exercise every copy boundary and
+   assert that a dropped capability or activation record fails closed.
+
+The activation record is persisted with the catalog/checker state and is
+replayed before scheduling writes. A v2 relation cannot be created while the
+phase is `DISABLED`, and an `ABORTED` generation is never retried implicitly.
+An old node may remain serving v1 relations while it is drained from the target
+set, but it cannot read or write a v2 relation. Thus “field skipped” and “safe
+to execute v2” are deliberately different decisions.
+
+### 5.3 Physical key and row locator
+
+The selected representation keeps the user-visible primary-key columns and
+`PkeyColName` unchanged and stores the derived identity in a storage-owned
+sidecar relation. No hidden logical column is exposed through SQL:
+
+- A primary-key sidecar stores `KeyV2(K(pk)) -> base-row locator`.
+- Each secondary UNIQUE hidden relation stores
+  `KeyV2(K(index parts)) -> source table ID + row locator` and its own version,
+  registry digest, and activation generation.
+- The base row continues to hold the original bytes. Foreign keys, FULLTEXT
+  doc-id/tokenizer input, user projections, and row-return paths read that
+  original value; they never decode or substitute the sidecar bytes.
+- The DML write projection computes final typed values, encodes each affected
+  key, and inserts/deletes the sidecar entry atomically with the base-row
+  mutation. A key update removes the old sidecar identity and inserts the new
+  one in the same transaction.
+- A probe encodes the incoming user value, performs an opaque point lookup, then
+  resolves and snapshot-validates the returned base row under the same codec
+  version. The locator is not the user PK and does not replace it. If compaction
+  invalidates a row handle, the sidecar entry is resolved through the base
+  table's current row handle/user PK or the operation fails closed and schedules
+  a rebuild; it is never treated as a match for a different row.
+- Migration builds the sidecar from one locked snapshot and atomically switches
+  the sidecar metadata. The logical schema and all FK references remain stable;
+  only the owning physical relation changes identity format.
+
+This choice avoids changing `PkeyColName` or FULLTEXT's source-column contract,
+while making the physical key bytes available to storage and lock owners. A
+future implementation may choose a storage-native key encoding instead of a
+literal sidecar table only if it preserves this same locator, version, and
+atomic-switch contract; it must not introduce a SQL-visible generated column as
+an accidental second source of truth.
+
+### 5.4 Catalog and plan flow
 
 DDL constructs the version on the physical table definition. The compile path
 serializes it into `SchemaExtra`; the engine schema stores it with the relation
@@ -334,7 +553,7 @@ completed migration explicitly selects v2; it must not imply that the base PK
 has migrated. Dropping an index removes only its own physical relation after the
 normal DDL ownership protocol.
 
-### 5.3 Upgrade, downgrade, backup, and restore
+### 5.5 Upgrade, downgrade, backup, and restore
 
 Older binaries that do not understand v2 can read catalog rows only when no v2
 relation is opened for writing. A capability fence prevents an old writer from
@@ -349,35 +568,95 @@ not downgraded by omission of an unknown field.
 ## 6. Explicit migration protocol
 
 Migration is an explicit DDL/admin operation, not an implicit upgrade action.
-It operates on one physical unique relation at a time under the existing table
-write/DDL fence:
+The ordinary table lock is not a sufficient fence: the current lock operator
+returns early for non-pessimistic transactions, and a lock acquired after a
+snapshot would still validate stale data. The migration therefore owns a
+persisted `UniqueKeyMigrationGate` for one physical relation:
 
-1. Read the source relation and resolve every indexed column's final type,
-   prefix, and declared domain.
-2. Verify that all participating services support the requested codec version.
-3. Build a temporary v2 relation from a stable snapshot, encoding every row.
-4. Detect equivalent non-NULL keys before publication. Report a bounded sample
+```text
+gate = { relation_id, migration_epoch, owner, phase,
+         source_schema_epoch, source_snapshot_id }
+phase = OPEN | DRAINING | EXCLUSIVE | PUBLISHED | ABORTED
+```
+
+Every write producer (plain INSERT, IGNORE, ODKU, REPLACE, UPDATE, DELETE,
+INSERT SELECT, LOAD DATA, bulk/direct/S3 ingestion, and partition routing) must
+obtain a shared permit from this gate before opening its write transaction and
+carry the `migration_epoch` through planning, lock acquisition, and TN commit.
+An ingress that cannot carry the epoch is not compatible with v2 migration and
+causes the migration request to fail before it changes the gate. Reads remain
+allowed throughout.
+
+The supported transaction contract is explicit. Autocommit writes and explicit
+pessimistic transactions participate normally. An optimistic transaction that
+was admitted before `DRAINING` may finish only with its recorded epoch and a
+commit-time gate check; if the connector or executor cannot provide that check,
+the transaction is aborted and the migration remains blocked. New write
+transactions are rejected once `DRAINING` is durable. No code path relies on
+the existing table-lock operator's pessimistic-only behavior.
+
+The operation proceeds as follows:
+
+1. Resolve every indexed column's final type, prefix, normalized domain, and
+   source schema epoch. Verify that all current CN/TN/HAKeeper targets are
+   `ENABLED` for the requested codec and registry.
+2. Persist `OPEN -> DRAINING` with a new monotonic `migration_epoch`. Admission
+   rejects new writes and TN commit rejects a stale/missing epoch. Existing
+   permits registered before the transition are allowed to commit or abort
+   under the old epoch; the gate waits a bounded interval for the registry to
+   become empty. On timeout it persists `ABORTED`, releases the gate, and leaves
+   the old relation untouched.
+3. Persist `DRAINING -> EXCLUSIVE`, acquire the single relation permit, and hold
+   it from this point through snapshot, temporary build, collision validation,
+   catalog publication, durable commit, and replay acknowledgement. The source
+   snapshot is created *after* exclusive ownership. If any engine operation
+   started a snapshot earlier, discard it and restart after the gate. A changed
+   schema epoch, row-count/checksum watermark, or source snapshot identity
+   invalidates the build and restarts it while the gate is still held.
+4. Build a temporary v2 relation from that stable snapshot, encoding every row.
+   Detect equivalent non-NULL keys before publication. Report a bounded sample
    and total count of conflicting source row identities; abort without choosing
-   a winner or deleting rows.
-5. Validate row coverage, encoded-key uniqueness, source-to-key checksums, and
-   forced-index versus table-scan results.
-6. Atomically publish the new relation and version metadata in one catalog/DDL
-   transition; retain the old relation until the transaction is durable.
-7. After restart/replay observes the committed transition, garbage-collect the
-   old relation through the ordinary DDL cleanup owner.
+   a winner or deleting rows. Validate row coverage, encoded-key uniqueness,
+   source-to-key checksums, and forced-index versus table-scan results.
+5. Atomically publish the new sidecar relation and version metadata in one
+   catalog/DDL transition, persist `PUBLISHED`, and retain the old relation
+   until the transition is durable and replay has acknowledged the same
+   generation. New writes remain rejected until the activation fence observes
+   the published relation.
+6. After restart/replay observes the committed transition, release the gate and
+   hand the old relation to the ordinary DDL cleanup owner. Garbage collection
+   is retryable and cannot make the old identity query-visible again.
 
-Failure before publication leaves the old relation and metadata usable. Failure
-after publication is recovered by replaying the committed catalog transition;
-the old relation is never made query-visible as the current unique identity.
-Migration is not online double-write: new writes are fenced while the source
-snapshot is copied, so there is one linearization point and no divergent key
-formats.
+Failure before publication persists `ABORTED` and leaves the old relation and
+metadata usable. Failure after publication is recovered by replaying the
+committed catalog transition; the old relation is never selected as the current
+unique identity. If a capability, ingress, or transaction-mode check cannot be
+proven, the operation is rejected rather than weakening the fence. This is not
+online double-write: writes are stopped while the source snapshot is copied, so
+there is one linearization point and no divergent key format.
 
 ## 7. End-to-end producer and consumer map
 
 The implementation review must keep this table synchronized with the code. A
 path is not considered covered merely because a search found no `Charset`
 reference.
+
+The current source entry points and the future codec boundary are explicit:
+
+| Current source entry | Producer/consumer today | Required v2 boundary and terminal error |
+| --- | --- | --- |
+| `pkg/sql/plan/bind_insert.go` ODKU binding | existing-row LEFT JOIN and ordered target selection | encode every PK/UNIQUE part before the probe; metadata/capability mismatch rejects the plan |
+| `pkg/sql/colexec/preinsertunique/preinsertunique.go` | statement-local duplicate arbitration and serialized unique values | replace raw-value/hash identity with the framed key; collisions are checked by encoded bytes, not only a hash |
+| `pkg/sql/colexec/lockop` and `pkg/sql/compile/lock_meta.go` | row/table lock acquisition | lock the encoded unique identity and resolved base locator; timeout/rollback releases the epoch permit |
+| `pkg/sql/plan/build_ddl.go` (`buildUniqueIndexTable`) | secondary UNIQUE hidden relation creation | record relation-local codec metadata and encode the snapshot before publication; collision aborts the build |
+| `pkg/vm/engine/disttae/txn_table.go` and TAE relation/index owners | physical PK/index read and write | sidecar point lookups consume opaque v2 bytes and verify the base locator at the same snapshot |
+| `pkg/vm/engine/disttae/cache/types.go` and `pkg/pb/api/api.go` | catalog/schema clone and cache copies | explicitly copy typed version, registry, capability, and activation fields; a missing field fails closed |
+| `pkg/sql/plan/primary_key_semantics.go` | uniqueness inference and bytewise legacy guards | retain legacy guards until relation version/domain proof is present; never infer from an unversioned key |
+| `pkg/sql/plan/build_dml_util.go` FULLTEXT source projection | doc-id and tokenizer input from user columns | keep original user PK/text values; do not use or decode the unique sidecar key |
+
+These entries are joined to the complete operation map below. The map covers
+both the SQL-visible producer and the persistence/locking consumer, so a future
+implementation cannot claim coverage from planner search results alone.
 
 | Path | Required identity | Owner/decision | Failure behavior | Proof |
 | --- | --- | --- | --- | --- |
@@ -393,6 +672,8 @@ reference.
 | Statement-local dedup | domain-aware hash/equality | preinsert unique | collision checked by bytes | batch UT |
 | Lock keys | encoded unique identity plus resolved base row | lock owner | timeout/rollback cleans prefix | two-session test |
 | Commit-time dedup/replay | versioned encoded identity | TN/storage | mismatched capability aborts | restart/upgrade test |
+| Migration admission | relation gate epoch on every write ingress | catalog/TN migration gate | unsupported ingress or stale epoch rejects before mutation | gate state-machine test |
+| Capability/activation | relation version plus registry digest/generation | HAKeeper, CN/TN heartbeat | stale, missing, or reconnected node is fenced | rolling upgrade test |
 | SQL equality/hash join/group/distinct | resolved expression domain | SQL function/hash owners | unsafe optimization disabled | query consistency tests |
 | Bloom/zonemap/range filters | order-compatible key only | index/filter owner | over-include or scan fallback | forced/index-scan pair |
 | FK and doc-id consumers | original user PK value | existing FK/FULLTEXT owners | no accidental re-encoding | regression tests |
@@ -474,8 +755,8 @@ checks remain proportional to input rows and constraints, not a full-table scan.
 | Public SQL/API change in this delivery | None |
 | Production implementation | Not started by this design PR |
 | QA decision | Required for implementation: user-visible uniqueness, persistence, concurrency, and compatibility behavior |
-| Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three rows remain after the issue statements, and the forced-index read agrees with the table scan |
-| Design review | Pending maintainer review of this revision |
+| Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
+| Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 2; maintainer approval is still pending |
 
 Open review findings must be recorded against this exact revision. Any change to
 codec domains, metadata location, migration linearization, or FULLTEXT/storage
@@ -491,10 +772,19 @@ evidence, not maintainer approval.
 | --- | --- | --- | --- | --- |
 | r1 / 2026-09-08 | Author self-review | ODKU-only and global-comparator alternatives do not cover statement arbitration, locks, persistence, or old-index ambiguity | Kept rejected; selected shared versioned codec with explicit migration | Recorded, not approval |
 | r1 / 2026-09-08 | Author self-review | Current main preserves the declared general-ci name but accepts case/trailing-space duplicates; `SHOW CREATE` also omits the column collation | Added as measured baseline evidence and a separate SQL/metadata contract to verify | Recorded, not approval |
-| r1 / pending | Planner/SQL owner | Equality, hash, ODKU target selection, and optimization fallback | Review Sections 2–4 and the producer/consumer table | PENDING_REVIEW |
-| r1 / pending | Storage/transaction/catalog owner | Physical key bytes, lock/commit/replay, protobuf propagation, migration fence and recovery | Review Sections 5–7 and the migration protocol | PENDING_REVIEW |
-| r1 / pending | QA/release owner | Upgrade, backup/restore, distributed capability fence, and acceptance matrix | Review Sections 6 and 9 before implementation PRs | PENDING_REVIEW |
+| r1 / 2026-09-08 | Local design review | P1: the existing table lock does not fence non-pessimistic transactions or stale snapshots | Revision 2 adds a persisted `UniqueKeyMigrationGate`, ingress epoch, transaction drain/reject rules, post-fence snapshot, and lock-through-publication protocol in Section 6 | **ADDRESSED / maintainer review pending** |
+| r1 / 2026-09-08 | Local design review | P1: capability fencing had no fields, activation state, or reconnect behavior; typed clone paths can drop unknown fields | Revision 2 defines typed capability/activation records, current free field reservations, generation acknowledgements, CN/TN admission and commit checks, and explicit copy-boundary requirements in Sections 5.1–5.2 | **ADDRESSED / maintainer review pending** |
+| r1 / 2026-09-08 | Local design review | P1: user PK and encoded physical PK/locator were not selected | Revision 2 selects a storage-owned sidecar key with source-table/row locator; logical PK, FK, and FULLTEXT continue to use original values in Section 5.3 | **ADDRESSED / maintainer review pending** |
+| r1 / 2026-09-08 | Local design review | P1: domain IDs, payload rules, type framing, and golden vectors were incomplete | Revision 2 freezes registry IDs/digest framing, type tags, string/numeric payload rules, malformed-input behavior, and normative byte vectors in Sections 4.1–4.3 | **ADDRESSED / maintainer review pending** |
+| r1 / 2026-09-08 | Local design review | P2: `0900_ai_ci` rejection was impossible to implement from normalized catalog metadata | Revision 2 selects normalized general-ci-v1 migration for the compatibility alias and rejects native/identity-preserving 0900 requests with an explicit ambiguity error in Section 3 | **ADDRESSED / maintainer review pending** |
+| r1 / 2026-09-08 | Local design review | P2: original reproduction was recorded only once | Added the three-independent-database correction run `20260909T000000Z`; the one-sample artifact remains historical and is not counted | **ADDRESSED / evidence PASS** |
+| r2 / pending | Planner/SQL owner | Equality, hash, ODKU target selection, and optimization fallback | Review Sections 2–4 and the producer/consumer table against the frozen vectors | PENDING_MAINTAINER_REVIEW |
+| r2 / pending | Storage/transaction/catalog owner | Physical key bytes, lock/commit/replay, protobuf propagation, migration fence and recovery | Review Sections 5–7 and the migration protocol | PENDING_MAINTAINER_REVIEW |
+| r2 / pending | QA/release owner | Upgrade, backup/restore, distributed capability fence, and acceptance matrix | Review Sections 5–6 and 9 before implementation PRs | PENDING_MAINTAINER_REVIEW |
 
-The design is complete enough to start a separately reviewed implementation
-series, but it is not marked approved until the named owners record findings and
-dispositions against revision 1.
+Revision 2 closes the local design findings and is complete enough to start a
+separately reviewed implementation series. It is marked ready for maintainer
+review, not approved: the named owners must still record acceptance or new
+findings against this revision before production code is written. The baseline
+reproduction is evidence of the current defect only; `production_fix` and
+`qa_acceptance` remain not implemented/not run.
