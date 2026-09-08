@@ -40,27 +40,20 @@ import (
 // - SQL size limits (splits large statements into multiple)
 // - All MatrixOne data types serialization
 type CDCStatementBuilder struct {
-	// Table information
-	dbName    string
-	tableName string
-
-	// Table schema
-	tableDef *plan.TableDef
-
 	// Column types (excluding internal columns like __mo_rowid)
 	insertColTypes []*types.Type
-	insertColNames []string
 
 	// Primary key information
-	pkColNames []string
 	pkColTypes []*types.Type
 	isSinglePK bool
 
+	// Immutable statement fragments. The timestamp comment is call-local.
+	insertStem   []byte
+	insertSuffix []byte
+	deleteStem   []byte
+
 	// SQL size limit
 	maxSQLSize uint64
-
-	// Flags
-	isMO bool // Whether target is MatrixOne (affects feature compatibility)
 }
 
 // NewCDCStatementBuilder creates a new SQL statement builder for a specific table
@@ -68,22 +61,26 @@ func NewCDCStatementBuilder(
 	dbName, tableName string,
 	tableDef *plan.TableDef,
 	maxSQLSize uint64,
-	isMO bool,
+	_ bool,
 ) (*CDCStatementBuilder, error) {
 	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("tableDef is required")
 	}
 
 	b := &CDCStatementBuilder{
-		dbName:     dbName,
-		tableName:  tableName,
-		tableDef:   tableDef,
 		maxSQLSize: maxSQLSize,
-		isMO:       isMO,
 	}
+	qualifiedTable := quoteSQLIdentifier(dbName) + "." + quoteSQLIdentifier(tableName)
+	var insertColNames []string
 
 	// Extract column types (excluding internal columns)
-	for _, col := range tableDef.Cols {
+	for i, col := range tableDef.Cols {
+		if col == nil {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("column %d is nil", i))
+		}
+		if col.Name == "" {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("column %d has an empty name", i))
+		}
 		if _, ok := catalog.InternalColumns[col.Name]; ok {
 			continue
 		}
@@ -92,22 +89,176 @@ func NewCDCStatementBuilder(
 			Width: col.Typ.Width,
 			Scale: col.Typ.Scale,
 		})
-		b.insertColNames = append(b.insertColNames, col.Name)
+		insertColNames = append(insertColNames, col.Name)
+	}
+	if len(b.insertColTypes) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("tableDef has no visible columns")
 	}
 
 	// Extract primary key information
+	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("primary key metadata is required")
+	}
+	pkColNames := make([]string, 0, len(tableDef.Pkey.Names))
 	for _, pkName := range tableDef.Pkey.Names {
-		b.pkColNames = append(b.pkColNames, pkName)
-		col := tableDef.Cols[tableDef.Name2ColIndex[pkName]]
+		if pkName == "" {
+			return nil, moerr.NewInternalErrorNoCtx("primary key column name is empty")
+		}
+		idx, ok := tableDef.Name2ColIndex[pkName]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q has no column mapping", pkName))
+		}
+		if idx < 0 || int64(idx) >= int64(len(tableDef.Cols)) {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q has invalid column index %d", pkName, idx))
+		}
+		col := tableDef.Cols[int(idx)]
+		if col == nil || col.Name != pkName {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q mapping does not match column metadata", pkName))
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q is internal", pkName))
+		}
+		pkColNames = append(pkColNames, pkName)
 		b.pkColTypes = append(b.pkColTypes, &types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Width: col.Typ.Width,
 			Scale: col.Typ.Scale,
 		})
 	}
-	b.isSinglePK = len(b.pkColNames) == 1
+	b.isSinglePK = len(pkColNames) == 1
+
+	useReplace := false
+	for i, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("index %d is nil", i))
+		}
+		useReplace = useReplace || indexDef.Unique
+	}
+
+	if useReplace {
+		b.insertStem = []byte("REPLACE INTO " + qualifiedTable + " VALUES ")
+		b.insertSuffix = []byte(";")
+	} else {
+		b.insertStem = []byte("INSERT INTO " + qualifiedTable + " VALUES ")
+		b.insertSuffix = buildUpsertSuffix(insertColNames)
+	}
+	b.deleteStem = []byte("DELETE FROM " + qualifiedTable + " WHERE " + buildPKColumnList(pkColNames) + " IN (")
 
 	return b, nil
+}
+
+func quoteSQLIdentifier(raw string) string {
+	return "`" + strings.ReplaceAll(raw, "`", "``") + "`"
+}
+
+func buildUpsertSuffix(colNames []string) []byte {
+	var suffix []byte
+	suffix = append(suffix, " ON DUPLICATE KEY UPDATE "...)
+	for i, name := range colNames {
+		if i > 0 {
+			suffix = append(suffix, ',')
+		}
+		quoted := quoteSQLIdentifier(name)
+		suffix = append(suffix, quoted...)
+		suffix = append(suffix, "=VALUES("...)
+		suffix = append(suffix, quoted...)
+		suffix = append(suffix, ')')
+	}
+	return append(suffix, ';')
+}
+
+func buildPKColumnList(names []string) string {
+	if len(names) == 1 {
+		return quoteSQLIdentifier(names[0])
+	}
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = quoteSQLIdentifier(name)
+	}
+	return "(" + strings.Join(quoted, ",") + ")"
+}
+
+type statementAssembler struct {
+	ctx       context.Context
+	prefix    []byte
+	suffix    []byte
+	limit     uint64
+	current   []byte
+	completed [][]byte
+	hasRows   bool
+}
+
+// A small payload-sized floor avoids repeated slice growth for statements near
+// the common small limit without returning to maxSQLSize-sized allocations.
+const initialStatementCapacity = 256
+
+func newStatementAssembler(ctx context.Context, prefix, suffix []byte, limit uint64) *statementAssembler {
+	return &statementAssembler{ctx: ctx, prefix: prefix, suffix: suffix, limit: limit}
+}
+
+func fitsWithin(limit uint64, lengths ...int) bool {
+	remaining := limit
+	for _, length := range lengths {
+		if length < 0 || uint64(length) > remaining {
+			return false
+		}
+		remaining -= uint64(length)
+	}
+	return true
+}
+
+func checkedTotalLength(lengths ...int) (int, bool) {
+	total := 0
+	for _, length := range lengths {
+		if length < 0 || length > int(^uint(0)>>1)-total {
+			return 0, false
+		}
+		total += length
+	}
+	return total, true
+}
+
+func (a *statementAssembler) appendRow(rowSQL []byte) error {
+	// A row must fit in a fresh complete statement independently of preceding rows.
+	if !fitsWithin(a.limit, v2SQLBufReserved, len(a.prefix), len(rowSQL), len(a.suffix)) {
+		return moerr.NewInternalError(a.ctx,
+			fmt.Sprintf("single row too large for max SQL size: row=%d bytes, max=%d bytes", len(rowSQL), a.limit))
+	}
+
+	if a.hasRows && !fitsWithin(a.limit, len(a.current), 1, len(rowSQL), len(a.suffix)) {
+		a.flush()
+	}
+	if !a.hasRows {
+		capacity, ok := checkedTotalLength(v2SQLBufReserved, len(a.prefix), len(rowSQL), len(a.suffix))
+		if !ok {
+			return moerr.NewInternalError(a.ctx, "SQL statement length exceeds platform capacity")
+		}
+		if capacity < initialStatementCapacity && a.limit >= initialStatementCapacity {
+			capacity = initialStatementCapacity
+		}
+		a.current = make([]byte, v2SQLBufReserved, capacity)
+		a.current = append(a.current, a.prefix...)
+	} else {
+		a.current = append(a.current, ',')
+	}
+	a.current = append(a.current, rowSQL...)
+	a.hasRows = true
+	return nil
+}
+
+func (a *statementAssembler) flush() {
+	if !a.hasRows {
+		return
+	}
+	a.current = append(a.current, a.suffix...)
+	a.completed = append(a.completed, a.current)
+	a.current = nil
+	a.hasRows = false
+}
+
+func (a *statementAssembler) finish() [][]byte {
+	a.flush()
+	return a.completed
 }
 
 // BuildInsertSQL constructs INSERT SQL statements from a batch
@@ -153,17 +304,8 @@ func (b *CDCStatementBuilder) buildInsertSQL(
 ) ([][]byte, error) {
 	defer iter.Close()
 
-	var sqls [][]byte
-	var currentSQL []byte
-
-	// Prepare SQL prefix with timestamp comment
 	prefix := b.buildInsertPrefix(fromTs, toTs)
-	suffix := b.buildInsertSuffix()
-
-	// Initialize first SQL statement
-	currentSQL = make([]byte, v2SQLBufReserved, b.maxSQLSize)
-	currentSQL = append(currentSQL, prefix...)
-	firstRow := true
+	assembler := newStatementAssembler(ctx, prefix, b.insertSuffix, b.maxSQLSize)
 
 	row := make([]any, len(b.insertColTypes))
 	for iter.Next() {
@@ -177,46 +319,11 @@ func (b *CDCStatementBuilder) buildInsertSQL(
 			return nil, err
 		}
 
-		// Check if adding this row would exceed max size
-		neededSpace := len(rowSQL)
-		if !firstRow {
-			neededSpace += 1 // For comma separator
+		if err = assembler.appendRow(rowSQL); err != nil {
+			return nil, err
 		}
-		neededSpace += len(suffix)
-
-		if len(currentSQL)+neededSpace > int(b.maxSQLSize) {
-			// Finish current SQL
-			if !firstRow {
-				currentSQL = append(currentSQL, suffix...)
-				sqls = append(sqls, currentSQL)
-
-				// Start new SQL
-				currentSQL = make([]byte, v2SQLBufReserved, b.maxSQLSize)
-				currentSQL = append(currentSQL, prefix...)
-				firstRow = true
-			} else {
-				// Single row too large!
-				return nil, moerr.NewInternalError(ctx,
-					fmt.Sprintf("single row too large for max SQL size: row=%d bytes, max=%d bytes",
-						len(rowSQL), b.maxSQLSize))
-			}
-		}
-
-		// Append row to current SQL
-		if !firstRow {
-			currentSQL = append(currentSQL, ',')
-		}
-		currentSQL = append(currentSQL, rowSQL...)
-		firstRow = false
 	}
-
-	// Finish last SQL statement
-	if !firstRow {
-		currentSQL = append(currentSQL, suffix...)
-		sqls = append(sqls, currentSQL)
-	}
-
-	return sqls, nil
+	return assembler.finish(), nil
 }
 
 type batchRowIterator struct {
@@ -242,10 +349,7 @@ func (iter *batchRowIterator) Close() {}
 // BuildDeleteSQL constructs DELETE SQL statements from atomic batches
 //
 // Returns multiple SQL statements if the batch is too large.
-// Supports two formats:
-// 1. Single PK: DELETE FROM t WHERE pk IN ((val1),(val2),...)
-// 2. Composite PK (MO): DELETE FROM t WHERE pk1=a1 AND pk2=a2 OR pk1=b1 AND pk2=b2 ...
-// 3. Composite PK (MySQL): DELETE FROM t WHERE (pk1,pk2) IN ((a1,a2),(b1,b2),...)
+// Single and composite keys use the same row-value IN syntax on both sinks.
 func (b *CDCStatementBuilder) BuildDeleteSQL(
 	ctx context.Context,
 	atmBatch *AtomicBatch,
@@ -255,26 +359,15 @@ func (b *CDCStatementBuilder) BuildDeleteSQL(
 		return nil, nil
 	}
 
-	var sqls [][]byte
-	var currentSQL []byte
-
-	// Prepare SQL prefix with timestamp comment
 	prefix := b.buildDeletePrefix(fromTs, toTs)
-	suffix := b.buildDeleteSuffix()
-
-	// Initialize first SQL statement
-	currentSQL = make([]byte, v2SQLBufReserved, b.maxSQLSize)
-	currentSQL = append(currentSQL, prefix...)
-	firstRow := true
+	assembler := newStatementAssembler(ctx, prefix, []byte(");"), b.maxSQLSize)
 
 	// Get row iterator
 	iter := atmBatch.GetRowIterator()
 	defer iter.Close()
 
-	// Process each row
+	pkRow := make([]any, 1) // AtomicBatch stores PK as one scalar or packed tuple.
 	for iter.Next() {
-		// Extract primary key value(s)
-		pkRow := make([]any, 1) // AtomicBatch stores PK as single value
 		if err := iter.Row(ctx, pkRow); err != nil {
 			return nil, err
 		}
@@ -285,107 +378,27 @@ func (b *CDCStatementBuilder) BuildDeleteSQL(
 			return nil, err
 		}
 
-		// Check if adding this row would exceed max size
-		neededSpace := len(rowSQL)
-		if !firstRow {
-			neededSpace += len(b.buildDeleteRowSeparator())
+		if err = assembler.appendRow(rowSQL); err != nil {
+			return nil, err
 		}
-		neededSpace += len(suffix)
-
-		if len(currentSQL)+neededSpace > int(b.maxSQLSize) {
-			// Finish current SQL
-			if !firstRow {
-				currentSQL = append(currentSQL, suffix...)
-				sqls = append(sqls, currentSQL)
-
-				// Start new SQL
-				currentSQL = make([]byte, v2SQLBufReserved, b.maxSQLSize)
-				currentSQL = append(currentSQL, prefix...)
-				firstRow = true
-			} else {
-				// Single row too large!
-				return nil, moerr.NewInternalError(ctx,
-					"single row too large for max SQL size")
-			}
-		}
-
-		// Append row to current SQL
-		if !firstRow {
-			currentSQL = append(currentSQL, b.buildDeleteRowSeparator()...)
-		}
-		currentSQL = append(currentSQL, rowSQL...)
-		firstRow = false
 	}
-
-	// Finish last SQL statement
-	if !firstRow {
-		currentSQL = append(currentSQL, suffix...)
-		sqls = append(sqls, currentSQL)
-	}
-
-	return sqls, nil
+	return assembler.finish(), nil
 }
 
 // buildInsertPrefix builds the INSERT statement prefix with timestamp comment
 func (b *CDCStatementBuilder) buildInsertPrefix(fromTs, toTs types.TS) []byte {
 	tsComment := fmt.Sprintf("/* [%s, %s) */ ", fromTs.ToString(), toTs.ToString())
-	prefix := fmt.Sprintf("%sINSERT INTO `%s`.`%s` VALUES ", tsComment, b.dbName, b.tableName)
-	return []byte(prefix)
-}
-
-func (b *CDCStatementBuilder) buildInsertSuffix() []byte {
-	suffix := make([]byte, 0, 32*len(b.insertColNames)+1)
-	suffix = append(suffix, " ON DUPLICATE KEY UPDATE "...)
-	for i, name := range b.insertColNames {
-		quotedName := strings.ReplaceAll(name, "`", "``")
-		if i > 0 {
-			suffix = append(suffix, ',')
-		}
-		suffix = append(suffix, '`')
-		suffix = append(suffix, quotedName...)
-		suffix = append(suffix, "`=VALUES(`"...)
-		suffix = append(suffix, quotedName...)
-		suffix = append(suffix, "`)"...)
-	}
-	suffix = append(suffix, ';')
-	return suffix
+	prefix := make([]byte, 0, len(tsComment)+len(b.insertStem))
+	prefix = append(prefix, tsComment...)
+	return append(prefix, b.insertStem...)
 }
 
 // buildDeletePrefix builds the DELETE statement prefix with timestamp comment
 func (b *CDCStatementBuilder) buildDeletePrefix(fromTs, toTs types.TS) []byte {
 	tsComment := fmt.Sprintf("/* [%s, %s) */ ", fromTs.ToString(), toTs.ToString())
-	pkStr := b.buildPKColumnList()
-	return []byte(fmt.Sprintf("%sDELETE FROM `%s`.`%s` WHERE %s IN (",
-		tsComment, b.dbName, b.tableName, pkStr))
-}
-
-// buildDeleteSuffix builds the DELETE statement suffix
-func (b *CDCStatementBuilder) buildDeleteSuffix() []byte {
-	return []byte(");")
-}
-
-// buildDeleteRowSeparator returns the separator between DELETE row conditions
-func (b *CDCStatementBuilder) buildDeleteRowSeparator() []byte {
-	return []byte(",")
-}
-
-// buildPKColumnList builds the primary key column list for DELETE IN clause
-// Single PK: "pk1"
-// Composite PK: "(pk1,pk2,pk3)"
-func (b *CDCStatementBuilder) buildPKColumnList() string {
-	if b.isSinglePK {
-		return b.pkColNames[0]
-	}
-
-	result := "("
-	for i, name := range b.pkColNames {
-		if i > 0 {
-			result += ","
-		}
-		result += name
-	}
-	result += ")"
-	return result
+	prefix := make([]byte, 0, len(tsComment)+len(b.deleteStem))
+	prefix = append(prefix, tsComment...)
+	return append(prefix, b.deleteStem...)
 }
 
 // formatInsertRow formats a row for INSERT statement: (val1,val2,...)
@@ -472,5 +485,5 @@ func (b *CDCStatementBuilder) EstimateDeleteRowSize() int {
 		return 50 // (value)
 	}
 	// (val1,val2,...)
-	return len(b.pkColNames) * 50
+	return len(b.pkColTypes) * 50
 }
