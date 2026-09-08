@@ -168,6 +168,162 @@ func TestCleanCommitStateFencesAfterBoundedConnectionFailures(t *testing.T) {
 	})
 }
 
+func TestCleanCommitStatePersistentDisconnectExpires(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		c := a.getCtl("s1")
+		require.Equal(t, cannotCommitState, c.tryCannotCommit("orphan"))
+		// Inject elapsed time instead of depending on the background timer.
+		firstDisconnect := time.Now().Add(-30 * time.Minute)
+		a.inactiveService.Store("s1", firstDisconnect)
+		calls := 0
+		probe := func(context.Context, string) (bool, [][]byte, error) {
+			calls++
+			return false, nil, moerr.NewBackendCannotConnectNoCtx("s1")
+		}
+		for range 2 {
+			a.cleanCommitStateOnce(context.Background(), probe, time.Hour)
+			observed, ok := a.inactiveService.Load("s1")
+			require.True(t, ok)
+			require.Equal(t, firstDisconnect, observed, "retry extended disconnect retention")
+			_, err := a.Valid("s1", []byte("late"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+		}
+		require.Equal(t, 2*getActiveTxnMaxAttempts, calls)
+		// The same first-disconnect time is now beyond the selected retention.
+		a.cleanCommitStateOnce(context.Background(), probe, time.Minute)
+		require.False(t, a.HasInvalidService("s1"))
+		_, exists := a.ctl.Load("s1")
+		require.False(t, exists)
+		calls = 0
+		a.cleanCommitStateOnce(context.Background(), probe, time.Minute)
+		require.Zero(t, calls, "expired owner remained in the probe set")
+	})
+}
+
+func TestCleanCommitStateExpiryDoesNotRequireSuccessfulProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unknown", moerr.NewInternalErrorNoCtx("unknown owner state")},
+		{"connection", moerr.NewBackendClosedNoCtx()},
+		{"negative_with_failed_reset", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+				require.NoError(t, a.client.Close())
+				a.client = &resetTrackingClient{resetErr: moerr.NewBackendClosedNoCtx()}
+				a.getCtl("s1").tryCannotCommit("orphan")
+				a.inactiveService.Store("s1", time.Now().Add(-2*time.Hour))
+				// A service can also have an inactive marker without any ctl.
+				a.inactiveService.Store("marker-only", time.Now().Add(-2*time.Hour))
+				calls := 0
+				a.cleanCommitStateOnce(context.Background(), func(_ context.Context, sid string) (bool, [][]byte, error) {
+					require.Equal(t, "s1", sid)
+					calls++
+					return false, nil, tc.err
+				}, time.Hour)
+				require.Positive(t, calls)
+				require.False(t, a.HasInvalidService("s1"))
+				require.False(t, a.HasInvalidService("marker-only"))
+				_, exists := a.ctl.Load("s1")
+				require.False(t, exists)
+			})
+		})
+	}
+}
+
+func TestCleanCommitStateExpiryPreservesFreshRecoveryEpoch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unknown", moerr.NewInternalErrorNoCtx("unknown owner state")},
+		{"connection", moerr.NewBackendClosedNoCtx()},
+		{"successful_empty_snapshot", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+				c := a.getCtl("s1")
+				c.tryCannotCommit("orphan")
+				a.inactiveService.Store("s1", time.Now().Add(-2*time.Hour))
+				var once sync.Once
+				a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+					once.Do(func() {
+						a.resumeService("s1")
+						a.AddInvalidService("s1")
+					})
+					return true, nil, tc.err
+				}, time.Hour)
+				require.True(t, a.HasInvalidService("s1"))
+				_, exists := c.getCommitState("orphan")
+				require.True(t, exists, "old sweep deleted a fresh epoch's fence")
+				a.resumeService("s1")
+				_, err := a.Valid("s1", []byte("orphan"), nil)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+				_, err = a.Valid("s1", []byte("new"), nil)
+				require.NoError(t, err)
+				a.FinishCommit("s1", []byte("new"))
+			})
+		})
+	}
+}
+
+func TestCleanCommitStateExpiryPreservesNewStateAndCommitSafety(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		c := a.getCtl("s1")
+		c.tryCannotCommit("old")
+		require.Equal(t, committingState, c.beginCommit("inflight"))
+		c.tryCannotCommit("unknown", commitFence{
+			persist: true, expiresAt: time.Now().Add(time.Hour).UnixNano(), commitSequence: 10,
+		})
+		a.inactiveService.Store("s1", time.Now().Add(-2*time.Hour))
+		a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+			a.AddCannotCommit([]pb.OrphanTxn{{Service: "s1", Txn: [][]byte{[]byte("new")}}})
+			return false, nil, moerr.NewInternalErrorNoCtx("unknown owner state")
+		}, time.Hour)
+		require.False(t, a.HasInvalidService("s1"))
+		_, exists := c.getCommitState("old")
+		require.False(t, exists)
+		state, exists := c.getCommitState("inflight")
+		require.True(t, exists)
+		require.Equal(t, uint32(1), state.inflight)
+		_, err := a.Valid("s1", []byte("new"), nil, CommitRequestMeta{Sequence: 11})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+		_, err = a.Valid("s1", []byte("late-unknown"), nil, CommitRequestMeta{Sequence: 10})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+		_, err = a.Valid("s1", []byte("fresh"), nil, CommitRequestMeta{Sequence: 11})
+		require.NoError(t, err)
+		a.FinishCommit("s1", []byte("fresh"))
+		a.FinishCommit("s1", []byte("inflight"))
+	})
+}
+
+func TestCleanCommitStateExpiryPreservesReplacementCtl(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		a.getCtl("s1").tryCannotCommit("old")
+		a.inactiveService.Store("s1", time.Now().Add(-2*time.Hour))
+		var replacement *commitCtl
+		a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+			// Simulate an intervening cleanup and a new ctl with a lower watermark.
+			a.ctlMu.Lock()
+			a.inactiveMu.Lock()
+			a.ctl.Delete("s1")
+			a.inactiveService.Delete("s1")
+			replacement = a.getCtl("s1")
+			replacement.tryCannotCommit("new")
+			a.inactiveMu.Unlock()
+			a.ctlMu.Unlock()
+			return true, nil, nil
+		}, time.Hour)
+		current, exists := a.ctl.Load("s1")
+		require.True(t, exists)
+		require.Same(t, replacement, current)
+		_, err := a.Valid("s1", []byte("new"), nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+	})
+}
+
 func TestCleanCommitStateRetriesDeadlineExceeded(t *testing.T) {
 	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
 		client := &resetTrackingClient{}

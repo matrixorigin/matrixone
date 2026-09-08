@@ -225,34 +225,20 @@ func (l *lockTableAllocator) markServiceInactive(
 			return false
 		}
 	}
-	l.inactiveService.Store(serviceID, time.Now())
+	// Repeated failures belong to the same disconnect epoch. Refreshing this
+	// timestamp would prevent its retained cannot-commit state from expiring.
+	l.inactiveService.LoadOrStore(serviceID, time.Now())
 	return true
 }
 
 func (l *lockTableAllocator) resumeService(serviceID string) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
 	ctl := l.getCtl(serviceID)
 	l.inactiveMu.Lock()
 	defer l.inactiveMu.Unlock()
 	ctl.advanceRecoveryEpoch()
 	l.inactiveService.Delete(serviceID)
-}
-
-func (l *lockTableAllocator) removeInactiveServiceIfExpired(
-	serviceID string,
-	observedAt time.Time,
-	removeDisconnectDuration time.Duration,
-) bool {
-	if time.Since(observedAt) <= removeDisconnectDuration {
-		return false
-	}
-	l.inactiveMu.Lock()
-	defer l.inactiveMu.Unlock()
-	current, ok := l.inactiveService.Load(serviceID)
-	if !ok || current.(time.Time) != observedAt {
-		return false
-	}
-	l.inactiveService.Delete(serviceID)
-	return true
 }
 
 func (l *lockTableAllocator) Valid(
@@ -778,38 +764,40 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 	getActiveTxnFunc func(context.Context, string) (bool, [][]byte, error),
 	removeDisconnectDuration time.Duration,
 ) {
-	var services []string
-	var invalidServices []string
-	var unknownServices []string
+	if ctx.Err() != nil {
+		return
+	}
+	snapshots := make(map[string]commitCleanupSnapshot)
 	activeTxnMap := make(map[string]map[string]struct{})
-	cleanupWatermarks := make(map[string]uint64)
-	expiredUnknownServices := make(map[string]struct{})
 
 	l.ctlMu.RLock()
+	l.inactiveMu.RLock()
 	l.ctl.Range(func(key, value any) bool {
-		services = append(services, key.(string))
+		ctl := value.(*commitCtl)
+		ctl.mu.Lock()
+		snapshots[key.(string)] = commitCleanupSnapshot{
+			ctl: ctl, generation: ctl.generation, recoveryEpoch: ctl.recoveryEpoch,
+		}
+		ctl.mu.Unlock()
 		return true
 	})
-	l.ctlMu.RUnlock()
-
 	l.inactiveService.Range(func(key, value any) bool {
 		sid := key.(string)
-		if l.removeInactiveServiceIfExpired(sid, value.(time.Time), removeDisconnectDuration) {
-			l.logger.Error("remove inactive service", zap.String("serviceID", sid))
-			expiredUnknownServices[sid] = struct{}{}
-		}
+		snapshot := snapshots[sid]
+		snapshot.inactiveAt = value.(time.Time)
+		snapshots[sid] = snapshot
 		return true
 	})
+	l.inactiveMu.RUnlock()
+	l.ctlMu.RUnlock()
 
-	for _, sid := range services {
+	for sid, snapshot := range snapshots {
 		if ctx.Err() != nil {
-			break
+			return
 		}
-		ctl, watermark, epoch, ok := l.getCtlCleanupSnapshot(sid)
-		if !ok {
+		if snapshot.ctl == nil {
 			continue
 		}
-		cleanupWatermarks[sid] = watermark
 
 		for attempt := 1; attempt <= getActiveTxnMaxAttempts; attempt++ {
 			valid, actives, err := getActiveTxnFunc(ctx, sid)
@@ -829,7 +817,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 						// negative reply is not evidence that the service is inactive.
 						break
 					}
-					invalidServices = append(invalidServices, sid)
+					activeTxnMap[sid] = nil
 				} else {
 					m := make(map[string]struct{}, len(actives))
 					for _, txn := range actives {
@@ -865,9 +853,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 				zap.Int("attempt", attempt),
 				zap.Error(err))
 			if attempt == getActiveTxnMaxAttempts {
-				if l.markServiceInactive(sid, ctl, epoch, true) {
-					unknownServices = append(unknownServices, sid)
-				}
+				l.markServiceInactive(sid, snapshot.ctl, snapshot.recoveryEpoch, true)
 				continue
 			}
 
@@ -883,21 +869,64 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 		}
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	l.ctlMu.Lock()
-	for _, sid := range invalidServices {
-		// A lockservice endpoint mismatch says nothing about a Commit already
-		// accepted by the TN RPC queue. Persistent unknown-commit fences remain
-		// until their Commit deadline makes a late admission impossible.
-		l.cleanCtlLocked(sid, nil, false, cleanupWatermarks[sid])
-	}
-	for _, sid := range unknownServices {
-		_, expired := expiredUnknownServices[sid]
-		l.cleanCtlLocked(sid, nil, !expired, cleanupWatermarks[sid])
-	}
-	for sid, activeTxns := range activeTxnMap {
-		l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
+	for sid, snapshot := range snapshots {
+		activeTxns, known := activeTxnMap[sid]
+		l.applyCommitCleanup(sid, snapshot, activeTxns, known, removeDisconnectDuration)
 	}
 	l.ctlMu.Unlock()
+}
+
+type commitCleanupSnapshot struct {
+	ctl           *commitCtl
+	generation    uint64
+	recoveryEpoch uint64
+	inactiveAt    time.Time
+}
+
+// applyCommitCleanup requires ctlMu exclusively. Expiry and state cleanup are
+// one transition with respect to Resume and fresh disconnects; a service-level
+// "expired" flag carried across an RPC cannot authorize deleting a new epoch.
+func (l *lockTableAllocator) applyCommitCleanup(
+	sid string,
+	snapshot commitCleanupSnapshot,
+	activeTxns map[string]struct{},
+	known bool,
+	retention time.Duration,
+) {
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	current, exists := l.ctl.Load(sid)
+	if (exists && current != snapshot.ctl) || (!exists && snapshot.ctl != nil) {
+		return
+	}
+	c := snapshot.ctl
+	if c != nil && (snapshot.recoveryEpoch == math.MaxUint64 ||
+		c.currentRecoveryEpoch() != snapshot.recoveryEpoch) {
+		return
+	}
+	inactive, isInactive := l.inactiveService.Load(sid)
+	// An inactive marker created after the snapshot is a new fence. Even a
+	// successful old RPC must not remove its cannot-commit tombstones.
+	if isInactive && inactive.(time.Time) != snapshot.inactiveAt {
+		return
+	}
+	expired := isInactive && time.Since(snapshot.inactiveAt) > retention
+	if c != nil {
+		// In-flight commits and persistent unknown-commit fences retain their
+		// independent lifetime protections in clean, even after disconnect expiry.
+		c.clean(activeTxns, !known && !expired, snapshot.generation, l.logger)
+		if c.empty() {
+			l.ctl.CompareAndDelete(sid, c)
+		}
+	}
+	if expired {
+		l.inactiveService.Delete(sid)
+		l.logger.Info("remove inactive service", zap.String("serviceID", sid))
+	}
 }
 
 type backendResetResult uint8
@@ -1667,19 +1696,6 @@ func (c *commitCtl) advanceRecoveryEpoch() {
 	if c.recoveryEpoch < math.MaxUint64 {
 		c.recoveryEpoch++
 	}
-}
-
-func (l *lockTableAllocator) getCtlCleanupSnapshot(
-	serviceID string,
-) (*commitCtl, uint64, uint64, bool) {
-	value, ok := l.ctl.Load(serviceID)
-	if !ok {
-		return nil, 0, 0, false
-	}
-	ctl := value.(*commitCtl)
-	ctl.mu.Lock()
-	defer ctl.mu.Unlock()
-	return ctl, ctl.generation, ctl.recoveryEpoch, true
 }
 
 func (l *lockTableAllocator) getCtlGeneration(serviceID string) (uint64, bool) {
