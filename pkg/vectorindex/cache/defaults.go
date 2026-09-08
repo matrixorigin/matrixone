@@ -118,7 +118,12 @@ func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
 		g.defaultLimit.device = device
 		g.defaultLimitDeviceErr = derr
 		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
-		g.defaultLimitDeviceReady = true
+		// Memoize the ANSWER, not the failure. Capacity does not change at runtime, so a
+		// successful probe is worth keeping forever -- but latching an error would turn one
+		// unlucky probe into a CN that refuses every device load for the rest of its life,
+		// with no way back short of a restart. A retry costs one CUDA call on the next cold
+		// miss, and only on a GPU build: a non-GPU build answers (0, nil) and never lands here.
+		g.defaultLimitDeviceReady = derr == nil
 	}
 	return g.defaultLimit, g.defaultLimitHostErr, g.defaultLimitDeviceErr
 }
@@ -131,7 +136,7 @@ func (g *VectorIndexGovernor) devicePerCardCaps() map[int]int64 {
 	if !g.defaultLimitDeviceReady {
 		g.defaultLimit.device, g.defaultLimitDeviceErr = automaticDeviceLimit()
 		g.defaultLimitPerCard, _ = automaticDeviceLimitPerCard()
-		g.defaultLimitDeviceReady = true
+		g.defaultLimitDeviceReady = g.defaultLimitDeviceErr == nil
 	}
 	return g.defaultLimitPerCard
 }

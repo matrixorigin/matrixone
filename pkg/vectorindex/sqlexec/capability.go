@@ -35,12 +35,21 @@ import (
 // MOProtocolVersion tracks the OLDEST live service and is lowered again for a rollback, so it is
 // read live at every decision. Unavailable answers false, which withholds the row.
 func ClusterHasIndexProvenance(sqlproc *SqlProcess) bool {
-	if sqlproc == nil || sqlproc.Proc == nil {
+	if sqlproc == nil {
 		return false
 	}
+	// A SqlProcess carries EITHER a Proc or a SqlCtx, and the CDC path -- the only writer of
+	// tail frame rows -- carries the SqlCtx one (RunTxnWithSqlContext builds it with Proc nil).
+	// Reading only Proc answered false for every CDC flush, which silently withheld every tail
+	// frame row and left sizing permanently on the chunk-count bound. GetService already
+	// resolves either shape, which is what RunSql and HasProvenanceColumns use.
+	if sqlproc.Proc == nil && sqlproc.SqlCtx == nil {
+		return false
+	}
+	service := sqlproc.GetService()
 	// ServiceRuntime returns nil for a service it has never seen (an unregistered service id,
 	// which internal and test callers do reach), so this must be checked before the read.
-	rt := moruntime.ServiceRuntime(sqlproc.Proc.GetService())
+	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return false
 	}

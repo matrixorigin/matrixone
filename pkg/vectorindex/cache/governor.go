@@ -545,10 +545,15 @@ func (g *VectorIndexGovernor) enforceDevicePlacement(incoming map[int]int64, pro
 		if used == 0 {
 			continue
 		}
+		// The budget named here is the CARD's own capacity, derived from the hardware. Unlike
+		// the arena-wide refusal, no session variable can raise it -- max_gpu_index_cache_size
+		// bounds how much of the GPU arena this CN will use in total, and cannot create VRAM on
+		// one card -- so pointing the operator at it would send them somewhere that cannot help.
 		return moerr.NewInternalErrorNoCtxf(
 			"index cache is full: loading %q needs %d more bytes on GPU %d, which already holds "+
-				"%d of its %d byte budget and has nothing idle left to reclaim -- retry, or raise "+
-				"%s",
+				"%d of its %d byte capacity and has nothing idle left to reclaim -- retry once a "+
+				"resident index on that card goes idle, or spread the indexes across cards; this "+
+				"is the card's own capacity and %s cannot raise it",
 			protect, want, device, used, limit, maxGpuIndexCacheSizeVar)
 	}
 	return nil
