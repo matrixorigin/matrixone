@@ -17,6 +17,7 @@ package shuffle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -900,6 +901,40 @@ func TestVMPrepareRejectsAbortedSharedPool(t *testing.T) {
 		t.Fatal("failed VM preparation leaked the producer context")
 	}
 	arg.Free(proc, true, err)
+}
+
+func TestShuffleResetPreservesAbortCause(t *testing.T) {
+	for _, drainAll := range []bool{false, true} {
+		for _, prepared := range []bool{false, true} {
+			for _, tc := range []struct {
+				name  string
+				cause error
+			}{
+				{"canceled", context.Canceled},
+				{"deadline", context.DeadlineExceeded},
+				{"execution_error", errors.New("upstream execution failed")},
+			} {
+				t.Run(fmt.Sprintf("drainAll=%t/prepared=%t/%s", drainAll, prepared, tc.name), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					pool := NewShufflePool(2, 2, drainAll)
+					arg := NewArgument()
+					defer arg.Release()
+					arg.BucketNum = 2
+					arg.DrainAllBuckets = drainAll
+					arg.SetShufflePool(pool)
+					if prepared {
+						require.NoError(t, vm.Prepare(arg, proc))
+					}
+					arg.Reset(proc, true, tc.cause)
+					arg.Free(proc, true, tc.cause)
+					require.ErrorIs(t, pool.terminalError(), tc.cause)
+					require.True(t, pool.cleaned)
+					require.False(t, pool.hold())
+				})
+			}
+		}
+	}
 }
 
 func TestVMPreparePreservesSharedPoolAbortCause(t *testing.T) {
