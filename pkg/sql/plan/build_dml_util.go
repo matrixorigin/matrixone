@@ -102,18 +102,19 @@ type dmlPlanCtx struct {
 	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
 	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
 	// the aggregation is skipped; the NULL-row filter must stay.
-	needAggFilter     bool
-	dedupByRowNumber  bool
-	updateColLength   int
-	rowIdPos          int
-	insertColPos      []int
-	updateColPosMap   map[string]int
-	allDelTableIDs    map[uint64]struct{}
-	allDelTables      map[FkReferKey]struct{}
-	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
-	lockTable         bool //we need lock table in stmt: delete from tbl
-	updatePkCol       bool //if update stmt will update the primary key or one of pks
-	pkFilterExprs     []*Expr
+	needAggFilter         bool
+	dedupByRowNumber      bool
+	updateColLength       int
+	rowIdPos              int
+	insertColPos          []int
+	updateColPosMap       map[string]int
+	allDelTableIDs        map[uint64]struct{}
+	skipForeignKeyActions map[*ForeignKeyDef]struct{}
+	allDelTables          map[FkReferKey]struct{}
+	isFkRecursionCall     bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
+	lockTable             bool //we need lock table in stmt: delete from tbl
+	updatePkCol           bool //if update stmt will update the primary key or one of pks
+	pkFilterExprs         []*Expr
 	// isUnrestrictedDelete means the statement semantically selects the entire
 	// target table. Physical truncate eligibility is decided separately.
 	isUnrestrictedDelete bool
@@ -132,6 +133,23 @@ type dmlPlanCtx struct {
 	// non-NULL key that needs a duplicate-key check.
 	isConditionalFkSetNullAction bool
 	ignoreCheckConstraint        bool
+}
+
+func cloneSkippedForeignKeyActions(
+	src map[*ForeignKeyDef]struct{},
+	additional ...*ForeignKeyDef,
+) map[*ForeignKeyDef]struct{} {
+	if len(src) == 0 && len(additional) == 0 {
+		return nil
+	}
+	dst := make(map[*ForeignKeyDef]struct{}, len(src)+len(additional))
+	for fk := range src {
+		dst[fk] = struct{}{}
+	}
+	for _, fk := range additional {
+		dst[fk] = struct{}{}
+	}
+	return dst
 }
 
 // information of deleteNode, which is about the deleted table
@@ -1728,10 +1746,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.sourceStep = combinedStep
 					upPlanCtx.updateColPosMap = updateMap
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+					upPlanCtx.skipForeignKeyActions = delCtx.skipForeignKeyActions
 					if childTableDef.TblId == delCtx.tableDef.TblId {
-						// The row is already being rewritten by this self-referential
-						// action; do not recursively apply the same child action again.
-						upPlanCtx.allDelTableIDs[0] = struct{}{}
+						upPlanCtx.skipForeignKeyActions = cloneSkippedForeignKeyActions(
+							delCtx.skipForeignKeyActions, setNullFks...)
 					}
 					upPlanCtx.insertColPos = insertColPos
 					upPlanCtx.isFkRecursionCall = true
@@ -1813,6 +1831,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
+				if _, ok := delCtx.skipForeignKeyActions[fk]; ok {
+					// This exact FK action was already materialized by the parent
+					// recursive update. Other FKs on the same self-referencing table
+					// must still be checked and applied.
+					continue
+				}
 				if _, ok := combinedSetNull[fk]; ok {
 					continue
 				}
@@ -2000,7 +2024,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						var filterExpr, tmpExpr *Expr
 						for updateName, newIdx := range updateRefColumn {
 							oldIdx := nameIdxMap[updateName]
-							tmpExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
+							equalExpr, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*Expr{{
 								Typ: *nameTypMap[updateName],
 								Expr: &plan.Expr_Col{
 									Col: &ColRef{
@@ -2017,15 +2041,19 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									},
 								},
 							}})
-							if err != nil {
-								return nil
+							if buildErr != nil {
+								return buildErr
+							}
+							tmpExpr, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{equalExpr})
+							if buildErr != nil {
+								return buildErr
 							}
 							if filterExpr == nil {
 								filterExpr = tmpExpr
 							} else {
-								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
-								if err != nil {
-									return nil
+								filterExpr, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
+								if buildErr != nil {
+									return buildErr
 								}
 							}
 						}
@@ -2224,8 +2252,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.beginIdx = 0
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+						upPlanCtx.skipForeignKeyActions = delCtx.skipForeignKeyActions
 						if childTableDef.TblId == delCtx.tableDef.TblId {
-							upPlanCtx.allDelTableIDs[0] = struct{}{}
+							upPlanCtx.skipForeignKeyActions = cloneSkippedForeignKeyActions(
+								delCtx.skipForeignKeyActions, fk)
 						}
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true

@@ -64,6 +64,27 @@ func TestIssue28308AffectedRowsExcludeForeignKeySideEffects(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select row_count()").Scan(&rowCount))
 			require.Equal(t, expected, rowCount, "ROW_COUNT() after %s", statement)
 		}
+		assertRows := func(statement string, expected [][]sql.NullInt64) {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, statement)
+			require.NoError(t, err, statement)
+			defer rows.Close()
+			rowCount := 0
+			for rows.Next() {
+				actual := make([]sql.NullInt64, len(expected[0]))
+				scanArgs := make([]any, len(actual))
+				for i := range actual {
+					scanArgs[i] = &actual[i]
+				}
+				require.NoError(t, rows.Scan(scanArgs...), statement)
+				require.Less(t, rowCount, len(expected), statement)
+				require.Equal(t, expected[rowCount], actual, statement)
+				rowCount++
+			}
+			require.NoError(t, rows.Err(), statement)
+			require.NoError(t, rows.Close(), statement)
+			require.Equal(t, len(expected), rowCount, statement)
+		}
 
 		exec("drop database if exists `" + dbName + "`")
 		defer func() {
@@ -130,6 +151,34 @@ func TestIssue28308AffectedRowsExcludeForeignKeySideEffects(t *testing.T) {
 			"select parent_a, parent_b from self_set_null_multi where id = 2").Scan(&parentA, &parentB))
 		require.False(t, parentA.Valid)
 		require.False(t, parentB.Valid)
+
+		exec("create table self_fk_boundary_single (id int primary key, k int unique, p int, " +
+			"foreign key (k) references self_fk_boundary_single(id) on delete set null, " +
+			"foreign key (p) references self_fk_boundary_single(k) on update restrict)")
+		exec("insert into self_fk_boundary_single values (1, null, null), (2, 1, null), (3, null, 1)")
+		_, err = conn.ExecContext(ctx, "delete from self_fk_boundary_single where id = 1")
+		require.ErrorContains(t, err, "foreign key constraint fails",
+			"a sibling self-referencing ON UPDATE RESTRICT must reject the SET NULL action")
+		assertRows("select id, k, p from self_fk_boundary_single order by id", [][]sql.NullInt64{
+			{{Int64: 1, Valid: true}, {Valid: false}, {Valid: false}},
+			{{Int64: 2, Valid: true}, {Int64: 1, Valid: true}, {Valid: false}},
+			{{Int64: 3, Valid: true}, {Valid: false}, {Int64: 1, Valid: true}},
+		})
+
+		exec("create table self_fk_boundary_combined (id int primary key, k int unique, k2 int, p int, " +
+			"foreign key (k) references self_fk_boundary_combined(id) on delete set null, " +
+			"foreign key (k2) references self_fk_boundary_combined(id) on delete set null, " +
+			"foreign key (p) references self_fk_boundary_combined(k) on update restrict)")
+		exec("insert into self_fk_boundary_combined values " +
+			"(1, null, null, null), (2, 1, 1, null), (3, null, null, 1)")
+		_, err = conn.ExecContext(ctx, "delete from self_fk_boundary_combined where id = 1")
+		require.ErrorContains(t, err, "foreign key constraint fails",
+			"the combined SET NULL action must retain the sibling ON UPDATE RESTRICT")
+		assertRows("select id, k, k2, p from self_fk_boundary_combined order by id", [][]sql.NullInt64{
+			{{Int64: 1, Valid: true}, {Valid: false}, {Valid: false}, {Valid: false}},
+			{{Int64: 2, Valid: true}, {Int64: 1, Valid: true}, {Int64: 1, Valid: true}, {Valid: false}},
+			{{Int64: 3, Valid: true}, {Valid: false}, {Valid: false}, {Int64: 1, Valid: true}},
+		})
 
 		exec("create table null_parent (id int primary key)")
 		exec("create table null_child (id int primary key, parent_id int, " +

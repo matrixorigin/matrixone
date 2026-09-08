@@ -201,3 +201,126 @@ func TestIssue28308ForeignKeyDeleteAffectedRowsOwnership(t *testing.T) {
 		require.Equal(t, 1, recursiveInserts)
 	})
 }
+
+func TestIssue28308SelfReferentialSetNullKeepsSiblingRestrict(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		combined bool
+	}{
+		{name: "single set null", combined: false},
+		{name: "combined set null", combined: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			configureIssue28308SelfReferentialBoundary(t, mock, tc.combined)
+
+			logicPlan, err := runOneStmt(mock, t,
+				"delete from self_ref_multi_cascade where id = 1")
+			require.NoError(t, err)
+			require.True(t, hasIssue28308SelfReferentialRestrictCheck(logicPlan.GetQuery()),
+				"the sibling ON UPDATE RESTRICT check must consume the NULL-safe changed-row stream")
+		})
+	}
+}
+
+func hasIssue28308SelfReferentialRestrictCheck(query *planpb.Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_FILTER || len(node.FilterList) == 0 ||
+			!issue28308ExprContainsFunction(node.FilterList[0], "assert") || len(node.Children) != 1 {
+			continue
+		}
+		join := query.Nodes[node.Children[0]]
+		if join.NodeType != planpb.Node_JOIN ||
+			len(join.Children) != 2 || len(join.OnList) == 0 {
+			continue
+		}
+		for _, childID := range join.Children {
+			child := query.Nodes[childID]
+			if child.NodeType == planpb.Node_FILTER &&
+				len(child.FilterList) > 0 &&
+				issue28308ExprContainsFunction(child.FilterList[0], "not") &&
+				issue28308ExprContainsFunction(child.FilterList[0], "<=>") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func issue28308ExprContainsFunction(expr *planpb.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.GetFunc().GetObjName() == name {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if issue28308ExprContainsFunction(arg, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func configureIssue28308SelfReferentialBoundary(
+	t *testing.T,
+	mock *MockOptimizer,
+	combined bool,
+) {
+	t.Helper()
+	table := mock.ctxt.tables["self_ref_multi_cascade"]
+	require.NotNil(t, table)
+
+	if combined {
+		cols := DeepCopyColDefList(table.Cols)
+		p := DeepCopyColDef(cols[2])
+		p.Name = "p"
+		p.OriginName = "p"
+		p.ColId = 3
+		rowID := cols[len(cols)-1]
+		rowID.ColId = 4
+		table.Cols = append(cols[:3], p, rowID)
+	} else {
+		table.Cols = DeepCopyColDefList(table.Cols)
+	}
+	table.Name2ColIndex = make(map[string]int32, len(table.Cols))
+	for pos, col := range table.Cols {
+		table.Name2ColIndex[col.Name] = int32(pos)
+	}
+
+	setNull := func(name string, childCol, parentCol uint64) *planpb.ForeignKeyDef {
+		return &planpb.ForeignKeyDef{
+			Name:        name,
+			Cols:        []uint64{childCol},
+			ForeignTbl:  0,
+			ForeignCols: []uint64{parentCol},
+			OnDelete:    planpb.ForeignKeyDef_SET_NULL,
+			OnUpdate:    planpb.ForeignKeyDef_NO_ACTION,
+		}
+	}
+	restrict := func(name string, childCol, parentCol uint64) *planpb.ForeignKeyDef {
+		return &planpb.ForeignKeyDef{
+			Name:        name,
+			Cols:        []uint64{childCol},
+			ForeignTbl:  0,
+			ForeignCols: []uint64{parentCol},
+			OnDelete:    planpb.ForeignKeyDef_NO_ACTION,
+			OnUpdate:    planpb.ForeignKeyDef_RESTRICT,
+		}
+	}
+	table.Fkeys = []*planpb.ForeignKeyDef{
+		setNull("fk_set_null_a", 1, 0),
+	}
+	if combined {
+		table.Fkeys = append(table.Fkeys,
+			setNull("fk_set_null_b", 2, 0),
+			restrict("fk_restrict_p", 3, 1))
+	} else {
+		table.Fkeys = append(table.Fkeys, restrict("fk_restrict_b", 2, 1))
+	}
+	table.RefChildTbls = []uint64{0}
+}
