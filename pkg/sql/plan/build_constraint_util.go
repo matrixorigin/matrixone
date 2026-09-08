@@ -719,7 +719,15 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 	var ifInsertFromUniqueColMap map[string]bool
-	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
+	if stmt.RowAlias != nil {
+		// The row-alias namespace is defined by the legal INSERT source columns.
+		// The legacy helper predates this contract and includes non-user-visible
+		// hidden columns for an implicit column list, so use the same filtered
+		// identity resolver as the modern path before building the fallback scan.
+		if insertColumns, err = builder.getInsertColsForRowAlias(stmt.Columns, tableDef); err != nil {
+			return false, nil, nil, err
+		}
+	} else if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
 		return false, nil, nil, err
 	}
 	if stmt.RowAlias != nil {
