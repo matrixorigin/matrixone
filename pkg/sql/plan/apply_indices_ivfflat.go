@@ -591,12 +591,6 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
-	if vecCtx != nil && vecCtx.hasMembership {
-		// The current vector-index API cannot consume an external SEMI JOIN
-		// before its candidate limit. Keep the exact plan until such a
-		// membership pre-filter is available.
-		return nodeID, nil
-	}
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
@@ -835,7 +829,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	//   pre-filter:    JOIN(scanNode, SEMI(vectorScan, secondScan))
 	var joinRootID int32
 
-	pushdownEnabled := !vecCtx.hasMembership && usePreFilter && len(remainingFilters) > 0
+	pushdownEnabled := vecCtx.hasMembership || (usePreFilter && len(remainingFilters) > 0)
 	scanNode.FilterList = remainingFilters
 
 	if canIndexOnly {
@@ -888,12 +882,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			secondScanNodeID = optimizedSecondScanID
 		}
 
-		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
-		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
+		membershipProducerID := secondScanNodeID
+		if vecCtx.hasMembership {
+			membershipNode := builder.qry.Nodes[vecCtx.membershipNodeID]
+			if membershipNode.NodeType != plan.Node_JOIN || membershipNode.JoinType != plan.Node_SEMI ||
+				len(membershipNode.Children) != 2 || membershipNode.Children[0] != scanNode.NodeId {
+				return nodeID, nil
+			}
+			membershipNode.Children[0] = secondScanNodeID
+			for _, expr := range membershipNode.OnList {
+				replaceColRefTag(expr, oldTag, newTag)
+			}
+			membershipProducerID = membershipNode.NodeId
+		}
 
-		// Add a PROJECT node above secondScanNode to output only the primary key column
+		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
+		clearLimitOffsetInSubtree(builder.qry, membershipProducerID)
+
+		// Add a PROJECT above the filtered relation to output only the primary key column.
 		secondProjectTag := builder.genNewBindTag()
-		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
+		secondPkExpr := builder.buildPkExprFromNode(membershipProducerID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if secondPkExpr == nil {
 			// If an optimized second-scan subtree can't provide a stable PK expression,
 			// skip IVF rewrite to avoid wiring stale bindings into join/runtime-filter paths.
@@ -901,7 +909,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		secondProjectNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{secondScanNodeID},
+			Children:    []int32{membershipProducerID},
 			ProjectList: []*plan.Expr{secondPkExpr},
 			BindingTags: []int32{secondProjectTag},
 		}, ctx)
@@ -1024,12 +1032,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID
 	} else {
-		// Keep an existing SEMI JOIN as the row-fetch side, preserving
-		// membership filtering before the final Top-K.
 		outerScanNodeID := scanNode.NodeId
-		if vecCtx.hasMembership {
-			outerScanNodeID = vecCtx.membershipNodeID
-		}
 		outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if outerPkExpr == nil || outerPkExpr.GetCol() == nil {
 			return nodeID, nil
