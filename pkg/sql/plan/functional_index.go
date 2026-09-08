@@ -904,7 +904,7 @@ func validateFunctionalIndexMetadata(ctx context.Context, tableDef *TableDef) er
 	functionalRefs := make(map[string]int)
 	for _, indexDef := range tableDef.Indexes {
 		if indexDef == nil {
-			return moerr.NewInternalError(ctx, "functional index has nil metadata")
+			continue
 		}
 		for partPos, part := range indexDef.Parts {
 			if catalog.IsFunctionalIndexColumnName(catalog.ResolveAlias(part)) &&

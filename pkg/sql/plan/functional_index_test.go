@@ -119,6 +119,9 @@ func TestFunctionalExpressionMatchesNormalizesRelationAndAssignmentCast(t *testi
 }
 
 func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
+	require.NoError(t, validateFunctionalIndexMetadata(context.Background(), &TableDef{
+		Indexes: []*plan.IndexDef{nil},
+	}))
 	table := &TableDef{
 		Cols: []*ColDef{{
 			Name:   "__mo_fi_deadbeef",
