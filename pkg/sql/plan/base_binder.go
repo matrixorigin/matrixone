@@ -2094,6 +2094,29 @@ func numericFunctionHasSelectiveContext(name string) bool {
 	}
 }
 
+// mysqlNumericPrefixBitwiseArg identifies textual operands of numeric bitwise
+// operators. MySQL consumes the leading decimal integer and evaluates its
+// unsigned 64-bit bit pattern; binary string families must continue through
+// their bytewise overloads. The existing comparison-cast overload keeps the
+// plan wire contract stable for older CN executors.
+func mysqlNumericPrefixBitwiseArg(name string, idx, argCount int, source, target types.Type) bool {
+	if source.Oid != types.T_char && source.Oid != types.T_varchar && source.Oid != types.T_text {
+		return false
+	}
+	if !target.Oid.IsInteger() || idx < 0 || idx >= argCount {
+		return false
+	}
+	if name == "unary_tilde" {
+		return idx == 0 && argCount == 1
+	}
+	switch name {
+	case "&", "|", "^", "<<", ">>":
+		return idx < 2 && argCount == 2
+	default:
+		return false
+	}
+}
+
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
 	if b.ctx == nil {
 		return Type{}, false
@@ -5722,6 +5745,8 @@ func bindFuncExprImplByPlanExpr(
 				typ := makePlan2Type(&castType)
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else {
 					args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
