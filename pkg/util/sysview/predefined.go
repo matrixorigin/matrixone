@@ -593,7 +593,7 @@ var (
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
 		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
-		"cast(" + informationSchemaViewCheckOptionSQL + " as varchar(9)) AS `CHECK_OPTION`," +
+		"cast(coalesce(" + informationSchemaViewCheckOptionSQL + ", 'NONE') as varchar(9)) AS `CHECK_OPTION`," +
 		"cast('NO' as varchar(3)) AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
