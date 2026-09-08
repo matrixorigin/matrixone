@@ -2609,6 +2609,10 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
 	values := [][]byte{
 		[]byte("ordinary inline"),
 		[]byte("ordinary long value that exceeds inline storage"),
@@ -2626,6 +2630,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 	encoded, err := vec.MarshalBinary()
 	require.NoError(t, err)
 	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
 	require.NoError(t, decoded.UnmarshalBinary(encoded))
 	require.Equal(t, values[0], decoded.GetBytesAt(0))
 	require.Equal(t, values[1], decoded.GetBytesAt(1))
@@ -2633,6 +2638,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 
 	window, err := vec.Window(2, 3)
 	require.NoError(t, err)
+	defer window.Free(nil)
 	windowPlan, err := window.PrepareMarshalBinary()
 	require.NoError(t, err)
 	require.True(t, windowPlan.canonicalVarlen,
@@ -2640,14 +2646,9 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 	windowEncoded, err := window.MarshalBinary()
 	require.NoError(t, err)
 	windowDecoded := NewVecFromReuse()
+	defer windowDecoded.Free(nil)
 	require.NoError(t, windowDecoded.UnmarshalBinary(windowEncoded))
 	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
-
-	windowDecoded.Free(nil)
-	window.Free(nil)
-	decoded.Free(nil)
-	vec.Free(mp)
-	require.Zero(t, mp.CurrNB())
 }
 
 func TestMarshalAndUnMarshal(t *testing.T) {
