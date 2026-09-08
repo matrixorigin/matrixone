@@ -372,47 +372,120 @@ func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
 		cancel()
 
 		unblock()
-		require.Eventually(t, func() bool {
-			return s.Drain(context.Background()) == nil
-		}, time.Second, time.Millisecond)
+		drainCtx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, s.Drain(drainCtx))
 	})
 }
 
 func TestQuiesceCancelsForwardWaitBeforeHandlerEntry(t *testing.T) {
+	for _, promote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("promotion=%t", promote), func(t *testing.T) {
+			testForwardWaitQuiesce(t, promote)
+		})
+	}
+}
+
+// Done is evaluated once by the worker's queue select, then again by its
+// forward-wait select. The second evaluation proves that the worker dequeued
+// the request, passed beginHandler, and selected TxnForwardWait. Holding that
+// evaluation lets the test arrange promotion/quiesce before either select arm
+// can win, without adding a hook to production code.
+type forwardWaitBarrierContext struct {
+	context.Context
+	calls   int
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (c *forwardWaitBarrierContext) Done() <-chan struct{} {
+	c.calls++ // Only the single test worker calls Done.
+	if c.calls == 2 {
+		close(c.entered)
+		<-c.resume
+	}
+	return c.Context.Done()
+}
+
+func testForwardWaitQuiesce(t *testing.T, promote bool) {
+	t.Helper()
 	rpcServer := &testRPCServer{}
 	s := newBlockedQueueTestServer(t, rpcServer)
 	s.handleState.state = TxnForwardWait
 	s.handleState.forward.waitReady = make(chan struct{})
+	var forwarded atomic.Int32
 	s.handleState.forward.forwardFunc = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-		t.Fatal("forward handler must not run after quiesce")
-		return nil
+		forwarded.Add(1)
+		return errors.New("unexpected forwarding after quiesce")
 	}
+	s.pool.responses.New = func() any { return &txn.TxnResponse{} }
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	barrier := &forwardWaitBarrierContext{
+		Context: workerCtx,
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(barrier.resume) }) }
+	joined := make(chan struct{})
+	// Install all release paths before any assertion or worker launch. In
+	// particular, a failed barrier oracle must not strand the worker in Done.
+	defer func() {
+		cancelWorker()
+		resume()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("forward-wait worker did not exit")
+		}
+		assert.NoError(t, s.Close())
+	}()
+	go func() {
+		defer close(joined)
+		s.handleTxnRequest(barrier)
+	}()
 
 	var canceled atomic.Int32
-	req := &txn.TxnRequest{}
-	s.activeHandlers.Lock()
-	s.activeHandlers.active++
-	s.activeHandlers.Unlock()
+	req := &txn.TxnRequest{RequestID: 42}
+	require.True(t, s.beginProducer())
 	s.queue <- executor{
+		ctx:     context.Background(),
 		req:     req,
 		cancel:  func() { canceled.Add(1) },
 		handler: s.handlers[txn.TxnMethod_Read],
 		s:       s,
 	}
-	s.startProcessors()
-	require.Eventually(t, func() bool {
-		s.activeHandlers.Lock()
-		active := s.activeHandlers.active
-		s.activeHandlers.Unlock()
-		return active == 1
-	}, time.Second, time.Millisecond)
+	s.finishProducer()
+	select {
+	case <-barrier.entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "worker did not enter forward-wait")
+	}
+	require.Empty(t, s.queue)
+	if promote {
+		require.NoError(t, s.SwitchTxnHandleStateTo(TxnForwarding))
+	}
 
 	require.NoError(t, s.Quiesce())
+	resume()
 	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	require.NoError(t, s.Drain(drainCtx))
-	cancel()
+	cancelWorker()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		require.FailNow(t, "forward-wait worker did not exit")
+	}
 	require.Equal(t, int32(1), canceled.Load())
-	s.stopper.Stop()
+	require.Zero(t, forwarded.Load())
+	require.Zero(t, req.RequestID, "request must be reset before release")
+	s.activeHandlers.Lock()
+	active := s.activeHandlers.active
+	s.activeHandlers.Unlock()
+	require.Zero(t, active)
+	require.Equal(t, int32(1), rpcServer.closeCalls.Load())
 }
 
 func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server {
