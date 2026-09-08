@@ -138,8 +138,27 @@ func ReadOneBlock(
 	policy fileservice.Policy,
 	options ...ReadOneBlockOption,
 ) (ioVec fileservice.IOVector, err error) {
+	sharedPosition := -1
+	if len(seqnums) == 1 && len(typs) == 1 && slices.Contains(options, ShareScopedDecodedColumn) {
+		sharedPosition = 0
+	}
 	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy,
-		slices.Contains(options, ShareScopedDecodedColumn))
+		sharedPosition)
+}
+
+// ReadOneBlockWithScopedDecode opts one requested column into immutable decoded
+// sharing. The caller must keep the complete IOVector until all views are consumed.
+// Position is in seqnums/typs, not in the compacted physical-entry list.
+func ReadOneBlockWithScopedDecode(
+	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
+	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
+	policy fileservice.Policy, sharedPosition int,
+) (fileservice.IOVector, error) {
+	if sharedPosition < 0 || sharedPosition >= len(seqnums) || sharedPosition >= len(typs) {
+		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtxf(
+			"scoped decode column position %d is outside column/type lists", sharedPosition)
+	}
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition)
 }
 
 func ReadOneBlockWithMeta(
@@ -154,13 +173,13 @@ func ReadOneBlockWithMeta(
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, false)
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1)
 }
 
 func readOneBlockWithMeta(
 	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
 	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
-	factory CacheConstructorFactory, policy fileservice.Policy, shareDecode bool,
+	factory CacheConstructorFactory, policy fileservice.Policy, sharedPosition int,
 ) (ioVec fileservice.IOVector, err error) {
 	ioVec = fileservice.IOVector{
 		FilePath: name,
@@ -217,7 +236,7 @@ func readOneBlockWithMeta(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		entry := newColumnIOEntry(ext, factory)
-		if shareDecode && len(seqnums) == 1 && len(typs) == 1 && typs[0].Oid.IsArrayRelate() {
+		if i == sharedPosition && typs[i].Oid.IsArrayRelate() {
 			entry.DecodeSharing = fileservice.DecodeSharing{
 				Codec:      "objectio-validated-column-v1",
 				Parameters: [2]uint64{uint64(ext.Alg()), uint64(ext.OriginSize())},

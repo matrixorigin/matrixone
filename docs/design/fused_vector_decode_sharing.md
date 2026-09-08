@@ -1,6 +1,6 @@
 # Selected-vector sharing in fused reads
 
-- Status: in progress; approved in the conversation before implementation.
+- Status: implemented; approved in the conversation before implementation.
 - Base: main `9f87b6249889107c3c108c133a4c3c8f3bc273ee`.
 - Implementation branch: `perf/fused-vector-decode-sharing`, delivered in one PR.
 - Related issue: [#24097](https://github.com/matrixorigin/matrixone/issues/24097), following #28413 and #28434; does not close the umbrella issue.

@@ -91,7 +91,7 @@ func readColumnsData(
 	extraTSColumn *uint16,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-	options ...objectio.ReadOneBlockOption,
+	sharedPosition int,
 ) (ioVectors fileservice.IOVector, fromCache bool, err error) {
 	if len(columns) != len(typs) {
 		return ioVectors, false, moerr.NewInvalidInputNoCtxf(
@@ -120,18 +120,15 @@ func readColumnsData(
 	}
 	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	ioVectors, err = objectio.ReadOneBlock(
-		ctx,
-		&dataMeta,
-		name,
-		location.ID(),
-		readColumns,
-		readTypes,
-		m,
-		fs,
-		policy,
-		options...,
-	)
+	if sharedPosition >= 0 {
+		ioVectors, err = objectio.ReadOneBlockWithScopedDecode(
+			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy, sharedPosition,
+		)
+	} else {
+		ioVectors, err = objectio.ReadOneBlock(
+			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
+		)
+	}
 	if err != nil {
 		return ioVectors, false, err
 	}
@@ -208,6 +205,7 @@ func LoadColumnsDataInto(
 		commitTSColumn,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return deleteMask, false, err
@@ -319,6 +317,7 @@ func LoadColumnDataBySearch(
 		commitTSColumn,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return nil, false, err
@@ -463,6 +462,7 @@ func LoadColumnsDataIntoAndTopN(
 		nil,
 		m,
 		policy,
+		len(columns),
 	)
 	if err != nil {
 		return nil, nil, false, err
@@ -545,6 +545,7 @@ func LoadColumnDataBySearchAndCheckTS(
 		nil,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return false, false, false, err
