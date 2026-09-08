@@ -10540,7 +10540,16 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
-		// step 0: lock account name first
+		// Account lifecycle mutations take SNAPSHOT before the account-name gate.
+		// DROP ACCOUNT already enters its lineage lifecycle barrier in this order.
+		// Holding the same order prevents CREATE and DROP of one account from
+		// waiting on each other's first gate.
+		if rtnErr = lockSnapshotLifecycle(ctx, bh); rtnErr != nil &&
+			!ignoreUnsupportedViewMetadataLifecycleGate(ses.GetService(), rtnErr) {
+			return rtnErr
+		}
+
+		// step 0: lock account name after the lifecycle gate
 		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, ca.Name)
 		if rtnErr != nil {
 			return rtnErr
@@ -10664,8 +10673,7 @@ func inheritViewMetadataRevalidation(
 	accountID uint32,
 ) error {
 	if err := lockViewMetadataLifecycle(ctx, bh); err != nil {
-		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
-			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+		if ignoreUnsupportedViewMetadataLifecycleGate(serviceID, err) {
 			return nil
 		}
 		return err
@@ -10686,6 +10694,11 @@ func inheritViewMetadataRevalidation(
 		return nil
 	}
 	return err
+}
+
+func ignoreUnsupportedViewMetadataLifecycleGate(serviceID string, err error) bool {
+	return !compile.ViewMetadataRefreshEnabled(serviceID) &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB))
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
