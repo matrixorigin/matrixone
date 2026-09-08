@@ -180,6 +180,20 @@ func TestIssue28308AffectedRowsExcludeForeignKeySideEffects(t *testing.T) {
 			{{Int64: 3, Valid: true}, {Valid: false}, {Valid: false}, {Int64: 1, Valid: true}},
 		})
 
+		// Exercise the successful combined SET NULL path as well. The unique
+		// hidden-index row for k must be removed when k becomes NULL; otherwise
+		// reinserting the parent key below would report a stale duplicate.
+		exec("create table self_fk_combined_index (id int primary key, k int unique, k2 int, " +
+			"foreign key (k) references self_fk_combined_index(id) on delete set null, " +
+			"foreign key (k2) references self_fk_combined_index(id) on delete set null)")
+		exec("insert into self_fk_combined_index values (1, null, null), (2, 1, 1)")
+		assertAffected("delete from self_fk_combined_index where id = 1", 1)
+		assertRows("select id, k, k2 from self_fk_combined_index order by id", [][]sql.NullInt64{
+			{{Int64: 2, Valid: true}, {Valid: false}, {Valid: false}},
+		})
+		exec("insert into self_fk_combined_index values (1, null, null)")
+		exec("insert into self_fk_combined_index values (3, 1, 1)")
+
 		exec("create table null_parent (id int primary key)")
 		exec("create table null_child (id int primary key, parent_id int, " +
 			"foreign key (parent_id) references null_parent(id) on delete set null)")

@@ -132,7 +132,11 @@ type dmlPlanCtx struct {
 	// stream only preserves existing non-NULL keys; it cannot introduce a new
 	// non-NULL key that needs a duplicate-key check.
 	isConditionalFkSetNullAction bool
-	ignoreCheckConstraint        bool
+	// isPostCreateQueryFkSetNullAction marks the direct-DELETE action stream
+	// appended after the root plan's createQuery pass. Its hidden-index joins
+	// must use the local positional ABI; REPLACE keeps the shared tagged ABI.
+	isPostCreateQueryFkSetNullAction bool
+	ignoreCheckConstraint            bool
 }
 
 func cloneSkippedForeignKeyActions(
@@ -1759,7 +1763,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					// layout after the sink, regardless of whether this is the local
 					// or tagged action path.
 					upPlanCtx.preserveUpdateSourceProjection = true
+					// A direct DELETE builds this action stream after createQuery and
+					// therefore needs the local positional index ABI. REPLACE owns a
+					// shared tagged action stream; keep its existing tagged layout.
 					upPlanCtx.isConditionalFkSetNullAction = true
+					upPlanCtx.isPostCreateQueryFkSetNullAction = localCombined
 					resetReferentialDeleteSource()
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
@@ -4419,6 +4427,7 @@ func appendDeleteIndexTablePlan(
 	preserveProjection bool,
 	preserveActionRows bool,
 	matchedDeleteOnly bool,
+	disableRuntimeFilter bool,
 ) (int32, error) {
 	/********
 	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
@@ -4596,8 +4605,8 @@ func appendDeleteIndexTablePlan(
 	)
 	// FK actions can consume this index-maintenance step through a sink scan.
 	// A runtime filter from that consumer back to the scan creates a wait-for
-	// cycle, so disable it only for this internal join when FK actions exist.
-	if preserveProjection {
+	// cycle, so disable it for internal FK maintenance joins.
+	if preserveProjection || disableRuntimeFilter {
 		hasRuntimeFilter = false
 	}
 	if hasRuntimeFilter {
@@ -6552,9 +6561,18 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			preserveIndexProjection = false
 			preserveActionRows = false
 		}
+		if delCtx.isPostCreateQueryFkSetNullAction {
+			// The combined SET NULL source is a post-createQuery maintenance
+			// stream. It may retain non-NULL keys for rows matched by a sibling
+			// FK, so it still needs the full delete/reinsert index flow, but that
+			// flow must use the local two-input JOIN ABI rather than planner tags.
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
 			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
+			delCtx.isPostCreateQueryFkSetNullAction,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -6567,6 +6585,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		if skipIndexInsert {
 			delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 			delNodeInfo.preserveProjection = !usePositionalIndexDelete &&
+				!delCtx.isPostCreateQueryFkSetNullAction &&
 				(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
@@ -6611,7 +6630,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				delNodeInfo.deleteIndex = 0
 				delNodeInfo.pkPos = 1
 			} else {
-				delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+				delNodeInfo.preserveProjection = !delCtx.isPostCreateQueryFkSetNullAction &&
+					(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 			}
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
