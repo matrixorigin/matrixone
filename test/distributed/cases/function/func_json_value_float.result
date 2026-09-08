@@ -5,7 +5,6 @@ select json_value('"NaN"', '$' returning float default 7 on error);
 json_value("NaN", $ returning float default 7 on error)
 7
 select json_value('"NaN"', '$' returning float error on error);
-json_value("NaN", $ returning float error on error)
 Data truncation: data out of range: data type FLOAT, JSON_VALUE value "NaN"
 select json_value('"NaN"', '$' returning double null on error);
 json_value("NaN", $ returning double null on error)
@@ -20,5 +19,4 @@ select json_value('"1.25"', '$' returning double);
 json_value("1.25", $ returning double)
 1.25
 select json_value('"NaN"', '$' returning double error on error);
-json_value("NaN", $ returning double error on error)
 Data truncation: data out of range: data type DOUBLE, JSON_VALUE value "NaN"
