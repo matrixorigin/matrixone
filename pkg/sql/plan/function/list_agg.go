@@ -374,9 +374,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -393,9 +391,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -412,9 +408,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -811,6 +805,13 @@ var BitOpsSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_binary, types.T_varbinary,
 	types.T_bit,
+}
+
+func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && aggexec.IsBitwiseAggregateOperandTooWide(inputs[0]) {
+		return newCheckResultWithFailure(failedBitwiseAggregateOperandsSize)
+	}
+	return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 }
 
 var BitOpsReturnType = func(typs []types.Type) types.Type {
