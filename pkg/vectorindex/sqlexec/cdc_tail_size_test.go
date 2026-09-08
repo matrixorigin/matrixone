@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
@@ -81,4 +82,20 @@ func TestCdcTailRowsUpperBoundFallsBackToChunks(t *testing.T) {
 	got, err = CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", 0)
 	require.NoError(t, err)
 	require.Zero(t, got)
+}
+
+// A SIZING probe must never be the thing that breaks a load. RunSql reaches the executor, which
+// PANICS rather than erroring when the process has no lock service -- a shape internal callers
+// and unit contexts really do reach -- and this query runs inside Preload, on the path to every
+// cold load. Unguarded it converts a missing executor into a crashed load; the honest answer is
+// no estimate, which is exactly the behaviour that existed before the estimate did.
+func TestCdcTailSizingSurvivesAProcessWithNoLockService(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sqlproc := NewSqlProcess(proc)
+
+	require.NotPanics(t, func() {
+		rows, err := CdcTailRowsUpperBound(sqlproc, "db", "meta", "store", 512)
+		require.NoError(t, err, "a probe that cannot run is not a load failure")
+		require.Zero(t, rows, "no estimate, so admission behaves as it did before the estimate")
+	})
 }
