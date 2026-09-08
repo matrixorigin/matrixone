@@ -5105,6 +5105,54 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 	}
 }
 
+// A row containing a scalar subquery becomes an independently scheduled
+// relational branch. Keep that fan-out finite before binding creates any
+// subquery plan nodes; the branches feed a blocking ordinal sort and do not
+// inherit the normal operator DOP bound. Thirty-two permits moderate batches
+// without letting one statement create hundreds of source scopes.
+const maxReplaceValuesSubqueryBranches = 32
+
+func replaceValueExprContainsSubquery(expr tree.Expr) bool {
+	// Keep ordinary literal/default/parameter VALUES rows on an allocation-free
+	// classification path. The reflective walker is only needed for expression
+	// trees that can contain nested subqueries.
+	switch typedExpr := expr.(type) {
+	case nil, *tree.NumVal, *tree.StrVal, *tree.UnresolvedName, *tree.ParamExpr, *tree.UpdateVal, *tree.MaxValue:
+		return false
+	case *tree.DefaultVal:
+		return replaceValueExprContainsSubquery(typedExpr.Expr)
+	}
+
+	found := false
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		if _, ok := candidate.(*tree.Subquery); ok {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func validateReplaceValuesSubqueryBranchLimit(ctx context.Context, rows []tree.Exprs) error {
+	subqueryRows := 0
+	for _, row := range rows {
+		for _, expr := range row {
+			if !replaceValueExprContainsSubquery(expr) {
+				continue
+			}
+			subqueryRows++
+			if subqueryRows > maxReplaceValuesSubqueryBranches {
+				return moerr.NewInvalidInputf(ctx,
+					"REPLACE VALUES supports at most %d rows containing subqueries",
+					maxReplaceValuesSubqueryBranches)
+			}
+			break
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	colRefAsDefault bool,
@@ -5115,6 +5163,12 @@ func (builder *QueryBuilder) buildValueScan(
 	colNames []string,
 ) (int32, error) {
 	var err error
+
+	if allowSubquery {
+		if err = validateReplaceValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
+			return 0, err
+		}
+	}
 
 	proc := builder.compCtx.GetProcess()
 	lastTag := builder.genNewBindTag()

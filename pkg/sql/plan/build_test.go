@@ -5468,6 +5468,19 @@ func makeReplaceValuesWithSingleSubquery(rowCount int) string {
 	return "REPLACE INTO dept (deptno, dname, loc) VALUES " + rows.String()
 }
 
+func makeReplaceValuesWithAllSubqueries(rowCount int) string {
+	var rows strings.Builder
+	for row := 0; row < rowCount; row++ {
+		if row > 0 {
+			rows.WriteByte(',')
+		}
+		fmt.Fprintf(&rows,
+			"(COALESCE((SELECT MAX(n_nationkey) FROM nation WHERE n_nationkey = %d), 0), 'subquery-%d', 'x')",
+			row, row)
+	}
+	return "REPLACE INTO dept (deptno, dname, loc) VALUES " + rows.String()
+}
+
 func TestReplaceScalarSubqueryLargeValuesBatchesLiterals(t *testing.T) {
 	const (
 		rowCount     = 1000
@@ -5494,8 +5507,28 @@ func TestReplaceScalarSubqueryLargeValuesBatchesLiterals(t *testing.T) {
 	require.Equal(t, int32(rowCount-1), literalBatchRows)
 }
 
-func BenchmarkReplaceScalarSubqueryLargeValuesPlan(b *testing.B) {
-	sqlText := makeReplaceValuesWithSingleSubquery(1000)
+func TestReplaceScalarSubqueryValuesBranchLimit(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches))
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.LessOrEqual(t, len(query.Nodes), 320)
+
+	unionAllCount := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			unionAllCount++
+		}
+	}
+	require.Equal(t, maxReplaceValuesSubqueryBranches-1, unionAllCount)
+
+	_, err = runOneStmt(NewMockOptimizer(true), t,
+		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches+1))
+	require.ErrorContains(t, err,
+		fmt.Sprintf("REPLACE VALUES supports at most %d rows containing subqueries", maxReplaceValuesSubqueryBranches))
+}
+
+func benchmarkReplaceScalarSubqueryValuesPlan(b *testing.B, sqlText string) {
 	var nodeCount, sourceBranches int
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -5520,6 +5553,35 @@ func BenchmarkReplaceScalarSubqueryLargeValuesPlan(b *testing.B) {
 	}
 	b.ReportMetric(float64(nodeCount), "nodes/op")
 	b.ReportMetric(float64(sourceBranches), "source-branches/op")
+}
+
+func BenchmarkReplaceScalarSubqueryLargeValuesPlan(b *testing.B) {
+	benchmarkReplaceScalarSubqueryValuesPlan(b, makeReplaceValuesWithSingleSubquery(1000))
+}
+
+func BenchmarkReplaceScalarSubqueryValuesAtBranchLimit(b *testing.B) {
+	benchmarkReplaceScalarSubqueryValuesPlan(b,
+		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches))
+}
+
+func BenchmarkReplaceScalarSubqueryValuesOverBranchLimit(b *testing.B) {
+	sqlText := makeReplaceValuesWithAllSubqueries(1000)
+	wantError := fmt.Sprintf(
+		"REPLACE VALUES supports at most %d rows containing subqueries", maxReplaceValuesSubqueryBranches)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		mock := NewMockOptimizer(true)
+		stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sqlText, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+		stmts[0].Free()
+		if err == nil || !strings.Contains(err.Error(), wantError) {
+			b.Fatalf("expected %q, got %v", wantError, err)
+		}
+	}
 }
 
 func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
