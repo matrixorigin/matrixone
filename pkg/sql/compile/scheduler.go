@@ -48,6 +48,47 @@ var queryScheduleLogger struct {
 	logger *logutil.RateLimitedLogger
 }
 
+// QueryScheduleObservation exposes one completed production placement decision
+// to integration tests. It deliberately contains only immutable scalar data and
+// an independently owned selected-worker slice.
+type QueryScheduleObservation struct {
+	ServiceID          string
+	SQL                string
+	IsInternal         bool
+	ExecKind           schedule.QueryExecKind
+	Satisfied          bool
+	Reason             string
+	RequestedPool      string
+	ResolvedPool       string
+	PoolFallback       bool
+	PoolFallbackPolicy schedule.PoolFallbackPolicy
+	EmptyWorkerPolicy  schedule.EmptyWorkerPolicy
+	WorkerSetMode      schedule.WorkerSetMode
+	MaxWorkers         int
+	SelectedWorkers    schedule.Workers
+}
+
+type queryScheduleObserver struct {
+	observe func(QueryScheduleObservation)
+}
+
+var queryScheduleObservers sync.Map
+
+// SetQueryScheduleObserverForTesting installs a service-scoped observer for
+// integration tests that must assert the workers selected by the real compile
+// path. The returned cleanup removes only this registration, so overlapping
+// tests using different embedded service IDs remain isolated.
+func SetQueryScheduleObserverForTesting(
+	serviceID string,
+	observe func(QueryScheduleObservation),
+) func() {
+	entry := &queryScheduleObserver{observe: observe}
+	queryScheduleObservers.Store(serviceID, entry)
+	return func() {
+		queryScheduleObservers.CompareAndDelete(serviceID, entry)
+	}
+}
+
 func getQueryScheduleLogger() *logutil.RateLimitedLogger {
 	queryScheduleLogger.once.Do(func() {
 		queryScheduleLogger.logger = logutil.NewRateLimitedLogger(logutil.GetGlobalLogger())
@@ -61,6 +102,7 @@ func (c *Compile) scheduleQueryWorkers() (engine.Nodes, error) {
 		return nil, err
 	}
 	c.queryPlacement = placement
+	c.notifyQueryScheduleObserver(placement)
 	if !placement.Satisfied {
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-unsatisfied-placement",
@@ -86,6 +128,41 @@ func (c *Compile) scheduleQueryWorkers() (engine.Nodes, error) {
 		return nil, err
 	}
 	return nodes, nil
+}
+
+func (c *Compile) notifyQueryScheduleObserver(placement schedule.QueryDecision) {
+	if c == nil || c.proc == nil {
+		return
+	}
+	serviceID := c.proc.GetService()
+	value, ok := queryScheduleObservers.Load(serviceID)
+	if !ok {
+		return
+	}
+	entry, ok := value.(*queryScheduleObserver)
+	if !ok || entry.observe == nil {
+		return
+	}
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+	entry.observe(QueryScheduleObservation{
+		ServiceID:          serviceID,
+		SQL:                sql,
+		IsInternal:         c.isInternal,
+		ExecKind:           toScheduleExecKind(c.execType),
+		Satisfied:          placement.Satisfied,
+		Reason:             placement.Reason,
+		RequestedPool:      placement.ResolvedPool.RequestedIdentity,
+		ResolvedPool:       placement.ResolvedPool.Identity,
+		PoolFallback:       placement.ResolvedPool.Fallback,
+		PoolFallbackPolicy: placement.Intent.PoolFallback,
+		EmptyWorkerPolicy:  placement.Intent.EmptyWorkerPolicy,
+		WorkerSetMode:      placement.Intent.WorkerSet.Mode,
+		MaxWorkers:         placement.Intent.WorkerSet.MaxWorkers,
+		SelectedWorkers:    append(schedule.Workers(nil), placement.Workers...),
+	})
 }
 
 func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision) []zap.Field {

@@ -252,6 +252,118 @@ func TestBackSessionSchedulingSnapshotControlsIvfPlacement(t *testing.T) {
 	}
 }
 
+func TestNestedBackSessionInheritsSchedulingSysVarsThroughParent(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	require.NoError(t, ses.SetSessionSysVar(ctx, queryPoolStrict, int64(1)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, queryMaxWorkers, int64(3)))
+
+	parent := (&backSession{}).initFeSes(ses, nil, "", nil)
+	parent.upstream = ses
+	// Model the nested shared-transaction construction: the child has a
+	// parent back session but no direct upstream pointer.
+	child := (&backSession{}).initFeSes(parent, nil, "", nil)
+	require.Nil(t, child.upstream)
+
+	strict, err := child.GetSessionSysVar(queryPoolStrict)
+	require.NoError(t, err)
+	require.Equal(t, int8(1), strict)
+	maxWorkers, err := child.GetSessionSysVar(queryMaxWorkers)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), maxWorkers)
+
+	intent := querySchedulingIntent(child)
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.PoolFallbackStrict, intent.PoolFallback)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
+}
+
+func TestCreateCompileFromBackSessionUsesInheritedIvfScheduling(t *testing.T) {
+	labels := map[string]string{"account": "tp", "role": "tp"}
+	intent := schedule.SchedulingIntent{
+		Explicit:          true,
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode:             schedule.WorkerSetMax,
+			MaxWorkers:       1,
+			SelectionKey:     "parent-statement",
+			AlgorithmVersion: schedule.WorkerSelectionAlgorithmV1,
+		},
+	}
+
+	for _, tc := range []struct {
+		name          string
+		strictNoMatch bool
+		wantErr       bool
+	}{
+		{name: "strict no candidate fails closed", strictNoMatch: true, wantErr: true},
+		{name: "worker cap is applied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newFeatureLimitTestSession(t)
+			ses.requestLabel = maps.Clone(labels)
+			ses.SetQueryInProgress(true)
+			ses.proc.Base.SessionInfo.QuerySchedulingIntent = intent
+			backSes := (&backSession{}).initFeSes(ses, nil, "", nil)
+
+			provider := &frontendBackSchedulingTestEngine{
+				candidates: engine.QueryCandidates{
+					{Service: metadata.CNService{ServiceID: "cn-a", PipelineServiceAddress: "cn-a:6001"}, Mcpu: 4},
+					{Service: metadata.CNService{ServiceID: "cn-b", PipelineServiceAddress: "cn-b:6001"}, Mcpu: 4},
+				},
+				resolvedNodes: engine.Nodes{
+					{Id: "cn-a", Addr: "cn-a:6001", Mcpu: 4},
+					{Id: "cn-b", Addr: "cn-b:6001", Mcpu: 4},
+				},
+				strictNoMatch: tc.strictNoMatch,
+			}
+			backSes.txnHandler = InitTxnHandler(backSes.service, provider, context.Background(), nil)
+			defer backSes.txnHandler.Close()
+			getPu(backSes.service).ClusterNodes = engine.Nodes{{Id: "cn-a", Addr: "cn-a:6001", Mcpu: 4}}
+
+			query := frontendBackIvfSchedulingQuery()
+			query.Nodes[0].Stats = &plan.Stats{}
+			query.Nodes[0].TableDef.Cols = []*plan.ColDef{}
+			physicalPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+			execCtx := &ExecCtx{
+				reqCtx: context.Background(),
+				ses:    backSes,
+				proc:   testutil.NewProcess(t),
+				input:  &UserInput{sql: "select * from ivf_search(...)"},
+			}
+			defer execCtx.Close()
+
+			compiled, err := createCompile(
+				execCtx,
+				backSes,
+				execCtx.proc,
+				"select * from ivf_search(...)",
+				"select * from ivf_search(...)",
+				nil,
+				&tree.Select{},
+				physicalPlan,
+				nil,
+				false,
+				nil,
+			)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), schedule.ReasonNoCandidateCN)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, compiled)
+			defer compiled.Release()
+			require.Equal(t, 1, execCtx.proc.GetSessionInfo().QuerySchedulingIntent.WorkerSet.MaxWorkers)
+			require.Equal(t, engine.QueryPoolFallbackStrict, provider.lastPoolRequest.FallbackPolicy)
+			require.Equal(t, labels, provider.lastPoolRequest.CNLabel)
+		})
+	}
+}
+
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	ctx := context.Background()
 	ses := newFeatureLimitTestSession(t)

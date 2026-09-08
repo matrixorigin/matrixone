@@ -1383,6 +1383,20 @@ func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sq
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
+	// A nested back session can be created from another back session whose
+	// upstream is intentionally empty (for example, a shared-transaction
+	// derived executor). Walk the back-session chain before falling back to the
+	// legacy nil behavior so session scheduling variables are not lost at this
+	// boundary.
+	getUpstreamSysVar := func() (interface{}, error) {
+		for current := backSes; current != nil; current = current.parentBackSession {
+			if current.upstream != nil {
+				return current.upstream.GetSessionSysVar(name)
+			}
+		}
+		return nil, nil
+	}
+
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
@@ -1394,15 +1408,9 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "sql_mode":
 		return "", nil
 	case queryMaxWorkers, queryPoolStrict:
-		if backSes.upstream != nil {
-			return backSes.upstream.GetSessionSysVar(name)
-		}
-		return nil, nil
+		return getUpstreamSysVar()
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
-		if backSes.upstream != nil {
-			return backSes.upstream.GetSessionSysVar(name)
-		}
-		return nil, nil
+		return getUpstreamSysVar()
 	}
 	return nil, nil
 }
