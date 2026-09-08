@@ -19,30 +19,53 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBinBinaryNumericLiteralsUseUnsignedNumericPath(t *testing.T) {
 	ctx := context.Background()
-	for _, value := range []string{string([]byte{0xff}), string([]byte{0x01, 0x00})} {
-		expr, err := BindFuncExprImplByPlanExpr(ctx, "bin", []*Expr{
-			makePlan2StringConstExprWithType(value, true),
+	tests := []struct {
+		name  string
+		value string
+		form  plan.StringLiteralForm
+	}{
+		{name: "hex", value: string([]byte{0x01, 0x00}), form: plan.StringLiteralForm_STRING_LITERAL_HEX},
+		{name: "bit", value: string([]byte{0xff}), form: plan.StringLiteralForm_STRING_LITERAL_BIT},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := makePlan2StringConstExprWithType(tc.value, true)
+			expr.GetLit().LiteralForm = tc.form
+			bound, err := BindFuncExprImplByPlanExpr(ctx, "bin", []*Expr{expr})
+			require.NoError(t, err)
+			fn := bound.GetF()
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 1)
+			require.Equal(t, types.T_uint64, makeTypeByPlan2Expr(fn.Args[0]).Oid)
 		})
-		require.NoError(t, err)
-		fn := expr.GetF()
-		require.NotNil(t, fn)
-		require.Len(t, fn.Args, 1)
-		require.Equal(t, types.T_uint64, makeTypeByPlan2Expr(fn.Args[0]).Oid)
 	}
 }
 
-func TestBinOrdinaryStringsKeepPrefixPath(t *testing.T) {
-	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "bin", []*Expr{
-		makePlan2StringConstExprWithType("255"),
-	})
-	require.NoError(t, err)
-	fn := expr.GetF()
-	require.NotNil(t, fn)
-	require.Len(t, fn.Args, 1)
-	require.Equal(t, types.T_varchar, makeTypeByPlan2Expr(fn.Args[0]).Oid)
+
+func TestBinStringOperandsKeepPrefixPath(t *testing.T) {
+	binaryIntroducer := makePlan2StringConstExprWithType(string([]byte{0x37, 0xff}), true)
+	binaryIntroducer.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	tests := []struct {
+		name string
+		expr *Expr
+	}{
+		{name: "text", expr: makePlan2StringConstExprWithType("255")},
+		{name: "binary introducer", expr: binaryIntroducer},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(context.Background(), "bin", []*Expr{tc.expr})
+			require.NoError(t, err)
+			fn := bound.GetF()
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 1)
+			require.Equal(t, types.T_varchar, makeTypeByPlan2Expr(fn.Args[0]).Oid)
+		})
+	}
 }

@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -3260,8 +3259,7 @@ func absInt64(v int64) int64 {
 func formatUnsignedToBase(val uint64, toBase int64) string {
 	base := absInt64(toBase)
 	if toBase < 0 {
-		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
-		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+		return strings.ToUpper(strconv.FormatInt(int64(val), int(base)))
 	}
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
