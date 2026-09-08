@@ -135,6 +135,12 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
+	// initiating CN and used by remote PRE_INSERT operators.  They are
+	// statement-scoped; zero means the default value one for compatibility with
+	// old process payloads and internal/background processes.
+	AutoIncrementIncrement uint64
+	AutoIncrementOffset    uint64
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.

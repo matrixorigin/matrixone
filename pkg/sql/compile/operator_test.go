@@ -551,6 +551,8 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 func TestDupOperatorPreInsertState(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.TrackAutoIncrementGenerated = true
+	op.AutoIncrementGeneratedColumn = 4
 	op.HasTargetSelector = true
 	op.TargetRowNumberCol = 7
 	op.TargetActiveCol = 8
@@ -559,6 +561,8 @@ func TestDupOperatorPreInsertState(t *testing.T) {
 	require.NotNil(t, result)
 	cloned := result.(*preinsert.PreInsert)
 	require.True(t, cloned.RejectZeroTemporal)
+	require.True(t, cloned.TrackAutoIncrementGenerated)
+	require.Equal(t, int32(4), cloned.AutoIncrementGeneratedColumn)
 	require.True(t, cloned.HasTargetSelector)
 	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
 	require.Equal(t, int32(8), cloned.TargetActiveCol)

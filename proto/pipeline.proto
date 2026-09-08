@@ -229,6 +229,8 @@ message PreInsert {
   int32 target_row_number_col = 14;
   int32 target_active_col = 15;
   int32 target_row_id_col = 16;
+  bool track_auto_increment_generated = 17;
+  int32 auto_increment_generated_column = 18;
 }
 
 message PostDml {
@@ -753,6 +755,11 @@ message SessionInfo {
   bool matrixone_native_mode = 12;
   bool explicit_zero_temporal_cast_returns_null = 13;
   string sql_mode = 14;
+  // Statement-scoped AUTO_INCREMENT controls captured on the initiating CN.
+  // Zero preserves compatibility with older payloads and means the default
+  // value of one on the receiving CN.
+  uint64 auto_increment_increment = 15;
+  uint64 auto_increment_offset = 16;
 }
 
 message SessionLoggerInfo {

@@ -128,15 +128,22 @@ func TestCatalogTombstonePKCheck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tbl.tableId = tc.id
-			key := vector.NewVec(pkType)
-			defer key.Free(mp)
-			require.NoError(t, vector.AppendBytes(key, []byte(tc.key), false, mp))
-			baseline := mp.CurrNB()
-			changed, err := tbl.PKPersistedBetween(state, types.BuildTS(tc.from, 0), types.BuildTS(tc.to, 0), key, true)
-			require.NoError(t, err)
-			require.Equal(t, tc.changed, changed)
-			require.Equal(t, baseline, mp.CurrNB())
-			require.Empty(t, pkCheckSemaphore, "the check must release its I/O permit")
+			for _, keyCount := range []int{1, 9} {
+				t.Run(fmt.Sprintf("keys=%d", keyCount), func(t *testing.T) {
+					key := vector.NewVec(pkType)
+					defer key.Free(mp)
+					for i := 1; i < keyCount; i++ {
+						require.NoError(t, vector.AppendBytes(key, []byte(fmt.Sprintf("missing-%d", i)), false, mp))
+					}
+					require.NoError(t, vector.AppendBytes(key, []byte(tc.key), false, mp))
+					baseline := mp.CurrNB()
+					changed, err := tbl.PKPersistedBetween(ctx, state, types.BuildTS(tc.from, 0), types.BuildTS(tc.to, 0), key, true)
+					require.NoError(t, err)
+					require.Equal(t, tc.changed, changed)
+					require.Equal(t, baseline, mp.CurrNB())
+					require.Empty(t, pkCheckSemaphore, "the check must release its I/O permit")
+				})
+			}
 		})
 	}
 	// Cancellation must not turn into a successful negative check, or into an
@@ -144,13 +151,11 @@ func TestCatalogTombstonePKCheck(t *testing.T) {
 	t.Run("cancelled", func(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel()
-		proc.Ctx = cancelCtx
-		defer func() { proc.Ctx = ctx }()
 		tbl.tableId = catalog.MO_TABLES_ID
 		key := vector.NewVec(pkType)
 		defer key.Free(mp)
 		require.NoError(t, vector.AppendBytes(key, []byte("target"), false, mp))
-		_, err := tbl.PKPersistedBetween(state, types.BuildTS(10, 0), types.BuildTS(30, 0), key, true)
+		_, err := tbl.PKPersistedBetween(cancelCtx, state, types.BuildTS(10, 0), types.BuildTS(30, 0), key, true)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Empty(t, pkCheckSemaphore)
 	})
@@ -259,6 +264,30 @@ func TestCatalogCNTombstonePKCheck(t *testing.T) {
 		require.Equal(t, value != "target", changed)
 	}
 	require.Empty(t, pkCheckSemaphore)
+}
+
+func BenchmarkCatalogTombstoneMultiKeyCheck(b *testing.B) {
+	proc, fs, state := newCatalogTombstoneFixture(b, 50001, false)
+	for _, count := range []int{1, 64, 1024, 4096} {
+		b.Run(fmt.Sprintf("keys=%d", count), func(b *testing.B) {
+			keys := vector.NewVec(types.T_varchar.ToType())
+			defer keys.Free(proc.Mp())
+			for key := 0; key < count; key++ {
+				if err := vector.AppendBytes(keys, []byte(fmt.Sprintf("probe-%05d", key)), false, proc.Mp()); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				changed, _, err := tombstonePKExistsInRange(proc.Ctx, catalog.MO_TABLES_ID, state,
+					types.BuildTS(10, 0), types.BuildTS(30, 0), keys, *keys.GetType(), fs, proc.Mp())
+				if err != nil || changed {
+					b.Fatalf("changed=%v err=%v", changed, err)
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkCatalogTombstonePKCheck(b *testing.B) {
