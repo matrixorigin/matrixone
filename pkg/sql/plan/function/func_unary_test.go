@@ -5931,13 +5931,13 @@ func TestFromBase64(t *testing.T) {
 		{input: strings.Repeat("YWJj", 32), want: strings.Repeat("abc", 32)},
 		{input: "YWJj", want: "abc"},
 	}
-	var inputs, wants []string
-	var inputNulls, wantNulls []bool
-	for _, row := range rows {
-		inputs = append(inputs, row.input)
-		wants = append(wants, row.want)
-		inputNulls = append(inputNulls, row.inputNull)
-		wantNulls = append(wantNulls, row.wantNull)
+	inputs, wants := make([]string, len(rows)), make([]string, len(rows))
+	inputNulls, wantNulls := make([]bool, len(rows)), make([]bool, len(rows))
+	for i, row := range rows {
+		inputs[i] = row.input
+		wants[i] = row.want
+		inputNulls[i] = row.inputNull
+		wantNulls[i] = row.wantNull
 	}
 	testCases = append(testCases, tcTemp{
 		info:   "padding, whitespace, invalid and NULL rows preserve batch cardinality",
