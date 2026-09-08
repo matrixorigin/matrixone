@@ -25,9 +25,9 @@ select id, category, score from ivf_cbitmap
 where category = 'cat1' and score > 2.0
 order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
-id    category    score
-1    cat1    5.0
-2    cat1    4.5
+➤ id[4,32,0]  ¦  category[12,50,0]  ¦  score[7,23,31]  𝄀
+1  ¦  cat1  ¦  5.0  𝄀
+2  ¦  cat1  ¦  4.5
 create table ivf_croaring (
 id bigint primary key,
 category varchar(50),
@@ -50,9 +50,9 @@ select id, category, score from ivf_croaring
 where category = 'cat1' and score > 2.0
 order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
-id    category    score
-10000000    cat1    5.0
-20000000    cat1    4.5
+➤ id[-5,64,0]  ¦  category[12,50,0]  ¦  score[7,23,31]  𝄀
+10000000  ¦  cat1  ¦  5.0  𝄀
+20000000  ¦  cat1  ¦  4.5
 create table ivf_bloom (
 id varchar(64) primary key,
 category varchar(50),
@@ -75,9 +75,59 @@ select id, category, score from ivf_bloom
 where category = 'cat1' and score > 2.0
 order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
-id    category    score
-v01    cat1    5.0
-v02    cat1    4.5
+➤ id[12,64,0]  ¦  category[12,50,0]  ¦  score[7,23,31]  𝄀
+v01  ¦  cat1  ¦  5.0  𝄀
+v02  ¦  cat1  ¦  4.5
+create table ivf_semi_chunks (
+id int primary key,
+document_id varchar(64) not null,
+embedding vecf32(2)
+);
+insert into ivf_semi_chunks values
+(1, 'ineligible', '[0.0,0.0]'),
+(2, 'ineligible', '[0.1,0.1]'),
+(3, 'ineligible', '[0.2,0.2]'),
+(4, 'eligible',   '[1.0,1.0]'),
+(5, 'eligible',   '[2.0,2.0]');
+create table ivf_semi_filters (document_id varchar(64));
+insert into ivf_semi_filters values ('eligible'), ('eligible'), (null);
+create index idx_semi using ivfflat on ivf_semi_chunks(embedding) lists=1 op_type 'vector_l2_ops';
+explain select c.id from ivf_semi_chunks c
+where c.document_id in (select f.document_id from ivf_semi_filters f)
+and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (c.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ivf_membership.ivf_semi_chunks  𝄀
+                    Runtime Filter Probe: c.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = ivf_semi_chunks.id)  𝄀
+                    Runtime Filter Build: #[17,0]  𝄀
+                    ->  Vector Index Scan on idx_semi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[15,0]  𝄀
+                          Vector Index: idx_semi, Metric: l2_distance, Candidate Limit: 1, NProbe: 5  𝄀
+                    ->  Join  𝄀
+                          Join Type: SEMI  𝄀
+                          Join Cond: (ivf_semi_chunks.document_id = f.document_id)  𝄀
+                          ->  Table Scan on ivf_membership.ivf_semi_chunks  𝄀
+                          ->  Table Scan on ivf_membership.ivf_semi_filters
+select c.id from ivf_semi_chunks c
+where c.document_id in (select f.document_id from ivf_semi_filters f)
+and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+4
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;
