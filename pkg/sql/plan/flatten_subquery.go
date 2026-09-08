@@ -61,6 +61,20 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+	// Only the conjunct itself consumes TRUE. NULL rejection through a scalar
+	// function is insufficient (for example NOT(IN) also observes FALSE).
+	if sub := expr.GetSub(); sub != nil {
+		consumer := existentialFilterTrue
+		if sub.Typ == plan.SubqueryRef_NOT_EXISTS {
+			consumer = existentialNegatedFilter
+		}
+		return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, consumer)
+	}
+	if f := expr.GetF(); f != nil && f.Func.ObjName == "not" && len(f.Args) == 1 {
+		if sub := f.Args[0].GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_EXISTS {
+			return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, existentialNegatedFilter)
+		}
+	}
 	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
 }
 
@@ -287,6 +301,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	ctx *BindContext,
 	nullResultRejected bool,
 ) (int32, *plan.Expr, error) {
+	return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, nullResultRejected, existentialIneligible)
+}
+
+func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
+	nodeID int32, expr *plan.Expr, ctx *BindContext,
+	nullResultRejected bool, consumer existentialConsumer,
+) (int32, *plan.Expr, error) {
 	memoID := expr.AuxId
 	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
 		if flattened, ok := ctx.flattenedVolatileExprs[memoID]; ok {
@@ -304,6 +325,17 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
+			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
+			sub := *exprImpl.F.Args[0].GetSub()
+			if sc := builder.ctxByNode[sub.NodeId]; sc != nil && builder.pendingExistentials[sc.existentialBlock] != nil {
+				sub.Typ = plan.SubqueryRef_NOT_EXISTS
+				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer)
+				break
+			}
+			// Without a pending region, retain the legacy recursion and
+			// the child's memo/metadata restoration as well as the NOT.
+		}
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
 			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueriesWithContext(nodeID, arg, ctx, childNullResultRejected)
@@ -313,7 +345,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 		}
 
 	case *plan.Expr_Sub:
-		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
+		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer)
 	}
 	if err == nil && memoID < 0 && ctx != nil {
 		if preparedNumeric != nil {
@@ -338,6 +370,16 @@ func (builder *QueryBuilder) flattenSubquery(
 	ctx *BindContext,
 	nullResultRejected bool,
 ) (int32, *plan.Expr, error) {
+	return builder.flattenSubqueryWithConsumer(nodeID, subquery, ctx, nullResultRejected, existentialIneligible)
+}
+
+func (builder *QueryBuilder) flattenSubqueryWithConsumer(
+	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
+	nullResultRejected bool, consumer existentialConsumer,
+) (int32, *plan.Expr, error) {
+	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
+		return id, expr, err
+	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
 		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
 	}

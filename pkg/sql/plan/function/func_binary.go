@@ -6667,6 +6667,97 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
+// Binary SUBSTRING uses byte offsets. Routing binary values through the text
+// implementation would decode invalid bytes as RuneError and could expand a
+// nominal 511-byte result beyond the planner's bound.
+func binarySubstringStartOffset(length int, start int64) (int, bool) {
+	if start > 0 {
+		offset := start - 1
+		if offset >= int64(length) {
+			return 0, false
+		}
+		return int(offset), true
+	}
+	if start < 0 {
+		if start < -int64(length) {
+			return 0, false
+		}
+		return length + int(start), true
+	}
+	return 0, false
+}
+
+func SubStringBinaryWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(v[offset:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if l <= 0 {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int64(len(v) - offset)
+		end := len(v)
+		if l < remaining {
+			end = offset + int(l)
+		}
+		if err = rs.AppendBytes(v[offset:end], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -7514,7 +7605,8 @@ func evalRight(str string, length int64) string {
 }
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
 			return 0, moerr.NewOutOfRangeNoCtxf(
@@ -9624,7 +9716,8 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if berr != nil {
 			return "", berr
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
+		out, err := geoEncodeWKB(b, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9636,6 +9729,13 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := source.GetStrValue(i)
 		dist, null2 := dists.GetValue(i)
 		qs, null3 := quads.GetValue(i)
@@ -9653,7 +9753,11 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if berr != nil {
 			return berr
 		}
-		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
+		out, err := geoEncodeWKB(b, f32)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -9678,7 +9782,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if oerr != nil {
 				return nil, oerr
 			}
-			return geoEncodeWKB(g, f32), nil
+			return geoEncodeWKB(g, f32)
 		}, selectList)
 	}
 }
@@ -9786,7 +9890,8 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9802,7 +9907,8 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
+		out, err := geoEncodeWKB(g, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9818,7 +9924,8 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9831,7 +9938,8 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
+		out, err := geoEncodeWKB(geo.Simplify(g, tol), f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9848,7 +9956,7 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.Collect(a, b), f32), nil
+		return geoEncodeWKB(geo.Collect(a, b), f32)
 	}, selectList)
 }
 
@@ -13439,7 +13547,11 @@ func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, le
 		pt := geo.Point{X: x, Y: y}
 		var wkb []byte
 		if f32 {
-			wkb = geo.WriteWKBFloat32(pt)
+			var err error
+			wkb, err = geo.WriteWKBFloat32(pt)
+			if err != nil {
+				return err
+			}
 		} else {
 			wkb = geo.WriteWKB(pt)
 		}

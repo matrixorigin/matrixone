@@ -26,4 +26,58 @@ result    persisted_offset
 select count(distinct ts) as distinct_ts from t_dynamic_interval;
 distinct_ts
 3
+prepare issue_27320_second from 'select date_add(''2026-01-01'', interval ? second) as added, date_sub(''2026-01-01'', interval ? second) as subtracted';
+set @issue_27320_interval = 3;
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-01-01 00:00:03    2025-12-31 23:59:57
+set @issue_27320_interval = -3;
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2025-12-31 23:59:57    2026-01-01 00:00:03
+set @issue_27320_interval = null;
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+NULL    NULL
+set @issue_27320_interval = '4';
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-01-01 00:00:04    2025-12-31 23:59:56
+set @issue_27320_interval = 'not-an-interval';
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+NULL    NULL
+set @issue_27320_interval = 5;
+execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-01-01 00:00:05    2025-12-31 23:59:55
+deallocate prepare issue_27320_second;
+prepare issue_27320_day_second from 'select date_add(''2026-01-01'', interval ? day_second) as added, date_sub(''2026-01-01'', interval ? day_second) as subtracted';
+set @issue_27320_interval = '1 02:03:04';
+execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-01-02 02:03:04    2025-12-30 21:56:56
+set @issue_27320_interval = '1 02:03:04:05';
+execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+NULL    NULL
+set @issue_27320_interval = '0 00:00:01';
+execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-01-01 00:00:01    2025-12-31 23:59:59
+deallocate prepare issue_27320_day_second;
+prepare issue_27320_year_month from 'select date_add(''2026-01-01'', interval ? year_month) as added, date_sub(''2026-01-01'', interval ? year_month) as subtracted';
+set @issue_27320_interval = '1-2';
+execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2027-03-01    2024-11-01
+set @issue_27320_interval = '1-2-3';
+execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+NULL    NULL
+set @issue_27320_interval = '0-1';
+execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
+added    subtracted
+2026-02-01    2025-12-01
+deallocate prepare issue_27320_year_month;
 drop database date_add_dynamic_interval;

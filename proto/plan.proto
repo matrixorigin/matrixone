@@ -1487,6 +1487,16 @@ message PreInsertUkCtx {
   // Only a row that remains an INSERT publishes all of its keys.
   bool odku_target_arbitration = 9;
   repeated int32 target_columns = 10;
+  // INSERT IGNORE may reject a row after the allocator has already produced
+  // its auto-increment candidate.  When enabled, the arbiter reuses those
+  // candidates in accepted-row order.  The two positions are physical child
+  // positions after plan remapping; the key index identifies the primary-key
+  // entry in key_columns/conflict_columns.
+  bool auto_increment_reorder = 11;
+  int32 auto_increment_column = 12;
+  int32 auto_increment_generated_column = 13;
+  int32 auto_increment_key_index = 14;
+  int32 auto_increment_output_column = 15;
 }
 
 message PreInsertCtx {
@@ -1502,6 +1512,10 @@ message PreInsertCtx {
   int32 target_row_number_col = 10;
   int32 target_active_col = 11;
   int32 target_row_id_col = 12;
+  // PRE_INSERT emits a transient bool provenance vector when an ordered
+  // INSERT IGNORE arbiter must distinguish generated from explicit values.
+  bool track_auto_increment_generated = 13;
+  int32 auto_increment_generated_column = 14;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

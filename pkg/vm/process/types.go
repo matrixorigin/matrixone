@@ -135,6 +135,12 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
+	// initiating CN and used by remote PRE_INSERT operators.  They are
+	// statement-scoped; zero means the default value one for compatibility with
+	// old process payloads and internal/background processes.
+	AutoIncrementIncrement uint64
+	AutoIncrementOffset    uint64
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -481,6 +487,11 @@ type BaseProcess struct {
 	userLevelLockOwner      string
 	userLevelLockConnID     uint64
 	userLevelLockGeneration string
+	// sequenceGate serializes the complete sequence metadata operation and
+	// session-state publication across all child processes sharing this Base.
+	// It is intentionally not part of SessionInfo: remote/rebuilt session state
+	// must not copy or replace a live synchronization object.
+	sequenceGate sequenceGate
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -570,15 +581,18 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone  bool
-	MsgId         uint64
-	Uid           uuid.UUID
-	Cs            morpc.ClientSession
-	Err           chan error
-	ReserveBatch  func(context.Context, uint64) (uint64, error)
-	RollbackBatch func(uint64)
-	BatchCredits  uint32
-	ByteCredits   uint64
+	ReceiverDone bool
+	// ReceiverStopped certifies an explicit StopSending while the registration
+	// connection and message remain live. It does not imply query success.
+	ReceiverStopped func() bool
+	MsgId           uint64
+	Uid             uuid.UUID
+	Cs              morpc.ClientSession
+	Err             chan error
+	ReserveBatch    func(context.Context, uint64) (uint64, error)
+	RollbackBatch   func(uint64)
+	BatchCredits    uint32
+	ByteCredits     uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.

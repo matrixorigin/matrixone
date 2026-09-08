@@ -836,6 +836,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	b.builder.nextExistentialBlock++
+	subCtx.existentialBlock = b.builder.nextExistentialBlock
+	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
 	if b.subqueryInAggregateInput {
 		subCtx.aggregateInputParent = b.ctx
 	}
@@ -3664,7 +3667,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
-		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args, false, nil)
+		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args, false, nil, false)
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
@@ -4168,7 +4171,7 @@ func bindFuncExprAndConstFoldInternal(
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
-	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args, descendFunctions, nil)
+	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args, descendFunctions, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4729,7 +4732,7 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil)
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, false)
 }
 
 func bindPreparedFuncExprImplByPlanExpr(
@@ -4746,7 +4749,7 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes)
+		ctx, name, args, true, stringDomainModes, true)
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -4755,6 +4758,7 @@ func bindFuncExprImplByPlanExpr(
 	args []*Expr,
 	descendFunctions bool,
 	stringDomainModes []function.StringDomainCheckMode,
+	allowInternalDateFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
@@ -4843,6 +4847,13 @@ func bindFuncExprImplByPlanExpr(
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
+		// Prepared execution rebinds the already-rewritten internal three-argument
+		// form after replacing a parameter marker. Do not run the SQL-syntax
+		// two-argument rewrite a second time; ordinary callers still cannot bind
+		// the internal overload directly.
+		if allowInternalDateFunctionArgs && len(args) == 3 {
+			break
+		}
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "date_add/date_sub function need two args", len(args))
 		}
@@ -5664,6 +5675,9 @@ func bindFuncExprImplByPlanExpr(
 	case "repeat":
 		refineRepeatLiteralReturnType(args, &returnType)
 
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -5790,6 +5804,115 @@ func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 		return
 	}
 	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
+}
+
+func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 && len(args) != 3 {
+		return
+	}
+
+	sourceType := makeTypeByPlan2Expr(args[0])
+	if sourceType.Oid == types.T_blob {
+		return
+	}
+
+	// This refinement exists for byte-preserving binary expressions. Text
+	// SUBSTRING keeps its existing metadata contract; narrowing it here would
+	// change the overload's declared result width and make consumers that rely
+	// on the text semantic family reject an otherwise valid expression.
+	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
+	if !binary {
+		return
+	}
+
+	var (
+		bound      uint64
+		boundKnown bool
+	)
+	if len(args) == 3 {
+		if length, known := binarySubstringLengthBound(args[2].GetLit()); known {
+			if length == 0 {
+				refineKnownStringResultType(returnType, 0, binary)
+				return
+			}
+			bound = length
+			boundKnown = true
+		}
+	}
+
+	if sourceBound, known := stringExprBound(args[0], binary); known {
+		// The source bound remains sound for a dynamic start; a literal start
+		// can only tighten it further.
+		if startBound, startKnown := binarySubstringStartBound(sourceBound, args[1].GetLit()); startKnown && startBound < sourceBound {
+			sourceBound = startBound
+		}
+		if !boundKnown || sourceBound < bound {
+			bound = sourceBound
+		}
+		boundKnown = true
+	}
+
+	if !boundKnown {
+		return
+	}
+
+	// Binary SUBSTRING is byte-preserving. The source bound, a constant start,
+	// and a constant length are independent truthful upper bounds, even when
+	// one of the other inputs is dynamic or the source declaration is wider
+	// than the aggregate limit.
+	refineKnownStringResultType(returnType, bound, binary)
+}
+
+func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	if signed, ok := literalSignedValue(lit); ok {
+		if signed <= 0 {
+			return 0, true
+		}
+		return uint64(signed), true
+	}
+	if unsigned, ok := literalUnsignedValue(lit); ok {
+		return unsigned, true
+	}
+	return 0, false
+}
+
+func binarySubstringStartBound(sourceBound uint64, lit *plan.Literal) (uint64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	if signed, ok := literalSignedValue(lit); ok {
+		if signed == 0 {
+			return 0, true
+		}
+		if signed > 0 {
+			offset := uint64(signed - 1)
+			if offset >= sourceBound {
+				return 0, true
+			}
+			return sourceBound - offset, true
+		}
+
+		// Avoid overflowing when taking the magnitude of MinInt64.
+		magnitude := uint64(-(signed + 1)) + 1
+		if magnitude > sourceBound {
+			return 0, true
+		}
+		return magnitude, true
+	}
+	if unsigned, ok := literalUnsignedValue(lit); ok {
+		if unsigned == 0 {
+			return 0, true
+		}
+		offset := unsigned - 1
+		if offset >= sourceBound {
+			return 0, true
+		}
+		return sourceBound - offset, true
+	}
+	return 0, false
 }
 
 func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
@@ -7883,11 +8006,12 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}, nil
 }
 
-// bindStringIntervalExpr keeps VARCHAR/CHAR interval semantics identical for
+// bindStringIntervalExpr keeps VARCHAR/CHAR/TEXT interval semantics identical for
 // literals and column expressions. Dynamic values are normalized row-by-row at
 // execution time instead of using a normal VARCHAR -> INT64 cast.
 func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.IntervalType) (*Expr, types.IntervalType, bool, error) {
-	if expr.Typ.Id != int32(types.T_varchar) && expr.Typ.Id != int32(types.T_char) {
+	if expr.Typ.Id != int32(types.T_varchar) && expr.Typ.Id != int32(types.T_char) &&
+		expr.Typ.Id != int32(types.T_text) {
 		return nil, types.IntervalTypeInvalid, false, nil
 	}
 	if lit := expr.GetLit(); lit != nil {
