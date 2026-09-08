@@ -9,6 +9,15 @@ SELECT JSON_SET(null, '$.fruits[1]', 'orange') AS result;
 SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', null, 'orange') AS result;
 SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', '$.fruits[1]', null) AS result;
 
+-- JSON_SET values use the same typed conversion as JSON_OBJECT and JSON_ARRAY.
+select json_type(json_extract(json_set('{}', '$.year', cast('2024' as year)), '$.year')), json_contains(json_set('{}', '$.year', cast('2024' as year)), '2024', '$.year'), json_contains(json_set('{}', '$.year', cast('2024' as year)), '"2024"', '$.year');
+select json_unquote(json_extract(json_set('{}', '$.time', cast('04:05:06' as time(0))), '$.time')), json_unquote(json_extract(json_set('{}', '$.blob', cast(x'00ff' as blob)), '$.blob')), json_unquote(json_extract(json_set('{}', '$.bit', cast(b'1010' as bit(4))), '$.bit'));
+select json_extract(json_set('{}', '$.g', st_geomfromtext('POINT(1 2)')), '$.g') = convert(st_geomfromtext('POINT(1 2)'), json);
+set @json_set_year = '2024';
+prepare json_set_typed from 'select json_set(''{}'', ''$.year'', cast(? as year))';
+execute json_set_typed using @json_set_year;
+deallocate prepare json_set_typed;
+
 drop table if exists users;
 CREATE TABLE users (
     id INT PRIMARY KEY,
@@ -117,4 +126,3 @@ SELECT * FROM employees;
 
 drop table employees;
 drop table projects;
-
