@@ -85,8 +85,10 @@ type vectorSortContext struct {
 	resultOffset  *plan.Expr
 	rankOption    *plan.RankOption
 
-	providerNodeID int32
-	vecArgExpr     *plan.Expr
+	providerNodeID   int32
+	vecArgExpr       *plan.Expr
+	membershipNodeID int32 // existing SEMI JOIN that filters the indexed table before Top-K
+	hasMembership    bool
 }
 
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
@@ -208,17 +210,19 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 	}
 
 	return &vectorSortContext{
-		projNode:      projNode,
-		sortNode:      sortNode,
-		scanNode:      scanNode,
-		childNode:     childNode,
-		orderExpr:     orderExpr,
-		distFnExpr:    distFnExpr,
-		sortDirection: sortNode.OrderBy[0].Flag,
-		limit:         candidateLimit,
-		resultLimit:   DeepCopyExpr(limit),
-		resultOffset:  DeepCopyExpr(offset),
-		rankOption:    rankOption,
+		projNode:         projNode,
+		sortNode:         sortNode,
+		scanNode:         scanNode,
+		childNode:        childNode,
+		orderExpr:        orderExpr,
+		distFnExpr:       distFnExpr,
+		sortDirection:    sortNode.OrderBy[0].Flag,
+		limit:            candidateLimit,
+		resultLimit:      DeepCopyExpr(limit),
+		resultOffset:     DeepCopyExpr(offset),
+		rankOption:       rankOption,
+		providerNodeID:   -1,
+		membershipNodeID: -1,
 	}
 }
 
@@ -228,11 +232,17 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 		return nil
 	}
 	joinNode, childNode := builder.resolveJoinNodeForVectorSort(sortNode)
-	if joinNode == nil || len(joinNode.Children) != 2 || !isVectorProviderJoin(joinNode) {
+	if joinNode == nil || len(joinNode.Children) != 2 {
 		return nil
 	}
 
 	orderExpr := sortNode.OrderBy[0].Expr
+	if joinNode.JoinType == plan.Node_SEMI {
+		return builder.buildVectorSortContextThroughMembershipJoin(projNode, joinNode, childNode, sortNode, orderExpr)
+	}
+	if !isVectorProviderJoin(joinNode) {
+		return nil
+	}
 	distFnExpr := orderExpr.GetF()
 	if distFnExpr == nil && childNode != nil {
 		orderCol := orderExpr.GetCol()
@@ -276,20 +286,83 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 	}
 
 	return &vectorSortContext{
-		projNode:       projNode,
-		sortNode:       sortNode,
-		scanNode:       scanNode,
-		childNode:      childNode,
-		orderExpr:      orderExpr,
-		distFnExpr:     distFnExpr,
-		sortDirection:  sortNode.OrderBy[0].Flag,
-		limit:          candidateLimit,
-		resultLimit:    DeepCopyExpr(limit),
-		resultOffset:   DeepCopyExpr(offset),
-		rankOption:     rankOption,
-		providerNodeID: providerNodeID,
-		vecArgExpr:     vecArgExpr,
+		projNode:         projNode,
+		sortNode:         sortNode,
+		scanNode:         scanNode,
+		childNode:        childNode,
+		orderExpr:        orderExpr,
+		distFnExpr:       distFnExpr,
+		sortDirection:    sortNode.OrderBy[0].Flag,
+		limit:            candidateLimit,
+		resultLimit:      DeepCopyExpr(limit),
+		resultOffset:     DeepCopyExpr(offset),
+		rankOption:       rankOption,
+		providerNodeID:   providerNodeID,
+		vecArgExpr:       vecArgExpr,
+		membershipNodeID: -1,
 	}
+}
+
+// buildVectorSortContextThroughMembershipJoin recognizes an indexed table on
+// the left side of a SEMI JOIN. The rewrite uses a copy of that join to produce
+// an exact runtime membership filter before the vector candidate limit.
+func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
+	projNode, joinNode, childNode, sortNode *plan.Node, orderExpr *plan.Expr,
+) *vectorSortContext {
+	var scanNode *plan.Node
+	for _, childID := range joinNode.Children {
+		candidate := builder.directScanWithVectorIndex(builder.qry.Nodes[childID])
+		if candidate != nil {
+			scanNode = candidate
+			break
+		}
+	}
+	if scanNode == nil || scanNode.TableDef == nil || orderExpr == nil || joinNode.Children[0] != scanNode.NodeId || len(joinNode.OnList) == 0 {
+		return nil
+	}
+	if !hasIvfFlatIndex(scanNode.TableDef) {
+		return nil
+	}
+	distFnExpr := orderExpr.GetF()
+	if distFnExpr == nil && childNode != nil {
+		col := orderExpr.GetCol()
+		if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childNode.ProjectList) {
+			return nil
+		}
+		distFnExpr = childNode.ProjectList[col.ColPos].GetF()
+	}
+	if distFnExpr == nil || len(distFnExpr.Args) != 2 || !exprListRefsOnlyTag(distFnExpr.Args, scanNode.BindingTags[0]) {
+		return nil
+	}
+	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
+	if limit == nil {
+		return nil
+	}
+	candidateLimit, ok := buildCandidateLimit(limit, offset)
+	if !ok {
+		return nil
+	}
+	return &vectorSortContext{
+		projNode: projNode, sortNode: sortNode, scanNode: scanNode, childNode: childNode,
+		orderExpr: orderExpr, distFnExpr: distFnExpr, sortDirection: sortNode.OrderBy[0].Flag,
+		limit: candidateLimit, resultLimit: DeepCopyExpr(limit), resultOffset: DeepCopyExpr(offset),
+		rankOption: rankOption, providerNodeID: -1, membershipNodeID: joinNode.NodeId, hasMembership: true,
+	}
+}
+
+func exprListRefsOnlyTag(exprs []*plan.Expr, tag int32) bool {
+	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		if col := expr.GetCol(); col != nil && col.RelPos != tag {
+			return false
+		}
+		if fn := expr.GetF(); fn != nil && !exprListRefsOnlyTag(fn.Args, tag) {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) resolveJoinNodeForVectorSort(sortNode *plan.Node) (*plan.Node, *plan.Node) {
@@ -362,6 +435,18 @@ func (builder *QueryBuilder) tryJoinThroughVectorSide(
 		return nil, nil
 	}
 	return scanNode, vecArgExpr
+}
+
+func hasIvfFlatIndex(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx != nil && idx.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+			return true
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.Node {

@@ -73,6 +73,9 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if spec == nil || spec.Index == nil || spec.SourceTable == nil {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan is missing source or index metadata")
 	}
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat required membership filter is unavailable")
+	}
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
@@ -276,6 +279,7 @@ func (r *planReader) initialize() error {
 	sqlproc.RelationScanner = r.scanner
 	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
 	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	sqlproc.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:        ivfUint64Expr(r.req.CandidateBudget),
 		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},
