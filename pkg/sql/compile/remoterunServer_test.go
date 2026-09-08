@@ -927,3 +927,30 @@ func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
 	flow.mu.Unlock()
 	require.NoError(t, flow.acknowledge(1))
 }
+
+func TestLiveReceiverStopRejectsConnectionAndMessageCancellation(t *testing.T) {
+	for _, closedConnection := range []bool{false, true} {
+		messageCtx, cancelMessage := context.WithCancel(context.Background())
+		connectionCtx, cancelConnection := context.WithCancel(context.Background())
+		flow := newPipelineBatchFlow(1, 1024)
+		r := &messageReceiverOnServer{messageCtx: messageCtx, connectionCtx: connectionCtx,
+			streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
+		require.False(t, r.hasLiveReceiverStop())
+		flow.stop(context.Canceled)
+		require.True(t, r.hasLiveReceiverStop())
+		if closedConnection {
+			cancelConnection()
+		} else {
+			cancelMessage()
+		}
+		require.False(t, r.hasLiveReceiverStop())
+		cancelMessage()
+		cancelConnection()
+	}
+	flow := newPipelineBatchFlow(1, 1024)
+	flow.abort(moerr.NewInternalErrorNoCtx("first substantive error"))
+	flow.stop(context.Canceled)
+	r := &messageReceiverOnServer{messageCtx: context.Background(), connectionCtx: context.Background(),
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
+	require.False(t, r.hasLiveReceiverStop(), "a later stop must not certify a previously failed flow")
+}

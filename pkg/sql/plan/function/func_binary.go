@@ -7514,7 +7514,8 @@ func evalRight(str string, length int64) string {
 }
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
 			return 0, moerr.NewOutOfRangeNoCtxf(
