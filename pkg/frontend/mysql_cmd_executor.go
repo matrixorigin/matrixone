@@ -4239,6 +4239,42 @@ func sessionSQLModeForParser(ses FeSession) string {
 
 func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.AutoIncrementIncrement = resolvePositiveSessionUint64(
+		ses, "auto_increment_increment", proc.Base.SessionInfo.AutoIncrementIncrement)
+	proc.Base.SessionInfo.AutoIncrementOffset = resolvePositiveSessionUint64(
+		ses, "auto_increment_offset", proc.Base.SessionInfo.AutoIncrementOffset)
+}
+
+func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) uint64 {
+	value := previous
+	if value == 0 {
+		value = 1
+	}
+	if ses == nil {
+		return value
+	}
+	v, err := ses.GetSessionSysVar(name)
+	if err != nil {
+		return value
+	}
+	switch n := v.(type) {
+	case int64:
+		if n > 0 {
+			return uint64(n)
+		}
+	case uint64:
+		if n > 0 {
+			return n
+		}
+	case int:
+		if n > 0 {
+			return uint64(n)
+		}
+	}
+	return value
 }
 
 func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
@@ -5705,6 +5741,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		// SET statements in the same COM_QUERY execute after the wrappers were
+		// planned.  Refresh the runtime snapshot immediately before each
+		// statement so the remote PRE_INSERT path observes the session values
+		// established by earlier statements in the request.
+		refreshStatementScopedSessionInfo(ses, proc)
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
