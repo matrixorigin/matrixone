@@ -3558,6 +3558,36 @@ var supportedStringBuiltIns = []FuncNew{
 					return SpaceNumber[int64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SpaceDecimal64
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SpaceDecimal128
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SpaceDecimal256
+				},
+			},
 		},
 	},
 
@@ -6857,7 +6887,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SHA2,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    sha2TypeMatch,
 
 		Overloads: []overload{
 			{
@@ -6868,6 +6898,16 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SHA2Func
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SHA2StringLengthFunc
 				},
 			},
 		},
