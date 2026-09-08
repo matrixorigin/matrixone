@@ -1,7 +1,7 @@
 # Named-snapshot index reads and index-cache residency
 
-- Status: **Design approved** 2026-09-07 (Eric) — implementation complete, with TWO
-  decisions added since that approval and marked **pending re-approval** below
+- Status: **Design approved** 2026-09-07 (Eric), re-approved 2026-09-08 (Eric)
+  for the two decisions added since — implementation complete
 - Issues: [#27941](https://github.com/matrixorigin/matrixone/issues/27941),
   [#27927](https://github.com/matrixorigin/matrixone/issues/27927)
 - Implementation: branch `bug_27941`
@@ -20,16 +20,15 @@ sign-off they carry. Implementation conformance is reviewed against them.
 | Capacity **derivation** (90% of RAM/VRAM, sentinel handling, no fallback) | §5.1 | Eric — 2026-09-07 |
 | Isolation and **eviction ownership** (per-tenant vs CN-wide, coldest-first, pay-first) | §5.2, §5.3 | Eric — 2026-09-07 |
 | **Migration**: widening every index metadata table, and the rolling-upgrade contract | §7 | Eric — 2026-09-07 |
-| **One metadata row per CDC tail frame** for fulltext2, cagra and ivfpq — reverses the original non-goal in §2, and tail sizing now depends on those rows | §7.1, §14 | **pending re-approval** |
-| **CREATE-time capability gate**: below `MOProtocolVersion 57` a metadata table is born in the legacy shape, so an index created mid-rollout carries no provenance until something widens it | §12 | **pending re-approval** |
+| **One metadata row per CDC tail frame** for fulltext2, cagra and ivfpq — reverses the original non-goal in §2, and tail sizing now depends on those rows | §7.1, §14 | Eric — 2026-09-08 |
+| **CREATE-time capability gate**: below `MOProtocolVersion 57` a metadata table is born in the legacy shape, so an index created mid-rollout carries no provenance until something widens it | §12 | Eric — 2026-09-08 |
 
 A later change to any of these rows is a change to the contract, not an
 implementation detail: it needs the row re-approved, not just the code updated.
-The two rows marked **pending re-approval** are exactly that case: the first
-reverses a documented non-goal, the second adds a rolling-upgrade window with a
-user-visible consequence. Both are implemented and described here so they can be
-reviewed as a contract, but neither has been signed off, and the sign-off is not
-the author's to give.
+The last two rows are exactly that case, and were re-approved on 2026-09-08: the
+first reverses the documented non-goal in §2, the second adds a rolling-upgrade
+window whose accepted consequence is that an index created mid-rollout carries no
+provenance until something widens it.
 
 ## 1. Problem and contract
 
