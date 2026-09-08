@@ -7058,36 +7058,31 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		str, isnull1 := strs.GetStrValue(i)
-		shaType, isnull2 := shaTypes.GetValue(i)
-
-		if isnull1 || isnull2 || !isSha2Family(shaType) {
+		if sha2RowMasked(selectList, i) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var checksum []byte
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
 
-			switch shaType {
-			case 0, 256:
-				sum256 := sha256.Sum256(str)
-				checksum = sum256[:]
-			case 224:
-				sum224 := sha256.Sum224(str)
-				checksum = sum224[:]
-			case 384:
-				sum384 := sha512.Sum384(str)
-				checksum = sum384[:]
-			case 512:
-				sum512 := sha512.Sum512(str)
-				checksum = sum512[:]
-			default:
-				panic("unexpected err happened in sha2 function")
-			}
-			checksum = []byte(hex.EncodeToString(checksum))
-			if err = res.AppendBytes(checksum, false); err != nil {
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
 		}
 
 	}
@@ -7095,9 +7090,92 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-// any one of 224 256 384 512 0 is valid
-func isSha2Family(len int64) bool {
-	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+// SHA2StringLengthFunc is the character-operand variant of SHA2. MySQL
+// converts the hash length as an integer at execution time, so a value such
+// as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
+// string wrapper preserves binary bytes and avoids the lossy implicit cast to
+// VARCHAR that would otherwise happen before execution.
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaLengths := vector.GenerateFunctionStrParameter(args[1])
+	lengthIsConst := args[1].IsConst()
+	var constLength int64
+	var constLengthNull bool
+	if lengthIsConst {
+		lengthValue, isnull := shaLengths.GetStrValue(0)
+		constLengthNull = isnull
+		if !isnull {
+			constLength = parseMySQLIntegerPrefix(lengthValue)
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if sha2RowMasked(selectList, i) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		var isnull2 bool
+		var shaType int64
+		if lengthIsConst {
+			isnull2 = constLengthNull
+			shaType = constLength
+		} else {
+			lengthValue, isnull := shaLengths.GetStrValue(i)
+			isnull2 = isnull
+			if !isnull {
+				shaType = parseMySQLIntegerPrefix(lengthValue)
+			}
+		}
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sha2Checksum(value []byte, length int64) ([]byte, bool) {
+	var checksum []byte
+	switch length {
+	case 0, 256:
+		sum256 := sha256.Sum256(value)
+		checksum = sum256[:]
+	case 224:
+		sum224 := sha256.Sum224(value)
+		checksum = sum224[:]
+	case 384:
+		sum384 := sha512.Sum384(value)
+		checksum = sum384[:]
+	case 512:
+		sum512 := sha512.Sum512(value)
+		checksum = sum512[:]
+	default:
+		return nil, false
+	}
+	encoded := make([]byte, hex.EncodedLen(len(checksum)))
+	hex.Encode(encoded, checksum)
+	return encoded, true
+}
+
+func sha2RowMasked(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row))
 }
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -13505,6 +13583,19 @@ type aesModeInfo struct {
 	useCBC  bool
 }
 
+func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
+	if !modeInfo.needsIV {
+		return nil
+	}
+	if !hasIV {
+		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
+	}
+	if nullIV || len(iv) < aes.BlockSize {
+		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
+	}
+	return nil
+}
+
 func getAESMode(proc *process.Process) (aesModeInfo, error) {
 	mode := "aes-128-ecb"
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -13560,11 +13651,8 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13633,11 +13721,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
