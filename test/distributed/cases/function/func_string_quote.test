@@ -5,17 +5,25 @@ SELECT QUOTE('Don\'t') AS result1;
 SELECT QUOTE('Hello') AS basic_string;
 SELECT QUOTE('It\'s') AS single_quote;
 SELECT QUOTE('C:\\path') AS backslash;
-SELECT QUOTE('line1\nline2') AS newline;
-SELECT QUOTE('tab\ttest') AS tab;
 SELECT QUOTE('') AS empty_string;
+
+# Use HEX for control bytes so the expected result is unambiguous.
+SELECT HEX(QUOTE(CONCAT('a', CHAR(39), 'b'))) AS apostrophe;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(92), 'b'))) AS backslash_hex;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(10), 'b'))) AS newline;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(13), 'b'))) AS carriage_return;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(9), 'b'))) AS tab;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(0), 'b'))) AS nul;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(26), 'b'))) AS ctrl_z;
 
 # NULL handling
 SELECT QUOTE(NULL) AS null_input;
+SELECT HEX(QUOTE(NULL)) AS null_input_hex;
 
 # Table usage
 CREATE TABLE t1(str VARCHAR(50));
-INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path');
-SELECT str, QUOTE(str) AS quoted FROM t1;
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path'), (NULL);
+SELECT str, HEX(QUOTE(str)) AS quoted_hex FROM t1;
 DROP TABLE t1;
 
 # WHERE clause
@@ -25,6 +33,5 @@ SELECT * FROM t1 WHERE QUOTE(str) = QUOTE('Hello');
 DROP TABLE t1;
 
 # Complex escaping
-SELECT QUOTE('test\x00null') AS with_null_byte;
-SELECT QUOTE('test\x1aend') AS with_ctrl_z;
-
+SELECT HEX(QUOTE(CONCAT('test', CHAR(0), 'null'))) AS with_null_byte;
+SELECT HEX(QUOTE(CONCAT('test', CHAR(26), 'end'))) AS with_ctrl_z;

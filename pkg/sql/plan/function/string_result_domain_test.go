@@ -649,7 +649,7 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 
 func TestQuotePreservesInvalidUTF8Bytes(t *testing.T) {
 	input := string([]byte{0xff, '\'', '\\', 0})
-	require.Equal(t, []byte{'\'', 0xff, '\'', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
+	require.Equal(t, []byte{'\'', 0xff, '\\', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
 }
 
 func TestExpandingReturnTypeBounds(t *testing.T) {

@@ -1155,43 +1155,13 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, single, selectList)
 }
 
-// QuoteString quotes a string for use in SQL statements
-// Escapes single quotes by doubling them, backslashes, and control characters
+// QuoteString quotes a string using MySQL's SQL-literal escaping rules.
+// The function is byte-preserving for binary strings and invalid UTF-8.
 func QuoteString(str string) string {
-	var result strings.Builder
-	result.WriteByte('\'')
-
-	for i := 0; i < len(str); i++ {
-		switch str[i] {
-		case '\'':
-			// Escape single quote by doubling it
-			result.WriteString("''")
-		case '\\':
-			// Escape backslash
-			result.WriteString("\\\\")
-		case '\n':
-			// Escape newline
-			result.WriteString("\\n")
-		case '\r':
-			// Escape carriage return
-			result.WriteString("\\r")
-		case '\t':
-			// Escape tab
-			result.WriteString("\\t")
-		case '\x00':
-			// Escape null byte
-			result.WriteString("\\0")
-		case '\x1a':
-			// Escape Ctrl+Z (EOF in Windows)
-			result.WriteString("\\Z")
-		default:
-			// Quote is byte-preserving for binary strings, including invalid UTF-8.
-			result.WriteByte(str[i])
-		}
-	}
-
-	result.WriteByte('\'')
-	return result.String()
+	value := []byte(str)
+	result := make([]byte, quotedBytesLength(value))
+	writeQuotedBytes(result, value)
+	return string(result)
 }
 
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1207,20 +1177,12 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 		}
 		value, null := parameter.GetStrValue(row)
 		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
 				return err
 			}
 			continue
 		}
-		resultBytes := 2
-		for _, b := range value {
-			switch b {
-			case '\'', '\\', '\n', '\r', '\t', 0, 0x1a:
-				resultBytes += 2
-			default:
-				resultBytes++
-			}
-		}
+		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -1234,26 +1196,27 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	return nil
 }
 
+func quotedBytesLength(value []byte) int {
+	resultBytes := 2
+	for _, b := range value {
+		switch b {
+		case '\'', '\\', 0, 0x1a:
+			resultBytes += 2
+		default:
+			resultBytes++
+		}
+	}
+	return resultBytes
+}
+
 func writeQuotedBytes(dst, value []byte) {
 	at := 0
 	dst[at] = '\''
 	at++
 	for _, b := range value {
 		switch b {
-		case '\'':
-			dst[at], dst[at+1] = '\'', '\''
-			at += 2
-		case '\\':
-			dst[at], dst[at+1] = '\\', '\\'
-			at += 2
-		case '\n':
-			dst[at], dst[at+1] = '\\', 'n'
-			at += 2
-		case '\r':
-			dst[at], dst[at+1] = '\\', 'r'
-			at += 2
-		case '\t':
-			dst[at], dst[at+1] = '\\', 't'
+		case '\'', '\\':
+			dst[at], dst[at+1] = '\\', b
 			at += 2
 		case 0:
 			dst[at], dst[at+1] = '\\', '0'

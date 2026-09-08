@@ -866,7 +866,7 @@ func initQuoteTestCase() []tcTemp {
 					[]bool{false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'Don''t'", "'It''s'", "'O''Brien'"},
+				[]string{"'Don\\'t'", "'It\\'s'", "'O\\'Brien'"},
 				[]bool{false, false, false}),
 		},
 		{
@@ -888,7 +888,7 @@ func initQuoteTestCase() []tcTemp {
 					[]bool{false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\\nline2'", "'tab\\ttest'", "'null\\0byte'"},
+				[]string{"'line1\nline2'", "'tab\ttest'", "'null\\0byte'"},
 				[]bool{false, false, false}),
 		},
 		{
@@ -910,8 +910,8 @@ func initQuoteTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
+				[]string{"NULL"},
+				[]bool{false}),
 		},
 		{
 			info: "test quote with carriage return",
@@ -921,7 +921,7 @@ func initQuoteTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\\rline2'"},
+				[]string{"'line1\rline2'"},
 				[]bool{false}),
 		},
 		{
