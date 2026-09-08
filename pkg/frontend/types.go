@@ -1106,6 +1106,13 @@ type ExecCtx struct {
 	// prepared statement. Direct statements leave it empty and resolve against
 	// the current session database.
 	effectiveTxnDefaultDatabase string
+	// effectiveTxnStatement is resolved once per statement generation so
+	// transaction-boundary policy and later execution use the same prepared AST.
+	// The statement is borrowed from the computation wrapper or prepare cache.
+	effectiveTxnStatement tree.Statement
+	// implicitCommitBefore is the generation-level policy for a top-level
+	// implicit-commit statement. It is copied into txnOpt after admission.
+	implicitCommitBefore bool
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1155,6 +1162,8 @@ type ExecCtx struct {
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	if input != nil {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
@@ -1185,6 +1194,8 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
