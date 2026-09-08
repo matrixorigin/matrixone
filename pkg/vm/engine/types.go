@@ -1258,6 +1258,23 @@ type LateMaterializationReader interface {
 	) (isEnd bool, err error)
 }
 
+// FilteredTopKReader is an optional Reader capability for vector-index scans.
+// It applies the exact residual filter before storage Top-K, so filtered-out
+// rows can neither occupy the distance heap nor force wide-vector
+// materialization. topKApplied is false when the reader safely fell back to a
+// filter-only read and the caller must compute and compact Top-K itself.
+type FilteredTopKReader interface {
+	ReadWithFilterAndTopK(
+		ctx context.Context,
+		cols []string,
+		earlyColumns []int,
+		filter ReaderFilter,
+		indexParam *plan.IndexReaderParam,
+		mp *mpool.MPool,
+		outBatch *batch.Batch,
+	) (isEnd bool, topKApplied bool, err error)
+}
+
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)

@@ -1517,30 +1517,30 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 			"mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
 	}
 
+	// Retire address-keyed state before realloc can release the address to
+	// another allocator thread. Failure leaves old live and restores its state.
+	var removedLease allocationLease
+	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
+	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.account != nil {
+		panic(moerr.NewInternalErrorNoCtx("allocation metadata changed during realloc"))
+	}
+	oldProfile := profileDetach(uintptr(oldptr))
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
+		profileRestore(uintptr(oldptr), oldProfile)
+		if restoreErr := mp.recordPtrHdr(oldptr, hdr); restoreErr != nil {
+			panic(restoreErr)
+		}
 		mp.stats.RecordFree(mp.tag, int64(sz))
 		globalStats.RecordFree("global", int64(sz))
 		return nil, moerr.NewMPoolCapacityNoCtxf(
 			"physical allocator rejected realloc to %d bytes: %v", sz, err)
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	var removedLease allocationLease
-	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
-	if !removed || removedHdr != hdr {
-		panic(moerr.NewInternalErrorNoCtx(
-			"allocation metadata changed during realloc",
-		))
-	}
-	if removedHdr.isAccounted() || removedLease.account != nil {
-		panic(moerr.NewInternalErrorNoCtx(
-			"unaccounted realloc removed an account lease",
-		))
-	}
 	newHdr := memHdr{
 		poolId:  hdr.poolId,
 		allocSz: int32(sz),
@@ -1550,7 +1550,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
 		panic(err)
 	}
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	profileRecordRealloc(3, oldProfile, uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	mp.resource.recordFree(int64(oldSize))

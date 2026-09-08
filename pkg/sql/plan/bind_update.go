@@ -2299,6 +2299,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if builder.fullTableUpdateLockTargets == nil {
 			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
 		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
 		for _, target := range lockTargets {
 			if target.Mode == lockpb.LockMode_Exclusive {
 				builder.fullTableUpdateLockTargets[target] = struct{}{}

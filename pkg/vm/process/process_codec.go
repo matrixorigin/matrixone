@@ -139,18 +139,20 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                proc.Base.SessionInfo.GetUser(),
-			Host:                proc.Base.SessionInfo.GetHost(),
-			Role:                proc.Base.SessionInfo.GetRole(),
-			ConnectionId:        proc.Base.SessionInfo.GetConnectionID(),
-			Database:            proc.Base.SessionInfo.GetDatabase(),
-			Version:             proc.Base.SessionInfo.GetVersion(),
-			TimeZone:            timeBytes,
-			QueryId:             proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:             resolveSqlMode(proc),
+			User:                   proc.Base.SessionInfo.GetUser(),
+			Host:                   proc.Base.SessionInfo.GetHost(),
+			Role:                   proc.Base.SessionInfo.GetRole(),
+			ConnectionId:           proc.Base.SessionInfo.GetConnectionID(),
+			Database:               proc.Base.SessionInfo.GetDatabase(),
+			Version:                proc.Base.SessionInfo.GetVersion(),
+			TimeZone:               timeBytes,
+			QueryId:                proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:                resolveSqlMode(proc),
+			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
+			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -432,6 +434,8 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
+		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

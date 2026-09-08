@@ -68,13 +68,14 @@ type jsonOverlapValueView struct {
 }
 
 type jsonOverlapOperand struct {
-	parameter *vector.Vector
-	wrapper   vector.FunctionParameterWrapper[types.Varlena]
-	cached    bool
-	document  bytejson.ByteJson
-	isNull    bool
-	err       error
-	prepared  jsonOverlapPreparedArray
+	parameter    *vector.Vector
+	wrapper      vector.FunctionParameterWrapper[types.Varlena]
+	functionName string
+	cached       bool
+	document     bytejson.ByteJson
+	isNull       bool
+	err          error
+	prepared     jsonOverlapPreparedArray
 }
 
 func jsonOverlapsCheckFn(_ []overload, inputs []types.Type) checkResult {
@@ -223,7 +224,11 @@ func (operand *jsonOverlapOperand) documentAt(
 			)
 		}
 		if err != nil && !bytejson.IsJSONDocumentDepthError(err) {
-			err = moerr.NewInvalidArg(proc.Ctx, "json_overlaps", "invalid JSON document")
+			name := operand.functionName
+			if name == "" {
+				name = "json_overlaps"
+			}
+			err = moerr.NewInvalidArg(proc.Ctx, name, "invalid JSON document")
 		}
 	}
 

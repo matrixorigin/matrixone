@@ -39,7 +39,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
 	if err != nil {
 		return -1, err
 	}
@@ -47,7 +47,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
 func (builder *QueryBuilder) bindExternalScan(
