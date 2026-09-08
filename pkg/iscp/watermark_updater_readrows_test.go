@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -189,6 +190,9 @@ func TestUnregisterMaterializedViewUsesTargetIdentity(t *testing.T) {
 
 func encodeMaterializedViewJobSpec(t *testing.T, spec *JobSpec) string {
 	t.Helper()
+	if spec.ConsumerType == int8(ConsumerType_MaterializedView) && spec.MVReference == nil {
+		spec.MVReference = &mvdefinition.Reference{Format: 1, TargetID: 100, Generation: 1, Digest: strings.Repeat("0", 64)}
+	}
 	raw, err := MarshalJobSpec(spec)
 	require.NoError(t, err)
 	byteJSON, err := types.ParseStringToByteJson(raw)
@@ -246,6 +250,48 @@ func TestUnregisterJobsByDBNameEscapesDatabaseLiteral(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, capturedSQL, "account_id = 7")
 	require.Contains(t, capturedSQL, `reldatabase = 'db_''name\\path'`)
+}
+
+func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testing.T) {
+	oldExec := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExec })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	rows := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	rows.NewBatchWithRowCount(3)
+	require.NoError(t, executor.AppendStringRows(rows, 0, []string{"first", "materialized_view_100", "last"}))
+	require.NoError(t, executor.AppendFixedRows(rows, 1, []uint64{11, 22, 33}))
+	var specs []string
+	for _, kind := range []ConsumerType{ConsumerType_IndexSync, ConsumerType_MaterializedView, ConsumerType_IndexSync} {
+		specs = append(specs, encodeMaterializedViewJobSpec(t, &JobSpec{ConsumerInfo: ConsumerInfo{
+			ConsumerType: int8(kind), DBName: "db", TableName: "original",
+			SrcTable: TableInfo{TableID: 10, TableName: "source"},
+		}}))
+	}
+	require.NoError(t, executor.AppendStringRows(rows, 2, specs))
+	var updates []string
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT ") {
+			return rows.GetResult(), nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	}
+	ctx := defines.AttachAccountId(context.Background(), 42)
+	require.NoError(t, renameSrcTable(ctx, "cn", nil, 1, 10, "source", "renamed"))
+	require.Len(t, updates, 2)
+	for i, name := range []string{"first", "last"} {
+		require.Contains(t, updates[i], "job_name = '"+name+"'")
+		require.Contains(t, updates[i], `"TableName":"renamed"`)
+		require.NotContains(t, updates[i], "materialized_view_100")
+	}
+	require.Contains(t, updates[0], "job_id = 11")
+	require.Contains(t, updates[1], "job_id = 33")
 }
 
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {

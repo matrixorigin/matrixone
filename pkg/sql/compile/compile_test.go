@@ -2041,7 +2041,9 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
 	require.False(t, supportsMultiSourceISCP(service))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion44)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion55)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)

@@ -474,7 +474,7 @@ func TestAddOrUpdateJobDropAtPreservesFenceOnParseFailure(t *testing.T) {
 		false,
 	)
 
-	require.Error(t, err)
+	require.NoError(t, err, "malformed jobs are isolated rather than aborting replay")
 	require.True(t, exec.IsJobFenced(key))
 	iters, _ := table.getCandidate()
 	require.Empty(t, iters)

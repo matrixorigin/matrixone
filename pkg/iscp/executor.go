@@ -1165,26 +1165,43 @@ func (exec *ISCPTaskExecutor) addOrUpdateJobInternal(
 		)
 	}()
 	watermark = types.StringToTS(watermarkStr)
-	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
-	if err != nil {
-		return err
-	}
+	jobSpec, specErr := UnmarshalJobSpec(jobSpecStr)
 	jobStatus, err := UnmarshalJobStatus(jobStatusStr)
 	if err != nil {
-		return err
+		jobStatus = &JobStatus{}
+		specErr = errors.Join(specErr, err)
 	}
+	if specErr != nil {
+		// A malformed payload must not poison replay or invoke any consumer.
+		// Recompute this terminal state on every replay until the row is fixed
+		// or dropped. The original durable payload is retained for diagnosis.
+		if jobSpec == nil {
+			jobSpec = &JobSpec{}
+		}
+		jobSpec.SrcTable.TableID = tableID
+		state = ISCPJobState_Error
+		jobStatus.ErrorCode = PermanentErrorThreshold
+		jobStatus.ErrorMsg = "invalid ISCP job specification: " + specErr.Error()
+		logutil.Error("ISCP job quarantined", zap.Uint32("account-id", accountID), zap.Uint64("table-id", tableID), zap.String("job", jobName), zap.Uint64("generation", jobID), zap.Error(specErr))
+	}
+
 	// The durable quarantine transaction can commit before its logtail is
 	// visible to the recovery snapshot. Mirror only that deterministic terminal
 	// decision in memory; never guess that initialization succeeded.
-	if recovering && isUnprovenInit(state, jobSpec, jobStatus) {
+	if specErr == nil && recovering && isUnprovenInit(state, jobSpec, jobStatus) {
 		state = ISCPJobState_Error
 		jobStatus.ErrorCode = PermanentErrorThreshold
 		jobStatus.ErrorMsg = ambiguousUnprovenInitError
 	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
+	if specErr != nil && !ok {
+		// No trustworthy source metadata exists yet. Keep the durable malformed
+		// row quarantined; a later valid job must create its own table metadata.
+		return nil
+	}
 	if !ok {
-		if dropAt != 0 {
+		if dropAt != 0 && specErr == nil {
 			exec.RemoveJobFence(fenceKey)
 			return nil
 		}
@@ -1202,7 +1219,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJobInternal(
 	if err != nil {
 		return err
 	}
-	if dropAt != 0 {
+	if dropAt != 0 && specErr == nil {
 		exec.RemoveJobFence(fenceKey)
 	}
 	return nil

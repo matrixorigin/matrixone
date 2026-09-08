@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,7 +69,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	tableDef := dmlCtx.tableDefs[0]
 	internalMVState := strings.HasPrefix(strings.ToLower(targetTable), "__mo_mv_state_")
 	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef) || internalMVState) &&
-		builder.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		!mvdefinition.CanWrite(builder.GetContext(), tableDef) {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into materialized view")
 	}
 	dmlCtx.targetDBName = targetDB
@@ -2376,7 +2377,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
-	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
+	isRegularDMLTarget := mvdefinition.CanWrite(builder.GetContext(), tableDef) || tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
 		tableDef.TableType == catalog.SystemClusterRel ||
 		tableDef.TableType == catalog.SystemTemporaryTable ||

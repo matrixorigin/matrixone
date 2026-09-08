@@ -16,15 +16,16 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -55,43 +56,10 @@ type materializedViewFromBoundaryRetriever interface {
 	GetFromTS() types.TS
 }
 
-type incrementalAggregate struct {
-	Kind             string `json:"kind"`
-	InputExpression  string `json:"input_expression,omitempty"`
-	OutputColumn     string `json:"output_column"`
-	StateSumColumn   string `json:"state_sum_column,omitempty"`
-	StateCountColumn string `json:"state_count_column,omitempty"`
-	StateIndex       int    `json:"state_index,omitempty"`
-}
-
-type incrementalGroup struct {
-	Expression   string `json:"expression"`
-	OutputColumn string `json:"output_column"`
-	NotNullable  bool   `json:"not_nullable,omitempty"`
-}
-
-type incrementalDescription struct {
-	Version        int                    `json:"version,omitempty"`
-	Strategy       string                 `json:"strategy,omitempty"`
-	SourceAlias    string                 `json:"source_alias"`
-	SourceColumns  []string               `json:"source_columns"`
-	Filter         string                 `json:"filter,omitempty"`
-	Having         string                 `json:"having,omitempty"`
-	Groups         []incrementalGroup     `json:"groups"`
-	Aggregates     []incrementalAggregate `json:"aggregates"`
-	GroupKeyColumn string                 `json:"group_key_column,omitempty"`
-	RowCountColumn string                 `json:"row_count_column"`
-	StateColumns   []string               `json:"state_columns"`
-	StateTable     string                 `json:"state_table,omitempty"`
-	BranchID       int                    `json:"branch_id,omitempty"`
-	SourceDatabase string                 `json:"source_database,omitempty"`
-	SourceTable    string                 `json:"source_table,omitempty"`
-	Branches       []incrementalBranch    `json:"branches,omitempty"`
-}
-
-type incrementalBranch struct {
-	Description *incrementalDescription `json:"description"`
-}
+type incrementalAggregate = mvdefinition.Aggregate
+type incrementalGroup = mvdefinition.Group
+type incrementalDescription = mvdefinition.Incremental
+type incrementalBranch = mvdefinition.Branch
 
 type materializedViewChangeRow struct {
 	Values   map[string]any
@@ -108,8 +76,11 @@ func NewMaterializedViewConsumer(
 	jobID JobID,
 	info *ConsumerInfo,
 ) (Consumer, error) {
-	if info == nil || info.DBName == "" || info.TableName == "" || info.RefreshSQL == "" || info.SourceSQL == "" {
+	if info == nil || info.DBName == "" || info.TableName == "" || info.MVReference == nil {
 		return nil, moerr.NewInternalErrorNoCtx("invalid materialized view consumer specification")
+	}
+	if err := info.MVReference.Validate(); err != nil {
+		return nil, err
 	}
 	return &MaterializedViewConsumer{
 		cnUUID: cnUUID, cnEngine: cnEngine, cnTxnClient: cnTxnClient,
@@ -129,7 +100,7 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 			return nil
 		} else {
 			metricv2.ISCPMaterializedViewRefreshDuration.WithLabelValues("incremental", "error").Observe(time.Since(started).Seconds())
-			if strings.EqualFold(c.info.RefreshMethod, "fast") {
+			if strings.EqualFold(c.info.RefreshMethod, "fast") || !materializedViewCanFallback(ctx, incrementalErr) {
 				return incrementalErr
 			}
 			metricv2.ISCPMaterializedViewFallback.Inc()
@@ -198,16 +169,16 @@ func (c *MaterializedViewConsumer) drainChanges(r DataRetriever) error {
 
 func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r DataRetriever) error {
 	return runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID,
-		r.GetAccountID(), 24*time.Hour, nil, nil,
+		r.GetAccountID(), time.Hour, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
-			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
+			refreshCtx := sqlproc.GetContext()
 			boundary, ok := r.(iterationBoundaryRetriever)
 			if !ok {
 				return moerr.NewInternalErrorNoCtx("materialized view retriever does not expose iteration boundary")
 			}
 			toTS := boundary.GetToTS()
-			if err := RefreshMaterializedView(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, &toTS); err != nil {
+			if err := RefreshMaterializedView(refreshCtx, c.cnEngine, sqlctx.GetService(), sqlctx.Txn(), c.info, &toTS); err != nil {
 				return err
 			}
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
@@ -217,11 +188,17 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 // RefreshMaterializedView atomically replaces a materialized view in txn. A
 // non-nil boundary is used by ISCP to read every source at the same watermark;
 // nil reads the caller transaction snapshot for an ON DEMAND refresh.
-func RefreshMaterializedView(ctx context.Context, service string, txn client.TxnOperator, info *ConsumerInfo, boundary *types.TS) error {
-	if info == nil || info.DBName == "" || info.TableName == "" || info.RefreshSQL == "" {
-		return moerr.NewInternalErrorNoCtx("invalid materialized view refresh specification")
+func RefreshMaterializedView(ctx context.Context, eng engine.Engine, service string, txn client.TxnOperator, info *ConsumerInfo, boundary *types.TS) error {
+	d, err := LoadMaterializedViewDefinition(ctx, eng, service, txn, info, true)
+	if err != nil {
+		return err
 	}
-	refreshCtx := context.WithValue(ctx, defines.MaterializedViewRefreshKey{}, true)
+	info, err = MaterializedViewInfo(d)
+	if err != nil {
+		return err
+	}
+	refreshCtx := mvdefinition.WithAuthority(ctx, d)
+
 	var incrementalDesc *incrementalDescription
 	if info.IncrementalSpec != "" {
 		var err error
@@ -232,9 +209,6 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 		if boundary == nil {
 			return moerr.NewInternalErrorNoCtx("incremental materialized view state requires an ISCP boundary")
 		}
-		if err = ensureMaterializedViewStateTable(refreshCtx, service, txn, info, incrementalDesc); err != nil {
-			return err
-		}
 		if err = rebuildMaterializedViewDistinctState(refreshCtx, service, txn, info, incrementalDesc, *boundary); err != nil {
 			return err
 		}
@@ -243,7 +217,7 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 	if materializedViewDeltaCanUpsert(incrementalDesc) {
 		deleteColumn = incrementalDesc.GroupKeyColumn
 	}
-	deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where %s is not null", info.DBName, info.TableName, sqlquote.Ident(deleteColumn))
+	deleteSQL := fmt.Sprintf("delete from %s where %s is not null", sqlquote.QualifiedIdent(info.DBName, info.TableName), sqlquote.Ident(deleteColumn))
 	res, err := ExecWithResult(refreshCtx, deleteSQL, service, txn)
 	if err != nil {
 		return err
@@ -258,7 +232,7 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 	if err != nil {
 		return err
 	}
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", info.DBName, info.TableName, refreshSQL)
+	insertSQL := fmt.Sprintf("insert into %s %s", sqlquote.QualifiedIdent(info.DBName, info.TableName), refreshSQL)
 	if len(info.Columns) > 0 {
 		targetColumns := append([]string(nil), info.Columns...)
 		if incrementalDesc != nil {
@@ -272,10 +246,10 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 			selectColumns = append(selectColumns, quoted)
 		}
 		if materializedViewDeltaCanUpsert(incrementalDesc) {
-			insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s from (%s) as `__mo_mv_refresh`", info.DBName, info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+			insertSQL = fmt.Sprintf("insert into %s (%s) select %s from (%s) as `__mo_mv_refresh`", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
 		} else {
 			columns = append(columns, sqlquote.Ident(catalog.FakePrimaryKeyColName))
-			insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", info.DBName, info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+			insertSQL = fmt.Sprintf("insert into %s (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
 		}
 	}
 	res, err = ExecWithResult(refreshCtx, insertSQL, service, txn)
@@ -286,64 +260,109 @@ func RefreshMaterializedView(ctx context.Context, service string, txn client.Txn
 	return nil
 }
 
-func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materializedViewChangeRow, error) {
+// visitMaterializedViewRows retains at most one bounded chunk. The callback
+// completes before the iterator advances or its borrowed AtomicBatch is released.
+func visitMaterializedViewRows(ctx context.Context, bat *AtomicBatch, insert bool, columns map[string]bool, maxRows, maxBytes int, visit func([]materializedViewChangeRow) error) error {
 	if bat == nil || bat.Rows == nil {
-		return nil, nil
+		return nil
 	}
 	iter := bat.GetRowIterator().(*atomicBatchRowIter)
 	defer iter.Close()
-	rows := make([]materializedViewChangeRow, 0, bat.Rows.Len())
+	rows := make([]materializedViewChangeRow, 0, min(bat.Rows.Len(), maxRows))
+	used := 0
+	flush := func() error {
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := visit(rows); err != nil {
+			return err
+		}
+		clear(rows)
+		rows = rows[:0]
+		used = 0
+		return nil
+	}
 	for iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		item := iter.Item()
-		values := make([]any, len(item.Src.Vecs))
-		if err := extractRowFromEveryVector(context.Background(), item.Src, item.Offset, values, ReprSQLString); err != nil {
-			return nil, err
+		if item.Src == nil || len(item.Src.Vecs) == 0 {
+			return moerr.NewInternalErrorNoCtx("empty materialized view change row")
 		}
-		if !insert {
-			rowid, ok := values[0].(types.Rowid)
-			if !ok {
-				return nil, moerr.NewInternalErrorNoCtx("materialized view delete batch does not retain rowid")
-			}
-			row := materializedViewChangeRow{RowID: rowid}
-			for i, attr := range item.Src.Attrs {
-				if i < len(values) && (strings.EqualFold(attr, objectio.DefaultCommitTS_Attr) ||
-					strings.EqualFold(attr, "commit_ts") || strings.EqualFold(attr, "__mo_commit_ts")) {
-					var commitOK bool
-					row.CommitTS, commitOK = values[i].(types.TS)
-					if !commitOK {
-						return nil, moerr.NewInternalErrorNoCtxf("materialized view delete batch has invalid commit timestamp %T", values[i])
-					}
-					break
-				}
-			}
-			rows = append(rows, row)
-			continue
-		}
-		row := materializedViewChangeRow{Values: make(map[string]any)}
-		if len(values) > 0 {
-			if rowid, ok := values[0].(types.Rowid); ok {
-				row.RowID = rowid
-			}
-		}
+		included := make([]int, 0, len(item.Src.Attrs))
+		bytes := 128
 		for i, attr := range item.Src.Attrs {
-			if i >= len(values) || strings.EqualFold(attr, catalog.Row_ID) || strings.EqualFold(attr, "commit_ts") || strings.EqualFold(attr, "__mo_commit_ts") {
+			name := strings.ToLower(attr)
+			commit := isMaterializedViewCommitColumn(name)
+			if insert && (name == catalog.Row_ID || commit || columns != nil && !columns[name]) {
 				continue
 			}
-			row.Values[strings.ToLower(attr)] = values[i]
+			if !insert && i != 0 && !commit {
+				continue
+			}
+			if i >= len(item.Src.Vecs) || item.Src.Vecs[i] == nil {
+				return moerr.NewInternalErrorNoCtx("missing materialized view change column")
+			}
+			vec := item.Src.Vecs[i]
+			offset := item.Offset
+			if vec.IsConst() {
+				offset = 0
+			}
+			bytes += 128
+			if !vec.IsConstNull() && !vec.GetNulls().Contains(uint64(offset)) && vec.GetType().IsVarlen() {
+				size := len(vec.GetBytesAt(offset))
+				if size > maxBytes/2 {
+					return engine.ErrRowIDReadLimit
+				}
+				bytes += 2 * size
+			}
+			included = append(included, i)
+		}
+		if bytes > maxBytes {
+			return engine.ErrRowIDReadLimit
+		}
+		if len(rows) >= maxRows || bytes > maxBytes-used {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		row := materializedViewChangeRow{}
+		if insert {
+			row.Values = make(map[string]any, len(included))
+		}
+		var value [1]any
+		for _, i := range included {
+			if err := extractRowFromVector(ctx, item.Src.Vecs[i], 0, value[:], item.Offset, ReprSQLString); err != nil {
+				return err
+			}
+			name := strings.ToLower(item.Src.Attrs[i])
+			if insert {
+				row.Values[name] = value[0]
+				continue
+			}
+			if i == 0 {
+				id, ok := value[0].(types.Rowid)
+				if !ok {
+					return moerr.NewInternalErrorNoCtx("materialized view delete batch does not retain rowid")
+				}
+				row.RowID = id
+			} else if isMaterializedViewCommitColumn(name) {
+				ts, ok := value[0].(types.TS)
+				if !ok {
+					return moerr.NewInternalErrorNoCtxf("materialized view delete batch has invalid commit timestamp %T", value[0])
+				}
+				row.CommitTS = ts
+			}
 		}
 		rows = append(rows, row)
+		used += bytes
 	}
-	return rows, nil
+	return flush()
 }
 
-func materializedViewRefreshAt(query, source string, ts types.TS) (string, error) {
-	needle := "from " + source
-	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", source, ts.ToString())
-	refresh := strings.Replace(query, needle, replacement, 1)
-	if refresh == query {
-		return "", moerr.NewInternalErrorNoCtxf("materialized view source %q not found in refresh query", source)
-	}
-	return refresh, nil
+func isMaterializedViewCommitColumn(name string) bool {
+	return name == objectio.DefaultCommitTS_Attr || name == "commit_ts" || name == "__mo_commit_ts"
 }
 
 // materializedViewRefreshAtSources adds the same snapshot boundary to every
@@ -480,4 +499,20 @@ func materializedViewRefreshAtSourcesWithBoundary(query string, sources []TableI
 		}
 	}
 	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()), nil
+}
+
+type materializedViewNoFallback struct{ error }
+
+func (e *materializedViewNoFallback) Unwrap() error { return e.error }
+func materializedViewCanFallback(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var invalid *mvdefinition.InvalidDefinition
+	var terminal *materializedViewNoFallback
+	var cas *iscpStatusCASLostError
+	if errors.Is(err, engine.ErrRowIDReadLimit) || errors.Is(err, errMaterializedViewDeltaSQLTooLarge) || errors.As(err, &invalid) || errors.As(err, &terminal) || errors.As(err, &cas) || isPermanentError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
 }

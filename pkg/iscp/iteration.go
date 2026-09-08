@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -341,6 +342,19 @@ func ExecuteIterationWithRuntime(
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
 	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
 	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+	for _, spec := range jobSpecs {
+		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
+			d, loadErr := LoadMaterializedViewDefinition(ctxWithAccount, cnEngine, cnUUID, txnOp, &spec.ConsumerInfo, false)
+			if loadErr != nil {
+				return loadErr
+			}
+			projected, loadErr := MaterializedViewInfo(d)
+			if loadErr != nil {
+				return loadErr
+			}
+			spec.ConsumerInfo = *projected
+		}
+	}
 	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
 	if err != nil {
 		return
@@ -403,6 +417,11 @@ func ExecuteIterationWithRuntime(
 		if sourceErr != nil {
 			return sourceErr
 		}
+		if sourceChanges == nil {
+			return moerr.NewInternalErrorNoCtx("source returned no change handle")
+		}
+		// Own each handle immediately: any later source lookup/open can fail.
+		defer sourceChanges.Close()
 		changeStreams = append(changeStreams, iterationSourceChanges{
 			tableID: sourceRel.GetTableID(ctxWithAccount),
 			rel:     sourceRel,
@@ -418,13 +437,6 @@ func ExecuteIterationWithRuntime(
 			changes: sourceChanges,
 		})
 	}
-	defer func() {
-		for i := range changeStreams {
-			if changeStreams[i].changes != nil {
-				changeStreams[i].changes.Close()
-			}
-		}
-	}()
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
@@ -577,7 +589,7 @@ func runISCPTaskIterationConsumers(
 	ctx context.Context,
 	runtime *ISCPTaskExecutor,
 	iterCtx *IterationContext,
-	changeInput any,
+	changeStreams []iterationSourceChanges,
 	consumers []Consumer,
 	statuses []*JobStatus,
 	defaultTableDef *plan.TableDef,
@@ -591,15 +603,6 @@ func runISCPTaskIterationConsumers(
 	retainRowID bool,
 	jobSpecs []*JobSpec,
 ) {
-	var changeStreams []iterationSourceChanges
-	switch changes := changeInput.(type) {
-	case []iterationSourceChanges:
-		changeStreams = changes
-	case engine.ChangesHandle:
-		changeStreams = []iterationSourceChanges{{tableID: iterCtx.tableID, changes: changes}}
-	default:
-		return
-	}
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -1228,7 +1231,8 @@ func FlushPermanentErrorMessage(
 
 func isPermanentError(err error) bool {
 	var target permanentError
-	return errors.As(err, &target)
+	var invalid *mvdefinition.InvalidDefinition
+	return errors.As(err, &target) || errors.As(err, &invalid) || errors.Is(err, engine.ErrRowIDReadLimit) || errors.Is(err, errMaterializedViewDeltaSQLTooLarge)
 }
 
 func (status *JobStatus) SetError(err error) {

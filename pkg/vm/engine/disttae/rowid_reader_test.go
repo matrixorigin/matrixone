@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,4 +35,28 @@ func TestRowIDReaderValuePreservesNull(t *testing.T) {
 	require.Equal(t, 20.0, rowIDReaderValue(vec, 1))
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestRowIDReaderOwnsVariableValuesAndChargesBeforeCopy(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("before"), false, mp))
+	owned, err := copyRowIDReaderRow([]*vector.Vector{vec}, 0, &engine.RowIDReadBudget{RemainingBytes: 268})
+	require.NoError(t, err)
+	copy(vec.GetBytesAt(0), []byte("after!"))
+	vec.Free(mp)
+	require.Equal(t, []byte("before"), owned[0])
+	require.Zero(t, mp.CurrNB())
+	tiny := &engine.RowIDReadBudget{RemainingBytes: 127}
+	_, err = copyRowIDReaderRow(nil, 0, tiny)
+	require.ErrorIs(t, err, engine.ErrRowIDReadLimit)
+	require.Equal(t, 127, tiny.RemainingBytes)
+	budget := &engine.RowIDReadBudget{RemainingBytes: 256}
+	_, err = copyRowIDReaderRow(nil, 0, budget)
+	require.NoError(t, err)
+	_, err = copyRowIDReaderRow(nil, 0, budget)
+	require.NoError(t, err)
+	_, err = copyRowIDReaderRow(nil, 0, budget)
+	require.ErrorIs(t, err, engine.ErrRowIDReadLimit)
 }

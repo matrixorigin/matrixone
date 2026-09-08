@@ -377,6 +377,9 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	if err = c.validateMaterializedViewReads(); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/prashantv/gostub"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -37,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1547,113 +1550,101 @@ func TestScope_CreateView(t *testing.T) {
 
 }
 
+func testCompileMVDefinition(t *testing.T) (*mvdefinition.Definition, *plan2.TableDef, *plan2.TableDef) {
+	t.Helper()
+	version := uint32(0)
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service", RefreshSQL: "select service, count(*) requests from events group by service", Method: "complete", Timing: "demand", Columns: []string{"service", "requests"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "events", DatabaseID: 1, ID: 11}, Version: &version}}}
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	target := &plan2.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan2.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}
+	source := &plan2.TableDef{DbName: "db", Name: "events", DbId: 1, TblId: 11, TableType: "r"}
+	return d, target, source
+}
 func TestScopeRefreshMaterializedViewOnDemand(t *testing.T) {
 	stubs := gostub.New()
 	t.Cleanup(stubs.Reset)
 	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
 	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
-
-	oldExec := iscpPkg.ExecWithResult
-	t.Cleanup(func() { iscpPkg.ExecWithResult = oldExec })
-	var sqls []string
-	iscpPkg.ExecWithResult = func(ctx context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
-		require.NotNil(t, ctx.Value(defines.MaterializedViewRefreshKey{}))
-		sqls = append(sqls, sql)
-		return executor.Result{}, nil
-	}
-
+	_, target, source := testCompileMVDefinition(t)
 	ctrl := gomock.NewController(t)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
-	tableDef := &plan2.TableDef{
-		Name:      "mv",
-		Createsql: "create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service",
-		Cols: []*plan2.ColDef{
-			{Name: "service"}, {Name: "requests"}, {Name: catalog.FakePrimaryKeyColName, Hidden: true},
-		},
-		Defs: []*plan2.TableDef_DefType{{Def: &plan2.TableDef_DefType_Properties{
-			Properties: &plan2.PropertiesDef{Properties: []*plan2.Property{
-				{Key: "mv_materialized", Value: "true"},
-				{Key: "mv_refresh_sql", Value: "select service, count(*) requests from events group by service"},
-				{Key: "mv_refresh_method", Value: "complete"},
-				{Key: "mv_refresh_timing", Value: "demand"},
-				{Key: "mv_source_database", Value: "db"},
-				{Key: "mv_source_table", Value: "events"},
-			}},
-		}}},
+	src := mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).Times(3)
+	db.EXPECT().Relation(gomock.Any(), "mv", gomock.Any()).Return(rel, nil).Times(2)
+	db.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(src, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(target).Times(2)
+	src.EXPECT().GetTableDef(gomock.Any()).Return(source)
+	var sqls []string
+	old := iscpPkg.ExecWithResult
+	t.Cleanup(func() { iscpPkg.ExecWithResult = old })
+	iscpPkg.ExecWithResult = func(ctx context.Context, sql, _ string, op client.TxnOperator) (executor.Result, error) {
+		require.Same(t, txn, op)
+		count := 0
+		if strings.HasPrefix(sql, "SELECT dat_id") {
+			count = 1
+		} else if strings.HasPrefix(sql, "SELECT rel_id") {
+			count = 2
+		}
+		if count > 0 {
+			b := batch.NewWithSize(0)
+			b.SetRowCount(count)
+			return executor.Result{Batches: []*batch.Batch{b}}, nil
+		}
+		require.True(t, mvdefinition.CanWrite(ctx, target))
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
 	}
-	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(db, nil)
-	db.EXPECT().Relation(gomock.Any(), "mv", gomock.Any()).Return(rel, nil)
-	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
-
 	proc := testutil.NewProcess(t)
-	compile := NewCompile("db", "", "refresh materialized view mv", "", "", eng, proc, nil, false, nil, time.Now())
-	scope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
-		DdlType: plan2.DataDefinition_REFRESH_MATERIALIZED_VIEW,
-		Definition: &plan2.DataDefinition_RefreshMaterializedView{RefreshMaterializedView: &plan2.RefreshMaterializedView{
-			Database: "db", Name: "mv",
-		}},
-	}}}}
-	require.NoError(t, scope.RefreshMaterializedView(compile))
+	proc.ReplaceTopCtx(defines.AttachAccountId(t.Context(), 0))
+	c := NewCompile("db", "", "refresh materialized view mv", "", "", eng, proc, nil, false, nil, time.Now())
+	proc.Base.TxnOperator = txn
+	scope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{DdlType: plan2.DataDefinition_REFRESH_MATERIALIZED_VIEW, Definition: &plan2.DataDefinition_RefreshMaterializedView{RefreshMaterializedView: &plan2.RefreshMaterializedView{Database: "db", Name: "mv"}}}}}}
+	require.NoError(t, scope.RefreshMaterializedView(c))
 	require.Equal(t, []string{
 		"delete from `db`.`mv` where `__mo_fake_pk_col` is not null",
 		"insert into `db`.`mv` (`service`,`requests`,`__mo_fake_pk_col`) select `service`,`requests`, row_number() over () from (select `service`, count(*) as `requests` from `db`.`events` group by `service`) as `__mo_mv_refresh`",
 	}, sqls)
 }
-
-func TestScopeCreateMaterializedViewOnDemand(t *testing.T) {
+func TestMaterializedViewCreationFinalizesCatalogWithoutJob(t *testing.T) {
 	stubs := gostub.New()
 	t.Cleanup(stubs.Reset)
-	stubs.Stub(&engine.PlanDefsToExeDefs, func(*plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
-		return nil, nil, nil
-	})
 	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
 	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
-	stubs.Stub(&maybeCreateAutoIncrement, func(
-		context.Context, string, engine.Database, *plan2.TableDef, client.TxnOperator, func() string,
-	) error {
-		return nil
-	})
-
-	tableDef := &plan2.TableDef{
-		Name:      "mv",
-		Createsql: "create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service",
-		ViewSql:   &plan2.ViewDef{View: `{"Stmt":"create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service","DefaultDatabase":"db"}`},
-		Cols: []*plan2.ColDef{
-			{Name: "service"}, {Name: "requests"}, {Name: catalog.FakePrimaryKeyColName, Hidden: true},
-		},
-		Defs: []*plan2.TableDef_DefType{{Def: &plan2.TableDef_DefType_Properties{
-			Properties: &plan2.PropertiesDef{Properties: []*plan2.Property{
-				{Key: "mv_materialized", Value: "true"},
-				{Key: "mv_source_database", Value: "db"},
-				{Key: "mv_source_table", Value: "events"},
-				{Key: "mv_source_sql", Value: "events"},
-				{Key: "mv_refresh_sql", Value: "select service, count(*) requests from events group by service"},
-				{Key: "mv_incremental_spec", Value: "unused-on-demand"},
-				{Key: "mv_source_tables", Value: "unused-on-demand"},
-				{Key: "mv_refresh_method", Value: "complete"},
-				{Key: "mv_refresh_timing", Value: "demand"},
-			}},
-		}}},
-	}
+	d, target, source := testCompileMVDefinition(t)
+	d.Target.ID = 0
+	d.Target.DatabaseID = 0
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	target.Props[0].Value = encoded
 	ctrl := gomock.NewController(t)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	src := mock_frontend.NewMockRelation(ctrl)
+	db.EXPECT().Relation(gomock.Any(), "mv", gomock.Any()).Return(rel, nil)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(100))
+	rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(db, nil)
-	db.EXPECT().RelationExists(gomock.Any(), "mv", gomock.Any()).Return(false, nil)
-	db.EXPECT().Create(gomock.Any(), "mv", gomock.Any()).Return(nil)
-
+	db.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(src, nil)
+	src.EXPECT().GetTableDef(gomock.Any()).Return(source)
+	original := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.StreamConfigsDef{Configs: []*plan2.Property{{Key: "preserve", Value: "value"}, {Key: mvdefinition.Property, Value: encoded}}}}}
+	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{original}, nil)
+	rel.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *engine.ConstraintDef) error {
+		props := updated.Cts[0].(*engine.StreamConfigsDef).Configs
+		require.Equal(t, "value", props[0].Value)
+		final, err := mvdefinition.Decode(props[1].Value, true)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), final.Target.ID)
+		require.Equal(t, uint64(1), final.Target.DatabaseID)
+		require.Equal(t, encoded, original.Cts[0].(*engine.StreamConfigsDef).Configs[1].Value, "do not mutate shared cached constraints")
+		return nil
+	})
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.IsRestore = true
-	compile := NewCompile("db", "", tableDef.Createsql, "", "", eng, proc, nil, false, nil, time.Now())
-	scope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
-		DdlType: plan2.DataDefinition_CREATE_VIEW,
-		Definition: &plan2.DataDefinition_CreateView{CreateView: &plan2.CreateView{
-			Database: "db", TableDef: tableDef,
-		}},
-	}}}}
-	require.NoError(t, scope.CreateView(compile))
+	c := NewCompile("db", "", "", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NoError(t, c.createMaterializedViewDefinition(db, target))
 }
 
 func TestMaterializedViewStateTableFromDef(t *testing.T) {
@@ -1670,13 +1661,23 @@ func TestMaterializedViewStateTableFromDef(t *testing.T) {
 			Properties: &plan2.PropertiesDef{Properties: []*plan2.Property{{Key: "mv_incremental_spec", Value: spec}}},
 		}}}}
 	}
-	_, err = materializedViewStateTableFromDef(defWithSpec("not-base64"))
-	require.ErrorContains(t, err, "invalid materialized view incremental specification")
-	_, err = materializedViewStateTableFromDef(defWithSpec("e30="))
+	// Old branch metadata must not authorize deletion of a guessed table name.
+	for _, spec := range []string{"not-base64", "e30=", "eyJzdGF0ZV90YWJsZSI6Il9fc3RhdGUifQ=="} {
+		state, err = materializedViewStateTableFromDef(defWithSpec(spec))
+		require.NoError(t, err)
+		require.Empty(t, state)
+	}
+	version := uint32(0)
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv as select * from src", RefreshSQL: "select * from src", Method: "complete", Timing: "demand", Columns: []string{"a"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "src", DatabaseID: 1, ID: 11}, Version: &version}}, State: &mvdefinition.Relation{Database: "db", Name: "__mo_mv_state_test", DatabaseID: 1, ID: 101}}
+	encoded, err := mvdefinition.Encode(d)
 	require.NoError(t, err)
-	state, err = materializedViewStateTableFromDef(defWithSpec("eyJzdGF0ZV90YWJsZSI6Il9fc3RhdGUifQ=="))
+	def := &plan2.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan2.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}
+	state, err = materializedViewStateTableFromDef(def)
 	require.NoError(t, err)
-	require.Equal(t, "__state", state)
+	require.Equal(t, "__mo_mv_state_test", state)
+	def.Props[0].Value = "broken"
+	_, err = materializedViewStateTableFromDef(def)
+	require.Error(t, err)
 }
 
 func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {

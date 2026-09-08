@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -37,6 +36,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -2670,6 +2670,11 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
+		if err := requireMaterializedViewCapability(c); err != nil {
+			return err
+		}
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2775,66 +2780,10 @@ func (s *Scope) CreateView(c *Compile) error {
 		); err != nil {
 			return err
 		}
-		var sourceDB, sourceTable, sourceSQL, refreshSQL, incrementalSpec, sourceTablesEncoded, refreshMethod, refreshTiming string
-		for _, def := range qry.GetTableDef().GetDefs() {
-			props := def.GetProperties()
-			if props == nil {
-				continue
-			}
-			for _, prop := range props.GetProperties() {
-				switch prop.GetKey() {
-				case "mv_source_database":
-					sourceDB = prop.GetValue()
-				case "mv_source_table":
-					sourceTable = prop.GetValue()
-				case "mv_refresh_sql":
-					refreshSQL = prop.GetValue()
-				case "mv_incremental_spec":
-					incrementalSpec = prop.GetValue()
-				case "mv_source_sql":
-					sourceSQL = prop.GetValue()
-				case "mv_source_tables":
-					sourceTablesEncoded = prop.GetValue()
-				case "mv_refresh_method":
-					refreshMethod = prop.GetValue()
-				case "mv_refresh_timing":
-					refreshTiming = prop.GetValue()
-				}
-			}
+		if err = c.createMaterializedViewDefinition(dbSource, qry.GetTableDef()); err != nil {
+			return err
 		}
-		if sourceDB == "" || sourceTable == "" || sourceSQL == "" || refreshSQL == "" {
-			return moerr.NewInternalError(c.proc.Ctx, "incomplete materialized view definition")
-		}
-		columns := make([]string, 0, len(qry.GetTableDef().GetCols()))
-		for _, col := range qry.GetTableDef().GetCols() {
-			if !col.GetHidden() {
-				columns = append(columns, col.GetName())
-			}
-		}
-		if refreshTiming != "demand" {
-			spec := &iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_MaterializedView),
-				DBName:       dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, SourceSQL: sourceSQL, IncrementalSpec: incrementalSpec, RefreshMethod: refreshMethod,
-			}}
-			if sourceTablesEncoded != "" {
-				var names []struct{ Database, Table string }
-				decoded, decodeErr := base64.StdEncoding.DecodeString(sourceTablesEncoded)
-				if decodeErr != nil || json.Unmarshal(decoded, &names) != nil || len(names) == 0 {
-					return moerr.NewInternalError(c.proc.Ctx, "invalid materialized view source table metadata")
-				}
-				spec.SrcTables = make([]iscp.TableInfo, 0, len(names))
-				for _, name := range names {
-					spec.SrcTables = append(spec.SrcTables, iscp.TableInfo{DBName: name.Database, TableName: name.Table})
-				}
-			}
-			if !supportsMultiSourceISCP(c.proc.GetService()) {
-				return moerr.NewNotSupported(c.proc.Ctx, "materialized view requires all services to support ISCP materialized view consumers")
-			}
-			job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
-			if _, err = CreateCdcTask(c, spec, job, false); err != nil {
-				return err
-			}
-		}
+
 	}
 	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
 		return err
@@ -2875,55 +2824,21 @@ func (s *Scope) RefreshMaterializedView(c *Compile) error {
 	if !plan2.IsMaterializedViewTableDef(tableDef) {
 		return moerr.NewNotSupportedf(c.proc.Ctx, "%s.%s is not a materialized view", dbName, viewName)
 	}
-	var refreshSQL, refreshMethod, refreshTiming, sourceDB, sourceTable, sourceTablesEncoded string
-	for _, item := range tableDef.GetDefs() {
-		if props := item.GetProperties(); props != nil {
-			for _, prop := range props.GetProperties() {
-				switch prop.GetKey() {
-				case "mv_refresh_sql":
-					refreshSQL = prop.GetValue()
-				case "mv_refresh_method":
-					refreshMethod = prop.GetValue()
-				case "mv_refresh_timing":
-					refreshTiming = prop.GetValue()
-				case "mv_source_database":
-					sourceDB = prop.GetValue()
-				case "mv_source_table":
-					sourceTable = prop.GetValue()
-				case "mv_source_tables":
-					sourceTablesEncoded = prop.GetValue()
-				}
-			}
-		}
+	d, err := mvdefinition.FromTable(tableDef)
+	if err != nil {
+		return err
 	}
-	if refreshTiming != "demand" || refreshMethod != "complete" {
-		return moerr.NewNotSupported(c.proc.Ctx, "manual REFRESH requires a COMPLETE or FULL ON DEMAND materialized view")
+	if d.Timing != "demand" || d.Method != "complete" {
+		return moerr.NewNotSupported(c.proc.Ctx, "manual REFRESH requires COMPLETE ON DEMAND")
 	}
-	if refreshSQL == "" {
-		return moerr.NewInternalError(c.proc.Ctx, "materialized view has no refresh query")
+	info, err := iscp.MaterializedViewInfo(d)
+	if err != nil {
+		return err
 	}
-	columns := make([]string, 0, len(tableDef.GetCols()))
-	for _, col := range tableDef.GetCols() {
-		if !col.GetHidden() {
-			columns = append(columns, col.GetName())
-		}
-	}
-	info := &iscp.ConsumerInfo{
-		DBName: dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, RefreshMethod: refreshMethod,
-		SrcTables: []iscp.TableInfo{{DBName: sourceDB, TableName: sourceTable}},
-	}
-	if sourceTablesEncoded != "" {
-		var names []struct{ Database, Table string }
-		decoded, decodeErr := base64.StdEncoding.DecodeString(sourceTablesEncoded)
-		if decodeErr != nil || json.Unmarshal(decoded, &names) != nil || len(names) == 0 {
-			return moerr.NewInternalError(c.proc.Ctx, "invalid materialized view source table metadata")
-		}
-		info.SrcTables = make([]iscp.TableInfo, 0, len(names))
-		for _, name := range names {
-			info.SrcTables = append(info.SrcTables, iscp.TableInfo{DBName: name.Database, TableName: name.Table})
-		}
-	}
-	return iscp.RefreshMaterializedView(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), info, nil)
+	refreshContext, cancel := context.WithTimeout(c.proc.Ctx, time.Hour)
+	defer cancel()
+	return iscp.RefreshMaterializedView(refreshContext, c.e, c.proc.GetService(), c.proc.GetTxnOperator(), info, nil)
+
 }
 
 var checkIndexInitializable = func(dbName string, tblName string) bool {
@@ -3755,6 +3670,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	if truncate.IsDelete {
+		preserve, err := c.hasMaterializedViewDependent(accountID, oldID)
+		if err != nil {
+			return err
+		}
+		if preserve {
+			// DELETE is a data change. Replacing a referenced physical relation
+			// would invalidate both ON CHANGE and ON DEMAND definitions. This
+			// check follows the source catalog lock, which also serializes CREATE
+			// MV; WHERE TRUE keeps the nested delete on its row-based path.
+			result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(db, table)), int32(accountID))
+			if err != nil {
+				return err
+			}
+			defer result.Close()
+			c.addAffectedRows(result.AffectedRows)
+			return nil
+		}
+	}
+
 	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
@@ -4308,7 +4243,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	// Unregister the source-table ISCP job before deleting its materialized result.
 	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
-		if err = DeleteMaterializedViewTask(c, qry.Database, qry.Table); err != nil {
+		if err = DeleteMaterializedViewTask(c, qry.Database, qry.Table, qry.GetTableDef().GetTblId()); err != nil {
 			return err
 		}
 		stateTable, stateErr := materializedViewStateTableFromDef(qry.GetTableDef())
@@ -4322,7 +4257,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 					return stateErr
 				}
 			} else {
-				if !plan2.IsMaterializedViewStateTableDef(stateRel.GetTableDef(c.proc.Ctx)) {
+				owner, ownerErr := mvdefinition.StateOwner(stateRel.GetTableDef(c.proc.Ctx))
+				d, defErr := mvdefinition.FromTable(qry.GetTableDef())
+				if ownerErr != nil || defErr != nil || d.State == nil || owner.TargetID != d.Target.ID || owner.AccountID != d.AccountID || owner.Generation != d.Generation || owner.StateID != d.State.ID {
 					return moerr.NewInternalErrorf(c.proc.Ctx, "materialized view state relation %s has invalid identity", stateTable)
 				}
 				if stateErr = lockMoTable(c, dbName, stateTable, lock.LockMode_Exclusive); stateErr != nil {
@@ -4517,36 +4454,20 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 }
 
 func materializedViewStateTableFromDef(def *plan.TableDef) (string, error) {
-	if def == nil {
-		return "", nil
-	}
-	var encoded string
-	for _, item := range def.GetDefs() {
-		props := item.GetProperties()
-		if props == nil {
-			continue
-		}
-		for _, prop := range props.GetProperties() {
-			if prop.GetKey() == "mv_incremental_spec" {
-				encoded = prop.GetValue()
-				break
-			}
-		}
-	}
-	if encoded == "" {
-		return "", nil
-	}
-	b, err := base64.StdEncoding.DecodeString(encoded)
+	d, err := mvdefinition.FromTable(def)
 	if err != nil {
-		return "", moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
+		// Unreleased legacy MVs can be removed, but guessed state names cannot
+		// authorize deleting another relation.
+		if mvdefinition.PropertyValue(def, mvdefinition.Property) == "" {
+			return "", nil
+		}
+		return "", err
 	}
-	var spec struct {
-		StateTable string `json:"state_table"`
+	if d.State == nil {
+		return "", nil
 	}
-	if err = json.Unmarshal(b, &spec); err != nil {
-		return "", moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
-	}
-	return spec.StateTable, nil
+	return d.State.Name, nil
+
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {

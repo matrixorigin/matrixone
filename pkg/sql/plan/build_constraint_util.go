@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -502,6 +503,10 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 }
 
 func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && !mvdefinition.CanWrite(ctx, tableDef) {
+		return moerr.NewUnsupportedDML(ctx, "materialized views can only be written by their refresh")
+	}
+
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
@@ -589,6 +594,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return err
 	}
 
+	ownedDef := *tableDef
+	tableDef = &ownedDef
 	var newCols []*ColDef
 	writeMVState := tblInfo.typ == "insert" && CanWriteMaterializedViewHiddenColumns(ctx.GetContext(), tableDef)
 	for _, col := range tableDef.Cols {

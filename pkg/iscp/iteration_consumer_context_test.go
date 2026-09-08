@@ -277,7 +277,7 @@ func runIterationConsumersWithStatusesForTest(
 			ctx,
 			nil,
 			iterCtx,
-			changes,
+			[]iterationSourceChanges{{tableID: iterCtx.tableID, changes: changes}},
 			consumers,
 			statuses,
 			nil,
@@ -379,7 +379,7 @@ func TestRunIterationRestoresAttrsWithRetainedRowID(t *testing.T) {
 	packer := types.NewPacker()
 	defer packer.Close()
 	runISCPTaskIterationConsumers(
-		context.Background(), nil, testIterationContext(), changes,
+		context.Background(), nil, testIterationContext(), []iterationSourceChanges{{changes: changes}},
 		[]Consumer{consumer}, []*JobStatus{{}},
 		&planpb.TableDef{Cols: []*planpb.ColDef{
 			{Name: "event_id"}, {Name: "bytes_sent"}, {Name: objectio.DefaultCommitTS_Attr},

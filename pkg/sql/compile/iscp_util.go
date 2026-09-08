@@ -76,9 +76,9 @@ func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), job)
 }
 
-func DeleteMaterializedViewTask(c *Compile, dbName, tableName string) error {
+func DeleteMaterializedViewTask(c *Compile, dbName, tableName string, targetID uint64) error {
 	logutil.Infof("Delete materialized view task %s.%s", dbName, tableName)
-	return iscpUnregisterMV(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName, tableName)
+	return iscpUnregisterMV(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName, tableName, targetID)
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {

@@ -1188,7 +1188,7 @@ type Relation interface {
 // this for tombstones, whose public batch contains the rowid and primary key
 // but not the deleted row values.
 type RowIDReader interface {
-	ReadRowsByRowID(context.Context, []types.Rowid, types.TS, []string, *mpool.MPool) ([][]any, error)
+	ReadRowsByRowID(context.Context, []types.Rowid, types.TS, []string, *mpool.MPool, *RowIDReadBudget) ([][]any, error)
 }
 
 // RelationHandleFactory is implemented by engines whose cached relations are

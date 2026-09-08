@@ -16,20 +16,17 @@ package iscp
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -78,100 +75,7 @@ type materializedViewSignedRow struct {
 }
 
 func decodeIncrementalDescription(encoded string) (*incrementalDescription, error) {
-	b, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification encoding: %v", err)
-	}
-	var desc incrementalDescription
-	if err := json.Unmarshal(b, &desc); err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
-	}
-	if desc.Version == 0 {
-		desc.Version = 1
-	}
-	if desc.Version < 1 || desc.Version > 3 {
-		return nil, moerr.NewInternalErrorNoCtxf("unsupported materialized view incremental specification version %d", desc.Version)
-	}
-	if err := validateIncrementalDescription(&desc, false); err != nil {
-		return nil, err
-	}
-	return &desc, nil
-}
-
-func validateIncrementalDescription(desc *incrementalDescription, nested bool) error {
-	if desc == nil {
-		return moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
-	}
-	if desc.Strategy == "union-all" {
-		if nested || desc.Version != 3 || len(desc.Branches) < 2 || desc.GroupKeyColumn == "" ||
-			desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
-			return moerr.NewInternalErrorNoCtx("invalid materialized view UNION ALL incremental specification")
-		}
-		branchIDs := make(map[int]struct{}, len(desc.Branches))
-		for _, item := range desc.Branches {
-			branch := item.Description
-			if branch == nil || branch.BranchID <= 0 || branch.SourceDatabase == "" || branch.SourceTable == "" ||
-				branch.GroupKeyColumn != desc.GroupKeyColumn || branch.RowCountColumn != desc.RowCountColumn ||
-				!slices.Equal(branch.StateColumns, desc.StateColumns) {
-				return moerr.NewInternalErrorNoCtx("invalid materialized view UNION ALL branch specification")
-			}
-			if _, exists := branchIDs[branch.BranchID]; exists {
-				return moerr.NewInternalErrorNoCtx("duplicate materialized view UNION ALL branch identity")
-			}
-			branchIDs[branch.BranchID] = struct{}{}
-			if err := validateIncrementalDescription(branch, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if len(desc.Branches) != 0 {
-		return moerr.NewInternalErrorNoCtx("nested materialized view incremental branches are not supported")
-	}
-	if desc.SourceAlias == "" || len(desc.SourceColumns) == 0 || len(desc.Groups) == 0 ||
-		desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
-		return moerr.NewInternalErrorNoCtx("incomplete materialized view incremental specification")
-	}
-	for _, group := range desc.Groups {
-		if group.Expression == "" || group.OutputColumn == "" {
-			return moerr.NewInternalErrorNoCtx("invalid materialized view incremental group")
-		}
-	}
-	for _, agg := range desc.Aggregates {
-		switch agg.Kind {
-		case "count_star":
-		case "count_column":
-			if agg.InputExpression == "" {
-				return moerr.NewInternalErrorNoCtx("incremental COUNT requires an input")
-			}
-		case "sum":
-			if agg.InputExpression == "" || agg.StateCountColumn == "" {
-				return moerr.NewInternalErrorNoCtx("incremental SUM requires input and state")
-			}
-			if desc.GroupKeyColumn != "" && agg.StateSumColumn == "" {
-				return moerr.NewInternalErrorNoCtx("incremental SUM with a group key requires sum state")
-			}
-		case "avg":
-			if agg.InputExpression == "" || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
-				return moerr.NewInternalErrorNoCtx("incremental AVG requires input and state")
-			}
-		case "min", "max":
-			if agg.InputExpression == "" {
-				return moerr.NewInternalErrorNoCtxf("incremental %s requires an input", strings.ToUpper(agg.Kind))
-			}
-		case "count_distinct":
-			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 {
-				return moerr.NewInternalErrorNoCtx("incremental COUNT(DISTINCT) requires versioned auxiliary state")
-			}
-		case "sum_distinct", "avg_distinct":
-			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
-				return moerr.NewInternalErrorNoCtxf("incremental %s(DISTINCT) requires versioned auxiliary state", strings.ToUpper(strings.TrimSuffix(agg.Kind, "_distinct")))
-			}
-		default:
-			return moerr.NewInternalErrorNoCtxf("incremental aggregate %q is not supported", agg.Kind)
-		}
-	}
-	return nil
+	return mvdefinition.DecodeIncremental(encoded)
 }
 
 func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r DataRetriever) (drained bool, err error) {
@@ -184,11 +88,17 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 		return false, moerr.NewInternalErrorNoCtx("materialized view retriever does not expose from boundary")
 	}
 	var insertRows, deleteRows int
+	var operationErr error
 	err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID,
-		r.GetAccountID(), 24*time.Hour, nil, nil,
-		func(sqlproc *sqlexec.SqlProcess, _ any) error {
+		r.GetAccountID(), time.Hour, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, _ any) (callbackErr error) {
+			defer func() { operationErr = callbackErr }()
 			sqlctx := sqlproc.SqlCtx
-			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
+			d, loadErr := LoadMaterializedViewDefinition(sqlproc.GetContext(), c.cnEngine, sqlctx.GetService(), sqlctx.Txn(), c.info, true)
+			if loadErr != nil {
+				return loadErr
+			}
+			refreshCtx := mvdefinition.WithAuthority(sqlproc.GetContext(), d)
 			runtimes, byTableID, err := c.materializedViewIncrementalRuntimes(refreshCtx, sqlctx.Txn(), desc)
 			if err != nil {
 				return err
@@ -212,70 +122,74 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					data.Done()
 					break
 				}
-				inserts, decodeErr := materializedViewRowsFromBatch(data.insertBatch, true)
-				if decodeErr != nil {
-					data.Done()
-					return decodeErr
-				}
-				deletes, decodeErr := materializedViewRowsFromBatch(data.deleteBatch, false)
-				if decodeErr != nil {
-					data.Done()
-					return decodeErr
-				}
-				insertRows += len(inserts)
-				deleteRows += len(deletes)
-				selected := runtimes
-				if desc.Strategy == "union-all" {
-					selected = byTableID[data.SourceTableID]
-					if data.SourceTableID == 0 || len(selected) == 0 {
-						data.Done()
-						return moerr.NewInternalErrorNoCtxf("materialized view UNION ALL received unknown source table %d", data.SourceTableID)
-					}
-				}
-				for _, runtime := range selected {
-					rows := make([]materializedViewSignedRow, 0, len(inserts)+len(deletes))
-					for _, row := range inserts {
-						rows = append(rows, materializedViewSignedRow{values: row.Values, sign: 1})
-					}
-					if len(deletes) > 0 {
-						oldRows, readErr := readMaterializedViewDeletedRows(
-							refreshCtx, runtime.reader, deletes, from.GetFromTS(), runtime.desc.SourceColumns,
-						)
-						if readErr != nil {
-							data.Done()
-							return readErr
-						}
-						if len(oldRows) != len(deletes) {
-							data.Done()
-							return moerr.NewInternalErrorNoCtxf("rowid lookup returned %d rows for %d deletes", len(oldRows), len(deletes))
-						}
-						for i := range oldRows {
-							values := make(map[string]any, len(runtime.desc.SourceColumns))
-							for j, column := range runtime.desc.SourceColumns {
-								values[strings.ToLower(column)] = oldRows[i][j]
-							}
-							rows = append(rows, materializedViewSignedRow{values: values, sign: -1})
-						}
-					}
-					for start := 0; start < len(rows); start += materializedViewDeltaBatchRows {
-						end := min(start+materializedViewDeltaBatchRows, len(rows))
-						chunk := rows[start:end]
-						if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
-							data.Done()
-							return err
-						}
-						if err := applyMaterializedViewDistinctDeltas(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
-							data.Done()
-							return err
-						}
-						if err := recordMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, chunk); err != nil {
-							data.Done()
-							return err
-						}
-					}
-				}
 				done := data.noMoreData
-				data.Done()
+				processErr := func() error {
+					defer data.Done()
+					selected := runtimes
+					if desc.Strategy == "union-all" {
+						selected = byTableID[data.SourceTableID]
+						if data.SourceTableID == 0 || len(selected) == 0 {
+							return moerr.NewInternalErrorNoCtxf("materialized view UNION ALL received unknown source table %d", data.SourceTableID)
+						}
+					}
+					columns := make(map[string]bool)
+					for _, runtime := range selected {
+						for _, column := range runtime.desc.SourceColumns {
+							columns[strings.ToLower(column)] = true
+						}
+					}
+					apply := func(runtime materializedViewIncrementalRuntime, rows []materializedViewSignedRow) error {
+						if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, rows); err != nil {
+							return err
+						}
+						if err := applyMaterializedViewDistinctDeltas(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, rows); err != nil {
+							return err
+						}
+						return recordMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, runtime.desc, runtime.sourceTypes, rows)
+					}
+					if err := visitMaterializedViewRows(refreshCtx, data.insertBatch, true, columns, materializedViewDeltaBatchRows, materializedViewDeltaMaxSQL, func(inserts []materializedViewChangeRow) error {
+						insertRows += len(inserts)
+						rows := make([]materializedViewSignedRow, len(inserts))
+						for i, row := range inserts {
+							rows[i] = materializedViewSignedRow{values: row.Values, sign: 1}
+						}
+						for _, runtime := range selected {
+							if err := apply(runtime, rows); err != nil {
+								return err
+							}
+						}
+						return nil
+					}); err != nil {
+						return err
+					}
+					return visitMaterializedViewRows(refreshCtx, data.deleteBatch, false, nil, materializedViewDeltaBatchRows, materializedViewDeltaMaxSQL, func(deletes []materializedViewChangeRow) error {
+						deleteRows += len(deletes)
+						for _, runtime := range selected {
+							oldRows, err := readMaterializedViewDeletedRows(refreshCtx, runtime.reader, deletes, from.GetFromTS(), runtime.desc.SourceColumns)
+							if err != nil {
+								return err
+							}
+							rows := make([]materializedViewSignedRow, len(oldRows))
+							for i, old := range oldRows {
+								if len(old) != len(runtime.desc.SourceColumns) {
+									return moerr.NewInternalErrorNoCtx("historical row column count changed")
+								}
+								values := make(map[string]any, len(old))
+								for j, column := range runtime.desc.SourceColumns {
+									values[strings.ToLower(column)] = old[j]
+								}
+								rows[i] = materializedViewSignedRow{values: values, sign: -1}
+							}
+							if err := apply(runtime, rows); err != nil {
+								return err
+							}
+						}
+						return nil
+					})
+				}()
+				if processErr != nil {
+					return processErr
+				}
 				if done {
 					drained = true
 					break
@@ -296,6 +210,14 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 			}
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
 		})
+	if err != nil {
+		// A successful callback followed by a commit error has unknown publication
+		// outcome. A failed rollback cannot authorize FORCE fallback either.
+		joined, ok := err.(interface{ Unwrap() []error })
+		if operationErr == nil || !errors.Is(err, operationErr) || ok && len(joined.Unwrap()) != 1 {
+			err = &materializedViewNoFallback{error: err}
+		}
+	}
 	if err == nil {
 		metricv2.ISCPMaterializedViewRows.WithLabelValues("insert").Add(float64(insertRows))
 		metricv2.ISCPMaterializedViewRows.WithLabelValues("delete").Add(float64(deleteRows))
@@ -384,10 +306,14 @@ func readMaterializedViewDeletedRows(
 		group.indices = append(group.indices, i)
 		group.rowids = append(group.rowids, deletes[i].RowID)
 	}
+	if len(deletes) > engine.MaxRowIDReadRows {
+		return nil, engine.ErrRowIDReadLimit
+	}
+	budget := &engine.RowIDReadBudget{RemainingBytes: engine.MaxRowIDReadBytes}
 	result := make([][]any, len(deletes))
 	for _, snapshot := range order {
 		group := groups[snapshot]
-		rows, err := reader.ReadRowsByRowID(ctx, group.rowids, snapshot, columns, nil)
+		rows, err := reader.ReadRowsByRowID(ctx, group.rowids, snapshot, columns, nil, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -662,23 +588,6 @@ func materializedViewSourceForBranch(info *ConsumerInfo, desc *incrementalDescri
 		}
 	}
 	return nil, false
-}
-
-func ensureMaterializedViewStateTable(
-	ctx context.Context,
-	service string,
-	txn client.TxnOperator,
-	info *ConsumerInfo,
-	desc *incrementalDescription,
-) error {
-	if !materializedViewHasAuxiliaryState(desc) {
-		return nil
-	}
-	sql := fmt.Sprintf(
-		"CREATE TABLE IF NOT EXISTS %s (aggregate_index INT NOT NULL, group_key VARBINARY(65535) NOT NULL, value_key VARBINARY(65535) NOT NULL, ref_count BIGINT NOT NULL, PRIMARY KEY (aggregate_index, group_key, value_key)) COMMENT = 'matrixone materialized view state'",
-		sqlquote.QualifiedIdent(info.DBName, desc.StateTable),
-	)
-	return execMaterializedViewDeltaAndClose(ctx, sql, service, txn)
 }
 
 func resetMaterializedViewAffectedGroups(

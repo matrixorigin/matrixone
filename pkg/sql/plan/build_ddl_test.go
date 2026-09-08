@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1425,8 +1426,9 @@ func tableDefCreateSQL(tableDef *plan.TableDef) string {
 	return ""
 }
 
-func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
-	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{
+func TestIsMaterializedViewTableDefUsesCatalogIdentity(t *testing.T) {
+	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{TableType: "m"}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
 		Createsql: "  CREATE MATERIALIZED VIEW mv AS SELECT 1",
 	}))
 	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
@@ -1465,7 +1467,7 @@ func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
 
 func TestIsMaterializedViewStateTableDefUsesReservedIdentity(t *testing.T) {
 	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "__mo_mv_state_0123456789abcdef"}))
-	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{
 		Name: "state", Createsql: "create table state (a int) comment = 'matrixone materialized view state'",
 	}))
 	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "user_state"}))
@@ -1507,27 +1509,27 @@ func TestInsertRejectsMaterializedViewTarget(t *testing.T) {
 	name := "mv_events"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424243}
 	mock.ctxt.tables[name] = &plan.TableDef{
-		Name:      name,
+		Name: name, TableType: "m",
 		Createsql: "create materialized view mv_events as select 1 as a",
 		Cols:      []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
 	}
 	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
-	require.ErrorContains(t, err, "insert into materialized view")
+	require.ErrorContains(t, err, "materialized views can only be written by their refresh")
 }
 
 func TestValidateMaterializedViewSources(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
-	mv := &plan.TableDef{
-		Name:      "mv",
-		DbName:    "tpch",
-		Createsql: "create materialized view mv as select * from tpch.missing_orders",
-	}
-	err := ValidateMaterializedViewSources(ctx, mv)
-	require.Error(t, err)
+	mv, d := testMaterializedViewTable(t, "mv")
+	d.Sources[0].Name = "missing_orders"
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	mv.Props[0].Value = encoded
+	err = ValidateMaterializedViewSources(ctx, mv)
 	require.ErrorContains(t, err, "missing_orders")
-
-	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel}
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", DbId: 1, TblId: 11, TableType: "r"}
 	require.NoError(t, ValidateMaterializedViewSources(ctx, mv))
+	ctx.tables["missing_orders"].TblId++
+	require.ErrorContains(t, ValidateMaterializedViewSources(ctx, mv), "changed")
 }
 
 func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testing.T) {
@@ -1537,7 +1539,7 @@ func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testi
 	ctx.tables["view_orders"] = &plan.TableDef{Name: "view_orders", DbName: "tpch", TableType: catalog.SystemViewRel}
 	ctx.tables["temp_orders"] = &plan.TableDef{Name: "temp_orders", DbName: "tpch", TableType: catalog.SystemTemporaryTable}
 	ctx.tables["mv_orders"] = &plan.TableDef{
-		Name: "mv_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel,
+		Name: "mv_orders", DbName: "tpch", TableType: "m",
 		Createsql: "create materialized view mv_orders as select * from tpch.missing_orders",
 	}
 
@@ -1573,19 +1575,28 @@ func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
 
 func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	property := func(def *plan.TableDef, key string) string {
-		for _, item := range def.GetDefs() {
-			if props := item.GetProperties(); props != nil {
-				for _, prop := range props.GetProperties() {
-					if prop.GetKey() == key {
-						return prop.GetValue()
-					}
-				}
-			}
+		d, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+		require.NoError(t, err)
+		switch key {
+		case "mv_refresh_method":
+			return d.Method
+		case "mv_refresh_timing":
+			return d.Timing
+		case "mv_incremental_spec":
+			return d.Incremental
 		}
+		t.Fatalf("unexpected property %s", key)
 		return ""
 	}
-
 	mock := NewMockOptimizer(true)
+	for name, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+		if def.TblId == 0 {
+			t.Fatalf("source %s needs table ID", name)
+		}
+	}
+
 	forcePlan, err := runOneStmt(mock, t, "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey")
 	require.NoError(t, err)
 	forceDef := forcePlan.GetDdl().GetCreateView().GetTableDef()
@@ -1605,22 +1616,20 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.NoError(t, err)
 	unionDef := unionPlan.GetDdl().GetCreateView().GetTableDef()
 	require.NotEmpty(t, property(unionDef, "mv_incremental_spec"))
-	encodedSources, err := base64.StdEncoding.DecodeString(property(unionDef, "mv_source_tables"))
+	unionDefinition, err := mvdefinition.Decode(mvdefinition.PropertyValue(unionDef, mvdefinition.Property), false)
 	require.NoError(t, err)
-	var unionSources []struct{ Database, Table string }
-	require.NoError(t, json.Unmarshal(encodedSources, &unionSources))
-	require.Len(t, unionSources, 2)
+	require.Len(t, unionDefinition.Sources, 2)
 
 	_, err = runOneStmt(mock, t, "create materialized view mv_union_distinct refresh fast on change as "+
 		"select n_regionkey k, count(*) c from nation group by n_regionkey "+
 		"union distinct select r_regionkey, count(*) from region group by r_regionkey")
-	require.ErrorContains(t, err, "set operations must be UNION ALL")
+	require.ErrorContains(t, err, "direct base sources or UNION ALL branches")
 
 	tooManyBranches := "create materialized view mv_union_wide refresh force on change as " +
 		"select n_regionkey k, count(*) c from nation group by n_regionkey" +
 		strings.Repeat(" union all select n_regionkey, count(*) from nation group by n_regionkey", materializedViewMaxDirectInputs)
 	_, err = runOneStmt(mock, t, tooManyBranches)
-	require.ErrorContains(t, err, "supports at most 16 direct UNION ALL branches, got 17")
+	require.ErrorContains(t, err, "1 to 16 direct base sources or UNION ALL branches")
 
 	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey limit 1")
 	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_LIMIT")
@@ -1633,7 +1642,7 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.Empty(t, property(completeDef, "mv_incremental_spec"))
 
 	_, err = runOneStmt(mock, t, "create materialized view mv_bad_demand refresh force on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
-	require.ErrorContains(t, err, "ON DEMAND currently requires COMPLETE or FULL")
+	require.ErrorContains(t, err, "ON DEMAND requires COMPLETE")
 
 	demandPlan, err := runOneStmt(mock, t, "create materialized view mv_demand refresh full on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
 	require.NoError(t, err)
@@ -1643,6 +1652,7 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.Empty(t, property(demandDef, "mv_incremental_spec"))
 	demandDef.Createsql = "create materialized view mv_demand refresh complete on demand as select n_regionkey, count(*) c from nation group by n_regionkey"
 
+	finalizeTestMaterializedView(t, demandDef, 101)
 	mock.ctxt.tables["mv_demand"] = demandDef
 	mock.ctxt.objects["mv_demand"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_demand"}
 	refreshPlan, err := runOneStmt(mock, t, "refresh materialized view mv_demand")
@@ -1650,6 +1660,7 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.Equal(t, plan.DataDefinition_REFRESH_MATERIALIZED_VIEW, refreshPlan.GetDdl().GetDdlType())
 	require.Equal(t, "mv_demand", refreshPlan.GetDdl().GetRefreshMaterializedView().GetName())
 
+	finalizeTestMaterializedView(t, forceDef, 102)
 	mock.ctxt.tables["mv_force"] = forceDef
 	forceDef.Createsql = "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey"
 	mock.ctxt.objects["mv_force"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_force"}
@@ -1828,7 +1839,7 @@ func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 	ctx := &mock.ctxt
 	ctx.SetContext(context.Background())
 	def := &TableDef{
-		Name: "mv_state", DbName: "tpch", TableType: catalog.SystemOrdinaryRel,
+		Name: "mv_state", DbName: "tpch", TblId: 100, DbId: 1, TableType: "m",
 		Createsql: "create materialized view mv_state as select service, count(*) from nation group by service",
 		Cols: []*ColDef{
 			{Name: "service", Typ: Type{Id: int32(types.T_varchar)}},
@@ -1841,7 +1852,9 @@ func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 	ctx.tables[def.Name] = def
 	ctx.objects[def.Name] = &ObjectRef{SchemaName: "tpch", ObjName: def.Name}
 
-	ctx.SetContext(context.WithValue(context.Background(), defines.MaterializedViewRefreshKey{}, true))
+	fixture, d := testMaterializedViewTable(t, "mv_state")
+	def.Props = fixture.Props
+	ctx.SetContext(mvdefinition.WithAuthority(defines.AttachAccountId(context.Background(), 0), d))
 	_, err := runOneStmt(mock, t, "insert into mv_state (service, __mv_state, __mo_fake_pk_col) select 'api', 1, 1")
 	require.NoError(t, err)
 	_, err = runOneStmt(mock, t, "update mv_state set __mv_state = __mv_state + 1 where service = 'api'")
@@ -6907,4 +6920,28 @@ func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
 	require.Equal(t,
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'PRIMARY' where db_name = 'db' and table_name = 'child' and constraint_name = 'fk_child_parent'",
 		getSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
+}
+
+func testMaterializedViewTable(t *testing.T, name string) (*plan.TableDef, *mvdefinition.Definition) {
+	t.Helper()
+	version := uint32(0)
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	return &plan.TableDef{Name: name, DbName: "tpch", TblId: 100, DbId: 1, TableType: "m", Props: []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}, d
+}
+func finalizeTestMaterializedView(t *testing.T, def *plan.TableDef, id uint64) {
+	t.Helper()
+	d, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+	require.NoError(t, err)
+	d.Target.ID = id
+	d.Target.DatabaseID = 1
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	def.TblId = id
+	def.DbId = 1
+	def.DbName = d.Target.Database
+	def.TableType = "m"
+	def.ViewSql = nil
+	def.Props = []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}
 }

@@ -19,17 +19,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -44,10 +46,11 @@ import (
 type materializedViewTestRelation struct {
 	engine.Relation
 	rows [][]any
+	def  *planpb.TableDef
 }
 
 func (r *materializedViewTestRelation) ReadRowsByRowID(
-	context.Context, []types.Rowid, types.TS, []string, *mpool.MPool,
+	context.Context, []types.Rowid, types.TS, []string, *mpool.MPool, *engine.RowIDReadBudget,
 ) ([][]any, error) {
 	return r.rows, nil
 }
@@ -90,9 +93,9 @@ func TestNewMaterializedViewConsumerValidatesSpec(t *testing.T) {
 	_, err := NewMaterializedViewConsumer("", nil, nil, JobID{}, nil)
 	require.Error(t, err)
 
-	consumer, err := NewMaterializedViewConsumer("", nil, nil, JobID{}, &ConsumerInfo{
-		DBName: "db", TableName: "mv", RefreshSQL: "select count(*) from src", SourceSQL: "src",
-	})
+	info := &ConsumerInfo{DBName: "db", TableName: "mv", RefreshSQL: "select count(*) from events"}
+	newMVTestCatalog(t, info)
+	consumer, err := NewMaterializedViewConsumer("", nil, nil, JobID{}, info)
 	require.NoError(t, err)
 	require.IsType(t, &MaterializedViewConsumer{}, consumer)
 }
@@ -106,34 +109,24 @@ func TestMaterializedViewConsumerNeedsTailPayloadOnlyForIncrementalRefresh(t *te
 }
 
 func TestRefreshMaterializedViewOnDemandUsesCallerTransaction(t *testing.T) {
-	oldExec := ExecWithResult
-	defer func() { ExecWithResult = oldExec }()
-	var sqls []string
-	ExecWithResult = func(ctx context.Context, sql, _ string, txn client.TxnOperator) (executor.Result, error) {
-		require.NotNil(t, ctx.Value(defines.MaterializedViewRefreshKey{}))
-		require.Nil(t, txn)
-		sqls = append(sqls, sql)
-		return executor.Result{}, nil
-	}
-	err := RefreshMaterializedView(context.Background(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
-		RefreshSQL: "select service, count(*) requests from events group by service",
-		SrcTables:  []TableInfo{{DBName: "db", TableName: "events"}},
-	}, nil)
+	info := &ConsumerInfo{DBName: "db", TableName: "mv", Columns: []string{"service", "requests"}, RefreshSQL: "select service, count(*) requests from events group by service"}
+	c := newMVTestCatalog(t, info)
+	err := RefreshMaterializedView(defines.AttachAccountId(t.Context(), 0), c, "cn", c.txn, info, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"delete from `db`.`mv` where `__mo_fake_pk_col` is not null",
 		"insert into `db`.`mv` (`service`,`requests`,`__mo_fake_pk_col`) select `service`,`requests`, row_number() over () from (select `service`, count(*) as `requests` from `db`.`events` group by `service`) as `__mo_mv_refresh`",
-	}, sqls)
+	}, c.sqls)
 }
 
 func TestMaterializedViewRefreshAtIterationBoundary(t *testing.T) {
 	ts := types.BuildTS(100, 7)
-	query, err := materializedViewRefreshAt("select src, count(*) from src group by src", "src", ts)
+	sources := []TableInfo{{DBName: "db", TableName: "src"}}
+	query, err := materializedViewRefreshAtSources("select src, count(*) from src group by src", sources, ts)
 	require.NoError(t, err)
-	require.Equal(t, "select src, count(*) from src{MO_TS = '100-7'} group by src", query)
+	require.Equal(t, "select `src`, count(*) from `db`.`src`{MO_TS = '100-7'} group by `src`", query)
 
-	_, err = materializedViewRefreshAt("select 1", "src", ts)
+	_, err = materializedViewRefreshAtSources("select 1", sources, ts)
 	require.Error(t, err)
 }
 
@@ -211,47 +204,31 @@ func TestMaterializedViewRefreshSourceValidation(t *testing.T) {
 }
 
 func TestRefreshMaterializedViewFailureBoundaries(t *testing.T) {
-	oldExec := ExecWithResult
-	t.Cleanup(func() { ExecWithResult = oldExec })
-
-	require.Error(t, RefreshMaterializedView(t.Context(), "cn", nil, nil, nil))
-	require.ErrorContains(t, RefreshMaterializedView(t.Context(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", RefreshSQL: "select * from events", IncrementalSpec: "not-base64",
-	}, nil), "invalid materialized view incremental specification encoding")
-
-	deleteErr := errors.New("delete failed")
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
-		return executor.Result{}, deleteErr
+	require.Error(t, RefreshMaterializedView(t.Context(), nil, "cn", nil, nil, nil))
+	for _, prefix := range []string{"delete from", "insert into"} {
+		t.Run(prefix, func(t *testing.T) {
+			info := &ConsumerInfo{DBName: "db", TableName: "mv", RefreshSQL: "select service, count(*) requests from events group by service"}
+			c := newMVTestCatalog(t, info)
+			failure := errors.New(prefix + " failed")
+			c.failSQL = func(sql string) error {
+				if strings.HasPrefix(sql, prefix) {
+					return failure
+				}
+				return nil
+			}
+			err := RefreshMaterializedView(defines.AttachAccountId(t.Context(), 0), c, "cn", c.txn, info, nil)
+			require.ErrorIs(t, err, failure)
+			require.True(t, strings.HasPrefix(c.sqls[len(c.sqls)-1], prefix), "no later statement may run after failure")
+		})
 	}
-	err := RefreshMaterializedView(t.Context(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", RefreshSQL: "select * from events",
-		SrcTables: []TableInfo{{DBName: "db", TableName: "events"}},
-	}, nil)
-	require.ErrorIs(t, err, deleteErr)
-
-	calls := 0
-	insertErr := errors.New("insert failed")
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
-		calls++
-		if calls == 2 {
-			return executor.Result{}, insertErr
-		}
-		return executor.Result{}, nil
-	}
-	err = RefreshMaterializedView(t.Context(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", RefreshSQL: "select * from events",
-		SrcTables: []TableInfo{{DBName: "db", TableName: "events"}},
-	}, nil)
-	require.ErrorIs(t, err, insertErr)
-
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
-		return executor.Result{}, nil
-	}
-	err = RefreshMaterializedView(t.Context(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", RefreshSQL: "select * from missing",
-		SrcTables: []TableInfo{{DBName: "db", TableName: "events"}},
-	}, nil)
-	require.ErrorContains(t, err, "not found in refresh metadata")
+	t.Run("invalid source identity before any DML", func(t *testing.T) {
+		info := &ConsumerInfo{DBName: "db", TableName: "mv", RefreshSQL: "select * from events"}
+		c := newMVTestCatalog(t, info)
+		c.relations["db.events"].def.TblId++
+		err := RefreshMaterializedView(defines.AttachAccountId(t.Context(), 0), c, "cn", c.txn, info, nil)
+		require.ErrorContains(t, err, "changed")
+		require.Empty(t, c.sqls)
+	})
 }
 
 func TestRefreshIncrementalMaterializedViewAtBoundary(t *testing.T) {
@@ -259,25 +236,17 @@ func TestRefreshIncrementalMaterializedViewAtBoundary(t *testing.T) {
 	t.Cleanup(func() { ExecWithResult = oldExec })
 
 	desc := incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
 		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
 		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
 		StateColumns: []string{"__row_count", "__group_key"},
 	}
-	var sqls []string
-	ExecWithResult = func(ctx context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
-		require.NotNil(t, ctx.Value(defines.MaterializedViewRefreshKey{}))
-		sqls = append(sqls, sql)
-		return executor.Result{}, nil
-	}
 	boundary := types.BuildTS(100, 7)
-	err := RefreshMaterializedView(t.Context(), "cn", nil, &ConsumerInfo{
-		DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
-		RefreshSQL:      "select e.service as service, count(*) as requests, count(*) as __row_count, serial_full(e.service) as __group_key from events as e group by e.service",
-		SrcTables:       []TableInfo{{DBName: "db", TableName: "events"}},
-		IncrementalSpec: encodeMaterializedViewIncrementalDescription(t, desc),
-	}, &boundary)
+	info := &ConsumerInfo{DBName: "db", TableName: "mv", Columns: []string{"service", "requests"}, RefreshSQL: "select e.service as service, count(*) as requests, count(*) as __row_count, serial_full(e.service) as __group_key from events as e group by e.service", IncrementalSpec: encodeMaterializedViewIncrementalDescription(t, desc)}
+	c := newMVTestCatalog(t, info)
+	err := RefreshMaterializedView(defines.AttachAccountId(t.Context(), 0), c, "cn", c.txn, info, &boundary)
+	sqls := c.sqls
 	require.NoError(t, err)
 	require.Len(t, sqls, 2)
 	require.Contains(t, sqls[0], "where `__group_key` is not null")
@@ -292,7 +261,7 @@ func TestMaterializedViewConsumerFullRefreshLifecycle(t *testing.T) {
 	t.Cleanup(func() { ExecWithResult = oldExec })
 
 	fallbackSpec := encodeMaterializedViewIncrementalDescription(t, incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
 		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
 		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
@@ -308,11 +277,7 @@ func TestMaterializedViewConsumerFullRefreshLifecycle(t *testing.T) {
 		{name: "tail fallback", dtype: ISCPDataType_Tail, incrementalSpec: fallbackSpec, wantFullRefreshes: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var sqls []string
-			ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
-				sqls = append(sqls, "refresh")
-				return executor.Result{}, nil
-			}
+
 			watermarks := 0
 			retriever := &materializedViewToBoundaryRetriever{
 				MockRetriever: MockRetriever{
@@ -330,8 +295,11 @@ func TestMaterializedViewConsumerFullRefreshLifecycle(t *testing.T) {
 				SrcTables:       []TableInfo{{DBName: "db", TableName: "events"}},
 				IncrementalSpec: tc.incrementalSpec,
 			}}
+			catalog := newMVTestCatalog(t, consumer.info)
+			catalog.stubTransactions(t)
+			consumer.cnEngine = catalog
 			require.NoError(t, consumer.Consume(t.Context(), retriever))
-			require.Equal(t, tc.wantFullRefreshes*2, len(sqls))
+			require.Equal(t, tc.wantFullRefreshes*2, len(catalog.sqls))
 			require.Equal(t, 1, watermarks)
 		})
 	}
@@ -358,7 +326,7 @@ func TestMaterializedViewIncrementalSourceFailureBoundaries(t *testing.T) {
 	stubTxn := stubIndexConsumerTxnRunner()
 	t.Cleanup(stubTxn.Reset)
 	desc := incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
 		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
 		RowCountColumn: "__row_count", StateColumns: []string{"__row_count"},
@@ -437,7 +405,7 @@ func TestMaterializedViewIncrementalSourceFailureBoundaries(t *testing.T) {
 					DBName: "db", TableName: "mv", IncrementalSpec: encodeMaterializedViewIncrementalDescription(t, desc),
 				},
 			}
-			_, err := consumer.consumeIncremental(t.Context(), &materializedViewBoundaryRetriever{})
+			_, _, err := consumer.materializedViewIncrementalRuntimes(t.Context(), nil, &desc)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -534,18 +502,7 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 	stubTxn := stubIndexConsumerTxnRunner()
 	t.Cleanup(stubTxn.Reset)
 
-	ctrl := gomock.NewController(t)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	db := mock_frontend.NewMockDatabase(ctrl)
-	rel := mock_frontend.NewMockRelation(ctrl)
-	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
-		{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}},
-		{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}},
-	}}
-	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
-	wrapped := &materializedViewTestRelation{Relation: rel, rows: [][]any{{[]byte("api"), int64(5)}}}
-	eng.EXPECT().Database(gomock.Any(), "srcdb", gomock.Any()).Return(db, nil)
-	db.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(wrapped, nil)
+	tableDef := &planpb.TableDef{DbName: "srcdb", Name: "events", Cols: []*planpb.ColDef{{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}}, {Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
 
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
@@ -556,7 +513,7 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 	rowID := types.NewRowid(&blockID, 1)
 	insertBat := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.NewVector(1, types.T_Rowid.ToType(), mp, false, []types.Rowid{rowID}),
-		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, [][]byte{[]byte("api")}),
+		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
 		testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{10}),
 	}, nil)
 	insertBat.Attrs = []string{catalog.Row_ID, "service", "value"}
@@ -578,7 +535,7 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 	atomicDelete.Rows.Set(AtomicBatchRow{Pk: []byte("delete"), Src: deleteBat})
 
 	desc := incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "value"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service", "value"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
 		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
 		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
@@ -596,7 +553,7 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 		from: types.BuildTS(10, 0), to: types.BuildTS(30, 0),
 	}
 	consumer := &MaterializedViewConsumer{
-		cnUUID: service, cnEngine: eng, jobID: JobID{DBName: "srcdb", TableName: "events"},
+		cnUUID: service, jobID: JobID{DBName: "srcdb", TableName: "events"},
 		info: &ConsumerInfo{
 			DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
 			SourceSQL: "events", RefreshSQL: "select service, count(*) requests from events group by service",
@@ -604,6 +561,10 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 			SrcTables: []TableInfo{{DBName: "srcdb", TableName: "events"}},
 		},
 	}
+	catalog := newMVTestCatalog(t, consumer.info, tableDef)
+	catalog.stubTransactions(t)
+	consumer.cnEngine = catalog
+	catalog.relations["srcdb.events"].rows = [][]any{{[]byte("api"), int64(5)}}
 	require.NoError(t, consumer.Consume(t.Context(), retriever))
 	require.Equal(t, 1, watermarkUpdates)
 	require.Len(t, sqls, 3)
@@ -621,29 +582,13 @@ func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
 	stubTxn := stubIndexConsumerTxnRunner()
 	t.Cleanup(stubTxn.Reset)
 
-	ctrl := gomock.NewController(t)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	eventsDB := mock_frontend.NewMockDatabase(ctrl)
-	archiveDB := mock_frontend.NewMockDatabase(ctrl)
-	eventsRel := mock_frontend.NewMockRelation(ctrl)
-	archiveRel := mock_frontend.NewMockRelation(ctrl)
-	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}}}}
-	eventsRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).Times(2)
-	eventsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).Times(2)
-	archiveRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
-	archiveRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(22))
-	eng.EXPECT().Database(gomock.Any(), "obs", gomock.Any()).Return(eventsDB, nil).Times(2)
-	eventsDB.EXPECT().Relation(gomock.Any(), "events", gomock.Any()).Return(&materializedViewTestRelation{Relation: eventsRel}, nil).Times(2)
-	eng.EXPECT().Database(gomock.Any(), "cold", gomock.Any()).Return(archiveDB, nil)
-	archiveDB.EXPECT().Relation(gomock.Any(), "archive", gomock.Any()).Return(&materializedViewTestRelation{Relation: archiveRel}, nil)
-
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
 		require.Zero(t, mp.CurrNB())
 		mpool.DeleteMPool(mp)
 	})
 	insertBat := testutil.NewBatchWithVectors([]*vector.Vector{
-		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, [][]byte{[]byte("api")}),
+		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
 	}, nil)
 	insertBat.Attrs = []string{"service"}
 	t.Cleanup(func() { insertBat.Clean(mp) })
@@ -683,7 +628,7 @@ func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
 		from: types.BuildTS(10, 0), to: types.BuildTS(30, 0),
 	}
 	consumer := &MaterializedViewConsumer{
-		cnUUID: service, cnEngine: eng,
+		cnUUID: service,
 		info: &ConsumerInfo{
 			DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
 			SourceSQL: "events", RefreshSQL: "select service, count(*) requests from obs.events group by service union all select service, count(*) requests from cold.archive group by service",
@@ -691,6 +636,11 @@ func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
 			SrcTables: []TableInfo{{DBName: "obs", TableName: "events", TableID: 11}, {DBName: "cold", TableName: "archive", TableID: 22}},
 		},
 	}
+	catalog := newMVTestCatalog(t, consumer.info,
+		&planpb.TableDef{DbName: "obs", Name: "events", TblId: 11, Cols: []*planpb.ColDef{{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}}}},
+		&planpb.TableDef{DbName: "cold", Name: "archive", TblId: 22, Cols: []*planpb.ColDef{{Name: "service", Typ: planpb.Type{Id: int32(types.T_varchar)}}}})
+	catalog.stubTransactions(t)
+	consumer.cnEngine = catalog
 	require.NoError(t, consumer.Consume(t.Context(), retriever))
 	require.Equal(t, 1, watermarkUpdates)
 	require.Len(t, sqls, 2)
@@ -699,4 +649,57 @@ func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
 	for _, sql := range sqls {
 		require.NotContains(t, sql, "serial_full(2,d.__mo_g_0)")
 	}
+}
+
+func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materializedViewChangeRow, error) {
+	var rows []materializedViewChangeRow
+	err := visitMaterializedViewRows(context.Background(), bat, insert, nil, materializedViewDeltaBatchRows, materializedViewDeltaMaxSQL, func(chunk []materializedViewChangeRow) error {
+		rows = append(rows, chunk...)
+		return nil
+	})
+	return rows, err
+}
+
+func TestMaterializedViewRowVisitorBoundsCancellationAndErrors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := testutil.NewVector(3, types.T_varchar.ToType(), mp, false, []string{"a", "b", "c"})
+	bat := testutil.NewBatchWithVectors([]*vector.Vector{vec}, nil)
+	bat.Attrs = []string{"k"}
+	defer func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) }()
+	atomic := NewAtomicBatch(mp)
+	for i := range 3 {
+		atomic.Rows.Set(AtomicBatchRow{Pk: []byte{byte(i)}, Src: bat, Offset: i})
+	}
+	var sizes []int
+	var values []string
+	err := visitMaterializedViewRows(t.Context(), atomic, true, map[string]bool{"k": true}, 2, 1024, func(rows []materializedViewChangeRow) error {
+		sizes = append(sizes, len(rows))
+		for _, row := range rows {
+			values = append(values, string(row.Values["k"].([]byte)))
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int{2, 1}, sizes)
+	require.Equal(t, []string{"a", "b", "c"}, values)
+	visits := 0
+	visit := func([]materializedViewChangeRow) error { visits++; return nil }
+	err = visitMaterializedViewRows(t.Context(), atomic, true, nil, 10, 257, visit)
+	require.ErrorIs(t, err, engine.ErrRowIDReadLimit)
+	require.Zero(t, visits)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, visitMaterializedViewRows(ctx, atomic, true, nil, 2, 1024, visit), context.Canceled)
+	require.Zero(t, visits)
+	failure := errors.New("apply chunk failed")
+	err = visitMaterializedViewRows(t.Context(), atomic, true, nil, 1, 1024, func([]materializedViewChangeRow) error { visits++; return failure })
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, visits)
+}
+func TestMaterializedViewTerminalFailuresNeverFallback(t *testing.T) {
+	for _, err := range []error{context.Canceled, context.DeadlineExceeded, engine.ErrRowIDReadLimit, errMaterializedViewDeltaSQLTooLarge, mvdefinition.Invalid("replaced source"), &materializedViewNoFallback{error: errors.New("rollback failed")}} {
+		require.False(t, materializedViewCanFallback(t.Context(), err), err)
+	}
+	require.True(t, materializedViewCanFallback(t.Context(), errors.New("recoverable delta SQL failure")))
 }

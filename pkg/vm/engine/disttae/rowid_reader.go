@@ -24,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 var _ engine.RowIDReader = (*txnTableDelegate)(nil)
@@ -42,7 +44,14 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 	snapshot types.TS,
 	attrs []string,
 	mp *mpool.MPool,
+	budget *engine.RowIDReadBudget,
 ) ([][]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(rowids) > engine.MaxRowIDReadRows {
+		return nil, engine.ErrRowIDReadLimit
+	}
 	if tbl.combined.is {
 		return nil, moerr.NewInternalErrorNoCtx("rowid lookup is not supported for combined relations")
 	}
@@ -73,38 +82,48 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 		wanted[rowid] = struct{}{}
 	}
 	found := make(map[types.Rowid][]any, len(rowids))
-	// Prefer the partition state's versioned row entries.  This path retains
-	// the exact historical row version (including rows that have since been
-	// tombstoned) and avoids depending on the current block ranges.
-	if pState, err := tbl.origin.getPartitionState(ctx); err == nil && pState != nil {
+	// Use the same immutable partition state for row versions and disk ranges.
+	pState, err := tbl.origin.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = func() error {
 		iter := pState.NewRowsIter(snapshot, nil, false)
+		defer iter.Close()
 		for iter.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			entry := iter.Entry()
 			if _, ok := wanted[entry.RowID]; !ok || entry.Batch == nil {
 				continue
 			}
-			row := make([]any, len(attrs))
-			valid := true
+			if _, ok := found[entry.RowID]; ok {
+				continue
+			}
+			vecs := make([]*vector.Vector, len(attrs))
 			for i, attr := range attrs {
-				idx := -1
 				for j, name := range entry.Batch.Attrs {
-					if strings.EqualFold(name, attr) {
-						idx = j
+					if strings.EqualFold(name, attr) && j < len(entry.Batch.Vecs) {
+						vecs[i] = entry.Batch.Vecs[j]
 						break
 					}
 				}
-				if idx < 0 || idx >= len(entry.Batch.Vecs) {
-					valid = false
-					break
+				if vecs[i] == nil {
+					return moerr.NewInternalErrorNoCtxf("historical row is missing column %q", attr)
 				}
-				row[i] = rowIDReaderValue(entry.Batch.Vecs[idx], int(entry.Offset))
 			}
-			if valid {
-				found[entry.RowID] = row
+			row, err := copyRowIDReaderRow(vecs, int(entry.Offset), budget)
+			if err != nil {
+				return err
 			}
+			found[entry.RowID] = row
 		}
-		_ = iter.Close()
+		return nil
+	}(); err != nil {
+		return nil, err
 	}
+
 	if len(found) == len(wanted) {
 		rows := make([][]any, 0, len(rowids))
 		for _, rowid := range rowids {
@@ -112,17 +131,66 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 		}
 		return rows, nil
 	}
-	err := ScanSnapshotWithCurrentRanges(ctx, "materialized-view-rowid-lookup", tbl, nil, snapshot, scanAttrs, scanTypes, nil, 1, mp,
+	// A nil range list scans memory only. Build ranges from objects visible at
+	// the historical snapshot, including objects retired by a later merge.
+	// Only blocks containing requested rowids enter the bounded range list.
+	blocks := make(map[types.Blockid]bool, len(wanted))
+	for id := range wanted {
+		if _, ok := found[id]; !ok {
+			blocks[id.CloneBlockID()] = true
+		}
+	}
+	ranges := readutil.NewBlockListRelationData(0, readutil.WithPartitionState(pState))
+	if err = func() error {
+		iter, err := pState.NewObjectsIter(snapshot, true, false)
+		if err != nil {
+			return err
+		}
+		defer iter.Close()
+		for iter.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			obj := iter.Entry()
+			var meta objectio.ObjectDataMeta
+			if obj.Rows() == 0 {
+				loc := obj.ObjectLocation()
+				loaded, err := objectio.FastLoadObjectMeta(ctx, &loc, false, tbl.origin.getTxn().engine.fs)
+				if err != nil {
+					return err
+				}
+				meta = loaded.MustDataMeta()
+			}
+			objectio.ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+				if blocks[blk.BlockID] {
+					blk.SetFlagByObjStats(&obj.ObjectStats)
+					ranges.AppendBlockInfo(&blk)
+					delete(blocks, blk.BlockID)
+				}
+				return true
+			}, obj.ObjectStats)
+		}
+		return nil
+	}(); err != nil {
+		return nil, err
+	}
+	err = ScanSnapshotWithCurrentRanges(ctx, "materialized-view-rowid-lookup", tbl, ranges, snapshot, scanAttrs, scanTypes, nil, 1, mp,
 		func(bat *batch.Batch) error {
 			rowidVec := bat.Vecs[0]
 			for i := 0; i < rowidVec.Length(); i++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				rowid := vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, i)
 				if _, ok := wanted[rowid]; !ok {
 					continue
 				}
-				row := make([]any, len(attrs))
-				for j := range attrs {
-					row[j] = rowIDReaderValue(bat.Vecs[j+1], i)
+				if _, ok := found[rowid]; ok {
+					continue
+				}
+				row, err := copyRowIDReaderRow(bat.Vecs[1:], i, budget)
+				if err != nil {
+					return err
 				}
 				found[rowid] = row
 			}
@@ -149,5 +217,35 @@ func rowIDReaderValue(vec *vector.Vector, row int) any {
 	if vec.IsConst() {
 		row = 0
 	}
-	return vector.GetAny(vec, row, false)
+	return vector.GetAny(vec, row, true)
+}
+
+// Include map/slice/interface overhead as well as variable-width payloads.
+// Charge before allocating the result or copying a vector's borrowed bytes.
+func copyRowIDReaderRow(vecs []*vector.Vector, row int, budget *engine.RowIDReadBudget) ([]any, error) {
+	bytes := 128 + 128*len(vecs)
+	for _, vec := range vecs {
+		if vec == nil || vec.IsConstNull() {
+			continue
+		}
+		offset := row
+		if vec.IsConst() {
+			offset = 0
+		}
+		if !vec.GetNulls().Contains(uint64(offset)) && vec.GetType().IsVarlen() {
+			size := len(vec.GetBytesAt(offset))
+			if size > engine.MaxRowIDReadBytes/2 {
+				return nil, engine.ErrRowIDReadLimit
+			}
+			bytes += 2 * size
+		}
+	}
+	if err := budget.Charge(bytes); err != nil {
+		return nil, err
+	}
+	result := make([]any, len(vecs))
+	for i, vec := range vecs {
+		result[i] = rowIDReaderValue(vec, row)
+	}
+	return result, nil
 }

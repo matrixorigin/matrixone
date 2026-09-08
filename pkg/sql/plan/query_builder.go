@@ -9832,6 +9832,7 @@ func (builder *QueryBuilder) bindValues(
 			Name:  colName,
 		}
 
+		notNullable := true
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
@@ -9845,7 +9846,12 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
+			// A VALUES column is NOT NULL only when every row proves it.
+			// Copying the last row's flag makes grouping and null filters drop
+			// earlier NULLs even though the value vector still contains them.
+			notNullable = notNullable && planExpr.Typ.NotNullable
 			tableDef.Cols[i].Typ = planExpr.Typ
+			tableDef.Cols[i].Typ.NotNullable = notNullable
 			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 				Expr: planExpr,
 			})

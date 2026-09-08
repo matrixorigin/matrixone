@@ -17,21 +17,69 @@ package iscp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
+
+type closeCountingChanges struct {
+	engine.ChangesHandle
+	closed int
+}
+
+func (c *closeCountingChanges) Close() error { c.closed++; return nil }
+
+func TestExecuteIterationClosesEarlierSourcesOnOpenFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	first, second := mock_frontend.NewMockRelation(ctrl), mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	eng.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{PhysicalTime: 20})
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txn, nil)
+	eng.EXPECT().New(gomock.Any(), txn).Return(nil)
+	txn.EXPECT().Rollback(gomock.Any()).Return(nil)
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "first", nil).Return(first, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "second", nil).Return(second, nil)
+	first.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+	second.EXPECT().GetTableID(gomock.Any()).Return(uint64(12))
+	first.EXPECT().CopyTableDef(gomock.Any()).Return(&planpb.TableDef{TblId: 11}).AnyTimes()
+	sources := []TableInfo{{DBName: "db", TableName: "first", TableID: 11}, {DBName: "db", TableName: "second", TableID: 12}}
+	stub := gostub.StubFunc(&GetJobSpecs, []*JobSpec{{ConsumerInfo: ConsumerInfo{SrcTable: sources[0], SrcTables: sources}}}, []*JobStatus{{LSN: 1, Stage: JobStage_Running}}, nil)
+	t.Cleanup(stub.Reset)
+	opened := &closeCountingChanges{}
+	failure := errors.New("second source open failed")
+	stub.Stub(&CollectChanges, func(_ context.Context, rel engine.Relation, _, _ types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		if rel == first {
+			return opened, nil
+		}
+		require.Same(t, second, rel)
+		return nil, failure
+	})
+	iter := &IterationContext{tableID: 11, sourceTables: sources, jobNames: []string{"job"}, jobIDs: []uint64{1}, lsn: []uint64{1}, stages: []int8{JobStage_Running}, fromTS: types.BuildTS(10, 0), toTS: types.BuildTS(20, 0)}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	require.ErrorIs(t, ExecuteIteration(t.Context(), "cn", eng, txnClient, iter, mp), failure)
+	require.Equal(t, 1, opened.closed, "partial acquisition must close each owned handle once")
+}
 
 func TestResolveSingleSourceInsertIndexesWithRetainedRowID(t *testing.T) {
 	def := &planpb.TableDef{

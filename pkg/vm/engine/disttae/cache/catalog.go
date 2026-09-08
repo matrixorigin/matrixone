@@ -28,6 +28,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -996,11 +997,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			Value: tblItem.CreateSql,
 		})
 		Createsql = tblItem.CreateSql
-		// Keep the planner-visible materialized-view kind distinct from the
-		// ordinary physical relation kind used by the storage layer.
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(Createsql)), "create materialized view") {
-			TableType = catalog.SystemMaterializedRel
-		}
 
 		props.Properties = append(props.Properties, engine.Property{
 			Key:   catalog.SystemRelAttr_CreateSQL,
@@ -1029,7 +1025,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 
 	// IsTemporary is session state, not a projection of the durable marker.
 	// The compiler sets it only after resolving a session's temporary alias.
-	return &plan.TableDef{
+	result := &plan.TableDef{
 		TblId:          tblItem.Id,
 		Name:           tblItem.Name,
 		DbName:         tblItem.DatabaseName,
@@ -1053,5 +1049,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DefaultCharset: tblItem.ExtraInfo.GetDefaultCharset(),
 		Checks:         tblItem.ExtraInfo.GetChecks(),
 		LogicalId:      tblItem.LogicalId,
-	}, tableDef
+	}
+	mvdefinition.PlannerKind(result)
+	return result, tableDef
 }

@@ -86,6 +86,8 @@ from (
            and m.trace_count <=> e.trace_count)
 ) mismatches;
 
+-- Historical delete lookup must read flushed blocks before their tombstones.
+select mo_ctl('dn', 'flush', 'mv_e2e.events');
 delete from events where id = 4;
 
 -- Delete tail: removing the previous maximum forces affected-group MIN/MAX
@@ -148,6 +150,18 @@ order by service;
 -- UNION ALL keeps branch identity in the hidden key. Equal visible groups from
 -- different sources remain duplicate output rows and each source batch is
 -- routed only to its own incremental branch.
+-- DELETE of every source row must release logical auxiliary state and allow reuse.
+delete from events;
+-- @wait_expect(2, 30)
+select count(*)=0 as empty_result from mv_fast;
+set mo_table_stats.use_old_impl=yes;
+-- @wait_expect(2, 30)
+select sum(mo_table_rows(reldatabase,relname))=0 as empty_state from mo_catalog.mo_tables where reldatabase='mv_e2e' and relname like '__mo_mv_state_%';
+set mo_table_stats.use_old_impl=no;
+insert into events values(8,'api',10,'new');
+-- @wait_expect(2, 30)
+select row_count=1 and duration_sum=10 and trace_count=1 as rebuilt_group from mv_fast;
+
 create table union_events (
     id bigint primary key,
     service varchar(20),

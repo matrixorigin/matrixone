@@ -128,7 +128,7 @@ func (t *TableEntry) sourceTableInfos() []TableInfo {
 	seen := make(map[[2]uint64]struct{})
 	result := make([]TableInfo, 0)
 	for _, job := range t.jobs {
-		if job.dropAt != 0 {
+		if job.dropAt != 0 || job.state == ISCPJobState_Error {
 			continue
 		}
 		sources := job.sourceTables
@@ -151,13 +151,16 @@ func (t *TableEntry) sourceTableInfos() []TableInfo {
 }
 
 func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
+	return t.gcInMemoryJobAt(time.Now(), threshold)
+}
+
+func (t *TableEntry) gcInMemoryJobAt(now time.Time, threshold time.Duration) (isEmpty bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	jobsToDelete := make([]JobKey, 0)
-	now := time.Now()
+	cutoff := types.UnixMicroToTimestamp(now.Add(-threshold).UnixMicro())
 	for _, jobEntry := range t.jobs {
-		loc := now.Location()
-		if jobEntry.dropAt != 0 && uint64(now.Unix())-uint64(threshold) >= uint64(jobEntry.dropAt.ToDatetime(loc).UnixTimestamp(loc)) {
+		if jobEntry.dropAt != 0 && jobEntry.dropAt <= cutoff {
 			jobsToDelete = append(
 				jobsToDelete,
 				JobKey{

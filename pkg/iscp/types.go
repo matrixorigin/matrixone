@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -265,6 +266,7 @@ type TriggerSpec struct {
 }
 
 type ConsumerInfo struct {
+	MVReference  *mvdefinition.Reference `json:",omitempty"`
 	ConsumerType int8
 	IndexName    string
 	TableName    string
@@ -293,7 +295,7 @@ type TableInfo struct {
 	TableID   uint64
 }
 
-const MaxSourceTables = 16
+const MaxSourceTables = mvdefinition.MaxSources
 
 func (info *ConsumerInfo) SourceTableInfos() []TableInfo {
 	if info == nil {

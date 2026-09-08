@@ -48,7 +48,7 @@ type controlledMVRowIDReader struct {
 }
 
 func (r *controlledMVRowIDReader) ReadRowsByRowID(
-	context.Context, []types.Rowid, types.TS, []string, *mpool.MPool,
+	context.Context, []types.Rowid, types.TS, []string, *mpool.MPool, *engine.RowIDReadBudget,
 ) ([][]any, error) {
 	return r.rows, r.err
 }
@@ -59,6 +59,7 @@ func (r *recordingMVRowIDReader) ReadRowsByRowID(
 	snapshot types.TS,
 	_ []string,
 	_ *mpool.MPool,
+	_ *engine.RowIDReadBudget,
 ) ([][]any, error) {
 	call := make([]types.TS, len(rowids))
 	rows := make([][]any, len(rowids))
@@ -175,8 +176,9 @@ func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 	legacy.Aggregates[1].StateSumColumn = ""
 	b, err := json.Marshal(&legacy)
 	require.NoError(t, err)
-	decoded, err := decodeIncrementalDescription(base64.StdEncoding.EncodeToString(b))
-	require.NoError(t, err)
+	_, err = decodeIncrementalDescription(base64.StdEncoding.EncodeToString(b))
+	require.ErrorContains(t, err, "unsupported materialized view incremental specification version 0")
+	decoded := &legacy
 	legacySets := strings.Join(materializedViewDeltaUpdateSets(decoded, "t", "d"), ",")
 	require.Contains(t, legacySets, "coalesce(t.`errors`,0) + coalesce(d.__mo_a_1_sum,0)")
 	legacyColumns, _ := materializedViewDeltaInsertProjection(decoded, "d")
@@ -199,7 +201,7 @@ func TestMaterializedViewDeltaRequiresInternalSQLExecutor(t *testing.T) {
 
 func TestDecodeIncrementalDescriptionVersionAndDistinctState(t *testing.T) {
 	base := incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "trace_id"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service", "trace_id"},
 		Groups: []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
 		Aggregates: []incrementalAggregate{{
 			Kind: "count_distinct", InputExpression: "e.trace_id", OutputColumn: "traces", StateIndex: 1,
@@ -257,7 +259,7 @@ func TestDecodeUnionAllIncrementalDescription(t *testing.T) {
 
 func TestDecodeIncrementalDescriptionRejectsIncompleteOperators(t *testing.T) {
 	base := incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "value"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service", "value"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
 		RowCountColumn: "__rows", StateColumns: []string{"__rows"},
 	}
@@ -496,7 +498,6 @@ func TestMaterializedViewDeltaExecutionPaths(t *testing.T) {
 	}
 
 	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, desc, sourceTypes, rows))
-	require.NoError(t, ensureMaterializedViewStateTable(t.Context(), service, nil, info, desc))
 	require.NoError(t, resetMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc))
 	require.NoError(t, recordMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc, sourceTypes, rows))
 	require.NoError(t, recomputeMaterializedViewAffectedGroups(t.Context(), service, nil, info, desc, types.BuildTS(100, 7)))
@@ -511,18 +512,21 @@ func TestMaterializedViewDeltaExecutionPaths(t *testing.T) {
 	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
 	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, rows[1:]))
 	require.NoError(t, applyMaterializedViewDeltaRows(t.Context(), service, nil, info, &legacy, sourceTypes, nil))
-	require.NoError(t, ensureMaterializedViewStateTable(t.Context(), service, nil, info, &legacy))
 	require.NoError(t, resetMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy))
 	require.NoError(t, recordMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
 	require.NoError(t, recomputeMaterializedViewAffectedGroups(t.Context(), service, nil, info, &legacy, types.BuildTS(100, 7)))
 	require.NoError(t, applyMaterializedViewDistinctDeltas(t.Context(), service, nil, info, &legacy, sourceTypes, rows))
 	require.NoError(t, rebuildMaterializedViewDistinctState(t.Context(), service, nil, info, &legacy, types.BuildTS(100, 7)))
-	require.GreaterOrEqual(t, len(sqls), 20)
+	joined := strings.Join(sqls, ";\n")
+	require.Contains(t, joined, "ref_count")
+	require.Contains(t, joined, "aggregate_index")
+	require.Contains(t, joined, "100-7")
+	require.NotContains(t, strings.ToLower(joined), "create table", "refresh must never recreate state by name")
 }
 
 func TestMaterializedViewDeltaExecutionFailureBoundaries(t *testing.T) {
 	desc := &incrementalDescription{
-		Version: 2, SourceAlias: "e", SourceColumns: []string{"service"},
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service"},
 		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
 		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
 		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",

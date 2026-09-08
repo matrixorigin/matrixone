@@ -36,9 +36,12 @@ func MarshalJobStatus(status *JobStatus) (string, error) {
 }
 
 func UnmarshalJobStatus(jsonByte []byte) (*JobStatus, error) {
-	byteJson := types.DecodeJson(jsonByte)
+	decoded, err := decodeISCPJSON(jsonByte)
+	if err != nil {
+		return nil, err
+	}
 	var jobStatus JobStatus
-	err := json.Unmarshal([]byte(byteJson.String()), &jobStatus)
+	err = json.Unmarshal(decoded, &jobStatus)
 	if err != nil {
 		return nil, err
 	}
