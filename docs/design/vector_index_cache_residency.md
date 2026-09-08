@@ -787,10 +787,64 @@ rather than carried forward:
   than the sampling interval. The figure did not mean what it was cited for. What
   does establish GPU execution here is simpler -- CAGRA and IVF-PQ have no CPU
   build path, so `vector_cagra` and `vector_ivfpq` passing IS the GPU path.
-- a 1M-row wiki_all run reporting zero admission refusals. It predates the
-  accounting fixes, which deliberately CHANGE what admission charges (the CDC
-  overflow is now reserved at Preload and the delete id-map is charged to the host
-  budget), so its refusal count cannot be assumed to still hold. See §10.4.
+- a 1M-row wiki_all run reporting zero admission refusals. It predated the
+  accounting fixes, which deliberately CHANGE what admission charges, so its
+  refusal count could not be assumed to hold. Re-run below.
+
+### 10.2.1 1M wiki_all, f32, after the accounting fixes
+
+The largest footprint this branch is expected to carry. Same data both sides
+(`wiki_all_1M`, dim 768, 1M rows), canonical triple k=20, concurrency 8, n=5000.
+
+**The restart is between the IMPORT and the BUILD, not before the import.** Both
+algorithms size their sub-index COUNT from free host RAM sampled once at build
+start, so a build that follows a 5.5 GB import on the same live CN sees depressed
+free RAM and rotates into several sub-indexes: the first attempt did exactly that
+and produced 2 (867,320 + 132,680 rows). Restarting after the import gave 19 GiB
+free at build start on both runs below, and one sub-index each.
+
+| | CAGRA f32 | IVF-PQ f32 |
+|---|---|---|
+| sub-indexes | **1** (`:0:0:0`, 1,000,000 rows) | **1** (`:0:0:0`, 1,000,000 rows) |
+| index size | **3.34 GB** | **229 MB** |
+| build | 157.8 s / 178.6 s (two runs) | 33.3 s |
+| recall@20 | 0.9891-0.9896 | 0.8296 |
+| QPS cold (first pass after restart) | 85.1 | 380.8 |
+| QPS warm (steady state, 8 workers) | ~376 (382.1 / 371.4 / 376.0) | ~453 (452.4 / 452.8 / 453.8) |
+| admission refusals | **0** | **0** |
+| `nrow` / `build_ts` recorded | yes | yes |
+
+**Cold vs warm is the cache, and it is the whole point of the number.** The first
+pass after a restart pays the load; every pass after it is served from residency.
+CAGRA goes 85 -> ~376 QPS, a 4.4x step, because a cold pass loads 3.34 GB before it
+can answer. IVF-PQ goes 381 -> ~453, only 1.2x, because there is 229 MB to load.
+The gap between those two ratios IS what the cache is worth per algorithm, and it
+is why eviction policy matters far more for CAGRA.
+
+Warm passes hold to within ~3% (CAGRA) and ~1.5 QPS (IVF-PQ) of each other, and
+recall is stable to the fourth decimal across all passes -- warm serving returns
+what cold serving returned, which is the property a residency cache must not
+break.
+
+`nrow` reads back as exactly 1,000,000 in both, which is this branch's provenance
+column verified on real data rather than a fixture.
+
+The ~15x size gap is why CAGRA is the memory case: its graph is what the per-card
+device budget exists for, and IVF-PQ at 229 MB barely touches it.
+
+**What zero refusals does and does not prove.** Both cache variables were at their
+default 0 = unbounded, so nothing COULD refuse. It establishes that the new
+charges -- the CDC overflow reserved at Preload, the delete id-map on the host
+budget -- do not spuriously refuse a legitimate 1M load. It does NOT exercise the
+refusal path at this scale; that needs a cap set below the index size, and is
+listed in §10.4.
+
+**Build time.** The two CAGRA builds measured 157.8 s and 178.6 s, against the
+spread recorded in §10.3 for a comparable cell (96.4-171.5 s, median 110.2) -- one
+inside it, one above. Both on a box that had been running benchmarks continuously,
+and the branch does not touch the build path, so these are recorded as data points
+rather than as a regression measurement. A paired build comparison against `main`
+is not part of this run.
 
 **Re-run after the accounting fixes** (CDC overflow charged at Preload, the delete
 id-map charged to the host budget, one probe for both device budgets), on a binary
@@ -863,16 +917,17 @@ measurement never observes the cache anyway.
 
 Stated so no reader has to infer coverage from silence.
 
-- **A 1M-scale run after the accounting fixes.** The earlier wiki_all figure
-  (zero admission refusals) predates them, and the fixes deliberately change what
-  admission charges -- a CDC-heavy 1M generation now reserves its overflow at
-  Preload, and any generation replaying a delete carries the id-map. The refusal
-  count at that scale is therefore unknown, not zero. The functional paths are
-  covered by §10.2 and the forced-state tests; what is missing is the scale.
-- **GPU performance acceptance.** No QPS or latency comparison against `main` has
-  been run for this branch. The distance kernels are untouched and the governor
-  sits on the load path rather than the search path, so no regression is expected
-  -- but expected is not measured.
+- **The refusal path at 1M.** §10.2.1 runs both algorithms at 1M after the fixes
+  with zero refusals, but with both caps at their default 0 = unbounded -- so
+  nothing could refuse. Exercising a real refusal at that scale needs a cap set
+  below the index size (CAGRA at 3.34 GB is the natural subject) with two
+  generations alternating. The refusal path itself is covered at unit scale by
+  the forced-state tests.
+- **A paired comparison against `main`.** §10.2.1 measures this branch at 1M --
+  build, cold and warm QPS, recall -- but does not run the same cells on `main`,
+  so it establishes absolute numbers rather than a delta. The distance kernels are
+  untouched and the governor sits on the load path rather than the search path, so
+  no regression is expected; expected is still not measured.
 - **The id-map prospective reservation.** The map is charged once it exists
   (§10.2) but NOT reserved before the replay that creates it. Reserving ahead
   means reserving rows x 40 for every CDC-active generation -- ~3.5 GB at 88M rows
