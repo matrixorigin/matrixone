@@ -362,6 +362,7 @@ func init() {
 		"mode":                       MODE,
 		"memory":                     MEMORY,
 		"materialized":               MATERIALIZED,
+		"member":                     MEMBER,
 		"modifies":                   UNUSED,
 		"multilinestring":            MULTILINESTRING,
 		"multipoint":                 MULTIPOINT,

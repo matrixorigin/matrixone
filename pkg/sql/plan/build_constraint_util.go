@@ -193,23 +193,10 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 		if err != nil {
 			return 0, err
 		}
-		if targetEligible != nil {
-			notEligible, err := BindFuncExprImplByPlanExpr(
-				builder.GetContext(),
-				"not",
-				[]*plan.Expr{DeepCopyExpr(targetEligible)},
-			)
-			if err != nil {
-				return 0, err
-			}
-			passExpr, err = BindFuncExprImplByPlanExpr(
-				builder.GetContext(),
-				"or",
-				[]*plan.Expr{notEligible, passExpr},
-			)
-			if err != nil {
-				return 0, err
-			}
+		passExpr, err = guardConstraintByEligibility(
+			builder.GetContext(), passExpr, targetEligible)
+		if err != nil {
+			return 0, err
 		}
 		if ignoreMode {
 			filterList = append(filterList, passExpr)
@@ -240,6 +227,27 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 		ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
 		FilterIsBarrier: ignoreMode,
 	}, bindCtx), nil
+}
+
+// guardConstraintByEligibility makes a row outside a constraint's mutation
+// domain pass without weakening validation for eligible rows. DML operators
+// use this when their data flow must retain non-writing rows for accounting or
+// routing even though those rows must not be revalidated as updates.
+func guardConstraintByEligibility(
+	ctx context.Context,
+	constraintOK *plan.Expr,
+	targetEligible *plan.Expr,
+) (*plan.Expr, error) {
+	if targetEligible == nil {
+		return constraintOK, nil
+	}
+	notEligible, err := BindFuncExprImplByPlanExpr(
+		ctx, "not", []*plan.Expr{DeepCopyExpr(targetEligible)})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(
+		ctx, "or", []*plan.Expr{notEligible, constraintOK})
 }
 
 func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) error {

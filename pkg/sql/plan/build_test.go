@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"slices"
@@ -3301,6 +3302,87 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"unmarked exclusive targets retain owner-side range escalation")
 }
 
+func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceID   uint64
+		scanID     uint64
+		tableCnt   float64
+		lockOutcnt float64
+		want       bool
+	}{
+		{
+			name:       "target scan repairs underestimated lock cardinality",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       true,
+		},
+		{
+			name:       "small target remains row scoped",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   3,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "unrelated large scan cannot widen target lock",
+			sourceID:   42,
+			scanID:     99,
+			tableCnt:   100,
+			lockOutcnt: 1,
+			want:       false,
+		},
+		{
+			name:       "non-finite target estimate fails closed",
+			sourceID:   42,
+			scanID:     42,
+			tableCnt:   math.Inf(1),
+			lockOutcnt: 1,
+			want:       false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 3,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			target := &plan.LockTarget{Mode: lockpb.LockMode_Exclusive}
+			builder := &QueryBuilder{
+				compCtx:                         &mock.ctxt,
+				fullTableUpdateSourceTableID:    test.sourceID,
+				hasFullTableUpdateSourceTableID: true,
+				fullTableUpdateLockTargets:      map[*plan.LockTarget]struct{}{target: {}},
+				qry: &plan.Query{Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						TableDef: &plan.TableDef{TblId: test.scanID},
+						Stats:    &plan.Stats{TableCnt: test.tableCnt},
+					},
+					{
+						NodeType:    plan.Node_LOCK_OP,
+						Stats:       &plan.Stats{Outcnt: test.lockOutcnt},
+						LockTargets: []*plan.LockTarget{target},
+					},
+				}},
+			}
+
+			applyLockTableFallback(builder)
+			require.Equal(t, test.want, target.LockTable)
+		})
+	}
+}
+
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	catalog.MarkTableDefTemporary(mock.ctxt.tables["nation"])
@@ -5181,7 +5263,14 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
 	t.Helper()
 	tableDef := mock.ctxt.tables[tableName]
-	colPos := tableDef.Name2ColIndex[columnName]
+	colPos := int32(-1)
+	for i, col := range tableDef.Cols {
+		if col.Name == columnName {
+			colPos = int32(i)
+			break
+		}
+	}
+	require.NotEqual(t, int32(-1), colPos, "column %s.%s", tableName, columnName)
 	checkExpr, err := BindFuncExprImplByPlanExpr(
 		t.Context(),
 		">",
@@ -5556,16 +5645,21 @@ func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
 
 	hasMultiUpdate := false
 	hasDedupJoin := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		switch {
 		case node.NodeType == plan.Node_MULTI_UPDATE:
 			hasMultiUpdate = true
 		case node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP:
 			hasDedupJoin = true
+		case node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration():
+			hasTargetArbiter = true
 		}
 	}
 	assert.True(t, hasMultiUpdate, "fake-PK ODKU plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "fake-PK ODKU plan should contain DEDUP JOIN node")
+	assert.True(t, hasTargetArbiter,
+		"fake-PK ODKU must arbitrate pre-statement and statement-local unique conflicts")
 }
 
 func TestInsertOnDupFKUsesModernPath(t *testing.T) {
@@ -5719,24 +5813,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
-		tableDef := mock.ctxt.tables["emp"]
-		colPos := tableDef.Name2ColIndex["deptno"]
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
-			},
-		}
-		checkExpr, err := BindFuncExprImplByPlanExpr(
-			t.Context(),
-			">",
-			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
-		)
-		require.NoError(t, err)
-		tableDef.Checks = []*plan.CheckDef{{
-			Name:  "positive_deptno",
-			Check: checkExpr,
-		}}
+		addPositiveCheck(t, mock, "emp", "deptno")
 
 		logicPlan, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err)
@@ -5821,7 +5898,14 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		addCheck := func(tableName, checkName, colName string) {
 			tableDef := mock.ctxt.tables[tableName]
-			colPos := tableDef.Name2ColIndex[colName]
+			colPos := int32(-1)
+			for i, col := range tableDef.Cols {
+				if col.Name == colName {
+					colPos = int32(i)
+					break
+				}
+			}
+			require.NotEqual(t, int32(-1), colPos, "column %s.%s", tableName, colName)
 			colExpr := &plan.Expr{
 				Typ:  tableDef.Cols[colPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: colPos}},
@@ -5921,19 +6005,21 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 			return false
 		}
 		require.Len(t, query.Nodes[assertNodeID].Children, 1)
-		require.Equal(t, plan.Node_PROJECT, query.Nodes[query.Nodes[assertNodeID].Children[0]].NodeType,
-			"ODKU CHECK must be attached directly to the final merged projection")
+		require.Equal(t, plan.Node_JOIN, query.Nodes[query.Nodes[assertNodeID].Children[0]].NodeType,
+			"ODKU CHECK must consume the per-action DEDUP UPDATE stream")
 		hasDedupUpdateBelowAssert := false
 		for nodeID, node := range query.Nodes {
 			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
 				node.OnDuplicateAction == plan.Node_UPDATE &&
 				containsNode(query.Nodes[assertNodeID].Children[0], int32(nodeID)) {
+				require.NotNil(t, node.DedupJoinCtx)
+				require.True(t, node.DedupJoinCtx.EmitActionRows)
 				hasDedupUpdateBelowAssert = true
 				break
 			}
 		}
 		require.True(t, hasDedupUpdateBelowAssert,
-			"CHECK assertion must remain above the DEDUP UPDATE final-row mutation")
+			"CHECK assertion must remain above every ordered DEDUP UPDATE action")
 	})
 }
 
@@ -5985,13 +6071,9 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 	// a unique-key conflict on a real-PK table must trigger an UPDATE of the
 	// conflicting row instead of raising a duplicate-entry error.
 	//
-	// The modern plan achieves this by resolving a single UPDATE target row up
-	// front: target_pk = coalesce(pk-existence-probe, uk1_pri, uk2_pri, ...),
-	// treating PRIMARY as the 0th index. The main DEDUP-update join then keys on
-	// target_pk so a cross-row UK conflict lands on the existing row's UPDATE.
-	// The per-UK FAIL dedup join is intentionally kept as in-batch protection
-	// (two brand-new rows sharing a new UK value still error, avoiding a
-	// duplicated unique-index entry).
+	// The modern plan resolves a single UPDATE target in PRIMARY/UNIQUE priority
+	// order against both the table snapshot and prior INSERT actions in this
+	// statement. The main DEDUP-update join then keys on that target identity.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = 'LA'")
 	if err != nil {
@@ -6003,7 +6085,7 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 
 	hasMultiUpdate := false
 	hasUpdateDedupJoin := false
-	hasTargetPkResolve := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
@@ -6012,27 +6094,28 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 			node.OnDuplicateAction == plan.Node_UPDATE {
 			hasUpdateDedupJoin = true
 		}
-		for _, expr := range node.ProjectList {
-			if exprContainsFuncName(expr, "coalesce") {
-				hasTargetPkResolve = true
-			}
+		if node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			hasTargetArbiter = true
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2,
+				"PRIMARY and secondary UNIQUE must participate in one ordered arbiter")
+			require.Len(t, node.PreInsertUkCtx.TargetColumns, 2)
+			require.Equal(t, int(node.PreInsertUkCtx.OutputColumns)+1, len(node.ProjectList),
+				"the runtime-resolved target identity must remain the final arbiter output")
 		}
 	}
 	assert.True(t, hasMultiUpdate, "real-PK ODKU plan should contain MULTI_UPDATE node")
 	assert.True(t, hasUpdateDedupJoin,
 		"real-PK ODKU plan should contain a DEDUP JOIN with OnDuplicateAction=UPDATE")
-	assert.True(t, hasTargetPkResolve,
-		"real-PK ODKU must resolve a coalesce(pk, uk...) target so unique-key "+
-			"conflicts update the existing row (MySQL-aligned), not just dedup on PK")
+	assert.True(t, hasTargetArbiter,
+		"real-PK ODKU must arbitrate existing and statement-local PK/UNIQUE conflicts")
 }
 
 func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// dept_ck has a real PK (deptno) and a composite unique key (dname, loc),
-	// plus a free column note. The target_pk resolution must serialize the
-	// composite unique-key value to probe its index table, so a composite
-	// unique-key conflict also resolves into the UPDATE target (MySQL-aligned).
+	// plus a free column note. The target arbiter must consume the serialized
+	// composite key used by its hidden index table.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO dept_ck VALUES (1, 'Sales', 'NY', 'n') ON DUPLICATE KEY UPDATE note = 'x'")
 	if err != nil {
@@ -6043,20 +6126,20 @@ func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
 	assert.NotNil(t, query)
 
 	hasMultiUpdate := false
-	hasTargetPkResolve := false
+	hasTargetArbiter := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
 		}
-		for _, expr := range node.ProjectList {
-			if exprContainsFuncName(expr, "coalesce") {
-				hasTargetPkResolve = true
-			}
+		if node.NodeType == plan.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			hasTargetArbiter = true
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2)
+			require.Len(t, node.PreInsertUkCtx.TargetColumns, 2)
 		}
 	}
 	assert.True(t, hasMultiUpdate, "composite-UK real-PK ODKU should contain MULTI_UPDATE node")
-	assert.True(t, hasTargetPkResolve,
-		"composite-UK real-PK ODKU should resolve a coalesce(pk, composite-uk) target")
+	assert.True(t, hasTargetArbiter,
+		"composite-UK real-PK ODKU should use ordered target arbitration")
 }
 
 // TestInsertOnDupIndexMetaTableUsesModernPath guards the regression where

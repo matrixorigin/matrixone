@@ -57,6 +57,20 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 	return true, nil
 }
 
+// isUnrestrictedDelete reports whether the statement targets every row of one
+// table without evaluating a row-producing or row-filtering clause.  Keep this
+// semantic classification separate from the physical truncate checks: foreign
+// keys, partitions, session settings, and RETURNING can still prevent a
+// truncate implementation for an otherwise unrestricted delete.
+func isUnrestrictedDelete(stmt *tree.Delete, targetCount int) bool {
+	return stmt != nil &&
+		targetCount == 1 &&
+		stmt.Where == nil &&
+		stmt.Limit == nil &&
+		len(stmt.TableRefs) == 0 &&
+		len(stmt.PartitionNames) == 0
+}
+
 func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
 	if len(stmt.Tables) != 1 {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
@@ -88,7 +102,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	//FIXME: optimize truncate table?
-	if !stmt.HasReturning() && stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
+	if !stmt.HasReturning() && isUnrestrictedDelete(stmt, len(dmlCtx.tableDefs)) {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {

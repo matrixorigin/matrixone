@@ -153,6 +153,7 @@ const (
 	// Watermark Related SQL
 	CDCInsertWatermarkSqlTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark, err_msg) " +
 		"VALUES %s"
 
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM " +
@@ -218,6 +219,28 @@ const (
 		"VALUES %s " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 
+	// Stable-epoch tasks never intentionally rewind a watermark. The durable
+	// max closes the cross-CN window where an old owner passes its claim check,
+	// stalls in SQL, and resumes after a replacement has already persisted a
+	// newer watermark. Legacy tasks retain the replace form above because their
+	// stale-read recovery can intentionally reset a watermark.
+	CDCOnDuplicateUpdateMonotonicWatermarkTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark, source_table_id) " +
+		"VALUES %s " +
+		"ON DUPLICATE KEY UPDATE watermark = CASE WHEN " +
+		"VALUES(source_table_id) > source_table_id OR (" +
+		"VALUES(source_table_id) = source_table_id AND (" +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) OR (" +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', 1) AS BIGINT) = " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', 1) AS BIGINT) AND " +
+		"CAST(SUBSTRING_INDEX(VALUES(watermark), '-', -1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(watermark, '-', -1) AS BIGINT)))) " +
+		"THEN VALUES(watermark) ELSE watermark END, " +
+		"source_table_id = CASE WHEN VALUES(source_table_id) > source_table_id " +
+		"THEN VALUES(source_table_id) ELSE source_table_id END"
+
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"(account_id, task_id, db_name, table_name, err_msg) " +
@@ -246,6 +269,30 @@ const (
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 
+	// Stable progress checkpoints are update-only. Startup owns creation of the
+	// progress row; keeping that ownership exclusive means a delayed old owner
+	// cannot recreate a row that RESTART deliberately deleted after the owner's
+	// preflight check.
+	CDCGuardedMonotonicWatermarkUpdateTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"INNER JOIN ( %s ) AS v ON " +
+		"w.account_id = v.account_id AND w.task_id = v.task_id AND " +
+		"w.db_name = v.db_name AND w.table_name = v.table_name " +
+		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"SET w.watermark = CASE WHEN v.owner_generation = w.owner_generation AND (" +
+		"v.source_table_id > w.source_table_id OR (" +
+		"v.source_table_id = w.source_table_id AND (" +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', 1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', 1) AS BIGINT) OR (" +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', 1) AS BIGINT) = " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', 1) AS BIGINT) AND " +
+		"CAST(SUBSTRING_INDEX(v.watermark, '-', -1) AS BIGINT) > " +
+		"CAST(SUBSTRING_INDEX(w.watermark, '-', -1) AS BIGINT))))) " +
+		"THEN v.watermark ELSE w.watermark END, " +
+		"w.source_table_id = CASE WHEN v.owner_generation = w.owner_generation AND " +
+		"v.source_table_id > w.source_table_id THEN v.source_table_id ELSE w.source_table_id END"
+
 	CDCGuardedWatermarkErrorUpdateTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"(account_id, task_id, db_name, table_name, err_msg) " +
@@ -254,6 +301,20 @@ const (
 		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
 		"ON t.account_id = v.account_id AND t.task_id = v.task_id " +
 		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
+
+	// Stable-task diagnostics belong to the same daemon generation as their
+	// progress. Keep this path update-only so an obsolete owner cannot recreate a
+	// watermark row removed by RESTART, and compare owner_generation in the
+	// durable statement so a preflight check cannot race with takeover.
+	CDCGuardedOwnedWatermarkErrorUpdateTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"INNER JOIN ( %s ) AS v ON " +
+		"w.account_id = v.account_id AND w.task_id = v.task_id AND " +
+		"w.db_name = v.db_name AND w.table_name = v.table_name AND " +
+		"w.owner_generation = v.owner_generation " +
+		"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` WHERE %s FOR UPDATE) AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"SET w.err_msg = v.err_msg"
 
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -848,6 +909,37 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	)
 }
 
+func (b cdcSQLBuilder) GetWatermarkProgressSQL(key *WatermarkKey) string {
+	return fmt.Sprintf(
+		"SELECT watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		key.AccountId,
+		escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName),
+		escapeSQLString(key.TableName),
+	)
+}
+
+func (b cdcSQLBuilder) ClaimWatermarkOwnerSQL(key *WatermarkKey, ownerGeneration uint64) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` SET owner_generation = GREATEST(owner_generation, %d) WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		ownerGeneration,
+		key.AccountId,
+		escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName),
+		escapeSQLString(key.TableName),
+	)
+}
+
+func (b cdcSQLBuilder) GetWatermarkOwnerProgressSQL(key *WatermarkKey) string {
+	return fmt.Sprintf(
+		"SELECT owner_generation, watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		key.AccountId,
+		escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName),
+		escapeSQLString(key.TableName),
+	)
+}
+
 func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
 	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
 		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
@@ -987,6 +1079,12 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkSQL(
 	)
 }
 
+func (b cdcSQLBuilder) OnDuplicateUpdateMonotonicWatermarkSQL(
+	values string,
+) string {
+	return fmt.Sprintf(CDCOnDuplicateUpdateMonotonicWatermarkTemplate, values)
+}
+
 func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 	values string,
 ) string {
@@ -1004,8 +1102,16 @@ func (b cdcSQLBuilder) GuardedWatermarkUpdateSQL(selectValues, taskPredicate str
 	return fmt.Sprintf(CDCGuardedWatermarkUpdateTemplate, selectValues, taskPredicate)
 }
 
+func (b cdcSQLBuilder) GuardedMonotonicWatermarkUpdateSQL(selectValues, taskPredicate string) string {
+	return fmt.Sprintf(CDCGuardedMonotonicWatermarkUpdateTemplate, selectValues, taskPredicate)
+}
+
 func (b cdcSQLBuilder) GuardedWatermarkErrorUpdateSQL(selectValues, taskPredicate string) string {
 	return fmt.Sprintf(CDCGuardedWatermarkErrorUpdateTemplate, selectValues, taskPredicate)
+}
+
+func (b cdcSQLBuilder) GuardedOwnedWatermarkErrorUpdateSQL(selectValues, taskPredicate string) string {
+	return fmt.Sprintf(CDCGuardedOwnedWatermarkErrorUpdateTemplate, selectValues, taskPredicate)
 }
 
 // ------------------------------------------------------------------------------------------------

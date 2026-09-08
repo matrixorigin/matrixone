@@ -1042,6 +1042,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc WINDOW_NAME_EMPTY
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
+%left <str> MEMBER
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -14466,6 +14467,10 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
     }
+|   bit_expr MEMBER opt_of '(' simple_expr ')' %prec IN
+    {
+        $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
@@ -14508,6 +14513,10 @@ like_escape_opt:
     {
         $$ = $2
     }
+
+opt_of:
+    /* EMPTY */
+|   OF
 
 col_tuple:
     tuple_expression
@@ -14953,7 +14962,7 @@ decimal_type:
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	goto ret1
         }
-        if $2.DisplayWith >= 24 {
+        if $2.Scale == tree.NotDefineDec && $2.DisplayWith > 24 {
             $$ = &tree.T{
             	InternalType: tree.InternalType{
             		Family: tree.FloatFamily,
@@ -16056,6 +16065,7 @@ non_reserved_keyword:
 |   MEDIUMTEXT
 |   MATERIALIZED
 |   MEMORY
+|   MEMBER
 |   METADATA
 |   MODE
 |   MULTILINESTRING

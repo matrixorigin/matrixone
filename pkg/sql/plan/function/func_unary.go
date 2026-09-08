@@ -439,7 +439,8 @@ func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 // OrdString calculates the ORD value for a string
 // For single-byte characters: returns the byte value (same as ASCII)
-// For multibyte characters: returns (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+// For multibyte characters, bytes are combined from left to right, matching
+// MySQL's ORD() semantics: byte1*256^(n-1) + ... + byten.
 func OrdString(val []byte) int64 {
 	if len(val) == 0 {
 		return 0
@@ -456,20 +457,50 @@ func OrdString(val []byte) int64 {
 		return int64(val[0])
 	}
 
-	// For multibyte characters, calculate using the formula:
-	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+	// For multibyte characters, append each byte in network order. This also
+	// avoids a shift-width special case and keeps the single-byte fast path.
 	var result int64
 	for i := 0; i < runeSize && i < len(val); i++ {
-		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
+		result = (result << 8) | int64(val[i])
 	}
 
 	return result
 }
 
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
-		return OrdString(v)
-	}, selectList)
+	if !ivecs[0].HasBinaryStringRows() {
+		binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary || ivecs[0].GetIsBinaryString()
+		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(value []byte) int64 {
+			if binary {
+				return int64(StringSingle(value))
+			}
+			return OrdString(value)
+		}, selectList)
+	}
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	values := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
+	nsp := rs.GetResultVector().GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			nsp.Add(i)
+			continue
+		}
+		value, isNull := p.GetStrValue(i)
+		if isNull {
+			nsp.Add(i)
+			continue
+		}
+		if ivecs[0].GetIsBinaryStringAt(int(i)) {
+			values[i] = int64(StringSingle(value))
+		} else {
+			values[i] = OrdString(value)
+		}
+	}
+	return nil
 }
 
 var (
@@ -592,26 +623,54 @@ func bitCountFromMysqlIntegerString(s string) (uint64, error) {
 		return 0, nil
 	}
 
-	if strings.HasPrefix(s, "-") {
-		val, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			if errors.Is(err, strconv.ErrRange) {
-				return bitCountFromUint64(minInt64BitPattern), nil
-			}
-			return 0, err
-		}
-		return bitCountFromUint64(uint64(val)), nil
+	negative := false
+	start := 0
+	switch s[0] {
+	case '-':
+		negative = true
+		start = 1
+	case '+':
+		start = 1
 	}
 
-	s = strings.TrimPrefix(s, "+")
-	val, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		if errors.Is(err, strconv.ErrRange) {
-			return bitCountFromUint64(math.MaxUint64), nil
+	// MySQL converts a nonbinary string to an integer by consuming the leading
+	// decimal digit run. It returns zero for a string with no digits rather than
+	// surfacing the parser's syntax error (for example, 'abc' or '+x').
+	var magnitude uint64
+	hasDigits := false
+	overflow := false
+	for ; start < len(s); start++ {
+		c := s[start]
+		if c < '0' || c > '9' {
+			break
 		}
-		return 0, err
+		hasDigits = true
+		digit := uint64(c - '0')
+		if magnitude > (math.MaxUint64-digit)/10 {
+			overflow = true
+			// Keep scanning only to consume the same prefix. The result is already
+			// known to be saturated, so avoid wrapping the accumulator.
+			continue
+		}
+		if !overflow {
+			magnitude = magnitude*10 + digit
+		}
 	}
-	return bitCountFromUint64(val), nil
+	if !hasDigits {
+		return 0, nil
+	}
+	if negative {
+		// String-to-integer conversion saturates negative overflow at the
+		// signed BIGINT minimum, whose two's-complement pattern has one bit.
+		if overflow || magnitude >= uint64(math.MaxInt64)+1 {
+			return bitCountFromUint64(minInt64BitPattern), nil
+		}
+		return bitCountFromUint64(uint64(-int64(magnitude))), nil
+	}
+	if overflow {
+		return bitCountFromUint64(math.MaxUint64), nil
+	}
+	return bitCountFromUint64(magnitude), nil
 }
 
 func bitCountFromDecimalIntegerString(s string) (uint64, error) {
@@ -746,10 +805,42 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if ivecs[0].GetIsBin() {
-		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+	if !ivecs[0].HasBinaryStringRows() {
+		binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary ||
+			ivecs[0].GetIsBin() || ivecs[0].GetIsBinaryString()
+		if binary {
+			return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+		}
+		return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
 	}
-	return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[uint64](result)
+	p := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	values := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
+	nsp := rs.GetResultVector().GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			nsp.Add(i)
+			continue
+		}
+		value, isNull := p.GetStrValue(i)
+		if isNull {
+			nsp.Add(i)
+			continue
+		}
+		if ivecs[0].GetIsBinaryStringAt(int(i)) {
+			values[i] = bitCountFromBinaryString(value)
+		} else {
+			var err error
+			values[i], err = bitCountFromNonBinaryString(value)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1003,6 +1094,12 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 
 	stringSingle := func(v []byte) (string, error) {
+		if !utf8.Valid(v) {
+			return "", moerr.NewInvalidInput(proc.Ctx, "invalid utf-8 string for json_unquote")
+		}
+		if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+			return string(v), nil
+		}
 		bj, err := types.ParseSliceToByteJson(v)
 		if err != nil {
 			return "", err
@@ -1010,12 +1107,21 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return bj.Unquote()
 	}
 
-	fSingle := jsonSingle
-	if ivecs[0].GetType().Oid.IsMySQLString() {
-		fSingle = stringSingle
+	single := func(v []byte, row int) (string, error) {
+		// Evaluate the selected row's domain after the template has filtered
+		// NULL and masked rows.  Runtime binary provenance can vary within a
+		// VARCHAR vector, and a selected text row can override a static binary
+		// result type.
+		if ivecs[0].GetIsBinaryStringAt(row) {
+			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
+		}
+		if ivecs[0].GetType().Oid.IsMySQLString() {
+			return stringSingle(v)
+		}
+		return jsonSingle(v)
 	}
 
-	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle, selectList)
+	return opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, single, selectList)
 }
 
 // QuoteString quotes a string for use in SQL statements
@@ -1198,7 +1304,7 @@ func StConvexHull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.ConvexHull(g), f32), nil
+		return geoEncodeWKB(geo.ConvexHull(g), f32)
 	}, selectList)
 }
 
@@ -1443,7 +1549,7 @@ func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.SwapXY(g), f32), nil
+		return geoEncodeWKB(geo.SwapXY(g), f32)
 	}, selectList)
 }
 
@@ -1592,25 +1698,25 @@ func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
 }
 
 // geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
-func geoEncodeWKB(g geo.Geometry, f32 bool) []byte {
+func geoEncodeWKB(g geo.Geometry, f32 bool) ([]byte, error) {
 	if f32 {
 		return geo.WriteWKBFloat32(g)
 	}
-	return geo.WriteWKB(g)
+	return geo.WriteWKB(g), nil
 }
 
 // reencodeGeom32 transcodes an already-encoded WKB payload to float32 WKB when
 // f32 is set; otherwise it returns the payload unchanged. Used by
 // geometry-returning functions that build their output through helpers that
 // always emit standard float64 WKB.
-func reencodeGeom32(out []byte, f32 bool) []byte {
-	if !f32 || len(out) == 0 {
-		return out
+func reencodeGeom32(out []byte, f32 bool) ([]byte, error) {
+	if !f32 {
+		return out, nil
 	}
 	g, err := geo.ReadWKB(out)
 	if err != nil {
 		if g, err = geo.ReadWKBFloat32(out); err != nil {
-			return out
+			return nil, err
 		}
 	}
 	return geo.WriteWKBFloat32(g)
@@ -1694,11 +1800,11 @@ func geodeticLength(payload []byte) (float64, error) {
 
 // encodeGeometryPayloadFloat32 is the GEOMETRY32 counterpart of
 // encodeGeometryPayload: it parses WKT and returns float32-coordinate WKB.
-func encodeGeometryPayloadFloat32(wkt string) []byte {
+func encodeGeometryPayloadFloat32(wkt string) ([]byte, error) {
 	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
 	g, err := geo.ParseWKT(wkt)
 	if err != nil {
-		return functionUtil.QuickStrToBytes(wkt)
+		return nil, err
 	}
 	return geo.WriteWKBFloat32(g)
 }
@@ -2522,6 +2628,23 @@ func geometryNFromPayload(payload []byte, n int64) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("geometry index out of range")
 	}
 	item := strings.TrimSpace(items[n-1])
+	// Empty members have no coordinate parentheses. Emit typed WKB rather
+	// than constructing POINT(EMPTY), LINESTRINGEMPTY, or POLYGONEMPTY and
+	// accidentally falling back to raw text at the encoding boundary.
+	if strings.EqualFold(item, "EMPTY") {
+		var empty geo.Geometry
+		switch typeName {
+		case "MULTIPOINT":
+			empty = geo.Point{IsEmpty: true}
+		case "MULTILINESTRING":
+			empty = geo.LineString{}
+		case "MULTIPOLYGON":
+			empty = geo.Polygon{}
+		}
+		if empty != nil {
+			return functionUtil.QuickBytesToStr(geo.WriteWKB(empty)), nil
+		}
+	}
 	switch typeName {
 	case "MULTIPOINT":
 		if strings.HasPrefix(strings.ToUpper(item), "POINT") {
@@ -2696,7 +2819,10 @@ func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return err
 		}
-		out := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		out, err := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
 		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
@@ -2739,7 +2865,11 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
+		out, err := reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -2753,7 +2883,7 @@ func StExteriorRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2798,7 +2928,11 @@ func StInteriorRingN(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
+		out, err := reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -2848,7 +2982,7 @@ func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2859,7 +2993,7 @@ func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2870,7 +3004,7 @@ func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2887,7 +3021,7 @@ func StPointOnSurface(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2898,7 +3032,7 @@ func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2909,7 +3043,7 @@ func StEndPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -3220,7 +3354,9 @@ func boundaryFromPayload(payload []byte) ([]byte, error) {
 			return nil, err
 		}
 		if points[0] == points[len(points)-1] {
-			return encodeGeometryPayload("MULTIPOINT()", srid, sridDefined), nil
+			// A closed line has an empty boundary, not a malformed text
+			// payload. Keep the same WKB contract as non-empty results.
+			return geo.WriteWKB(geo.MultiPoint{}), nil
 		}
 		return encodeGeometryPayload("MULTIPOINT(("+points[0]+"),("+points[len(points)-1]+"))", srid, sridDefined), nil
 	case "POLYGON":
@@ -7310,23 +7446,63 @@ func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList.IgnoreAllRow() {
+		return rs.AppendMultiBytes(nil, true, length)
+	}
 
 	rowCount := uint64(length)
+	var small [64]byte
+	decoded := small[:]
+	var compact []byte
 	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		data, null := source.GetStrValue(i)
 		if null {
-			return rs.AppendMustNullForBytesResult()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
 		}
 
-		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
-		_, err := base64.StdEncoding.Decode(buf, data)
-		if err != nil {
-			return rs.AppendMustNullForBytesResult()
+		size := base64.StdEncoding.DecodedLen(len(data))
+		if cap(decoded) < size {
+			decoded = make([]byte, size)
 		}
-		_ = rs.AppendMustBytesValue(buf)
+		n, err := base64.StdEncoding.Decode(decoded[:size], data)
+		if err != nil {
+			// Keep ordinary Base64 on the standard decoder's fast path. On
+			// failure, retry after removing MySQL's whitespace bytes (not
+			// Unicode whitespace), without mutating input vector storage.
+			for j, b := range data {
+				if isBase64Space(b) {
+					compact = append(compact[:0], data[:j]...)
+					for _, b := range data[j+1:] {
+						if !isBase64Space(b) {
+							compact = append(compact, b)
+						}
+					}
+					n, err = base64.StdEncoding.Decode(decoded[:size], compact)
+					break
+				}
+			}
+		}
+		// Decode may return a valid prefix with an error. Never publish that
+		// prefix, and never let one invalid row terminate the batch.
+		if err := rs.AppendBytes(decoded[:n], err != nil); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func isBase64Space(b byte) bool {
+	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).

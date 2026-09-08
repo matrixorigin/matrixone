@@ -449,6 +449,104 @@ func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 	)
 }
 
+func TestKeepRemoteLockRejectsRequestRoutedToReplacementCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"replacement-cn"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			bind := pb.LockTable{
+				Group:       0,
+				Table:       27707,
+				OriginTable: 27707,
+				ServiceID:   getServiceIdentifier("departed-cn", 1),
+				Version:     1,
+				Valid:       true,
+			}
+			require.NotEqual(t,
+				getUUIDFromServiceIdentifier(s.serviceID),
+				getUUIDFromServiceIdentifier(bind.ServiceID))
+			s.tableGroups.set(bind.Group, bind.Table, s.createLockTableByBind(bind))
+
+			req := &pb.Request{
+				Method:    pb.Method_KeepRemoteLock,
+				LockTable: bind,
+			}
+			req.KeepRemoteLock.ServiceID = "source-cn"
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged))
+			require.False(t, s.activeTxnHolder.hasRemoteLockBind(
+				req.KeepRemoteLock.ServiceID, bind, time.Hour))
+		},
+	)
+}
+
+func TestKeepRemoteLockNotFoundCanRecoverSameBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"owner"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			const table = uint64(27709)
+			bind := alloc.Get(
+				s.serviceID,
+				0,
+				table,
+				table,
+				pb.Sharding_None,
+			)
+			req := &pb.Request{
+				Method:    pb.Method_KeepRemoteLock,
+				LockTable: bind,
+			}
+			req.KeepRemoteLock.ServiceID = "source"
+
+			alloc.server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					_ *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession,
+				) {
+					writeResponse(
+						alloc.logger,
+						cancel,
+						resp,
+						moerr.NewInternalErrorNoCtx("transient allocator failure"),
+						cs,
+					)
+				})
+
+			resp := acquireResponse()
+			cs := &testClientSession{ctx: context.Background()}
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableNotFound))
+			require.Nil(t, s.tableGroups.get(bind.Group, bind.Table))
+			releaseResponse(resp)
+
+			alloc.server.RegisterMethodHandler(pb.Method_GetBind, alloc.handleGetBind)
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			cs = &testClientSession{ctx: context.Background()}
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.NoError(t, resp.UnwrapError())
+			require.Equal(t, bind, s.tableGroups.get(bind.Group, bind.Table).getBind())
+		},
+	)
+}
+
 func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
 	req := &pb.Request{
 		LockTable: pb.LockTable{

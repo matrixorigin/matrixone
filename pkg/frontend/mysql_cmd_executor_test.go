@@ -4597,6 +4597,8 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
 	}
 	line := geo.LineString{Points: points}
+	line32, err := geo.WriteWKBFloat32(line)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name    string
@@ -4604,7 +4606,7 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		payload []byte
 	}{
 		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
-		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: line32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := vector.NewVec(tc.typ.ToType())

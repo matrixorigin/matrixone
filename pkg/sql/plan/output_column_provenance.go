@@ -138,8 +138,15 @@ func (bc *BindContext) markViewCTASDefaultBoundary(viewCols []*plan.ColDef) {
 			}
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
-		bc.outputColumnProvenance[int32(i)] = provenance
+		bc.setOutputColumnProvenance(int32(i), provenance)
 	}
+}
+
+func (bc *BindContext) setOutputColumnProvenance(index int32, provenance OutputColumnProvenance) {
+	if bc.outputColumnProvenance == nil {
+		bc.outputColumnProvenance = make(map[int32]OutputColumnProvenance)
+	}
+	bc.outputColumnProvenance[index] = provenance
 }
 
 // transparentOutputSourceExpr unwraps planner display adapters that preserve
@@ -248,6 +255,11 @@ func (bc *BindContext) outputColumnProvenanceForBoundary() []OutputColumnProvena
 }
 
 func (bc *BindContext) clearOutputColumnProvenance() {
+	if len(bc.projects) == 0 || len(bc.headings) == 0 {
+		bc.outputColumnProvenance = nil
+		return
+	}
+	bc.outputColumnProvenance = make(map[int32]OutputColumnProvenance, min(len(bc.headings), len(bc.projects)))
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		bc.outputColumnProvenance[int32(i)] = OutputColumnProvenance{State: ProvenanceNone}
 	}

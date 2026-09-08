@@ -202,6 +202,10 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
+	// scope trees whose bounded receiver channels would deadlock under the TP
+	// query's sequential fast path.
+	ConcurrentPreScopes bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
@@ -334,6 +338,10 @@ type Compile struct {
 	planGenerationRebuilt bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
+	// sequenceState is the frontend-visible sequence state captured at the
+	// beginning of this statement. It is restored before a retry generation so
+	// a failed attempt cannot publish stale CURRVAL/LASTVAL values.
+	sequenceState sequenceStatementState
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
@@ -392,6 +400,10 @@ type Compile struct {
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
+	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
+	// owned by the SQL executor. It is intentionally separate from isInternal,
+	// which also controls routing and other execution policy.
+	temporaryDDLInExecutorTxn bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool

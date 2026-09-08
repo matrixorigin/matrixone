@@ -114,9 +114,32 @@ type GCReport struct {
 	DStaleCpk  int
 }
 
+type catalogGCDeleteKind uint8
+
+const (
+	catalogGCDeleteTable catalogGCDeleteKind = iota
+	catalogGCDeleteDatabase
+)
+
+// deleteCatalogVersions deletes a newest-first group from oldest to newest.
+// When the newest collected version is a tombstone, keeping it until all
+// superseded live versions are gone prevents concurrent readers from briefly
+// observing a dropped database or table as live again.
+func deleteCatalogVersions[T any](items []T, deleteItem func(T)) {
+	for i := len(items) - 1; i >= 0; i-- {
+		deleteItem(items[i])
+	}
+}
+
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 	cc.gcMu.Lock()
 	defer cc.gcMu.Unlock()
+
+	// Stop serving snapshots whose retained history is about to be removed
+	// before the first destructive operation. Readers at an older snapshot
+	// must fall back to storage rather than interpreting a partially retired
+	// cache as an authoritative miss.
+	cc.UpdateStart(types.TimestampToTS(ts))
 
 	/*
 							GC
@@ -139,15 +162,20 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 	r := GCReport{}
 	{ // table cache gc
+		var prevAccountId uint32
 		var prevName string
 		var prevDbId uint64
 		deletedCpkey := make([]*TableItem, 0, 16)
 		deletedItems := make([]*TableItem, 0, 16)
+		seenGroup := false
 		seenLargest := false
 		cc.tables.data.Scan(func(item *TableItem) bool {
-			if item.DatabaseId != prevDbId {
+			if !seenGroup || item.AccountId != prevAccountId || item.DatabaseId != prevDbId {
+				prevAccountId = item.AccountId
 				prevDbId = item.DatabaseId
 				prevName = ""
+				seenGroup = true
+				seenLargest = false
 			}
 
 			if item.Name != prevName {
@@ -173,22 +201,29 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		})
 		r.TStaleItem = len(deletedItems)
 		r.TStaleCpk = len(deletedCpkey)
-		for _, item := range deletedItems {
+		deleteCatalogVersions(deletedItems, func(item *TableItem) {
 			cc.tables.data.Delete(item)
-		}
+			if cc.gcDeleteObserverForTesting != nil {
+				cc.gcDeleteObserverForTesting(catalogGCDeleteTable)
+			}
+		})
 		for _, item := range deletedCpkey {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
 	}
 	{ // database cache gc
+		var prevAccountId uint32
 		var prevName string
 		deletedCpkey := make([]*DatabaseItem, 0, 16)
 		deletedItems := make([]*DatabaseItem, 0, 16)
+		seenGroup := false
 		seenLargest := false
 		cc.databases.data.Scan(func(item *DatabaseItem) bool {
-			if item.Name != prevName {
+			if !seenGroup || item.AccountId != prevAccountId || item.Name != prevName {
+				prevAccountId = item.AccountId
 				prevName = item.Name
+				seenGroup = true
 				seenLargest = false
 			}
 			if item.Ts.Less(ts) {
@@ -210,14 +245,16 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 		r.DStaleItem = len(deletedItems)
 		r.DStaleCpk = len(deletedCpkey)
-		for _, item := range deletedItems {
+		deleteCatalogVersions(deletedItems, func(item *DatabaseItem) {
 			cc.databases.data.Delete(item)
-		}
+			if cc.gcDeleteObserverForTesting != nil {
+				cc.gcDeleteObserverForTesting(catalogGCDeleteDatabase)
+			}
+		})
 		for _, item := range deletedCpkey {
 			cc.databases.cpkeyIndex.Delete(item)
 		}
 	}
-	cc.UpdateStart(types.TimestampToTS(ts))
 	return r
 }
 

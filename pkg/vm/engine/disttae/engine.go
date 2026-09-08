@@ -433,7 +433,11 @@ func (e *Engine) Database(
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if txn.databaseOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
+		// Keep all authoritative "database does not exist" results on the same
+		// typed contract.  In particular, DROP DATABASE followed by CREATE
+		// DATABASE in the same transaction (used by PITR and snapshot restore)
+		// reaches this transaction-local tombstone before consulting the catalog.
+		return nil, moerr.GetOkExpectedEOB()
 	}
 
 	if v := txn.databaseOps.existAndActive(key); v != nil {
@@ -595,6 +599,12 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		if cacheItem == nil {
+			latest := cache.GetTableById(accountId, 0, tableId)
+			if latest != nil && latest.Kind == catalog.SystemTemporaryTable && defines.IsTempTableName(latest.Name) {
+				cacheItem = latest
+			}
+		}
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName

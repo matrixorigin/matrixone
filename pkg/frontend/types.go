@@ -362,16 +362,33 @@ type PrepareStmt struct {
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
 	paramMetadata              []bool
+	// paramBinaryStrings is statement-owned backing storage for the optional
+	// per-execution BLOB domain sidecar. It remains available across executions
+	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
+	paramBinaryStrings []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation for generic JSON comparison adapters and EXECUTE USING
+	// metadata. jsonMemberOfParamPositions is the narrower set that may use
+	// exact binary-protocol SQL domains; paramConcreteTypes is a reusable
+	// execution buffer.
 	jsonComparisonParamPositions []int32
+	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
+	// contract. Each marker starts with the binary-string default; after an
+	// actual numeric value reparses the statement, later text/BLOB values keep
+	// that marker's canonical numeric parameter category, matching MySQL's
+	// one-way parameter-type evolution without retaining source-width limits.
+	bitCountOverloadParamPositions []int32
+	// bitCountNumericParamTypes is bounded by the statement parameter count and
+	// belongs to the current prepared-plan generation. A zero entry means that
+	// the corresponding BIT_COUNT marker has not observed a numeric value.
+	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -849,6 +866,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.paramBinaryStrings = nil
 	prepareStmt.remapDb = nil
 }
 

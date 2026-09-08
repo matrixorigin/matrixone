@@ -2783,10 +2783,14 @@ func createPrepareStmtInSession(
 		protocolVersion:  protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
+		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			prepareControl.Plan),
+		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
 			prepareControl.Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		hasPaginationParams:        hasPaginationParams,
@@ -4995,6 +4999,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		if finishTxnOnReturn {
 			err = finishTxnFunc(ses, err, execCtx)
 		}
+		if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
+			owner.cleanupRetiredTempTables(execCtx.reqCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -5535,6 +5542,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
@@ -5991,6 +5999,15 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 func checkNodeCanCache(p *plan2.Plan) bool {
 	if p == nil {
 		return true
+	}
+	// INFORMATION_SCHEMA.STATISTICS expands the account's currently visible
+	// subscriptions while the plan is built. In particular, a plan built with
+	// zero subscriptions has no publisher scan whose node-level flags would
+	// otherwise reject it. Do not admit any plan with this dependency to the
+	// ordinary COM_QUERY cache: creating the first subscription does not change
+	// a table schema version and therefore cannot invalidate such a cached plan.
+	if plan2.PreparedPlanDependsOnSubscriptionMetadata(p) {
+		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
 		if q.Query.GetHasForeignKeyAction() {
