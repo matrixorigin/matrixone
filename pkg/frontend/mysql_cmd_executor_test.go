@@ -197,6 +197,28 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 	require.ErrorContains(t, err, "first statement failed")
 }
 
+func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	compileErr := moerr.NewInternalError(ctx, "placement rejected")
+	cw := mock_frontend.NewMockComputationWrapper(ctrl)
+	cw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, compileErr)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.proc = ses.GetProc()
+	execCtx.input = &UserInput{}
+	execCtx.cw = cw
+	execCtx.stmt = &tree.Load{Local: true}
+
+	err := executeStmt(ses, execCtx)
+	require.ErrorIs(t, err, compileErr)
+	require.Nil(t, execCtx.proc.Base.LoadLocalReader)
+	require.Nil(t, execCtx.loadLocalWriter)
+}
+
 func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
 	execCtx := &ExecCtx{}
@@ -3965,6 +3987,14 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementOffset)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_increment", int64(7)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_offset", int64(4)))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, uint64(7), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(4), proc.Base.SessionInfo.AutoIncrementOffset)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
 	refreshStatementScopedSessionInfo(ses, proc)
@@ -4597,6 +4627,8 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
 	}
 	line := geo.LineString{Points: points}
+	line32, err := geo.WriteWKBFloat32(line)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name    string
@@ -4604,7 +4636,7 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		payload []byte
 	}{
 		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
-		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: line32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := vector.NewVec(tc.typ.ToType())
@@ -7531,7 +7563,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7554,11 +7586,156 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+type trackedLoadLocalMysqlWriter struct {
+	*testMysqlWriter
+	started        chan struct{}
+	cleanupEntered chan struct{}
+	releaseCleanup chan struct{}
+	completed      atomic.Bool
+}
+
+func (w *trackedLoadLocalMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	return w.testMysqlWriter.WriteLocalInfileRequest(filename)
+}
+
+func (w *trackedLoadLocalMysqlWriter) FreeLoadLocal() {
+	if w.cleanupEntered != nil {
+		select {
+		case w.cleanupEntered <- struct{}{}:
+		default:
+		}
+		<-w.releaseCleanup
+	}
+	w.testMysqlWriter.FreeLoadLocal()
+	w.completed.Store(true)
+}
+
+func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		runnerErr   error
+		runnerPanic any
+		payload     []byte
+	}{
+		{name: "success", payload: []byte("helloworld")},
+		{name: "runner failure", runnerErr: moerr.NewInternalErrorNoCtx("runner failed")},
+		{name: "runner panic", runnerPanic: "runner panicked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			reqCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			proc := testutil.NewProc(t)
+			tConn := &testConn{}
+			packets := []*Packet{
+				{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+				{Length: 5, Payload: []byte("world"), SequenceID: 2},
+				{Length: 0, Payload: nil, SequenceID: 3},
+			}
+			writeExceptResult(tConn, packets)
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			setPu("", pu)
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
+			require.NoError(t, err)
+			mysqlWriter := &trackedLoadLocalMysqlWriter{
+				testMysqlWriter: &testMysqlWriter{ioses: ioses},
+				started:         make(chan struct{}, 1),
+			}
+			if test.runnerPanic != nil {
+				mysqlWriter.cleanupEntered = make(chan struct{}, 1)
+				mysqlWriter.releaseCleanup = make(chan struct{})
+			}
+			ses := &Session{feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(mysqlWriter),
+			}}
+
+			var payload []byte
+			runner := mock_frontend.NewMockComputationRunner(ctrl)
+			runner.EXPECT().Run(uint64(0)).DoAndReturn(func(uint64) (*util.RunResult, error) {
+				select {
+				case <-mysqlWriter.started:
+				case <-reqCtx.Done():
+					return nil, reqCtx.Err()
+				}
+				reader := proc.GetLoadLocalReader()
+				require.NotNil(t, reader)
+				if test.runnerPanic != nil {
+					panic(test.runnerPanic)
+				}
+				if test.runnerErr != nil {
+					return nil, test.runnerErr
+				}
+				payload, err = io.ReadAll(reader)
+				return &util.RunResult{}, err
+			})
+			execCtx := newTestExecCtx(reqCtx, ctrl)
+			execCtx.proc = proc
+			execCtx.runner = runner
+			execCtx.stmt = &tree.Load{
+				Local: true,
+				Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}},
+			}
+
+			if test.runnerPanic != nil {
+				panicResult := make(chan any, 1)
+				go func() {
+					defer func() {
+						panicResult <- recover()
+					}()
+					_ = executeStatusStmt(ses, execCtx)
+				}()
+				select {
+				case <-mysqlWriter.cleanupEntered:
+				case <-time.After(5 * time.Second):
+					cancel()
+					close(mysqlWriter.releaseCleanup)
+					t.Fatal("upload owner did not reach cleanup")
+				}
+				var panicValue any
+				returnedBeforeCleanup := false
+				select {
+				case panicValue = <-panicResult:
+					returnedBeforeCleanup = true
+				case <-time.After(100 * time.Millisecond):
+				}
+				close(mysqlWriter.releaseCleanup)
+				if !returnedBeforeCleanup {
+					select {
+					case panicValue = <-panicResult:
+					case <-time.After(5 * time.Second):
+						cancel()
+						t.Fatal("statement did not return after upload cleanup")
+					}
+				}
+				require.False(t, returnedBeforeCleanup,
+					"statement returned while upload owner was still cleaning up")
+				require.Equal(t, test.runnerPanic, panicValue)
+			} else {
+				err = executeStatusStmt(ses, execCtx)
+				require.ErrorIs(t, err, test.runnerErr)
+			}
+			require.Equal(t, test.payload, payload)
+			require.True(t, mysqlWriter.completed.Load(), "upload owner must terminate before statement return")
+			require.Nil(t, proc.GetLoadLocalReader())
+			require.Nil(t, execCtx.loadLocalWriter)
+		})
+	}
 }
 
 func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
@@ -7580,7 +7757,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7598,7 +7775,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
 	})
@@ -7626,7 +7803,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7658,7 +7835,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
 		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
@@ -7711,7 +7888,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7735,7 +7912,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		}()
 
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 
 		// Should return error containing "network read timeout"
 		convey.So(err, convey.ShouldNotBeNil)

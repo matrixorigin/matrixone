@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -60,23 +61,61 @@ func applyLockTableFallback(builder *QueryBuilder) {
 	if maxRows <= 0 {
 		return
 	}
+	fullUpdateRows := estimateFullTableUpdateRows(builder)
 
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType != plan.Node_LOCK_OP ||
-			node.Stats == nil ||
-			node.Stats.Outcnt <= maxRows {
+			node.Stats == nil {
 			continue
 		}
 		for _, target := range node.LockTargets {
+			_, fullUpdateTarget := builder.fullTableUpdateLockTargets[target]
+			estimatedRows := node.Stats.Outcnt
+			if fullUpdateTarget && fullUpdateRows > estimatedRows {
+				estimatedRows = fullUpdateRows
+			}
+			if estimatedRows <= maxRows {
+				continue
+			}
 			if target.Mode == lockpb.LockMode_Shared {
 				target.LockTable = true
 				continue
 			}
-			if _, ok := builder.fullTableUpdateLockTargets[target]; ok {
+			if fullUpdateTarget {
 				target.LockTable = true
 			}
 		}
 	}
+}
+
+// estimateFullTableUpdateRows returns the unfiltered cardinality of the target
+// scan for an UPDATE already proven to cover its complete keyspace. Join and
+// projection estimates can undercount the final LOCK_OP, especially with stale
+// hidden-index statistics. TableCnt is safe only under that semantic proof: a
+// bounded UPDATE must never acquire a table lock just because its source table
+// is large.
+func estimateFullTableUpdateRows(builder *QueryBuilder) float64 {
+	if !builder.hasFullTableUpdateSourceTableID {
+		return 0
+	}
+
+	var rows float64
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN ||
+			node.TableDef == nil ||
+			node.TableDef.TblId != builder.fullTableUpdateSourceTableID ||
+			node.Stats == nil {
+			continue
+		}
+		candidate := node.Stats.TableCnt
+		if candidate <= 0 || math.IsNaN(candidate) || math.IsInf(candidate, 0) {
+			continue
+		}
+		if candidate > rows {
+			rows = candidate
+		}
+	}
+	return rows
 }
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process

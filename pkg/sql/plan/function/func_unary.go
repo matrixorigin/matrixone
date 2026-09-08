@@ -1304,7 +1304,7 @@ func StConvexHull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.ConvexHull(g), f32), nil
+		return geoEncodeWKB(geo.ConvexHull(g), f32)
 	}, selectList)
 }
 
@@ -1549,7 +1549,7 @@ func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.SwapXY(g), f32), nil
+		return geoEncodeWKB(geo.SwapXY(g), f32)
 	}, selectList)
 }
 
@@ -1698,25 +1698,25 @@ func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
 }
 
 // geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
-func geoEncodeWKB(g geo.Geometry, f32 bool) []byte {
+func geoEncodeWKB(g geo.Geometry, f32 bool) ([]byte, error) {
 	if f32 {
 		return geo.WriteWKBFloat32(g)
 	}
-	return geo.WriteWKB(g)
+	return geo.WriteWKB(g), nil
 }
 
 // reencodeGeom32 transcodes an already-encoded WKB payload to float32 WKB when
 // f32 is set; otherwise it returns the payload unchanged. Used by
 // geometry-returning functions that build their output through helpers that
 // always emit standard float64 WKB.
-func reencodeGeom32(out []byte, f32 bool) []byte {
-	if !f32 || len(out) == 0 {
-		return out
+func reencodeGeom32(out []byte, f32 bool) ([]byte, error) {
+	if !f32 {
+		return out, nil
 	}
 	g, err := geo.ReadWKB(out)
 	if err != nil {
 		if g, err = geo.ReadWKBFloat32(out); err != nil {
-			return out
+			return nil, err
 		}
 	}
 	return geo.WriteWKBFloat32(g)
@@ -1800,11 +1800,11 @@ func geodeticLength(payload []byte) (float64, error) {
 
 // encodeGeometryPayloadFloat32 is the GEOMETRY32 counterpart of
 // encodeGeometryPayload: it parses WKT and returns float32-coordinate WKB.
-func encodeGeometryPayloadFloat32(wkt string) []byte {
+func encodeGeometryPayloadFloat32(wkt string) ([]byte, error) {
 	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
 	g, err := geo.ParseWKT(wkt)
 	if err != nil {
-		return functionUtil.QuickStrToBytes(wkt)
+		return nil, err
 	}
 	return geo.WriteWKBFloat32(g)
 }
@@ -2628,6 +2628,23 @@ func geometryNFromPayload(payload []byte, n int64) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("geometry index out of range")
 	}
 	item := strings.TrimSpace(items[n-1])
+	// Empty members have no coordinate parentheses. Emit typed WKB rather
+	// than constructing POINT(EMPTY), LINESTRINGEMPTY, or POLYGONEMPTY and
+	// accidentally falling back to raw text at the encoding boundary.
+	if strings.EqualFold(item, "EMPTY") {
+		var empty geo.Geometry
+		switch typeName {
+		case "MULTIPOINT":
+			empty = geo.Point{IsEmpty: true}
+		case "MULTILINESTRING":
+			empty = geo.LineString{}
+		case "MULTIPOLYGON":
+			empty = geo.Polygon{}
+		}
+		if empty != nil {
+			return functionUtil.QuickBytesToStr(geo.WriteWKB(empty)), nil
+		}
+	}
 	switch typeName {
 	case "MULTIPOINT":
 		if strings.HasPrefix(strings.ToUpper(item), "POINT") {
@@ -2802,7 +2819,10 @@ func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return err
 		}
-		out := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		out, err := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
 		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
@@ -2845,7 +2865,11 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
+		out, err := reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -2859,7 +2883,7 @@ func StExteriorRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2904,7 +2928,11 @@ func StInteriorRingN(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
+		out, err := reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0))
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -2954,7 +2982,7 @@ func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2965,7 +2993,7 @@ func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2976,7 +3004,7 @@ func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -2993,7 +3021,7 @@ func StPointOnSurface(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -3004,7 +3032,7 @@ func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -3015,7 +3043,7 @@ func StEndPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return nil, err
 		}
-		return reencodeGeom32(out, f32), nil
+		return reencodeGeom32(out, f32)
 	}, selectList)
 }
 
@@ -3326,7 +3354,9 @@ func boundaryFromPayload(payload []byte) ([]byte, error) {
 			return nil, err
 		}
 		if points[0] == points[len(points)-1] {
-			return encodeGeometryPayload("MULTIPOINT()", srid, sridDefined), nil
+			// A closed line has an empty boundary, not a malformed text
+			// payload. Keep the same WKB contract as non-empty results.
+			return geo.WriteWKB(geo.MultiPoint{}), nil
 		}
 		return encodeGeometryPayload("MULTIPOINT(("+points[0]+"),("+points[len(points)-1]+"))", srid, sridDefined), nil
 	case "POLYGON":
@@ -7416,23 +7446,63 @@ func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList.IgnoreAllRow() {
+		return rs.AppendMultiBytes(nil, true, length)
+	}
 
 	rowCount := uint64(length)
+	var small [64]byte
+	decoded := small[:]
+	var compact []byte
 	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		data, null := source.GetStrValue(i)
 		if null {
-			return rs.AppendMustNullForBytesResult()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
 		}
 
-		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
-		_, err := base64.StdEncoding.Decode(buf, data)
-		if err != nil {
-			return rs.AppendMustNullForBytesResult()
+		size := base64.StdEncoding.DecodedLen(len(data))
+		if cap(decoded) < size {
+			decoded = make([]byte, size)
 		}
-		_ = rs.AppendMustBytesValue(buf)
+		n, err := base64.StdEncoding.Decode(decoded[:size], data)
+		if err != nil {
+			// Keep ordinary Base64 on the standard decoder's fast path. On
+			// failure, retry after removing MySQL's whitespace bytes (not
+			// Unicode whitespace), without mutating input vector storage.
+			for j, b := range data {
+				if isBase64Space(b) {
+					compact = append(compact[:0], data[:j]...)
+					for _, b := range data[j+1:] {
+						if !isBase64Space(b) {
+							compact = append(compact, b)
+						}
+					}
+					n, err = base64.StdEncoding.Decode(decoded[:size], compact)
+					break
+				}
+			}
+		}
+		// Decode may return a valid prefix with an error. Never publish that
+		// prefix, and never let one invalid row terminate the batch.
+		if err := rs.AppendBytes(decoded[:n], err != nil); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func isBase64Space(b byte) bool {
+	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).

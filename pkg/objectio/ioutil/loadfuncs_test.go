@@ -88,6 +88,71 @@ type releaseTrackingData struct {
 	outstanding *atomic.Int32
 }
 
+func TestLoadColumnsDataIntoAndTopNRejectsInvalidContract(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	destination := vector.NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	top := &objectio.IndexReaderTopOp{}
+	selector := func() ([]int64, error) { return []int64{}, nil }
+
+	call := func(
+		columns []uint16,
+		typs []types.Type,
+		destinations []*vector.Vector,
+		topColumn uint16,
+		deferredColumns []uint16,
+		deferredTypes []types.Type,
+		deferredDestinations []*vector.Vector,
+		selectTopRows func() ([]int64, error),
+		orderByLimit *objectio.IndexReaderTopOp,
+		pool *mpool.MPool,
+	) error {
+		_, _, _, err := LoadColumnsDataIntoAndTopN(
+			ctx, columns, typs, nil, objectio.Location{}, destinations, nil,
+			topColumn, types.T_array_float32.ToType(), deferredColumns, deferredTypes,
+			deferredDestinations, selectTopRows, orderByLimit, pool, fileservice.Policy(0),
+		)
+		return err
+	}
+
+	t.Run("mismatched filter metadata", func(t *testing.T) {
+		err := call([]uint16{0}, nil, []*vector.Vector{destination}, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "filter column count")
+	})
+	t.Run("mismatched deferred metadata", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{2}, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "deferred object column count")
+	})
+	t.Run("empty filter columns", func(t *testing.T) {
+		err := call(nil, nil, nil, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "no object filter columns")
+	})
+	t.Run("nil selector and topn", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, nil, top, mp)
+		require.ErrorContains(t, err, "nil fused object topn input")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, selector, nil, mp)
+		require.ErrorContains(t, err, "nil fused object topn input")
+	})
+	t.Run("nil mpool", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, nil, nil, nil, selector, top, nil)
+		require.ErrorContains(t, err, "nil mpool")
+	})
+	t.Run("invalid column ownership", func(t *testing.T) {
+		err := call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{nil}, 1, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "nil destination")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 0, nil, nil, nil, selector, top, mp)
+		require.ErrorContains(t, err, "also a filter column")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{2}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{nil}, selector, top, mp)
+		require.ErrorContains(t, err, "nil destination for deferred")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{1}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, selector, top, mp)
+		require.ErrorContains(t, err, "also a deferred column")
+		err = call([]uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, 1, []uint16{0}, []types.Type{types.T_int64.ToType()}, []*vector.Vector{destination}, selector, top, mp)
+		require.ErrorContains(t, err, "also a filter column")
+	})
+}
+
 func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
