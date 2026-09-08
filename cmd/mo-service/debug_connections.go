@@ -71,6 +71,7 @@ func logConnTrack(ctx context.Context, events chan conntrack.Event, errorChan ch
 
 	activeConns := make(map[uint32]*conntrack.Flow)
 	ticker := time.NewTicker(conntrackReportInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
