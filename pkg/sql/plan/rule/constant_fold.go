@@ -592,6 +592,14 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		if sourceErr != nil {
 			return false, sourceErr
 		}
+		// Establish the uniform source before appending. AppendFixed uses the
+		// vector source metadata during its preflight; leaving it at the default
+		// Expression would allocate a growing sidecar for every same-source row.
+		if vec.GetStringSources() == nil && (vec.Length() == 0 || vec.GetStringSource() == source) {
+			if err = vec.SetStringSource(source); err != nil {
+				return false, err
+			}
+		}
 		// Existing type-specific branches publish exactly one physical row on a
 		// successful constant match. Apply metadata after that append so NULL and
 		// every physical family share one owner without duplicating switch arms.
