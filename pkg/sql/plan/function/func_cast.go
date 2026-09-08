@@ -2616,10 +2616,11 @@ func strTypeToOthers(proc *process.Process,
 	fromType := source.GetType()
 	strictStringWidth := mode.strictStringWidth()
 	explicit := mode == castModeExplicit
-	// Comparison casts are also used by numeric bitwise operands. Textual
-	// operands in that domain consume MySQL's leading decimal integer prefix;
-	// ordinary casts, explicit CAST, and assignment modes retain their existing
-	// full-string contracts. Binary string families remain byte payloads.
+	// Comparison casts are also used by numeric bitwise operands and selected
+	// MySQL string-function numeric arguments. Only these textual-to-numeric
+	// branches consume a decimal prefix; ordinary casts, explicit CAST, and
+	// assignment modes retain their established conversion contracts. Binary
+	// string families remain byte payloads.
 	numericPrefix := mode == castModeComparison &&
 		(fromType.Oid == types.T_char || fromType.Oid == types.T_varchar || fromType.Oid == types.T_text)
 	assignmentCast := mode == castModeStrictStringWidth
@@ -6996,9 +6997,10 @@ func numericIntegerPrefixOutOfRange(prefix string, bitSize int, strictErr error,
 	if bitSize != 64 {
 		return errors.Is(strictErr, strconv.ErrRange)
 	}
-	// MySQL accepts the complete unsigned 64-bit magnitude before applying the
-	// target's signedness. Values above that magnitude are range errors; 2^63
-	// itself is a valid signed bit pattern for bitwise evaluation.
+	// MySQL's string integer conversion accepts the complete unsigned 64-bit
+	// magnitude before applying the target's signedness. Values above that
+	// magnitude are the actual range errors; 2^63 itself is a valid bit
+	// pattern for the signed result and must not produce a warning here.
 	token, err := parseCastNumericToken(prefix)
 	if err != nil {
 		return false
