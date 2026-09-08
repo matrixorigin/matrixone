@@ -52,9 +52,14 @@ type viewMetadataCleanupRecordingExecutor struct {
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
 	t.Helper()
-	original := viewMetadataRefreshEnabled
+	originalRefresh := viewMetadataRefreshEnabled
+	originalRecovery := viewMetadataRecoveryEnabled
 	viewMetadataRefreshEnabled = func(string) bool { return true }
-	t.Cleanup(func() { viewMetadataRefreshEnabled = original })
+	viewMetadataRecoveryEnabled = func(string) bool { return true }
+	t.Cleanup(func() {
+		viewMetadataRefreshEnabled = originalRefresh
+		viewMetadataRecoveryEnabled = originalRecovery
+	})
 }
 
 func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
@@ -1091,11 +1096,16 @@ func TestViewMetadataLifecycleSkipsInternalDatabasesBeforeCatalogProbe(t *testin
 
 	t.Run("user database still probes lifecycle", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		exec := &viewMetadataCleanupRecordingExecutor{}
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{
+			2: moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH),
+		}}
 		installUnavailableViewMetadataTestExecutor(t, proc, exec)
 		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
 			refreshViewsAfterRelationMutation("user_db", "relation", 0, 0))
-		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+		require.Equal(t, []string{
+			catalog.SnapshotLifecycleGateSQL,
+			catalog.ViewMetadataLifecycleGateSQL,
+		}, exec.sqls)
 	})
 }
 
