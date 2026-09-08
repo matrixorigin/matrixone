@@ -828,6 +828,14 @@ func rebuildPreparePlan(
 	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
 		compilerCtx := executionSes.GetTxnCompileCtx()
 		currentDatabase := compilerCtx.GetDatabase()
+		currentContext := compilerCtx.GetContext()
+		warningContext := currentContext
+		if warningContext == nil {
+			warningContext = execCtx.reqCtx
+		}
+		compilerCtx.SetContext(plan2.WithJSONMergeWarningOrigin(
+			warningContext, plan2.JSONMergeWarningInternalReprepare))
+		defer compilerCtx.SetContext(currentContext)
 		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
 		defer compilerCtx.SetDatabase(currentDatabase)
 		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt)

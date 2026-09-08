@@ -11369,6 +11369,10 @@ func (builder *QueryBuilder) bindView(
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
 	}()
+	previousWarningContext := builder.compCtx.GetContext()
+	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
+		previousWarningContext, JSONMergeWarningStoredView))
+	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
 		capture.enterNestedView()

@@ -3816,6 +3816,15 @@ func buildPlanWithPrepareMode(
 	if planContext == nil {
 		planContext = context.Background()
 	}
+	warningOrigin, ok := plan2.JSONMergeWarningOriginFromContext(planContext)
+	if !ok {
+		warningOrigin = plan2.JSONMergeWarningUser
+	}
+	var warningSink plan2.JSONMergeWarningSink
+	if ses != nil {
+		warningSink, _ = ses.(plan2.JSONMergeWarningSink)
+	}
+	planContext = plan2.WithJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 

@@ -2540,7 +2540,7 @@ func TestJsonRemoveIgnoreAllRows(t *testing.T) {
 
 func TestJsonMergeCheckFn(t *testing.T) {
 	ctx := context.Background()
-	for _, fn := range []string{"json_merge_patch", "json_merge_preserve"} {
+	for _, fn := range []string{"json_merge", "json_merge_patch", "json_merge_preserve"} {
 		_, err := GetFunctionByName(ctx, fn, []types.Type{
 			types.T_json.ToType(),
 			types.T_varchar.ToType(),
@@ -2562,6 +2562,18 @@ func TestJsonMergeCheckFn(t *testing.T) {
 		})
 		require.NoError(t, err, fn)
 	}
+
+	alias, err := GetFunctionByName(ctx, "json_merge", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	preserve, err := GetFunctionByName(ctx, "json_merge_preserve", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, preserve.GetEncodedOverloadID(), alias.GetEncodedOverloadID())
 }
 
 func TestJsonMerge(t *testing.T) {
