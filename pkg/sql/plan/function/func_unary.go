@@ -6788,21 +6788,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			var resultStr string
-			if len(v1) == 4 {
-				// IPv4: 4 bytes
-				ip := net.IP(v1)
-				resultStr = ip.String()
-			} else if len(v1) == 16 {
-				// IPv6: 16 bytes
-				ip := net.IP(v1)
-				// Check if it's an IPv4-mapped IPv6 address (::ffff:x.x.x.x)
-				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-					resultStr = ip4.String()
-				} else {
-					resultStr = ip.String()
-				}
-			} else {
+			resultStr, ok := inet6NtoaString(v1)
+			if !ok {
 				// Invalid length: return NULL for all rows
 				rs.SetNullResult(uint64(length))
 				return nil
@@ -6829,18 +6816,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			var resultStr string
-			if len(v1) == 4 {
-				ip := net.IP(v1)
-				resultStr = ip.String()
-			} else if len(v1) == 16 {
-				ip := net.IP(v1)
-				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-					resultStr = ip4.String()
-				} else {
-					resultStr = ip.String()
-				}
-			} else {
+			resultStr, ok := inet6NtoaString(v1)
+			if !ok {
 				// Invalid length: return NULL
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
@@ -6857,18 +6834,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		var resultStr string
-		if len(v1) == 4 {
-			ip := net.IP(v1)
-			resultStr = ip.String()
-		} else if len(v1) == 16 {
-			ip := net.IP(v1)
-			if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-				resultStr = ip4.String()
-			} else {
-				resultStr = ip.String()
-			}
-		} else {
+		resultStr, ok := inet6NtoaString(v1)
+		if !ok {
 			// Invalid length: return NULL
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
 				return err
@@ -6880,6 +6847,29 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		}
 	}
 	return nil
+}
+
+// inet6NtoaString implements the MySQL-compatible textual representation for
+// the binary input accepted by INET6_NTOA. In particular, MySQL emits the
+// dotted-decimal tail for an IPv4-compatible address only when the seventh
+// IPv6 hextet is non-zero. This preserves hexadecimal output for values such
+// as ::1 and ::100 while formatting ::192.0.2.1 as expected.
+func inet6NtoaString(v []byte) (string, bool) {
+	switch len(v) {
+	case net.IPv4len:
+		return net.IP(v).String(), true
+	case net.IPv6len:
+		ip := net.IP(v)
+		if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+			return ip4.String(), true
+		}
+		if isIPv4Compat(ip) && (v[12] != 0 || v[13] != 0) {
+			return "::" + net.IP(v[12:]).String(), true
+		}
+		return ip.String(), true
+	default:
+		return "", false
+	}
 }
 
 // isIPv4Mapped checks if an IPv6 address is IPv4-mapped (::ffff:x.x.x.x)
