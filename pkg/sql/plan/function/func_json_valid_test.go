@@ -502,14 +502,16 @@ func TestNormalizeMySQLDraft4SchemaPositions(t *testing.T) {
 		"format":"email",
 		"$ref":1,
 		"exclusiveMinimum":5,
-		"properties":{"format":{"type":"string"},"ref":{"$ref":false}},
+		"properties":{"id":{"type":"integer"},"format":{"type":"string"},"ref":{"$ref":false}},
 		"additionalProperties":{"minimum":5,"exclusiveMinimum":"5"},
 		"not":{"exclusiveMaximum":true},
 		"dependencies":{"a":{"maximum":5,"exclusiveMaximum":false}},
-		"enum":[{"$ref":1,"format":"email","exclusiveMinimum":5}],
-		"default":{"format":"email","exclusiveMinimum":5},
-		"const":{"format":"email","exclusiveMinimum":5},
-		"unknown":{"format":"email","exclusiveMinimum":5}
+		"definitions":{"id":{"type":"integer"},"$id":{"type":"string"}},
+		"$defs":{"id":{"type":"integer"},"$id":{"type":"string"}},
+		"enum":[{"id":"literal","$id":"literal","$ref":1,"format":"email","exclusiveMinimum":5}],
+		"default":{"id":"#/definitions/default","format":"email","exclusiveMinimum":5},
+		"const":{"id":"literal","$id":"literal","format":"email","exclusiveMinimum":5},
+		"unknown":{"id":"#/definitions/alias","$id":"#/definitions/alias","format":"email","exclusiveMinimum":5}
 	}`))
 	decoder.UseNumber()
 	var schema any
@@ -521,6 +523,11 @@ func TestNormalizeMySQLDraft4SchemaPositions(t *testing.T) {
 	require.NotContains(t, root, "format")
 	require.NotContains(t, root, "exclusiveMinimum")
 	require.Contains(t, root["properties"].(map[string]any), "format")
+	require.Contains(t, root["properties"].(map[string]any), "id")
+	require.Contains(t, root["definitions"].(map[string]any), "id")
+	require.Contains(t, root["definitions"].(map[string]any), "$id")
+	require.Contains(t, root["$defs"].(map[string]any), "id")
+	require.Contains(t, root["$defs"].(map[string]any), "$id")
 	require.NotContains(t, root["properties"].(map[string]any)["ref"], "$ref")
 	require.NotContains(t, root["additionalProperties"], "exclusiveMinimum")
 	require.NotContains(t, root["not"], "exclusiveMaximum")
@@ -537,7 +544,14 @@ func TestNormalizeMySQLDraft4SchemaPositions(t *testing.T) {
 		require.Equal(t, json.Number("5"), obj["exclusiveMinimum"])
 	}
 	literal := root["enum"].([]any)[0].(map[string]any)
+	require.Equal(t, "literal", literal["id"])
+	require.Equal(t, "literal", literal["$id"])
 	require.Equal(t, json.Number("1"), literal["$ref"])
+	constValue := root["const"].(map[string]any)
+	require.Equal(t, "literal", constValue["id"])
+	require.Equal(t, "literal", constValue["$id"])
+	require.NotContains(t, root["unknown"], "id")
+	require.NotContains(t, root["unknown"], "$id")
 }
 
 func TestJsonSchemaMixedOverloads(t *testing.T) {
@@ -1211,6 +1225,75 @@ func TestJsonSchemaIDAliasesCannotRebindLocalReferences(t *testing.T) {
 							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
 						},
 						NewFunctionTestResult(function.ret, false, wanted, []bool{false}), function.fn)
+					s, info := tc.Run()
+					require.True(t, s, info)
+				})
+			}
+		})
+	}
+}
+
+func TestJsonSchemaIDAliasesInUnknownValuesCannotRebindLocalReferences(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	functions := []struct {
+		name string
+		ret  types.Type
+		fn   fEvalFn
+	}{
+		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
+		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
+	}
+	cases := []struct {
+		name   string
+		schema string
+	}{
+		{
+			name:   "unknown object id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":{"id":"#/definitions/safe","type":"string"}}`,
+		},
+		{
+			name:   "unknown object dollar id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":{"$id":"#/definitions/safe","type":"string"}}`,
+		},
+		{
+			name:   "nested array id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"id":"#/definitions/safe","type":"string"}]}]}`,
+		},
+		{
+			name:   "nested array dollar id",
+			schema: `{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"$id":"#/definitions/safe","type":"string"}]}]}`,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			schema, err := types.ParseStringToByteJson(test.schema)
+			require.NoError(t, err)
+			compiled, err := compileMySQLDraft4Schema(context.Background(), "json_schema_valid", schema)
+			require.NoError(t, err)
+			result, err := compiled.Validate(gojsonschema.NewStringLoader(`1`))
+			require.NoError(t, err)
+			require.True(t, result.Valid())
+			result, err = compiled.Validate(gojsonschema.NewStringLoader(`"wrong-target"`))
+			require.NoError(t, err)
+			require.False(t, result.Valid())
+
+			for _, function := range functions {
+				t.Run(function.name, func(t *testing.T) {
+					var wanted any
+					if function.name == "json_schema_valid" {
+						wanted = []bool{true, false}
+					} else {
+						wanted = []string{
+							mustJsonBinaryString(t, `{"valid":true}`),
+							mustJsonBinaryString(t, `{"document-location":"$","reason":"Invalid type. Expected: integer, given: string","schema-failed-keyword":"type","schema-location":"#/type","valid":false}`),
+						}
+					}
+					tc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{test.schema}, []bool{false}),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`, `"wrong-target"`}, []bool{false, false}),
+						},
+						NewFunctionTestResult(function.ret, false, wanted, []bool{false, false}), function.fn)
 					s, info := tc.Run()
 					require.True(t, s, info)
 				})

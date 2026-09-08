@@ -3244,16 +3244,47 @@ func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytej
 }
 
 func normalizeMySQLDraft4Schema(schema any) {
+	normalizeMySQLDraft4SchemaAliases(schema)
+	normalizeMySQLDraft4SchemaKeywords(schema)
+}
+
+// normalizeMySQLDraft4SchemaAliases mirrors gojsonschema's schema-pool walk.
+// The loader registers id/$id in arbitrary schema-valued maps and arrays, not
+// only in recognized Draft 4 keyword positions. Keep literal const/enum data
+// and named property/dependency/definition keys out of that walk.
+func normalizeMySQLDraft4SchemaAliases(value any) {
+	switch value := value.(type) {
+	case []any:
+		for _, child := range value {
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	case map[string]any:
+		delete(value, "id")
+		delete(value, "$id")
+		for key, child := range value {
+			switch key {
+			case "const", "enum":
+				continue
+			case "properties", "patternProperties", "dependencies", "definitions", "$defs":
+				named, ok := child.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, schema := range named {
+					normalizeMySQLDraft4SchemaAliases(schema)
+				}
+				continue
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4SchemaKeywords(schema any) {
 	obj, ok := schema.(map[string]any)
 	if !ok {
 		return
 	}
-
-	// Local references are resolved against physical JSON Pointers before the
-	// gojsonschema loader sees the document. Remove id aliases here so the
-	// loader cannot rebind a physical pointer to a different schema object.
-	delete(obj, "id")
-	delete(obj, "$id")
 
 	if ref, ok := obj["$ref"]; ok {
 		if _, ok := ref.(string); !ok {
@@ -3267,39 +3298,39 @@ func normalizeMySQLDraft4Schema(schema any) {
 	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMaximum", "maximum")
 
 	for _, key := range []string{"properties", "patternProperties", "definitions", "$defs"} {
-		normalizeMySQLDraft4NamedSchemas(obj[key])
+		normalizeMySQLDraft4NamedSchemaKeywords(obj[key])
 	}
 	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
 		for _, dependency := range dependencies {
-			normalizeMySQLDraft4Schema(dependency)
+			normalizeMySQLDraft4SchemaKeywords(dependency)
 		}
 	}
 	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
-		normalizeMySQLDraft4Schema(obj[key])
+		normalizeMySQLDraft4SchemaKeywords(obj[key])
 	}
 	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
-		normalizeMySQLDraft4SchemaOrArray(obj[key])
+		normalizeMySQLDraft4SchemaKeywordsOrArray(obj[key])
 	}
 }
 
-func normalizeMySQLDraft4NamedSchemas(value any) {
+func normalizeMySQLDraft4NamedSchemaKeywords(value any) {
 	named, ok := value.(map[string]any)
 	if !ok {
 		return
 	}
 	for _, schema := range named {
-		normalizeMySQLDraft4Schema(schema)
+		normalizeMySQLDraft4SchemaKeywords(schema)
 	}
 }
 
-func normalizeMySQLDraft4SchemaOrArray(value any) {
+func normalizeMySQLDraft4SchemaKeywordsOrArray(value any) {
 	if schemas, ok := value.([]any); ok {
 		for _, schema := range schemas {
-			normalizeMySQLDraft4Schema(schema)
+			normalizeMySQLDraft4SchemaKeywords(schema)
 		}
 		return
 	}
-	normalizeMySQLDraft4Schema(value)
+	normalizeMySQLDraft4SchemaKeywords(value)
 }
 
 func normalizeMySQLDraft4ExclusiveBound(obj map[string]any, exclusiveKey, boundKey string) {
