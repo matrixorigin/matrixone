@@ -981,20 +981,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		case ">", "<", ">=", "<=", "between", "in_range":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
-			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
-			if len(exprImpl.F.Args) == 2 {
-				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder, s)
-				if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (ret+sel2) > 1 {
-					ret = ret + sel2 - 1
-				} else {
-					ret = andSelectivity(ret, sel2)
-				}
-			} else {
-				for i := 1; i < len(exprImpl.F.Args); i++ {
-					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder, s)
-					ret = andSelectivity(ret, sel2)
-				}
-			}
+			ret = estimateAndSelectivity(exprImpl.F.Args, builder, s)
 		case "or":
 			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
 			for i := 1; i < len(exprImpl.F.Args); i++ {
@@ -1047,6 +1034,245 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
 	return ret
+}
+
+type rangeSelectivityKey struct {
+	relPos    int32
+	colPos    int32
+	colFnName string
+}
+
+type rangeSelectivityGroup struct {
+	key   rangeSelectivityKey
+	exprs []*plan.Expr
+}
+
+// estimateAndSelectivity treats constant ranges on the same column as one
+// interval. Multiplying nested predicates such as x >= 35, x >= 36, x <= 45,
+// x <= 50 counts the same restriction four times and makes estimates depend on
+// the binder's AND-tree shape rather than on the represented interval.
+func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
+	conjuncts := make([]*plan.Expr, 0, len(args))
+	for _, arg := range args {
+		flattenAndConjuncts(arg, &conjuncts)
+	}
+	groups := make([]rangeSelectivityGroup, 0)
+	groupByKey := make(map[rangeSelectivityKey]int)
+	groupForConjunct := make([]int, len(conjuncts))
+	for i := range groupForConjunct {
+		groupForConjunct[i] = -1
+	}
+	for i, conjunct := range conjuncts {
+		key, ok := rangeSelectivityGroupKey(conjunct)
+		if !ok {
+			continue
+		}
+		groupIndex, exists := groupByKey[key]
+		if !exists {
+			groupIndex = len(groups)
+			groupByKey[key] = groupIndex
+			groups = append(groups, rangeSelectivityGroup{key: key})
+		}
+		groups[groupIndex].exprs = append(groups[groupIndex].exprs, conjunct)
+		groupForConjunct[i] = groupIndex
+	}
+
+	ret := 1.0
+	emitted := make([]bool, len(groups))
+	for i, conjunct := range conjuncts {
+		groupIndex := groupForConjunct[i]
+		if groupIndex < 0 || len(groups[groupIndex].exprs) == 1 {
+			ret = andSelectivity(ret, estimateExprSelectivity(conjunct, builder, s))
+			continue
+		}
+		if emitted[groupIndex] {
+			continue
+		}
+		emitted[groupIndex] = true
+		groupSelectivity, ok := estimateConjunctiveRangeSelectivity(
+			groups[groupIndex].exprs, builder)
+		if !ok {
+			for _, grouped := range groups[groupIndex].exprs {
+				ret = andSelectivity(ret, estimateExprSelectivity(grouped, builder, s))
+			}
+			continue
+		}
+		ret = andSelectivity(ret, groupSelectivity)
+	}
+	return ret
+}
+
+func flattenAndConjuncts(expr *plan.Expr, result *[]*plan.Expr) {
+	if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "and" {
+		for _, arg := range fn.Args {
+			flattenAndConjuncts(arg, result)
+		}
+		return
+	}
+	*result = append(*result, expr)
+}
+
+func rangeSelectivityGroupKey(expr *plan.Expr) (rangeSelectivityKey, bool) {
+	fn := expr.GetF()
+	if fn == nil {
+		return rangeSelectivityKey{}, false
+	}
+	switch fn.Func.ObjName {
+	case ">", ">=", "<", "<=", "between":
+	default:
+		return rangeSelectivityKey{}, false
+	}
+	col, _, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if col == nil || hasDynamicParam || len(literals) == 0 {
+		return rangeSelectivityKey{}, false
+	}
+	for _, literal := range literals {
+		if literal == nil {
+			return rangeSelectivityKey{}, false
+		}
+	}
+	return rangeSelectivityKey{
+		relPos: col.RelPos, colPos: col.ColPos, colFnName: colFnName,
+	}, true
+}
+
+func estimateConjunctiveRangeSelectivity(
+	exprs []*plan.Expr,
+	builder *QueryBuilder,
+) (float64, bool) {
+	if len(exprs) == 0 {
+		return 0, false
+	}
+	col, litType, _, colFnName, _ := extractColRefAndLiteralsInFilter(exprs[0])
+	if col == nil {
+		return 0, false
+	}
+	w := builder.getStatsInfoByCol(col)
+	if w == nil || w.GetStats() == nil {
+		return 0, false
+	}
+	stats := w.GetStats()
+	typeID, hasType := stats.DataTypeMap[col.Name]
+	minValue, hasMin := stats.MinValMap[col.Name]
+	maxValue, hasMax := stats.MaxValMap[col.Name]
+	if !hasType || !hasMin || !hasMax || maxValue < minValue {
+		return 0, false
+	}
+	typ := types.T(typeID)
+	if colFnName == "year" {
+		if typ != types.T_date {
+			return 0, false
+		}
+		minValue = float64(types.Date(minValue).Year())
+		maxValue = float64(types.Date(maxValue).Year())
+		typ = litType
+	}
+
+	var lower, upper float64
+	var hasLower, hasUpper bool
+	var lowerInclusive, upperInclusive bool
+	for _, expr := range exprs {
+		fn := expr.GetF()
+		if fn == nil {
+			return 0, false
+		}
+		first, ok := rangeLiteralAsFloat64(fn.Args[1], types.T(typeID))
+		if colFnName == "year" {
+			first, ok = rangeLiteralAsFloat64(fn.Args[1], typ)
+		}
+		if !ok {
+			return 0, false
+		}
+		switch fn.Func.ObjName {
+		case ">", ">=":
+			if !hasLower || first > lower {
+				lower = first
+				hasLower = true
+				lowerInclusive = fn.Func.ObjName == ">="
+			} else if first == lower && fn.Func.ObjName == ">" {
+				lowerInclusive = false
+			}
+		case "<", "<=":
+			if !hasUpper || first < upper {
+				upper = first
+				hasUpper = true
+				upperInclusive = fn.Func.ObjName == "<="
+			} else if first == upper && fn.Func.ObjName == "<" {
+				upperInclusive = false
+			}
+		case "between":
+			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], types.T(typeID))
+			if colFnName == "year" {
+				second, secondOK = rangeLiteralAsFloat64(fn.Args[2], typ)
+			}
+			if !secondOK {
+				return 0, false
+			}
+			if !hasLower || first > lower {
+				lower = first
+				hasLower = true
+				lowerInclusive = true
+			}
+			if !hasUpper || second < upper {
+				upper = second
+				hasUpper = true
+				upperInclusive = true
+			}
+		}
+	}
+	return estimateIntervalSelectivity(
+		minValue, maxValue,
+		lower, hasLower, lowerInclusive,
+		upper, hasUpper, upperInclusive), true
+}
+
+func rangeLiteralAsFloat64(expr *plan.Expr, typ types.T) (float64, bool) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return 0, false
+	}
+	if typ == types.T_decimal64 || typ == types.T_decimal128 {
+		return getDecimalLiteralValue(literal, expr.Typ.Scale)
+	}
+	return getFloat64Value(typ, literal)
+}
+
+func estimateIntervalSelectivity(
+	minValue, maxValue float64,
+	lower float64, hasLower, lowerInclusive bool,
+	upper float64, hasUpper, upperInclusive bool,
+) float64 {
+	if maxValue < minValue {
+		return 0.1
+	}
+	if hasLower && lower < minValue {
+		lower = minValue
+		lowerInclusive = true
+	}
+	if hasUpper && upper > maxValue {
+		upper = maxValue
+		upperInclusive = true
+	}
+	if (hasLower && (lower > maxValue || lower == maxValue && !lowerInclusive)) ||
+		(hasUpper && (upper < minValue || upper == minValue && !upperInclusive)) ||
+		(hasLower && hasUpper &&
+			(lower > upper || lower == upper && (!lowerInclusive || !upperInclusive))) {
+		return 0.00000001
+	}
+	if maxValue == minValue {
+		return 1
+	}
+	span := maxValue - minValue
+	selectivity := 1.0
+	switch {
+	case hasLower && hasUpper:
+		selectivity = (upper - lower + 1) / span
+	case hasLower:
+		selectivity = (maxValue - lower + 1) / span
+	case hasUpper:
+		selectivity = (upper - minValue + 1) / span
+	}
+	return clampSelectivity(selectivity, 0.1)
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
@@ -2815,13 +3041,19 @@ func (builder *QueryBuilder) hasRecursiveScanPath(node *plan.Node, visited map[*
 // (a~b and b~c does not imply a~c), which makes it an invalid comparator for
 // slices.SortFunc; the grid is a genuine strict weak ordering. See issue #25702.
 func compareStats(stats1, stats2 *Stats) int {
-	b1 := int64(math.Floor(stats1.Selectivity / 0.01))
-	b2 := int64(math.Floor(stats2.Selectivity / 0.01))
+	return compareStatsValues(
+		stats1.Selectivity, stats1.Outcnt,
+		stats2.Selectivity, stats2.Outcnt)
+}
+
+func compareStatsValues(selectivity1, outcnt1, selectivity2, outcnt2 float64) int {
+	b1 := int64(math.Floor(selectivity1 / 0.01))
+	b2 := int64(math.Floor(selectivity2 / 0.01))
 	if b1 != b2 {
 		return cmp.Compare(b1, b2)
 	}
 	// todo we need to calculate ndv of outcnt here
-	return cmp.Compare(stats1.Outcnt, stats2.Outcnt)
+	return cmp.Compare(outcnt1, outcnt2)
 }
 
 func andSelectivity(s1, s2 float64) float64 {
