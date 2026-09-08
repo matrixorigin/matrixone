@@ -1012,6 +1012,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			Table:           df.TruncateTable.Table,
 			ClusterTable:    DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
 			IndexTableNames: slices.Clone(df.TruncateTable.IndexTableNames),
+			TableId:         df.TruncateTable.TableId,
+			ForeignTbl:      slices.Clone(df.TruncateTable.ForeignTbl),
+			IsDelete:        df.TruncateTable.IsDelete,
 		}
 		newDf.Definition = &plan.DataDefinition_TruncateTable{
 			TruncateTable: truncateTable,
