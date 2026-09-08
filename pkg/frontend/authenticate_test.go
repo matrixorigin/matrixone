@@ -17197,7 +17197,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setPu("", pu)
 
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,

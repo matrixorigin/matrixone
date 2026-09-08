@@ -1553,7 +1553,7 @@ func TestScope_CreateView(t *testing.T) {
 func testCompileMVDefinition(t *testing.T) (*mvdefinition.Definition, *plan2.TableDef, *plan2.TableDef) {
 	t.Helper()
 	version := uint32(0)
-	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service", RefreshSQL: "select service, count(*) requests from events group by service", Method: "complete", Timing: "demand", Columns: []string{"service", "requests"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "events", DatabaseID: 1, ID: 11}, Version: &version}}}
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv refresh complete on demand as select service, count(*) requests from events group by service", RefreshSQL: "select service, count(*) requests from events group by service", Method: "complete", Timing: "demand", Columns: []string{"service", "requests"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "events", DatabaseID: 1, ID: 11}, Version: &version}}}
 	encoded, err := mvdefinition.Encode(d)
 	require.NoError(t, err)
 	target := &plan2.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan2.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}
@@ -1668,7 +1668,7 @@ func TestMaterializedViewStateTableFromDef(t *testing.T) {
 		require.Empty(t, state)
 	}
 	version := uint32(0)
-	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv as select * from src", RefreshSQL: "select * from src", Method: "complete", Timing: "demand", Columns: []string{"a"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "src", DatabaseID: 1, ID: 11}, Version: &version}}, State: &mvdefinition.Relation{Database: "db", Name: "__mo_mv_state_test", DatabaseID: 1, ID: 101}}
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv as select * from src", RefreshSQL: "select * from src", Method: "complete", Timing: "demand", Columns: []string{"a"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "db", Name: "src", DatabaseID: 1, ID: 11}, Version: &version}}, State: &mvdefinition.Relation{Database: "db", Name: "__mo_mv_state_test", DatabaseID: 1, ID: 101}}
 	encoded, err := mvdefinition.Encode(d)
 	require.NoError(t, err)
 	def := &plan2.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan2.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}

@@ -1,7 +1,7 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires protocol 56. This document describes the implemented aggregate
+1 and requires protocol 57. This document describes the implemented aggregate
 and UNION ALL variants; it does not specify a future operator-graph format.
 
 ## SQL and refresh policy
@@ -106,7 +106,7 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 56. Admission is a rollout
+All creation, including ON DEMAND, requires protocol 57. Admission is a rollout
 check; safety also relies on representations understood by predecessor readers.
 On disk, the job uses the existing IndexSync discriminator with an empty index
 selector and an additive MVReference. A predecessor's writer registry rejects

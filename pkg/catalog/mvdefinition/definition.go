@@ -29,7 +29,7 @@ import (
 
 const (
 	Format             = 1
-	RequiredCapability = 56
+	RequiredCapability = 57
 	Property           = "mv_definition"
 	OwnerProperty      = "mv_owner"
 	StatePrefix        = "__mo_mv_state_"

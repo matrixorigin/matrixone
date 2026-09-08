@@ -2818,6 +2818,7 @@ func pkCommitTSMatchedInRange(
 }
 
 func (tbl *txnTable) PKPersistedBetween(
+	ctx context.Context,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -2832,6 +2833,12 @@ func (tbl *txnTable) PKPersistedBetween(
 	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 	v2.TxnPKChangeCheckTotalCounter.Inc()
 	defer func() {
+		// A statement (including internal SQL in an existing transaction) may
+		// have a shorter lifetime than the relation's transaction process.
+		// Cancellation is terminal, not evidence of a PK/metadata conflict.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			changed, err = false, ctxErr
+		}
 		if err == nil && changed {
 			v2.TxnPKChangeCheckChangedCounter.Inc()
 		}
@@ -2859,7 +2866,9 @@ func (tbl *txnTable) PKPersistedBetween(
 			)
 		}
 	}()
-	ctx := tbl.proc.Load().Ctx
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
 
@@ -2883,6 +2892,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
+			if err2 = ctx.Err(); err2 != nil {
+				return
+			}
 			var zmCkecked bool
 			if !isFakePK {
 				// if the object info contains a pk zonemap, fast-check with the zonemap
@@ -2961,7 +2973,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
-		tbl.proc.Load().Ctx,
+		ctx,
 		colExpr,
 		int32(keys.Length()),
 		bytes,
@@ -3015,6 +3027,10 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
+			if err := ctx.Err(); err != nil {
+				releasePKCheckSemaphore()
+				return false, err
+			}
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
@@ -3159,8 +3175,8 @@ func tombstonePKExistsInRange(
 			isCNCreated := obj.GetCNCreated()
 			if cachedSearch != nil {
 				// Tombstone objects are ordered by rowid, not by the copied PK
-				// column. Always use the linear search even when object metadata
-				// carries a sorted flag.
+				// column. Always use the unsorted-source search even when object
+				// metadata carries a sorted flag.
 				if isCNCreated {
 					hits, _, err := ioutil.LoadColumnDataBySearch(
 						ctx,
@@ -3449,6 +3465,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	//need check pk whether exist on S3 block.
 	v2.TxnPKMayBeChangedPersistedCounter.Inc()
 	return tbl.PKPersistedBetween(
+		ctx,
 		snap,
 		from,
 		to,

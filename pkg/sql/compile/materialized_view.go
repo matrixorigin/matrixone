@@ -192,7 +192,7 @@ func (c *Compile) validateMaterializedViewReads() error {
 
 func requireMaterializedViewCapability(c *Compile) error {
 	if !supportsMultiSourceISCP(c.proc.GetService()) {
-		return moerr.NewNotSupported(c.proc.Ctx, "materialized view creation requires protocol 56 on all services")
+		return moerr.NewNotSupported(c.proc.Ctx, "materialized view creation requires protocol 57 on all services")
 	}
 	return nil
 }

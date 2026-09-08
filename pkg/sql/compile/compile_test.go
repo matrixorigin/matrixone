@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,6 +92,36 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered.GroupBy = nil
 	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
+func TestCompileResetRejectsAPTopology(t *testing.T) {
+	for _, execType := range []plan2.ExecType{plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
+		t.Run(fmt.Sprint(execType), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			c := NewCompile("ingress:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+			t.Cleanup(c.Release)
+			c.execType = execType
+			board := proc.GetMessageBoard()
+			// Reject before resetting shared process state, even if a caller
+			// accidentally admits an AP compile into a prepared cache.
+			require.ErrorIs(t, c.Reset(proc, time.Now(), nil, "execute s"), cantCompileForPrepareErr)
+			require.Same(t, board, proc.GetMessageBoard())
+			require.Equal(t, "select 1", c.sql)
+		})
+	}
+}
+
+func TestCompileClearResetsExecutionType(t *testing.T) {
+	// Exercise the pool reset directly, independent of which object sync.Pool
+	// would choose for the next allocation.
+	c := &Compile{
+		proc:         testutil.NewProcess(t),
+		execType:     plan2.ExecTypeAP_MULTICN,
+		MessageBoard: message.NewMessageBoard(),
+		affectRows:   new(atomic.Uint64),
+	}
+	c.clear()
+	require.True(t, c.IsTpQuery())
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
@@ -2041,9 +2072,9 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
 	require.False(t, supportsMultiSourceISCP(service))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion55)
-	require.False(t, supportsMultiSourceISCP(service))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)

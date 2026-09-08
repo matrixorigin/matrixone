@@ -77,7 +77,7 @@ func (r *materializedViewTestRelation) GetTableID(ctx context.Context) uint64 {
 func newMVTestCatalog(t *testing.T, info *ConsumerInfo, sources ...*planpb.TableDef) *mvTestCatalog {
 	t.Helper()
 	c := &mvTestCatalog{relations: make(map[string]*materializedViewTestRelation), txn: mock_frontend.NewMockTxnOperator(gomock.NewController(t))}
-	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: info.DBName, Name: info.TableName, DatabaseID: 1, ID: 100}, Generation: 1,
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: info.DBName, Name: info.TableName, DatabaseID: 1, ID: 100}, Generation: 1,
 		CreateSQL: "create materialized view " + info.TableName + " as " + info.RefreshSQL, RefreshSQL: info.RefreshSQL, Method: info.RefreshMethod, Timing: "change", Columns: info.Columns, Incremental: info.IncrementalSpec}
 	if d.Method == "" {
 		d.Method = "force"

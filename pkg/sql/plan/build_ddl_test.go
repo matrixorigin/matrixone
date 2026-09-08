@@ -1395,8 +1395,8 @@ func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
 		sql        string
 		wantOffset uint64
 	}{
-		{name: "session offset", sql: "create table t(id int auto_increment)", wantOffset: 9},
-		{name: "zero keeps session offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 9},
+		{name: "session offset does not affect DDL", sql: "create table t(id int auto_increment)", wantOffset: 0},
+		{name: "zero keeps default offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 0},
 		{name: "nonzero overrides session offset", sql: "create table t(id int auto_increment) auto_increment = 100", wantOffset: 99},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6925,7 +6925,7 @@ func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
 func testMaterializedViewTable(t *testing.T, name string) (*plan.TableDef, *mvdefinition.Definition) {
 	t.Helper()
 	version := uint32(0)
-	d := &mvdefinition.Definition{Format: 1, RequiredCapability: 56, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
 	encoded, err := mvdefinition.Encode(d)
 	require.NoError(t, err)
 	return &plan.TableDef{Name: name, DbName: "tpch", TblId: 100, DbId: 1, TableType: "m", Props: []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}, d
