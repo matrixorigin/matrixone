@@ -21,6 +21,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -2421,6 +2422,34 @@ func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]st
 	}
 
 	return false
+}
+
+// collectParamExprOffsets walks the complete expression tree, including CASE,
+// binary/comparison operands and nested subqueries. The legacy no-key INSERT
+// fallback does not bind its discarded ODKU expression, so it uses these
+// offsets to retain the prepared-parameter metadata without evaluating or
+// resolving row-alias references.
+func collectParamExprOffsets(expr tree.Expr) []int {
+	if expr == nil {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		param, ok := candidate.(*tree.ParamExpr)
+		if ok {
+			seen[param.Offset] = struct{}{}
+		}
+		return true
+	})
+	if len(seen) == 0 {
+		return nil
+	}
+	offsets := make([]int, 0, len(seen))
+	for offset := range seen {
+		offsets = append(offsets, offset)
+	}
+	slices.Sort(offsets)
+	return offsets
 }
 
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "

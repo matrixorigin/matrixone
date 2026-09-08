@@ -711,6 +711,40 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
 		return false, nil, nil, err
 	}
+	if stmt.RowAlias != nil {
+		if stmt.Rows == nil {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "INSERT row alias has no input rows")
+		}
+		values, ok := stmt.Rows.Select.(*tree.ValuesClause)
+		if !ok {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"INSERT row aliases are supported only for VALUES or SET")
+		}
+		if values.HasRowWord {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"VALUES ROW(...) does not support an INSERT row alias")
+		}
+		targetDBName := string(stmt.TargetDatabaseName)
+		if targetDBName == "" {
+			targetDBName = tableObjRef.SchemaName
+		}
+		targetTableName := string(stmt.TargetTableName)
+		if targetTableName == "" {
+			targetTableName = tableDef.Name
+		}
+		if _, err = validateInsertRowAlias(
+			builder.GetContext(), stmt.RowAlias, insertColumns, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
+		if err = validateOndupUpdateTargets(
+			builder.GetContext(), stmt.OnDuplicateUpdate, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
+	}
 	if stmt.Columns != nil {
 		syntaxHasColumnNames = true
 	}
@@ -745,7 +779,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		var valueScanColumns []string
-		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate, stmt.RowAlias)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -1001,7 +1035,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	onDuplicateUpdate := stmt.GetOnDuplicateUpdate()
-	if len(onDuplicateUpdate) > 0 {
+	if stmt.RowAlias == nil && len(onDuplicateUpdate) > 0 {
 
 		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
@@ -1993,6 +2027,7 @@ func buildValueScan(
 	updateColumns []string,
 	colToIdx map[string]int,
 	OnDuplicateUpdate tree.UpdateExprs,
+	rowAlias *tree.AliasClause,
 ) ([]string, error) {
 	var err error
 	effectiveColumns := append([]string(nil), updateColumns...)
@@ -2188,14 +2223,27 @@ func buildValueScan(
 	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
 		// The no-key fallback does not execute the ODKU action, but its complete
 		// expression still has to be bound so every parameter marker is retained.
-		// Use the ODKU binder here because the fallback value scan has no FROM
-		// binding for target-table column references such as `id + ?`.
+		// Row-alias expressions are checked for parameter positions only; they
+		// are not evaluated by this legacy fallback.
 		odkuBinder := NewOndupUpdateBinder(
 			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
 			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
 		)
 		for _, update := range OnDuplicateUpdate {
 			if update == nil || len(update.Names) == 0 || update.Names[0] == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
+				continue
+			}
+			if rowAlias != nil {
+				if _, ok := colToIdx[update.Names[0].ColName()]; !ok {
+					return nil, moerr.NewBadFieldErrorf(builder.GetContext(),
+						"invalid input: column '%s' does not exist", update.Names[0].ColNameOrigin())
+				}
+				for _, offset := range collectParamExprOffsets(update.Expr) {
+					onUpdateExprs = append(onUpdateExprs, &plan.Expr{
+						Typ:  constTextType,
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(offset)}},
+					})
+				}
 				continue
 			}
 			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
