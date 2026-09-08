@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -2034,6 +2035,68 @@ func TestJsonValueOutputCapacityFailureIsTerminal(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONValueStoredRejectsMalformedStorage(t *testing.T) {
+	t.Run("self reference", func(t *testing.T) {
+		data := make([]byte, 13)
+		binary.LittleEndian.PutUint32(data, 1)
+		binary.LittleEndian.PutUint32(data[4:], uint32(len(data)))
+		data[8] = byte(bytejson.TpCodeArray)
+		binary.LittleEndian.PutUint32(data[9:], 0)
+
+		_, err := decodeJSONValueStored(append([]byte{byte(bytejson.TpCodeArray)}, data...))
+		require.Error(t, err)
+		extracted := jsonValueExtract(append([]byte{byte(bytejson.TpCodeArray)}, data...), []byte(`$`), types.T_json)
+		require.Equal(t, jsonValueSourceParseError, extracted.state)
+	})
+
+	t.Run("overlapping values", func(t *testing.T) {
+		data := make([]byte, 26)
+		binary.LittleEndian.PutUint32(data, 2)
+		binary.LittleEndian.PutUint32(data[4:], uint32(len(data)))
+		for i := 0; i < 2; i++ {
+			entry := 8 + i*5
+			data[entry] = byte(bytejson.TpCodeInt64)
+			binary.LittleEndian.PutUint32(data[entry+1:], 18)
+		}
+
+		_, err := decodeJSONValueStored(append([]byte{byte(bytejson.TpCodeArray)}, data...))
+		require.Error(t, err)
+	})
+
+	t.Run("excessive depth remains a hard error", func(t *testing.T) {
+		input := strings.Repeat("[", bytejson.JSONDocumentMaxNestingDepth+1) + "1" +
+			strings.Repeat("]", bytejson.JSONDocumentMaxNestingDepth+1)
+		document, err := types.ParseStringToByteJson(input)
+		require.NoError(t, err)
+		stored, err := document.Marshal()
+		require.NoError(t, err)
+
+		extracted := jsonValueExtract(stored, []byte(`$`), types.T_json)
+		require.Equal(t, jsonValueHardError, extracted.state)
+		require.True(t, bytejson.IsJSONDocumentDepthError(extracted.err))
+	})
+}
+
+func TestJsonValueStoredLargeDocumentSmallPath(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString(`{"keep":1,"large":[`)
+	for i := 0; i < 1024; i++ {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteByte('1')
+	}
+	builder.WriteString(`]}`)
+	document, err := types.ParseStringToByteJson(builder.String())
+	require.NoError(t, err)
+	stored, err := document.Marshal()
+	require.NoError(t, err)
+
+	extracted := jsonValueExtract(stored, []byte(`$.keep`), types.T_json)
+	require.Equal(t, jsonValueOneValue, extracted.state)
+	require.Equal(t, "1", extracted.text)
+}
+
 func TestJsonValueNumericExponentBoundary(t *testing.T) {
 	// math/big's exponent allocation guard must not turn a zero mantissa
 	// into a conversion failure, or a tiny nonzero number into exact zero.
@@ -2084,8 +2147,16 @@ func TestJsonValueConversionDiagnosticsAreTyped(t *testing.T) {
 			_, err := parseJSONValueFloat32(jsonValueExtract([]byte(`{"a":"1e100"}`), []byte(`$.a`), types.T_varchar), types.T_float32.ToType())
 			return err
 		}, moerr.ErrOutOfRange},
+		{"float NaN", func() error {
+			_, err := parseJSONValueFloat32(jsonValueExtract([]byte(`{"a":"NaN"}`), []byte(`$.a`), types.T_varchar), types.T_float32.ToType())
+			return err
+		}, moerr.ErrOutOfRange},
 		{"double overflow", func() error {
 			_, err := parseJSONValueFloat64(jsonValueExtract([]byte(`{"a":"1e1000"}`), []byte(`$.a`), types.T_varchar), types.T_float64.ToType())
+			return err
+		}, moerr.ErrOutOfRange},
+		{"double NaN", func() error {
+			_, err := parseJSONValueFloat64(jsonValueExtract([]byte(`{"a":"NaN"}`), []byte(`$.a`), types.T_varchar), types.T_float64.ToType())
 			return err
 		}, moerr.ErrOutOfRange},
 		{"decimal64 scale", func() error {
