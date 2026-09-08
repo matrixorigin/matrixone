@@ -274,7 +274,7 @@ the `.proto` files):
 
 ```protobuf
 message UniqueKeyCodecVersion {
-  // 0 is reserved for an explicitly bytewise relation; absence means legacy.
+  // 0 retains legacy/bytewise behavior; absence is also legacy.
   uint32 value = 1;
 }
 
