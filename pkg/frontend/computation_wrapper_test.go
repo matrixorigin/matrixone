@@ -1013,8 +1013,12 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 	const maxUint64 = ^uint64(0)
 	for _, tc := range []struct {
-		name  string
-		query string
+		name      string
+		query     string
+		peer      uint64
+		control   bool
+		floatPeer bool
+		nullPeer  bool
 	}{
 		{
 			name:  "addition",
@@ -1024,6 +1028,22 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			name:  "multiplication",
 			query: "select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned)",
 		},
+		{
+			name:  "bare_addition",
+			query: "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
+			peer:  1,
+		},
+		{
+			name:  "bare_multiplication",
+			query: "select (cast(? as unsigned) * ?) - cast(? as unsigned)",
+			peer:  2,
+		},
+		{name: "negative_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: maxUint64 - 1, control: true},
+		{name: "bare_both", query: "select (? + ?) - cast(? as unsigned)", peer: 1},
+		{name: "abs_parent", query: "select abs(cast(? as unsigned) + ?) - cast(? as unsigned)", peer: 1},
+		{name: "multiplication_identity", query: "select (cast(? as unsigned) * ?) is not null", peer: 1, control: true},
+		{name: "float_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: 0x3ff0000000000000, control: true, floatPeer: true},
+		{name: "null_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: 1, control: true, nullPeer: true},
 	} {
 		for _, sqlMode := range []string{"", mysql.SQLModeNoUnsignedSubtraction} {
 			t.Run(tc.name+"/"+sqlMode, func(t *testing.T) {
@@ -1032,6 +1052,8 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 					t, 28134, tc.query, compilerContext)
 				proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, tc.query)
+				cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, err)
 				defer func() {
 					cw.proc.SetPrepareParams(nil)
 					prepareStmt.Close()
@@ -1047,6 +1069,31 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				packet[10] = 0x80
 				binary.LittleEndian.PutUint64(packet[11:], maxUint64)
 				binary.LittleEndian.PutUint64(packet[19:], maxUint64)
+				if tc.peer != 0 {
+					packet = make([]byte, 37)
+					packet[6] = 1
+					packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+					packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+					packet[11], packet[12] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+					binary.LittleEndian.PutUint64(packet[13:], maxUint64)
+					binary.LittleEndian.PutUint64(packet[21:], tc.peer)
+					binary.LittleEndian.PutUint64(packet[29:], maxUint64)
+					if tc.control {
+						packet = make([]byte, 27)
+						packet[6] = 1
+						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+						binary.LittleEndian.PutUint64(packet[11:], maxUint64)
+						binary.LittleEndian.PutUint64(packet[19:], tc.peer)
+						if tc.floatPeer {
+							packet[9] = byte(defines.MYSQL_TYPE_DOUBLE)
+						}
+						if tc.nullPeer {
+							packet[5] = 2
+							packet = packet[:19]
+						}
+					}
+				}
 				require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0))
 
 				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
@@ -1062,8 +1109,16 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				defer executor.Free()
 				input := batch.New(nil)
 				input.SetRowCount(1)
-				_, err = executor.Eval(cw.proc, []*batch.Batch{input}, nil)
-				require.Error(t, err, "inner unsigned overflow must fail before outer cancellation")
+				result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+				if tc.control {
+					require.NoError(t, err)
+					require.Equal(t, !tc.nullPeer, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "inner unsigned overflow must fail before outer cancellation: %v", err)
+				}
+				after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, cachedPlan, after, "execution must not mutate the prepared template")
 			})
 		}
 	}

@@ -205,6 +205,35 @@ execute unsigned_null_peer using @null_operand, @negative_peer;
 ➤ result[-7,1,0]  𝄀
 1
 deallocate prepare unsigned_null_peer;
+set @bare_one = 1;
+set @bare_two = 2;
+prepare unsigned_bare_add from 'select (cast(? as unsigned) + ?) - cast(? as unsigned) as result';
+execute unsigned_bare_add using @max_uint64, @bare_one, @max_uint64;
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
+execute unsigned_bare_add using @max_uint64, @zero_decimal, @max_uint64;
+➤ result[-5,64,0]  𝄀
+0
+execute unsigned_bare_add using @max_uint64, @bare_one, @max_uint64;
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
+deallocate prepare unsigned_bare_add;
+prepare unsigned_bare_mul from 'select (cast(? as unsigned) * ?) - cast(? as unsigned) as result';
+execute unsigned_bare_mul using @max_uint64, @bare_two, @max_uint64;
+Data truncation: data out of range: data type uint64, value '36893488147419103230'
+execute unsigned_bare_mul using @max_uint64, @bare_one, @max_uint64;
+➤ result[-5,64,0]  𝄀
+0
+deallocate prepare unsigned_bare_mul;
+set session sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+prepare unsigned_bare_add from 'select (cast(? as unsigned) + ?) - cast(? as unsigned) as result';
+execute unsigned_bare_add using @max_uint64, @bare_one, @max_uint64;
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
+deallocate prepare unsigned_bare_add;
+prepare unsigned_bare_mul from 'select (cast(? as unsigned) * ?) - cast(? as unsigned) as result';
+execute unsigned_bare_mul using @max_uint64, @bare_two, @max_uint64;
+Data truncation: data out of range: data type uint64, value '36893488147419103230'
+deallocate prepare unsigned_bare_mul;
+set @bare_one = null;
+set @bare_two = null;
 set @max_uint64 = null;
 set @negative_peer = null;
 set @zero_decimal = null;

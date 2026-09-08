@@ -1264,7 +1264,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		bound, err := bindRuntimeUnsignedArithmetic(rule.ctx, name, fn.Args, copy.GetF().Args)
+		if err == nil && bound == nil {
+			bound, err = BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		}
 		if err != nil {
 			return nil, false, err
 		}
@@ -1292,6 +1295,52 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		}
 	}
 	return expr, false, nil
+}
+
+// bindRuntimeUnsignedArithmetic closes PREPARE's bare-marker deferral once
+// EXECUTE has supplied concrete operand domains. Both ordinary replacement and
+// numeric-source reconstruction (for example under ABS) must retain this bound.
+// Subtraction already has its prepare-time SQL-mode result cast; fractional
+// operands remain on the ordinary decimal/float overload path.
+func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArgs, args []*Expr) (*Expr, error) {
+	if len(args) != 2 || len(originalArgs) != 2 ||
+		(name != "+" && name != "*" && name != "%" && name != "div") ||
+		(!preparedArithmeticOperandHasUnresolvedMarker(originalArgs[0]) && !preparedArithmeticOperandHasUnresolvedMarker(originalArgs[1])) {
+		return nil, nil
+	}
+	unsigned := false
+	for i, arg := range args {
+		original := originalArgs[i]
+		// Ignore only prepare-time coercion envelopes, never semantic CASTs.
+		for original.GetF() != nil && original.GetF().Func.GetObjName() == "cast" &&
+			!isExplicitPreparedCast(original) && arg.GetF() != nil && arg.GetF().Func.GetObjName() == "cast" {
+			original = original.GetF().Args[0]
+			arg = arg.GetF().Args[0]
+		}
+		oid := types.T(arg.Typ.Id)
+		if !integerSubtractionOperand(oid) {
+			return nil, nil
+		}
+		unsigned = unsigned || unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+	if !unsigned {
+		return nil, nil
+	}
+	decimalType := types.New(types.T_decimal128, 38, 0)
+	wideArgs := make([]*Expr, 2)
+	for i, arg := range args {
+		var err error
+		wideArgs[i], err = appendCastBeforeExpr(ctx, arg, makePlan2Type(&decimalType))
+		if err != nil {
+			return nil, err
+		}
+	}
+	bound, err := BindFuncExprImplByPlanExpr(ctx, name, wideArgs)
+	if err != nil {
+		return nil, err
+	}
+	resultType := types.T_uint64.ToType()
+	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -2211,6 +2260,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			if bounded, bindErr := bindRuntimeUnsignedArithmetic(rule.ctx, functionName, originalArgs, boundArgs); bindErr != nil {
+				return nil, bindErr
+			} else if bounded != nil {
+				rule.specialized = true
+				return bounded, nil
+			}
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
 			if resolveErr != nil {

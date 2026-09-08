@@ -6040,6 +6040,8 @@ func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []
 		// enclosing node must retain the result-boundary cast. In particular this
 		// keeps an overflowing CAST(? AS UNSIGNED) + CAST(1 AS SIGNED) from being
 		// cancelled by an outer expression.
+		// ResetParamRefRule restores the deferred result boundary once the bare
+		// marker's execution-time domain is known.
 		return nil
 	}
 
