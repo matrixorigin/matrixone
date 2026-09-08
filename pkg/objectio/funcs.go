@@ -218,7 +218,7 @@ func readOneBlockWithMeta(
 		ext := col.Location()
 		entry := newColumnIOEntry(ext, factory)
 		if shareDecode && len(seqnums) == 1 && len(typs) == 1 && typs[0].Oid.IsArrayRelate() {
-			entry.DecodeSharing = &fileservice.DecodeSharing{
+			entry.DecodeSharing = fileservice.DecodeSharing{
 				Codec:      "objectio-validated-column-v1",
 				Parameters: [2]uint64{uint64(ext.Alg()), uint64(ext.OriginSize())},
 			}

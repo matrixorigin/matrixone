@@ -77,7 +77,7 @@ func BenchmarkS3FSSharedDecode(b *testing.B) {
 					makeRead := func() IOVector {
 						entry := IOEntry{Size: int64(n), CachedDataSize: int64(len(raw)), ToCacheData: convert}
 						if share {
-							entry.DecodeSharing = &DecodeSharing{Codec: "benchmark-lz4-v1"}
+							entry.DecodeSharing = DecodeSharing{Codec: "benchmark-lz4-v1"}
 						}
 						return IOVector{FilePath: "column", Entries: []IOEntry{entry}}
 					}

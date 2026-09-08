@@ -55,6 +55,7 @@ Data, stream handles or writers. Their existing behavior is unchanged.
 
 Reuse `IOEntry.CachedDataSize` for the decoded-size hint. Add an optional
 sharing descriptor containing a stable codec name and conversion parameters;
+store this descriptor inline so opting in does not allocate on a memory hit.
 the ObjectIO column constructor identifies the validated-column codec,
 compression algorithm and original extent size. Zero/invalid descriptors
 disable sharing, not the read. Do not use a Go function pointer as identity.
@@ -202,15 +203,18 @@ and distances through the frontend.
 
 Local performance evidence (Go 1.26.4, Linux amd64; synthetic, not Wiki-10M):
 
-| Microbenchmark (five-run medians) | Sharing off | Sharing on |
+| Microbenchmark (five 3-second samples; exact main FileService vs candidate) | Main | Candidate |
 |---|---:|---:|
-| Memory hit | 713 ns/read | 721 ns/read |
-| Independent read | 114.0 us/read | 115.5 us/read |
-| Eight independent keys | 309.9 us/batch | 317.2 us/batch |
-| Eight overlapping reads | 182.8 us/batch, 8 decodes | 147.2 us/batch, 1 decode |
+| Memory hit | 693.8 ns/read, 5 allocations | 699.7 ns/read, 5 allocations |
+| Eight independent keys | 180.3 us/batch | 186.6 us/batch |
+| Eight overlapping reads | 180.9 us/batch, 8 decodes | 148.0 us/batch, 1 decode |
 
-All three control medians remain within 5%; the overlapping batch improves by
-about 20%. The 512 KiB decode workload also reduces decoded backing allocation
+Both control medians remain within 5%; the overlapping batch improves by
+about 18%. An earlier literal-main comparison exposed per-read descriptor
+allocation overhead: the final implementation stores it inline and snapshots
+only the owned release resources instead of copying the entire IOEntry. The
+memory-hit fixture uses 416 Go bytes/read versus main's 384, with no additional
+allocation count. The 512 KiB decode workload also reduces decoded backing allocation
 from eight buffers to one; Go allocation accounting alone excludes that native
 backing and does not represent the memory saving.
 
@@ -234,8 +238,11 @@ indexes or a claim about the incident-scale dataset.
 | 256 MiB cache: QPS | 4,340 | 4,290 |
 
 The pressure measurement was repeated after merging main `f8a690cb21`, including
-its vector-membership planner changes, and is reported above. The microbenchmarks
-and large-cache control used main `c51bb4ed86` plus the same sharing mechanism.
+its vector-membership planner changes, and is reported above. It preceded the
+final metadata-allocation/release-copy cleanup. The final microbenchmarks use
+`f8a690cb21` FileService source as their control; all temporary source changes
+were restored before validation/delivery. The large-cache SQL control used main
+`c51bb4ed86` plus the same sharing mechanism.
 The large cache's short high-QPS samples have noisy tails (p95 78/96 ms, p99 142/133 ms);
 they are not a tail-latency improvement claim. Sequential queries decoded eight
 columns in both modes under pressure and zero with the large cache, as expected.

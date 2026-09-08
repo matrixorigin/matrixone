@@ -330,7 +330,7 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 	}
 	entry := &vector.Entries[0]
 	sharing := entry.DecodeSharing
-	if sharing == nil || sharing.Codec == "" || len(sharing.Codec) > 64 || len(vector.FilePath) > 4096 ||
+	if sharing.Codec == "" || len(sharing.Codec) > 64 || len(vector.FilePath) > 4096 ||
 		entry.Offset < 0 || entry.Size <= 0 || entry.CachedDataSize <= 0 || entry.CachedDataSize > int64(^uint(0)>>1) ||
 		entry.ToCacheData == nil || entry.WriterForRead != nil || entry.ReadCloserForRead != nil || entry.ReaderForWrite != nil ||
 		entry.Data != nil || entry.CachedData != nil || entry.decodeLease != nil {
@@ -343,7 +343,7 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 	if !s.decodedReads.beginRead() {
 		return nil, sharedDecodeClosed()
 	}
-	key := decodedReadKey{path: path.File, offset: entry.Offset, size: entry.Size, decoded: entry.CachedDataSize, policy: vector.Policy, codec: *sharing}
+	key := decodedReadKey{path: path.File, offset: entry.Offset, size: entry.Size, decoded: entry.CachedDataSize, policy: vector.Policy, codec: sharing}
 	original := entry.ToCacheData
 	var lease *decodedReadLease
 	entry.ToCacheData = func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {

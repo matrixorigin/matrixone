@@ -310,7 +310,7 @@ func TestSharedDecodeKeyIsolation(t *testing.T) {
 		change(&k)
 		keys = append(keys, k)
 	}
-	var held []decodedTestResult
+	held := make([]decodedTestResult, 0, len(keys))
 	calls := 0
 	for _, key := range keys {
 		v := testDecode(r, context.Background(), key, func() (fscache.Data, error) { calls++; return NewBytes([]byte("data")), nil })
@@ -331,8 +331,10 @@ func TestS3FSSharedDecodeEligibility(t *testing.T) {
 		name   string
 		change func(*IOVector)
 	}{
-		{"no descriptor", func(v *IOVector) { v.Entries[0].DecodeSharing = nil }},
-		{"zero codec", func(v *IOVector) { v.Entries[0].DecodeSharing.Codec = "" }},
+		{"no descriptor", func(v *IOVector) { v.Entries[0].DecodeSharing = DecodeSharing{} }},
+		{"parameters without codec", func(v *IOVector) {
+			v.Entries[0].DecodeSharing = DecodeSharing{Parameters: [2]uint64{1, 2}}
+		}},
 		{"large codec", func(v *IOVector) { v.Entries[0].DecodeSharing.Codec = string(make([]byte, 65)) }},
 		{"unknown size", func(v *IOVector) { v.Entries[0].Size = -1 }},
 		{"unknown decoded size", func(v *IOVector) { v.Entries[0].CachedDataSize = 0 }},
@@ -348,7 +350,7 @@ func TestS3FSSharedDecodeEligibility(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, CachedDataSize: 3,
-				DecodeSharing: &DecodeSharing{Codec: "test"}, ToCacheData: CacheOriginalData}}}
+				DecodeSharing: DecodeSharing{Codec: "test"}, ToCacheData: CacheOriginalData}}}
 			tc.change(&v)
 			finish, err := fs.prepareSharedDecode(&v)
 			require.NoError(t, err)
@@ -393,7 +395,7 @@ func TestS3FSSharedDecodeDiskHits(t *testing.T) {
 		return out, nil
 	}
 	makeVector := func() IOVector {
-		return IOVector{FilePath: "column", Entries: []IOEntry{{Size: int64(n), CachedDataSize: int64(len(raw)), ToCacheData: decode, DecodeSharing: &DecodeSharing{Codec: "test-lz4-v1"}}}}
+		return IOVector{FilePath: "column", Entries: []IOEntry{{Size: int64(n), CachedDataSize: int64(len(raw)), ToCacheData: decode, DecodeSharing: DecodeSharing{Codec: "test-lz4-v1"}}}}
 	}
 	before := counters.FileService.S3.Get.Load()
 	vectors := make([]IOVector, 8)
@@ -482,7 +484,7 @@ func TestS3FSSharedDecodeCloseDefersCacheRetirement(t *testing.T) {
 	unblockLeader := sync.OnceFunc(func() { close(unblock) })
 	t.Cleanup(unblockLeader)
 	var original fscache.Data
-	vec := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, CachedDataSize: 3, DecodeSharing: &DecodeSharing{Codec: "test-copy"}, ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
+	vec := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, CachedDataSize: 3, DecodeSharing: DecodeSharing{Codec: "test-copy"}, ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
 		original = a.CopyToCacheData(ctx, data)
 		close(entered)
 		<-unblock
@@ -524,7 +526,7 @@ func TestS3FSSharedDecodeCloseDuringCacheUpdate(t *testing.T) {
 	t.Cleanup(unblockUpdate)
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, Data: []byte("abc")}}, Policy: SkipAllCache}))
 	vec := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, CachedDataSize: 3,
-		DecodeSharing: &DecodeSharing{Codec: "test-copy"}, ToCacheData: CacheOriginalData}}}
+		DecodeSharing: DecodeSharing{Codec: "test-copy"}, ToCacheData: CacheOriginalData}}}
 	done := make(chan error, 1)
 	go func() { done <- fs.Read(ctx, &vec) }()
 	select {

@@ -149,8 +149,9 @@ type IOEntry struct {
 	// storage extent before cache admission.
 	CachedDataSize int64
 	// DecodeSharing is opt-in for immutable conversion results whose lifetime
-	// is scoped to this complete IOVector, including its release ticket.
-	DecodeSharing *DecodeSharing
+	// is scoped to this complete IOVector, including its release ticket. Its zero
+	// value disables sharing; storing it inline avoids per-read metadata allocation.
+	DecodeSharing DecodeSharing
 	decodeLease   *decodedReadLease
 	// ValidateCacheData validates a final representation received from a cache
 	// tier. The caller transfers its one input reference to a successful return;
