@@ -6122,6 +6122,22 @@ func (b *baseBinder) integerArithmeticOperandDomain(astExpr tree.Expr, expr *Exp
 		oid := types.T(typ.Id)
 		return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
 	}
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok &&
+		(unary.Op == tree.UNARY_PLUS || unary.Op == tree.UNARY_MINUS) {
+		child := expr
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.GetObjName() == "unary_plus" || fn.Func.GetObjName() == "unary_minus") {
+			child = fn.Args[0]
+		}
+		return b.integerArithmeticOperandDomain(unary.Expr, child)
+	}
+	if _, ok := astExpr.(*tree.ParamExpr); ok {
+		// A parameter's concrete numeric domain is not known until EXECUTE, but
+		// subtraction still needs its prepare-time SQL-mode result boundary. The
+		// execute-time parameter reset preserves the cast while supplying the
+		// actual signed/unsigned value to the arithmetic node.
+		return true, false
+	}
 	// An already-bound implicit result cast is semantic, rather than a
 	// user-written DECIMAL boundary. Prefer it before interpreting the binary
 	// AST: a protected nested unsigned operation reaches its parent as CAST(...

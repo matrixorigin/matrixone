@@ -1305,7 +1305,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArgs, args []*Expr) (*Expr, error) {
 	if len(args) != 2 || len(originalArgs) != 2 ||
 		(name != "+" && name != "*" && name != "%" && name != "div") ||
-		(!preparedArithmeticOperandHasUnresolvedMarker(originalArgs[0]) && !preparedArithmeticOperandHasUnresolvedMarker(originalArgs[1])) {
+		(!preparedArithmeticOperandNeedsRuntimeBound(originalArgs[0]) && !preparedArithmeticOperandNeedsRuntimeBound(originalArgs[1])) {
 		return nil, nil
 	}
 	unsigned := false
@@ -1317,11 +1317,11 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 			original = original.GetF().Args[0]
 			arg = arg.GetF().Args[0]
 		}
-		oid := types.T(arg.Typ.Id)
-		if !integerSubtractionOperand(oid) {
+		integer, operandUnsigned := runtimePreparedUnsignedIntegerOperand(original, arg)
+		if !integer {
 			return nil, nil
 		}
-		unsigned = unsigned || unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+		unsigned = unsigned || operandUnsigned
 	}
 	if !unsigned {
 		return nil, nil
@@ -1341,6 +1341,83 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	}
 	resultType := types.T_uint64.ToType()
 	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+}
+
+func preparedArithmeticOperandNeedsRuntimeBound(expr *plan.Expr) bool {
+	if preparedArithmeticOperandHasUnresolvedMarker(expr) {
+		return true
+	}
+	return !isExplicitPreparedCast(expr) && preparedExprContainsParam(expr)
+}
+
+// runtimePreparedUnsignedIntegerOperand recognizes a result-selecting wrapper
+// whose DECIMAL type was introduced while an unresolved marker still had its
+// provisional prepare-time domain. It deliberately accepts only exact integer
+// leaves. A genuine DECIMAL (for example 0.5), FLOAT, or explicit DECIMAL CAST
+// remains on the ordinary fractional arithmetic path.
+func runtimePreparedUnsignedIntegerOperand(original, expr *plan.Expr) (integer, unsigned bool) {
+	if expr == nil {
+		return false, false
+	}
+	oid := types.T(expr.Typ.Id)
+	if integerSubtractionOperand(oid) {
+		return true, unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return oid.IsDecimal() && expr.Typ.Scale == 0, false
+	}
+	if !preparedExprContainsParam(original) {
+		return false, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if isExplicitPreparedCast(original) && !original.GetPreparedNumeric().GetProvisionalResultCast() {
+			return false, false
+		}
+		if len(fn.Args) == 0 || original.GetF() == nil || len(original.GetF().Args) == 0 {
+			return false, false
+		}
+		return runtimePreparedUnsignedIntegerOperand(original.GetF().Args[0], fn.Args[0])
+	}
+	if name == "abs" || name == "unary_plus" || name == "unary_minus" {
+		if len(fn.Args) != 1 || original.GetF() == nil || len(original.GetF().Args) != 1 {
+			return false, false
+		}
+		return runtimePreparedUnsignedIntegerOperand(original.GetF().Args[0], fn.Args[0])
+	}
+	if !preparedExactIntegerResultSelector(name) {
+		return false, false
+	}
+	seenValue := false
+	for i, arg := range fn.Args {
+		if !preparedSQLExecuteNumericResultValueArg(name, i, len(fn.Args)) {
+			continue
+		}
+		originalArg := original
+		if originalFn := original.GetF(); originalFn != nil && i < len(originalFn.Args) {
+			originalArg = originalFn.Args[i]
+		}
+		argInteger, argUnsigned := runtimePreparedUnsignedIntegerOperand(originalArg, arg)
+		if !argInteger {
+			return false, false
+		}
+		seenValue = true
+		unsigned = unsigned || argUnsigned
+	}
+	return seenValue, unsigned
+}
+
+func preparedExactIntegerResultSelector(name string) bool {
+	switch canonicalPreparedResultFunctionName(name) {
+	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least":
+		return true
+	default:
+		return false
+	}
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -1873,8 +1950,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		// Type equality alone cannot prove that all current sibling domains are
 		// compatible.
 		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
-		needResetFunction := regexpDomainsDeferred
-		compareArgTypes := regexpDomainsDeferred
+		runtimeUnsignedBoundaryDeferred := (functionName == "+" || functionName == "*" ||
+			functionName == "%" || functionName == "div") &&
+			(len(originalArgs) == 2 && (preparedArithmeticOperandNeedsRuntimeBound(originalArgs[0]) ||
+				preparedArithmeticOperandNeedsRuntimeBound(originalArgs[1])))
+		needResetFunction := regexpDomainsDeferred || runtimeUnsignedBoundaryDeferred
+		compareArgTypes := regexpDomainsDeferred || runtimeUnsignedBoundaryDeferred
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false

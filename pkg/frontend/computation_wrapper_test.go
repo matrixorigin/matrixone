@@ -1043,6 +1043,46 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			runtimeBoundOperator: "*",
 		},
 		{
+			name:  "bare_subtraction_negative_peer",
+			query: "select (cast(? as unsigned) - ?) - cast(? as unsigned)",
+			// The second packet value is signed LONGLONG -1. The inner
+			// UINT64_MAX - (-1) must fail before the outer subtraction can
+			// cancel it to 1.
+			peer: maxUint64,
+		},
+		{
+			name:                 "bare_absolute_value_peer",
+			query:                "select (cast(? as unsigned) + abs(?)) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:  "bare_negated_peer",
+			query: "select (cast(? as unsigned) - -?) - cast(? as unsigned)",
+			// The second packet value is signed LONGLONG 1. Unary negation
+			// makes the inner operation UINT64_MAX - (-1), which must fail
+			// before the final subtraction could cancel it to 1.
+			peer: 1,
+		},
+		{
+			name:                 "bare_coalesced_peer",
+			query:                "select (cast(? as unsigned) + coalesce(?, 0)) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:    "coalesced_fractional_fallback",
+			query:   "select (cast(? as unsigned) + coalesce(?, 0.5)) is not null",
+			peer:    1,
+			control: true,
+		},
+		{
+			name:                 "bare_conditional_peer",
+			query:                "select (cast(? as unsigned) + case when 1 then ? else 0 end) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
 			name:                 "bare_integer_division_negative_peer",
 			query:                "select (cast(? as unsigned) div ?) - cast(? as unsigned)",
 			peer:                 maxUint64,
