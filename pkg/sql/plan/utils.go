@@ -4669,7 +4669,7 @@ func collectPreparedJSONComparisonParamPositions(
 			for i, arg := range impl.F.Args {
 				valueArg := functionName == "json_array" ||
 					(functionName == "json_object" && i%2 == 1) ||
-					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace") && i >= 2 && i%2 == 0)
+					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace" || functionName == "json_array_append") && i >= 2 && i%2 == 0)
 				if valueArg {
 					if param := arg.GetP(); param != nil {
 						positions[param.Pos] = struct{}{}

@@ -31,6 +31,12 @@ null
 SELECT JSON_ARRAY_APPEND('{"a":[]}', '$.a', NULL) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 null
+SELECT JSON_ARRAY_APPEND('[]', '$', CAST('ab' AS BLOB)) AS result;
+➤ result[-1,2147483647,0]  𝄀
+["base64:type252:YWI="]
+SELECT JSON_ARRAY_APPEND('[]', '$', CAST(NULL AS BLOB)) AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
 SELECT JSON_ARRAY_APPEND('{"a":[]}', '$.*', 1) AS result;
 invalid argument json_array_append, bad value invalid path expression
 DROP TABLE IF EXISTS json_array_append_docs;
