@@ -5723,6 +5723,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement generation. Reset before authorization/admission, then inject
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
+		// Keep the transaction origin available to compile-time lineage admission.
+		// TRUNCATE commits the old transaction before its plan is built, so the
+		// fresh transaction alone cannot tell whether the client was already in an
+		// explicit transaction.  Reset the marker for every statement generation;
+		// otherwise a later statement in the same request could inherit it.
+		execCtx.reqCtx = context.WithValue(
+			execCtx.reqCtx,
+			defines.ImplicitCommitFromExplicitTxn{},
+			false,
+		)
+		proc.ReplaceTopCtx(execCtx.reqCtx)
 		// Make the current owner visible to the transaction boundary helper before
 		// authorization.  The helper reuses commitUnsafe, which needs the session
 		// for commit context, metrics, temporary-table ownership, and cleanup.
@@ -5746,6 +5757,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				!ses.GetIsInternal() && isImplicitCommitStatement(effectiveStmt) {
 				execCtx.implicitCommitBefore = true
 			}
+		}
+		if execCtx.implicitCommitBefore && ses.GetTxnHandler() != nil {
+			execCtx.reqCtx = context.WithValue(
+				execCtx.reqCtx,
+				defines.ImplicitCommitFromExplicitTxn{},
+				ses.GetTxnHandler().InMultiStmtTransactionMode(),
+			)
+			proc.ReplaceTopCtx(execCtx.reqCtx)
 		}
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
