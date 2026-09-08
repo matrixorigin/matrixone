@@ -489,11 +489,54 @@ func getDataBranchMutationExecutor(
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 	explicitTxn := ses.proc.GetTxnOperator().TxnOptions().ByBegin
-	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, featureLimited, explicitTxn, true, getBackExecutor, opts...,
+	)
+}
+
+type backgroundExecutorFactory func(
+	context.Context,
+	*Session,
+	...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error)
+
+func getCloneMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	useTxnHandler bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	if useTxnHandler {
+		return getLineageOwnerMutationExecutor(
+			ctx, ses, false,
+			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), false,
+			getBackExecutorWithTxnHandler, opts...,
+		)
+	}
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, false,
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin, false,
+		getBackExecutor, opts...,
+	)
+}
+
+func getLineageOwnerMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	featureLimited bool,
+	explicitTxn bool,
+	validateExplicitTxn bool,
+	factory backgroundExecutorFactory,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	bh, deferred, err := factory(ctx, ses, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
 	if explicitTxn {
+		if !validateExplicitTxn {
+			return bh, deferred, nil
+		}
 		// Preserve DATA BRANCH's transactional SQL contract without letting a
 		// client-controlled transaction own the global row after this statement.
 		// Successful owner-catalog work is validated with fast-fail admission at
@@ -888,25 +931,6 @@ func diffMergeAgency(
 		return err
 	}
 
-	// do not open another transaction,
-	// if this already executed within a transaction.
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-
-	ctx, cancel = context.WithCancel(execCtx.reqCtx)
-
 	var (
 		dagInfo   branchMetaInfo
 		tblStuff  tableStuff
@@ -917,10 +941,6 @@ func diffMergeAgency(
 		pickStmt  *tree.DataBranchPick
 	)
 
-	defer func() {
-		cancel()
-	}()
-
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
 			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
@@ -928,6 +948,23 @@ func diffMergeAgency(
 			}
 		}
 	}
+
+	// DIFF, PICK, and MERGE all create and drop apply tables. Enter the
+	// lineage-owner lifecycle before resolving either endpoint, so their nested
+	// DDL follows the same lineage -> view-metadata -> object lock order as
+	// ordinary DROP, clone, and restore paths.
+	bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(execCtx.reqCtx)
+	defer cancel()
 
 	if diffStmt != nil {
 		if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) != 0 {

@@ -391,48 +391,80 @@ func TestScopeSerialization(t *testing.T) {
 
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
-	scope := generateScopeCases(t, []string{
-		"select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
-	})[0]
+	tests := []struct {
+		name                 string
+		sql                  string
+		candidateLimit       uint64
+		offset               uint64
+		expectResidentGather bool
+	}{
+		{
+			name:                 "resident candidate prefix",
+			sql:                  "select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
+			name:           "candidate prefix above resident threshold",
+			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+	}
 
-	var topLimits []uint64
-	var offsets []uint64
-	var opTypes []vm.OpType
-	var visitOperator func(vm.Operator)
-	visitOperator = func(operator vm.Operator) {
-		if operator == nil {
-			return
-		}
-		base := operator.GetOperatorBase()
-		for i := 0; i < base.NumChildren(); i++ {
-			visitOperator(base.GetChildren(i))
-		}
-		opTypes = append(opTypes, operator.OpType())
-		switch op := operator.(type) {
-		case *top.Top:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *mergetop.MergeTop:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *offset.Offset:
-			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
-		}
-	}
-	var visitScope func(*Scope)
-	visitScope = func(current *Scope) {
-		visitOperator(current.RootOp)
-		for _, preScope := range current.PreScopes {
-			visitScope(preScope)
-		}
-	}
-	visitScope(scope)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scope := generateScopeCases(t, []string{test.sql})[0]
+			var topLimits []uint64
+			var offsets []uint64
+			var opTypes []vm.OpType
+			var visitOperator func(vm.Operator)
+			visitOperator = func(operator vm.Operator) {
+				if operator == nil {
+					return
+				}
+				base := operator.GetOperatorBase()
+				for i := 0; i < base.NumChildren(); i++ {
+					visitOperator(base.GetChildren(i))
+				}
+				opTypes = append(opTypes, operator.OpType())
+				switch op := operator.(type) {
+				case *top.Top:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *mergetop.MergeTop:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *offset.Offset:
+					offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+				}
+			}
+			var visitScope func(*Scope)
+			visitScope = func(current *Scope) {
+				visitOperator(current.RootOp)
+				for _, preScope := range current.PreScopes {
+					visitScope(preScope)
+				}
+			}
+			visitScope(scope)
 
-	require.NotEmpty(t, topLimits)
-	for _, candidateLimit := range topLimits {
-		require.Equal(t, uint64(7), candidateLimit)
+			if !test.expectResidentGather {
+				require.Empty(t, topLimits)
+				require.Contains(t, opTypes, vm.Order)
+				require.Contains(t, opTypes, vm.MergeOrder)
+				require.Contains(t, offsets, test.offset)
+				return
+			}
+			require.NotEmpty(t, topLimits)
+			for _, candidateLimit := range topLimits {
+				require.Equal(t, test.candidateLimit, candidateLimit)
+			}
+			require.Contains(t, offsets, test.offset)
+			require.NotContains(t, opTypes, vm.Order)
+			if test.expectResidentGather {
+				require.NotContains(t, opTypes, vm.MergeOrder)
+			}
+		})
 	}
-	require.Contains(t, offsets, uint64(2))
-	require.NotContains(t, opTypes, vm.Order)
-	require.NotContains(t, opTypes, vm.MergeOrder)
 }
 
 func checkScopeRoot(t *testing.T, s *Scope) {
@@ -774,6 +806,57 @@ func TestNewParallelScope(t *testing.T) {
 		require.NotSame(t, firstPool, nextPool)
 		require.Nil(t, templateShuffle.GetShufflePool())
 	}
+}
+
+func TestNewParallelScopeConsolidatesOrderedTopStreams(t *testing.T) {
+	c := NewMockCompile(t)
+	external := process.NewPipelineEdge(1, 1)
+	external.OrderedStream = true
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(100000)
+	orderBy := []*plan.OrderBySpec{{
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		},
+	}}
+	localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy).WithOrderedOutput()
+	localTop.AppendChild(table_scan.NewArgument())
+	out := connector.NewArgument().WithReg(external)
+	out.AppendChild(localTop)
+	s := &Scope{
+		Magic:    Normal,
+		NodeInfo: engine.Node{Mcpu: 4},
+		Proc:     c.proc,
+		RootOp:   out,
+	}
+
+	ordered, workers := newParallelScope(s)
+	require.Equal(t, Merge, ordered.Magic)
+	require.True(t, ordered.ConcurrentPreScopes)
+	require.Equal(t, 1, ordered.NodeInfo.Mcpu)
+	require.Len(t, workers, 4)
+	require.Len(t, ordered.PreScopes, 4)
+	require.Len(t, ordered.Proc.Reg.MergeReceivers, 4)
+
+	orderedOut, ok := ordered.RootOp.(*connector.Connector)
+	require.True(t, ok)
+	require.Same(t, external, orderedOut.Reg)
+	globalTop, ok := orderedOut.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, globalTop.OrderedStreams)
+	require.Same(t, limitExpr, globalTop.Limit)
+	for i, worker := range workers {
+		workerOut, ok := worker.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		require.Same(t, ordered.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+		require.Equal(t, 1, workerOut.Reg.NilBatchCnt)
+		require.True(t, workerOut.Reg.OrderedStream)
+		_, ok = workerOut.GetOperatorBase().GetChildren(0).(*top.Top)
+		require.True(t, ok)
+	}
+
+	s.release()
+	c.proc.Free()
 }
 
 func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {

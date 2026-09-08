@@ -34,6 +34,11 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
+func TestRefreshSessionAuthRequiresProtocolVersion54(t *testing.T) {
+	assert.Equal(t, defines.MORPCVersion54, methodVersions[query.CmdMethod_RefreshSessionAuth])
+	assert.GreaterOrEqual(t, defines.MORPCLatestVersion, methodVersions[query.CmdMethod_RefreshSessionAuth])
+}
+
 func TestNewCacheClient(t *testing.T) {
 	ct := testCreateQueryClient(t)
 	assert.NotNil(t, ct)
@@ -56,4 +61,26 @@ func TestUnwrapResponseError(t *testing.T) {
 	resp2, err = client.unwrapResponseError(resp1)
 	assert.Equal(t, "internal error: test", err.Error())
 	assert.Nil(t, resp2)
+
+	resp1 = &query.Response{
+		CmdMethod: query.CmdMethod_RefreshSessionAuth,
+		Error:     moe,
+		RefreshSessionAuthResponse: &query.RefreshSessionAuthResponse{
+			AuthenticationFailed: true,
+		},
+	}
+	resp2, err = client.unwrapResponseError(resp1)
+	assert.Equal(t, "internal error: test", err.Error())
+	assert.Same(t, resp1, resp2)
+
+	resp1 = &query.Response{
+		CmdMethod: query.CmdMethod_RefreshSessionAuth,
+		Error:     moe,
+		RefreshSessionAuthResponse: &query.RefreshSessionAuthResponse{
+			RequestRejected: true,
+		},
+	}
+	resp2, err = client.unwrapResponseError(resp1)
+	assert.Equal(t, "internal error: test", err.Error())
+	assert.Same(t, resp1, resp2)
 }

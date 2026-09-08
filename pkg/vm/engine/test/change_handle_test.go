@@ -4539,12 +4539,12 @@ func TestCancelIteration2(t *testing.T) {
 			int8,
 			[]uint64,
 		) error {
-			if flushCount == 0 {
+			flushCount++
+			if flushCount == 1 {
 				cancelCh <- struct{}{}
 				<-cancelCh
 				return nil
 			}
-			flushCount++
 			return nil
 		},
 	)
@@ -4566,11 +4566,9 @@ func TestCancelIteration2(t *testing.T) {
 
 	txn.Commit(ctxWithTimeout)
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	iterationErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		err = iscp.ExecuteIteration(
+		iterationErr <- iscp.ExecuteIteration(
 			ctxWithTimeout,
 			"",
 			disttaeEngine.Engine,
@@ -4578,12 +4576,11 @@ func TestCancelIteration2(t *testing.T) {
 			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, []uint64{1}, types.TS{}, types.TS{}),
 			common.DebugAllocator,
 		)
-		assert.NoError(t, err)
 	}()
 	<-cancelCh
 	cancel()
 	close(cancelCh)
-	wg.Wait()
+	require.ErrorIs(t, <-iterationErr, context.Canceled)
 
 }
 

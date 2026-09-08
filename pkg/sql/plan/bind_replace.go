@@ -67,7 +67,7 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, stmt.IsSetFormat)
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, stmt.IsSetFormat)
 	if err != nil {
 		return 0, err
 	}
@@ -1234,8 +1234,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
 		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
-			-1, -1,
-			irregularIndexes, nil, -1, tableDef, objRef)
+			-1, -1, -1,
+			irregularIndexes, nil, -1, nil, tableDef, objRef)
 		if err != nil {
 			return 0, err
 		}

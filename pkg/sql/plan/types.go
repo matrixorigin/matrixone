@@ -300,6 +300,26 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// SubscriptionMetadata carries both publication membership and the
+// subscriber-local RBAC scope that was established before the planner crosses
+// into the publisher catalog. AllTablesVisible and VisibleTableIDs are
+// mutually exclusive representations of that subscriber-side scope.
+type SubscriptionMetadata struct {
+	Meta             *SubscriptionMeta
+	AllTablesVisible bool
+	VisibleTableIDs  []uint64
+}
+
+// SubscriptionMetadataProvider enumerates the active subscriptions whose
+// metadata is visible to the current account and active role closure.
+// maxCandidates is the remaining statement admission budget. Implementations
+// must fail instead of returning a partial result when more active catalog
+// candidates exist, and must bound catalog materialization to at most
+// maxCandidates+1 rows before performing visibility expansion.
+type SubscriptionMetadataProvider interface {
+	GetSubscriptionMetadata(snapshot *Snapshot, maxCandidates int) ([]*SubscriptionMetadata, error)
+}
+
 // TableDefStatsCompilerContext is an optional extension for compiler contexts
 // that can bind a statistics read to the table definition used by the plan.
 // Implementations should reject schema-bound statistics from another table
@@ -350,19 +370,47 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// Deep existential regions are owned by a SQL block, never by a partially
+	// constructed node. The registry stays nil on the ordinary flattening path.
+	nextExistentialBlock    uint64
+	pendingExistentials     map[uint64]*pendingExistential
+	hadPendingExistentials  bool
+	existentialGateProjects map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
+	// queryingSubscriptionMetadata is scoped to binding one account-wide
+	// subscription metadata branch. It complements CompilerContext's publisher
+	// routing state with subscriber-local table visibility.
+	queryingSubscriptionMetadata *SubscriptionMetadata
+	// subscriptionStatisticsPublisherBranches is the statement-wide admission
+	// count for publisher STATISTICS view expansions. It is reserved before an
+	// occurrence binds either its local view or any publisher view, so an
+	// over-budget statement cannot produce a partial metadata plan.
+	subscriptionStatisticsPublisherBranches int
+	// subscriptionStatisticsPublicationTableEntries and
+	// subscriptionStatisticsPublicationTableLiteralBytes account for the
+	// per-publication IN-list literals that are expanded inside each publisher
+	// branch. Branch count alone does not bound a publication containing a large
+	// explicit table list.
+	subscriptionStatisticsPublicationTableEntries      int
+	subscriptionStatisticsPublicationTableLiteralBytes int
+	// subscriptionStatisticsMetadata caches the complete, bounded visible set
+	// per requested snapshot for this QueryBuilder. Sibling STATISTICS
+	// occurrences reuse it instead of repeating catalog and RBAC enumeration.
+	subscriptionStatisticsMetadata map[string][]*SubscriptionMetadata
 	// persistedViewTarget is set structurally by CREATE/ALTER/regeneration
 	// while one persisted view definition is bound. It is statement-local so
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode             []*BindContext
-	windowValidationScans []*plan.Node
-	nameByColRef          map[[2]int32]string
-	protectedScans        map[int32]int
-	updateTargetScans     map[int32]struct{}
-	projectSpecialGuards  map[int32]*specialIndexGuard
+	ctxByNode               []*BindContext
+	headingProvenanceByNode map[int32]headingProvenanceMap
+	windowValidationScans   []*plan.Node
+	nameByColRef            map[[2]int32]string
+	protectedScans          map[int32]int
+	updateTargetScans       map[int32]struct{}
+	projectSpecialGuards    map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -384,6 +432,12 @@ type QueryBuilder struct {
 	// checks. Planner-local metadata lets the final cardinality pass choose table
 	// locks without weakening bounded UPDATE predicates into table-wide locks.
 	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
+	// fullTableUpdateSourceTableID identifies the single logical target whose
+	// complete scan cardinality can safely repair an underestimated LOCK_OP
+	// cardinality. The accompanying flag keeps table ID zero representable in
+	// planner tests and fail-closed mock catalogs.
+	fullTableUpdateSourceTableID    uint64
+	hasFullTableUpdateSourceTableID bool
 	// userWindowNodes contains only WINDOW nodes produced from user
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
@@ -452,10 +506,26 @@ type QueryBuilder struct {
 	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
 	// source before the complete result count can be observed.
 	sqlCalcFoundRows bool
+	// sessionSelectLimitMayStopEarly records a finite ordinary
+	// sql_select_limit or a dynamic prepared one. Such a top-level cap is
+	// materialized only after optimization and therefore cannot appear in the
+	// logical drain-witness walk.
+	sessionSelectLimitMayStopEarly bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure
 	optimizationHistory []string
+
+	// groupingSetCandidates are internally generated UNION ALL branches whose
+	// common input can be shared after CTE reuse has established any nested
+	// producer boundaries.
+	groupingSetCandidates []groupingSetCandidate
+	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
+	// the conservative cumulative reservations made by planner-introduced CTE
+	// and grouping-set sources. They prevent individually valid rewrites from
+	// jointly exceeding explicit statement caps.
+	sharedMaterializationMemoryBytes float64
+	sharedMaterializationSpillBytes  float64
 
 	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
 	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
@@ -484,10 +554,15 @@ type QueryBuilder struct {
 	// maintenance is intentionally absent.
 	irregularMaintInsertOnlySourceStep int32
 	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
-	irregularMaintTableDef             *plan.TableDef
-	irregularMaintObjRef               *plan.ObjectRef
-	irregularMaintSkipInsert           bool
-	irregularUpdateMaints              []irregularUpdateMaintenance
+	// irregularMaintValueChangedSourceSteps maps an affected logical index to a
+	// derivative source containing only new rows or conflict rows whose stored
+	// index inputs actually changed. Groups absent from the map retain the
+	// conservative unfiltered maintenance source.
+	irregularMaintValueChangedSourceSteps map[string]int32
+	irregularMaintTableDef                *plan.TableDef
+	irregularMaintObjRef                  *plan.ObjectRef
+	irregularMaintSkipInsert              bool
+	irregularUpdateMaints                 []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -532,15 +607,16 @@ type QueryBuilder struct {
 }
 
 type irregularUpdateMaintenance struct {
-	sourceStep           int32
-	deleteStep           int32
-	deletePkPos          int32
-	deletePkTyp          plan.Type
-	indexes              []*plan.IndexDef
-	insertOnlySourceStep int32
-	insertOnlyIndexes    []*plan.IndexDef
-	tableDef             *plan.TableDef
-	objRef               *plan.ObjectRef
+	sourceStep              int32
+	deleteStep              int32
+	deletePkPos             int32
+	deletePkTyp             plan.Type
+	indexes                 []*plan.IndexDef
+	insertOnlySourceStep    int32
+	insertOnlyIndexes       []*plan.IndexDef
+	valueChangedSourceSteps map[string]int32
+	tableDef                *plan.TableDef
+	objRef                  *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -564,6 +640,7 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	disableRightSingleRF       int
+	sharedComputation          int
 	subqueryPredicatePlanning  int
 	printShuffle               int
 	skipDedup                  int
@@ -582,12 +659,13 @@ type CTERef struct {
 }
 
 type cteOccurrence struct {
-	rootID       int32
-	rootTag      int32
-	ctx          *BindContext
-	headings     []string
-	types        []plan.Type
-	isCorrelated bool
+	rootID            int32
+	rootTag           int32
+	ctx               *BindContext
+	headings          []string
+	headingProvenance headingProvenanceMap
+	types             []plan.Type
+	isCorrelated      bool
 }
 
 type CteBindState struct {
@@ -622,12 +700,104 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+// headingPart keeps the syntax provenance needed when a CTAS heading is
+// normalized. Identifier text is lower-cased, while SQL string literals keep
+// their spelling because format strings are case-sensitive. Keeping the
+// segments separate avoids trying to infer syntax from apostrophes in the
+// rendered heading (an apostrophe is valid identifier data too).
+type headingPart struct {
+	text    string
+	literal bool
+}
+
+type headingProvenance struct {
+	parts []headingPart
+}
+
+// headingProvenanceMap stores only output columns whose headings contain
+// case-sensitive SQL string literals. Most planner outputs have no such
+// metadata, so keeping this map nil avoids allocating one empty entry per
+// heading (and avoids copying a full-width slice through every boundary).
+type headingProvenanceMap map[int32]headingProvenance
+
+func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
+	if len(provenance.parts) == 0 {
+		return headingProvenance{}
+	}
+	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
+}
+
+func headingProvenanceEqual(left, right headingProvenance) bool {
+	if len(left.parts) != len(right.parts) {
+		return false
+	}
+	for i := range left.parts {
+		if left.parts[i] != right.parts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneHeadingProvenances(provenances headingProvenanceMap) headingProvenanceMap {
+	if len(provenances) == 0 {
+		return nil
+	}
+	cloned := make(headingProvenanceMap, len(provenances))
+	for i, provenance := range provenances {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		cloned[i] = cloneHeadingProvenance(provenance)
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
+}
+
+func mergeHeadingProvenances(
+	dst *headingProvenanceMap,
+	src headingProvenanceMap,
+	offset int32,
+) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = make(headingProvenanceMap, len(src))
+	}
+	for index, provenance := range src {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		(*dst)[offset+index] = cloneHeadingProvenance(provenance)
+	}
+}
+
+func truncateHeadingProvenances(provenances *headingProvenanceMap, length int32) {
+	if len(*provenances) == 0 {
+		return
+	}
+	for index := range *provenances {
+		if index >= length {
+			delete(*provenances, index)
+		}
+	}
+	if len(*provenances) == 0 {
+		*provenances = nil
+	}
+}
+
 type orderResolutionMetadata struct {
 	bindAsts          []tree.Expr
 	semanticKeysByTag map[int32][]string
 }
 
 type BindContext struct {
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
+
 	binder Binder
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity
@@ -689,6 +859,15 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
+	// headingProvenance records only output positions with structural SQL
+	// literal segments in an expression heading. CTAS uses it to preserve
+	// case-sensitive format strings without confusing apostrophes that are part
+	// of identifier text with string delimiters.
+	headingProvenance headingProvenanceMap
+	// generatedHeadingProvenance is keyed by output ordinal for the
+	// ROLLUP/window rewrite. An ordinal avoids case-folding collisions between
+	// headings such as DATE_FORMAT(..., '%M') and DATE_FORMAT(..., '%m').
+	generatedHeadingProvenance headingProvenanceMap
 
 	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
@@ -1007,9 +1186,13 @@ type Binding struct {
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
-	originCols  []string
-	colIsHidden []bool
-	types       []*plan.Type
+	originCols []string
+	// headingProvenance carries expression-heading syntax through a derived
+	// table/CTE so SELECT * can retain the original literal spelling. It is
+	// sparse and keyed by column ordinal.
+	headingProvenance headingProvenanceMap
+	colIsHidden       []bool
+	types             []*plan.Type
 	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.

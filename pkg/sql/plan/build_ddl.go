@@ -1445,13 +1445,34 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 
 		cols[i] = &plan.ColDef{
-			Name:    strings.ToLower(bindCtx.headings[i]),
+			Name: normalizeCTASColumnName(
+				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
 	return cols, query, nil
+}
+
+// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
+// Literal segments are supplied by the AST formatter; an apostrophe in an
+// identifier is therefore never mistaken for a string delimiter.
+func normalizeCTASColumnName(heading string, provenance headingProvenance) string {
+	if len(provenance.parts) == 0 {
+		return strings.ToLower(heading)
+	}
+
+	var result strings.Builder
+	result.Grow(len(heading))
+	for _, part := range provenance.parts {
+		if part.literal {
+			result.WriteString(part.text)
+		} else {
+			result.WriteString(strings.ToLower(part.text))
+		}
+	}
+	return result.String()
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
@@ -2318,11 +2339,6 @@ func buildCreateTable(
 		return nil, err
 	}
 
-	v, ok := getAutoIncrementOffsetFromVariables(ctx)
-	if ok {
-		createTable.TableDef.AutoIncrOffset = v
-	}
-
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -2798,6 +2814,23 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 		}
 	}
 	return clone
+}
+
+func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
+	return &plan.Default{
+		Expr: &Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
+					Value: &plan.Literal_U32Val{U32Val: catalog.System_Account},
+				},
+			},
+			Typ: plan.Type{
+				Id:          colType.Id,
+				NotNullable: true,
+			},
+		},
+		NullAbility: false,
+	}
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
@@ -3306,9 +3339,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// add cluster table attribute
 	if stmt.IsClusterTable {
 		internal := defines.IsInternalExecutor(ctx.GetContext())
-		_, has := colMap[util.GetClusterTableAttributeName()]
+		colDef, has := colMap[util.GetClusterTableAttributeName()]
 		if has && !internal {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		if has && colDef.Default.GetExpr() == nil {
+			// SHOW CREATE renders the physical account_id column but deliberately
+			// omits its storage-only default. TRUNCATE and unconditional DELETE
+			// replay that DDL through the internal executor, so restore the
+			// system-managed default before publishing the replacement table.
+			colDef.Default = makeClusterTableAttributeDefault(colDef.Typ)
 		}
 		if !has {
 			colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
@@ -3320,21 +3360,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
 				NotNull: true,
-				Default: &plan.Default{
-					Expr: &Expr{
-						Expr: &plan.Expr_Lit{
-							Lit: &Const{
-								Isnull: false,
-								Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
-							},
-						},
-						Typ: plan.Type{
-							Id:          colType.Id,
-							NotNullable: true,
-						},
-					},
-					NullAbility: false,
-				},
+				Default: makeClusterTableAttributeDefault(colType),
 				Comment: "the account_id added by the mo",
 			}
 			colMap[util.GetClusterTableAttributeName()] = colDef
@@ -5720,6 +5746,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 
+	if tableDef.IsTemporary {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		tableDef.Name = tableName
+	}
+
 	alterTable := &plan.AlterTable{
 		Actions:        make([]*plan.AlterTable_Action, len(stmt.Options)),
 		AlgorithmType:  plan.AlterTable_INPLACE,
@@ -6220,11 +6251,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// TODO ONLY Check
-			_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
+			_, destination, err := ctx.Resolve(databaseName, newName, nil)
 			if err != nil {
 				return nil, err
 			}
-			if tableDef != nil {
+			if destination != nil && (!tableDef.IsTemporary || destination.IsTemporary) {
 				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 			}
 
@@ -6237,10 +6268,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
-			updateSqls = append(
-				updateSqls,
-				getSqlForRenameTable(databaseName, oldName, newName)...,
-			)
+			if !tableDef.IsTemporary {
+				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
 				return nil, moerr.NewInvalidInputf(
@@ -6863,16 +6893,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 		return nil, err
 	}
 	return &fkData, nil
-}
-
-func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
-	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
-	if err == nil {
-		if offset, ok := v.(int64); ok && offset > 1 {
-			return uint64(offset - 1), true
-		}
-	}
-	return 0, false
 }
 
 var unitDurations = map[string]time.Duration{

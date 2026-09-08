@@ -1187,6 +1187,9 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "power domain or overflow", fid: POW, argCount: 2},
+		{name: "exponential overflow", fid: EXP, argCount: 1},
+		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
@@ -1195,6 +1198,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
+		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},
 		{name: "invalid interval string", fid: TO_INTERVAL, argCount: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

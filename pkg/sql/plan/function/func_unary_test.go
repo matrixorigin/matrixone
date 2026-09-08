@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -798,6 +800,50 @@ func TestOrd(t *testing.T) {
 	}
 }
 
+func TestOrdMultibyteUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"é", "中", "😀", "éx", ""},
+				nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0xC3A9, 0xE4B8AD, 0xF09F9880, 0xC3A9, 0}, nil),
+		Ord)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestOrdBinaryUsesFirstOctet(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.New(oid, 4, 0), []string{"é", "中", ""}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xE4, 0}, nil),
+				Ord)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestOrdUsesRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"é", "é", "ignored"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0xC3, 0xC3A9, 0}, []bool{false, false, true}),
+		Ord)
+	require.NoError(t, tc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 // QUOTE
 func initQuoteTestCase() []tcTemp {
 	return []tcTemp{
@@ -1445,7 +1491,35 @@ func geom32WKB(t *testing.T, wkt string) string {
 	t.Helper()
 	g, err := geo.ParseWKT(wkt)
 	require.NoError(t, err)
-	return string(geo.WriteWKBFloat32(g))
+	out, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestReencodeGeom32RejectsMalformedPayload(t *testing.T) {
+	for _, malformed := range [][]byte{nil, {1, 1, 0, 0, 0}} {
+		out, err := reencodeGeom32(malformed, true)
+		require.Nil(t, out)
+		require.Error(t, err)
+	}
+
+	malformed := []byte{1, 1, 0, 0, 0}
+	out, err := reencodeGeom32(malformed, false)
+	require.NoError(t, err)
+	require.Equal(t, malformed, out)
+
+	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+		standard := make([]byte, 21)
+		if order == binary.LittleEndian {
+			standard[0] = 1
+		}
+		order.PutUint32(standard[1:5], 1)
+		order.PutUint64(standard[5:13], math.Float64bits(3.5e38))
+		order.PutUint64(standard[13:21], math.Float64bits(0))
+		out, err = reencodeGeom32(standard, true)
+		require.Nil(t, out)
+		require.ErrorContains(t, err, "not finite in GEOMETRY32")
+	}
 }
 
 func TestStXY32(t *testing.T) {
@@ -1481,6 +1555,72 @@ func TestStXY32(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func BenchmarkGeometryDerivedPayload(b *testing.B) {
+	for _, tc := range []struct{ name, input string }{
+		{"closed_boundary", "LINESTRING(0 0,1 1,0 0)"},
+		{"open_boundary", "LINESTRING(0 0,1 1)"},
+		{"empty_member", "MULTIPOINT(EMPTY,1 2)"},
+		{"nonempty_member", "MULTIPOINT(0 0,1 2)"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			g, err := geo.ParseWKT(tc.input)
+			require.NoError(b, err)
+			input := geo.WriteWKB(g)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if strings.Contains(tc.name, "boundary") {
+					_, err = boundaryFromPayload(input)
+				} else {
+					_, err = geometryNFromPayload(input, 1)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestGeometryEmptyDerivedWKB(t *testing.T) {
+	// Both widths and legacy-text/WKB inputs must produce actual WKB, not
+	// merely text that ST_AsText happens to accept.
+	cases := []struct{ name, input, want string }{
+		{"closed_boundary", "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY"},
+		{"empty_point_member", "MULTIPOINT(EMPTY,1 2)", "POINT EMPTY"},
+		{"empty_line_member", "MULTILINESTRING(EMPTY,(0 0,1 1))", "LINESTRING EMPTY"},
+		{"empty_polygon_member", "MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))", "POLYGON EMPTY"},
+		{"empty_collection_member", "GEOMETRYCOLLECTION(MULTIPOINT EMPTY,POINT(1 2))", "MULTIPOINT EMPTY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := geo.ParseWKT(tc.input)
+			require.NoError(t, err)
+			f32, err := geo.WriteWKBFloat32(g)
+			require.NoError(t, err)
+			for _, input := range [][]byte{[]byte(tc.input), geo.WriteWKB(g), f32} {
+				var out []byte
+				if tc.name == "closed_boundary" {
+					out, err = boundaryFromPayload(input)
+				} else {
+					var member string
+					member, err = geometryNFromPayload(input, 1)
+					out = []byte(member)
+				}
+				require.NoError(t, err)
+				decoded, err := geo.ReadWKB(out)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, geo.WriteWKT(decoded))
+				converted, err := reencodeGeom32(out, true)
+				require.NoError(t, err)
+				decoded, err = geo.ReadWKBFloat32(converted)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, geo.WriteWKT(decoded))
+			}
+		})
+	}
+}
+
 func TestGeometry32ReturningUnary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -1503,6 +1643,7 @@ func TestGeometry32ReturningUnary(t *testing.T) {
 	}
 
 	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StBoundary, "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY")
 	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
 	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
 	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
@@ -2495,7 +2636,7 @@ func initStBoundaryTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
 				[]string{
 					"MULTIPOINT((0 0),(4 2))",
-					"MULTIPOINT()",
+					"MULTIPOINT EMPTY",
 					"MULTILINESTRING((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
 					"SRID=4326;MULTILINESTRING((0 0,2 0,2 2,0 2,0 0))",
 				},
@@ -3541,6 +3682,17 @@ func initJsonUnquoteTestCase() []tcTemp {
 				[]string{"hello", "world", "", `"x"`, `""`},
 				[]bool{false, false, true, false, false}),
 		},
+		{
+			info: "test json unquote preserves non-string SQL text",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"plain text", `{"a":1}`, `[1,2]`, "1e2", `"leading`, `trailing"`, ` "framed" `, "你好"},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -3555,6 +3707,152 @@ func TestJsonUnquote(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestJsonUnquoteRejectsInvalidFramedStringAndUTF8(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{`"\x"`, string([]byte{0xff})} {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
+			JsonUnquote)
+		s, _ := tc.Run()
+		require.False(t, s)
+	}
+}
+
+func TestJsonUnquoteTextTypeContract(t *testing.T) {
+	for _, input := range []types.Type{
+		types.NewWithCharset(types.T_char, 8, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxMediumTextLen, 0, types.CharsetUTF8),
+		types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8MB4Bin),
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		result := resolved.GetReturnType()
+		if input.Oid == types.T_char {
+			require.Equal(t, types.T_varchar, result.Oid)
+		} else {
+			require.Equal(t, input.Oid, result.Oid)
+		}
+		require.Equal(t, input.Width, result.Width)
+		require.Equal(t, types.CharsetUTF8MB4Bin, result.Charset)
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast)
+	}
+	for _, input := range []types.Type{types.T_json.ToType(), types.T_any.ToType()} {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err)
+		require.Equal(t, types.CharsetUTF8MB4Bin, resolved.GetReturnType().Charset)
+	}
+}
+
+func TestJsonUnquoteRejectsNonStringDomain(t *testing.T) {
+	for _, input := range []types.Type{
+		types.T_date.ToType(),
+		types.T_time.ToType(),
+		types.T_datetime.ToType(),
+		types.T_int64.ToType(),
+	} {
+		_, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.Error(t, err, input.String())
+	}
+}
+
+func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
+	inputs := []types.Type{
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 32, 0),
+		types.T_blob.ToType(),
+		types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+	}
+	for _, input := range inputs {
+		resolved, err := GetFunctionByName(context.Background(), "json_unquote", []types.Type{input})
+		require.NoError(t, err, input.String())
+		_, needCast := resolved.ShouldDoImplicitTypeCast()
+		require.False(t, needCast, input.String())
+
+		proc := testutil.NewProcess(t)
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			JsonUnquote)
+		succeed, info := nullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
+
+		nonNullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(input, []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+			JsonUnquote)
+		succeed, info = nonNullCase.Run()
+		require.True(t, succeed, "%s: %s", input, info)
+	}
+}
+
+func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{"", ""}, []bool{false, false}),
+			JsonUnquote)
+		require.NoError(t, tc.parameters[0].SetBinaryStringRowsWithMP([]bool{true, false}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"text", ""}, []bool{false, true}),
+			JsonUnquote).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		})
+		require.NoError(t, tc.parameters[0].SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("prepared text binary text rebind", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"plain"}, []bool{false}),
+			JsonUnquote)
+
+		run := func(binary bool) error {
+			tc.parameters[0].SetIsBinaryString(binary)
+			require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+			return JsonUnquote(tc.parameters, tc.result, proc, tc.fnLength, nil)
+		}
+		assertResult := func() {
+			value, isNull := vector.GenerateFunctionStrParameter(tc.GetResultVectorDirectly()).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, "plain", string(value))
+		}
+
+		require.NoError(t, run(false))
+		assertResult()
+		require.Error(t, run(true))
+		require.NoError(t, run(false))
+		assertResult()
+	})
 }
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
@@ -5611,12 +5909,134 @@ func initFromBase64TestCase() []tcTemp {
 
 func TestFromBase64(t *testing.T) {
 	testCases := initFromBase64TestCase()
+	// Keep NULL and malformed rows between valid rows: each row is independent.
+	rows := []struct {
+		input, want         string
+		inputNull, wantNull bool
+	}{
+		{input: "YQ==", want: "a"},
+		{input: "YWI=", want: "ab"},
+		{inputNull: true, wantNull: true},
+		{input: "YWJj", want: "abc"},
+		{input: "invalid!", wantNull: true},
+		{input: "Y Q\t=\r=\n", want: "a"},
+		{input: "", want: ""},
+		{input: "YQ", wantNull: true},
+		{input: "AAEC/w==", want: "\x00\x01\x02\xff"},
+		{input: " \t\r\n", want: ""},
+		{input: "YQ==Yg==", wantNull: true},
+		{input: "YQ\v\f\xa0==", want: "a"},
+		{input: "YQ\u00a0==", wantNull: true},
+		{input: "YQ====", wantNull: true},
+		{input: strings.Repeat("YWJj", 32), want: strings.Repeat("abc", 32)},
+		{input: "YWJj", want: "abc"},
+	}
+	inputs, wants := make([]string, len(rows)), make([]string, len(rows))
+	inputNulls, wantNulls := make([]bool, len(rows)), make([]bool, len(rows))
+	for i, row := range rows {
+		inputs[i] = row.input
+		wants[i] = row.want
+		inputNulls[i] = row.inputNull
+		wantNulls[i] = row.wantNull
+	}
+	testCases = append(testCases, tcTemp{
+		info:   "padding, whitespace, invalid and NULL rows preserve batch cardinality",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), inputs, inputNulls)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, wants, wantNulls),
+	}, tcTemp{
+		info:   "empty batch",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{}, nil),
+	}, tcTemp{
+		info:   "constant padded input",
+		inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"YQ=="}, nil)},
+		expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{"a"}, nil),
+	})
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestFromBase64SelectionAndReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Cross both input/output inline-storage boundaries so aliasing is observable.
+	values := []string{" " + strings.Repeat("YWJj", 32), "YWI=", "YWJj"}
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)},
+		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), FromBase64)
+	t.Cleanup(func() {
+		for _, v := range tc.parameters {
+			v.Free(proc.Mp())
+		}
+		tc.result.Free()
+	})
+	for _, scenario := range []struct {
+		mask  *FunctionSelectList
+		nulls [3]bool
+	}{
+		{mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, nulls: [3]bool{true, false, false}},
+		{mask: &FunctionSelectList{AllNull: true}, nulls: [3]bool{true, true, true}},
+		{mask: nil, nulls: [3]bool{false, false, false}},
+	} {
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		require.NoError(t, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, scenario.mask))
+		result := tc.result.GetResultVector()
+		require.Equal(t, len(values), result.Length())
+		for i, want := range []string{strings.Repeat("abc", 32), "ab", "abc"} {
+			masked := scenario.nulls[i]
+			require.Equal(t, masked, result.IsNull(uint64(i)))
+			if !masked {
+				require.Equal(t, want, result.GetStringAt(i))
+			}
+			require.Equal(t, values[i], tc.parameters[0].GetStringAt(i), "input must remain immutable")
+		}
+	}
+}
+
+func BenchmarkFromBase64(b *testing.B) {
+	for _, size := range []int{12, 1024} {
+		for _, whitespace := range []bool{false, true} {
+			b.Run(fmt.Sprintf("bytes=%d/whitespace=%t", size, whitespace), func(b *testing.B) {
+				proc := testutil.NewProcess(b)
+				encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'a'}, size))
+				if whitespace {
+					encoded = " \t" + encoded + "\r\n"
+				}
+				values := make([]string, 128)
+				for i := range values {
+					values[i] = encoded
+				}
+				tc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)},
+					NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), FromBase64)
+				defer tc.parameters[0].Free(proc.Mp())
+				defer tc.result.Free()
+				// Reject deceptively fast implementations that return early or
+				// produce NULL instead of decoding every whitespace-bearing row.
+				require.NoError(b, tc.result.PreExtendAndReset(tc.fnLength))
+				require.NoError(b, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil))
+				require.Equal(b, len(values), tc.result.GetResultVector().Length())
+				for i := range values {
+					require.False(b, tc.result.GetResultVector().IsNull(uint64(i)))
+					require.Equal(b, strings.Repeat("a", size), tc.result.GetResultVector().GetStringAt(i))
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(size * len(values)))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
+						b.Fatal(err)
+					}
+					if err := FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 

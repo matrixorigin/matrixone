@@ -994,6 +994,7 @@ var (
 		"mo_shards_metadata":            0,
 		"mo_cdc_task":                   0,
 		"mo_cdc_watermark":              0,
+		"mo_cdc_snapshot":               0,
 		catalog.MO_TABLE_STATS:          0,
 		catalog.MO_ACCOUNT_LOCK:         0,
 		catalog.MO_MERGE_SETTINGS:       0,
@@ -1050,6 +1051,7 @@ var (
 		MoCatalogMoCacheDDL,
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
+		MoCatalogMoCdcSnapshotDDL,
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
 		MoCatalogMoAccountLockDDL,
@@ -5742,7 +5744,36 @@ func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses 
 		// authorization objects.
 		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
 	}
-	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+	if err == nil || ot != tree.OBJECT_TYPE_TABLE || !isMissingPrivilegeObjectError(err) ||
+		(pl.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE && pl.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
+		return privLevel, objID, err
+	}
+
+	// Subscription relations are resolved from the publisher catalog at query
+	// time and deliberately have no subscriber-side mo_tables row. Therefore an
+	// exact grant cannot be represented by the current mo_role_privs object key.
+	// Diagnose this explicitly instead of reporting the published relation as a
+	// missing local table. Database-wide grants remain alias-scoped through the
+	// subscriber's local mo_database row; publication table lists provide the
+	// supported table-level boundary.
+	dbName := pl.DbName
+	if pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+		dbName = ses.GetDatabaseName()
+	}
+	if dbName == "" {
+		return privLevel, objID, err
+	}
+	_, dbType, dbTypeErr := getDbIdAndType(ctx, bh, dbName)
+	if dbTypeErr == nil && dbType == catalog.SystemDBTypeSubscription {
+		return 0, 0, moerr.NewInvalidInputf(
+			ctx,
+			`exact table grants on subscription database "%s" are unsupported; grant on "%s.*" or narrow the publication table list instead`,
+			dbName,
+			dbName,
+		)
+	}
+	return privLevel, objID, err
 }
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(
@@ -10632,7 +10663,7 @@ func inheritViewMetadataRevalidation(
 	serviceID string,
 	accountID uint32,
 ) error {
-	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(ctx, bh); err != nil {
 		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
 			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
 			return nil
@@ -10772,6 +10803,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
@@ -11408,25 +11442,22 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
-	// watch and cancel
-	// TODO use context.AfterFunc in go1.21
 	funcCtx, cancel := context.WithCancel(execCtx.reqCtx)
-	defer cancel()
-	go func() {
-		defer loadLocalReader.Close()
-
-		<-funcCtx.Done()
-	}()
-
 	// write to pipe
 	loadLocalErrGroup := new(errgroup.Group)
+	defer func() {
+		cancel()
+		_ = loadLocalReader.Close()
+		// Also join on file-service panic before session state can be reused.
+		_ = loadLocalErrGroup.Wait()
+	}()
 	loadLocalErrGroup.Go(func() error {
 		param := &tree.ExternParam{
 			ExParamConst: tree.ExParamConst{
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ses, execCtx, param, loadLocalWriter, loadLocalReader)
+		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter, loadLocalReader)
 	})
 
 	// read from pipe and upload
@@ -11443,6 +11474,9 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 	fileService := getPu(ses.GetService()).FileService
 	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
 	err := fileService.Write(execCtx.reqCtx, ioVector)
+	if err != nil {
+		cancel()
+	}
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err

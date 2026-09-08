@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -183,6 +184,56 @@ func TestCDCRaceTxn(t *testing.T) {
 			}}, nil)
 			// Do not release, cancel, or join: registered cleanup owns all three.
 		})
+	})
+}
+
+func TestCDCWaiterProbe(t *testing.T) {
+	t.Run("requires the contender transaction", func(t *testing.T) {
+		found, observedTxnIDs := cdcWaiterMatches([]lockpb.WaitTxn{
+			{TxnID: []byte("unrelated")},
+		}, []byte("contender"))
+		require.False(t, found)
+		require.Equal(t, []string{"756e72656c61746564"}, observedTxnIDs)
+
+		found, observedTxnIDs = cdcWaiterMatches([]lockpb.WaitTxn{
+			{TxnID: []byte("unrelated")},
+			{TxnID: []byte("contender")},
+		}, []byte("contender"))
+		require.True(t, found)
+		require.Equal(t, []string{"756e72656c61746564", "636f6e74656e646572"}, observedTxnIDs)
+	})
+
+	t.Run("cancellation joins the in-flight probe", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		probeEntered := make(chan struct{})
+		done := make(chan struct{})
+		var observedTxnIDs []string
+		var err error
+		go func() {
+			observedTxnIDs, err = waitForCDCWaiter(ctx, func(ctx context.Context) (bool, []string, error) {
+				close(probeEntered)
+				<-ctx.Done()
+				return false, []string{"blocked"}, ctx.Err()
+			})
+			close(done)
+		}()
+
+		joinCtx, joinCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer joinCancel()
+		select {
+		case <-probeEntered:
+		case <-joinCtx.Done():
+			t.Fatal("waiter probe did not start")
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-joinCtx.Done():
+			t.Fatal("waiter probe did not stop after cancellation")
+		}
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, []string{"blocked"}, observedTxnIDs)
 	})
 }
 
