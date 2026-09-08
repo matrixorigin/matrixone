@@ -1,8 +1,9 @@
-- Status: drafted
+- Status: in-progress
 - Start Date: 2026-09-04
 - Authors: iamlinjunhong
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/28139
 - Issue for this RFC: https://github.com/matrixorigin/matrixone/issues/27891
+- Design-review decision: pending independent approval
 
 # Filtered IVFFLAT INCLUDE Top-K reads
 
@@ -103,74 +104,71 @@ membership controls. Existing
 INCLUDE SQL path.  These are functional acceptance tests; they are not a
 substitute for the scale gate below.
 
-The performance acceptance protocol is one warm-up followed by three measured
-rounds on the exact pushed PR head on the CA 10M lane: 10,000,000 rows,
-`VECF64(1024)`, IVF `lists=256`, `probe_limit=10`, each of selectivity 1/10/50
-percent and K=1/10/100.  It must record the warm-round p50, returned rows, and
-recall against a separate exact `mode=force` oracle for INCLUDE, PRE, and POST.
-It must separately record the first cold query for every cell.  INCLUDE must
-retain its exact residual-predicate result and its warm-round p50 must not
-exceed 10 times the fastest corresponding PRE/POST warm-round p50.  The earlier
-main-only run is not evidence for this PR head.  The available exact-head run is
-[33941908938/job/101251498026](https://github.com/matrixorigin/mo-auto-test/actions/runs/33941908938/job/101251498026),
-which verified MatrixOne `a51969dd979974c394340006d32ad6b8c0e20745`; its
-[attempt-2 artifact](https://github.com/matrixorigin/mo-auto-test/actions/runs/33941908938/artifacts/9964172403)
-contains the raw plans, JSONL, and summary.  It did **not** execute a separate
-warm-up: its rounds 1--3 are the only executions.  Consequently it is not an
-execution of this acceptance protocol and does not establish a cold-start bound
-or a protocol-acceptance result.  The entries below are retained as exact-head
-diagnostic evidence only: `all-three-round p50 ms / returned rows / recall`.
-The displayed p50 happens to select a warm sample in the affected cells, so it
-must not be read as hiding or bounding round 1.  Comparisons use the fastest
-PRE/POST p50 for the same cell.
+The performance acceptance protocol is one recorded cold/warm-up query followed
+by three measured rounds on the exact pushed PR head on the CA 10M lane:
+10,000,000 rows, `VECF64(1024)`, IVF `lists=256`, `probe_limit=10`, each of
+selectivity 1/10/50 percent and K=1/10/100.  It records the measured p50,
+returned rows, and recall against a separate exact `mode=force` oracle for
+INCLUDE, PRE, and POST, and records the first cold query separately for every
+cell.  INCLUDE must retain its exact residual-predicate result and its measured
+p50 must not exceed 10 times the fastest corresponding PRE/POST measured p50.
+
+This protocol was executed successfully against MatrixOne
+`c492e554eb201fa00deaf4205956a3728278d3a2` in
+[run 34172928231, job 101896622990](https://github.com/matrixorigin/mo-auto-test/actions/runs/34172928231/job/101896622990),
+using the trusted lane revision `c7a9608a43711b0db3407dd36fb44836aa67a81b`.
+The [artifact](https://github.com/matrixorigin/mo-auto-test/actions/artifacts/10037522712)
+contains 108 query events: 27 cells with one `warmup`/`cold_start` event and
+three `measured` events each.  `cold_start_recorded_separately` is true and the
+validator reported no gate failures.  The table below reports the p50 of the
+three measured rounds as `latency ms / rows / recall`; the ratio is INCLUDE
+against the faster PRE/POST result for the same cell.
 
 | Selectivity | K | INCLUDE p50 / rows / recall | PRE p50 / rows / recall | POST p50 / rows / recall | Artifact p50 ratio |
 | --- | ---: | --- | --- | --- | --- |
-| 1% | 1 | 67.9 / 1 / 0.00 | 324.5 / 1 / 0.00 | 313.2 / 0 / 0.00 | 0.22x |
-| 1% | 10 | 74.1 / 10 / 0.10 | 445.8 / 10 / 0.00 | 326.4 / 0 / 0.00 | 0.23x |
-| 1% | 100 | 126.9 / 100 / 0.05 | 350.4 / 100 / 0.04 | 329.7 / 0 / 0.00 | 0.38x |
-| 10% | 1 | 132.3 / 1 / 0.00 | 876.8 / 1 / 0.00 | 324.9 / 1 / 0.00 | 0.41x |
-| 10% | 10 | 116.6 / 10 / 0.10 | 940.2 / 10 / 0.10 | 321.3 / 4 / 0.10 | 0.36x |
-| 10% | 100 | 138.4 / 100 / 0.09 | 906.6 / 100 / 0.08 | 320.8 / 11 / 0.08 | 0.43x |
-| 50% | 1 | 264.1 / 1 / 0.00 | 619.7 / 1 / 0.00 | 305.7 / 1 / 0.00 | 0.86x |
-| 50% | 10 | 266.0 / 10 / 0.10 | 585.5 / 10 / 0.00 | 323.5 / 10 / 0.00 | 0.82x |
-| 50% | 100 | 266.5 / 100 / 0.14 | 542.4 / 71 / 0.12 | 329.6 / 71 / 0.12 | 0.81x |
+| 1% | 1 | 71.1 / 1 / 0.00 | 522.6 / 1 / 0.00 | 311.0 / 0 / 0.00 | 0.23x |
+| 1% | 10 | 77.3 / 10 / 0.10 | 485.6 / 10 / 0.00 | 336.6 / 0 / 0.00 | 0.23x |
+| 1% | 100 | 98.1 / 100 / 0.08 | 552.0 / 100 / 0.06 | 340.7 / 0 / 0.00 | 0.29x |
+| 10% | 1 | 139.6 / 1 / 0.00 | 1254.8 / 1 / 0.00 | 349.9 / 0 / 0.00 | 0.40x |
+| 10% | 10 | 144.2 / 10 / 0.00 | 1208.6 / 10 / 0.00 | 323.3 / 2 / 0.00 | 0.45x |
+| 10% | 100 | 157.0 / 100 / 0.08 | 1211.9 / 100 / 0.06 | 343.4 / 11 / 0.06 | 0.46x |
+| 50% | 1 | 308.6 / 1 / 1.00 | 588.2 / 1 / 0.00 | 334.5 / 1 / 0.00 | 0.92x |
+| 50% | 10 | 280.3 / 10 / 0.10 | 551.4 / 10 / 0.20 | 348.3 / 10 / 0.20 | 0.80x |
+| 50% | 100 | 294.6 / 100 / 0.05 | 510.8 / 72 / 0.09 | 340.3 / 72 / 0.09 | 0.87x |
 
-The artifact records a material first-query cold path.  Its INCLUDE round-1
-samples were:
+The same artifact records the first cold query separately for all 27 cells.  The
+table below reports those rows as `latency ms / rows / recall`; these samples are
+not included in the measured p50 or the 10x warm-performance gate.
 
-| Selectivity | K=1 | K=10 | K=100 |
-| --- | ---: | ---: | ---: |
-| 1% | 247951.0 ms | 157200.7 ms | 117466.1 ms |
-| 10% | 70130.7 ms | 40417.0 ms | 14200.2 ms |
-| 50% | 2106.1 ms | 318.6 ms | 259.4 ms |
+| Selectivity | K | INCLUDE cold / rows / recall | PRE cold / rows / recall | POST cold / rows / recall |
+| --- | ---: | --- | --- | --- |
+| 1% | 1 | 256889.9 / 1 / 0.00 | 97465.7 / 1 / 0.00 | 349.7 / 0 / 0.00 |
+| 1% | 10 | 186663.1 / 10 / 0.10 | 99886.1 / 10 / 0.00 | 352.2 / 0 / 0.00 |
+| 1% | 100 | 127961.0 / 100 / 0.08 | 87851.1 / 100 / 0.06 | 344.3 / 0 / 0.00 |
+| 10% | 1 | 86942.1 / 1 / 0.00 | 84313.2 / 1 / 0.00 | 307.9 / 0 / 0.00 |
+| 10% | 10 | 21350.7 / 10 / 0.00 | 70601.7 / 10 / 0.00 | 312.7 / 2 / 0.00 |
+| 10% | 100 | 9536.3 / 100 / 0.08 | 10855.0 / 100 / 0.06 | 350.8 / 11 / 0.06 |
+| 50% | 1 | 1578.9 / 1 / 1.00 | 3707.1 / 1 / 0.00 | 318.1 / 1 / 0.00 |
+| 50% | 10 | 281.5 / 10 / 0.10 | 543.9 / 10 / 0.20 | 315.6 / 10 / 0.20 |
+| 50% | 100 | 278.2 / 100 / 0.05 | 516.7 / 72 / 0.09 | 704.7 / 72 / 0.09 |
 
-For the 1% cells, the corresponding round-2/round-3 samples were 67.9/67.4 ms
-(K=1), 74.1/67.7 ms (K=10), and 79.2/126.9 ms (K=100).  The p95 values in the
-raw summary preserve the same cold samples.  This RFC makes no claim that a
-first query is acceptably bounded: the changed reader contract covers
-filter-before-heap, bounded winner retention, and fused ObjectIO reads; it does
-not introduce cache priming, cache admission, or a cold-query latency guarantee.
-The artifact alone cannot attribute the cold cost to a particular component.
-The conservative operational disposition is therefore to keep cold-start
-performance unaccepted until the stated warm-up-plus-three-round protocol is
-run and its cold samples are reported separately; no functional correctness or
-steady-state performance claim above is a substitute for that evidence.
-
-The job's terminal `result_cardinality` failure is not an INCLUDE result or
-performance failure: it unconditionally required the approximate PRE/POST
-baselines to return K rows.  Seven baseline cells were deterministically short
-(for example POST 1% returned 0 for K=1/10/100), while every INCLUDE cell
-returned K and all nine diagnostic p50 comparisons were within 10x.  This validator-contract
-failure is tracked in [#27891](https://github.com/matrixorigin/matrixone/issues/27891);
-the issue also records the independent main-lane observation that approximate
-IVF must not be compared as an exact `mode=force` result.
+The cold path is materially longer for selective INCLUDE and PRE cells (for
+example, INCLUDE 1% is 256.9 s / 186.7 s / 128.0 s for K=1/10/100).  The
+measured acceptance gate deliberately does not claim a cold-start latency bound:
+the changed reader contract covers filter-before-heap, bounded winner retention,
+and fused ObjectIO reads, but does not introduce cache priming, cache admission,
+or a cold-query SLA.  The cold samples are disclosed for operations and future
+capacity work; they are not hidden by the measured p50.  Approximate PRE/POST
+short rows are valid observations under `probe_limit=10`, while every INCLUDE
+measured cell returned K rows and every performance ratio passed the `<=10x`
+gate.  The previous run 33941908938 remains diagnostic-only historical evidence;
+it is not used as the acceptance result for this head.
 
 ## Drawbacks and unresolved questions
 
 Fusion can increase the peak pin footprint of one request, particularly for
-wide deferred projections and concurrent scans; the capacity model above is
-the admission constraint.  The available CA artifact is diagnostic evidence,
-not the required warm/cold operational acceptance evidence.  This RFC remains
-drafted until an independent design review advances it under the repository RFC
-process; that approval is independent from the exact-head diagnostic evidence.
+wide deferred projections and concurrent scans; the capacity model above is the
+admission constraint.  The exact-head warm/cold acceptance evidence is now
+recorded, while the design-review decision remains pending independent approval.
+The RFC is `in-progress` as required by the repository process after review; it
+does not self-certify independent approval.
