@@ -270,6 +270,12 @@ func (c *Compile) FreezeResultMetadata() {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	// Reset only supports the TP topology admitted by prepare-time compilation.
+	// AP scan state and worker placement belong to one execution; updating the
+	// transaction offset cannot make them valid for another execution.
+	if !c.IsTpQuery() {
+		return cantCompileForPrepareErr
+	}
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
 			return err
@@ -505,6 +511,7 @@ func (c *Compile) clear() {
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 
+	c.execType = plan2.ExecTypeTP
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
