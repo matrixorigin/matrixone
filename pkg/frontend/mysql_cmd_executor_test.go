@@ -5078,6 +5078,24 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 	}
 }
 
+func TestPrepareDataBranchCanExecuteInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+
+	for _, stmt := range []tree.Statement{
+		tree.NewPrepareStmt("merge", &tree.DataBranchMerge{}),
+		tree.NewPrepareStmt("pick", &tree.DataBranchPick{}),
+		tree.NewPrepareString("merge_sql", "data branch merge src into dst when conflict accept"),
+		tree.NewPrepareString("pick_sql", "data branch pick src into dst keys(?) when conflict accept"),
+	} {
+		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, allowed)
+	}
+}
+
 func TestDataBranchMergePickTransactionFallback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -8507,6 +8525,65 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+
+	for _, tt := range []struct {
+		name       string
+		sql        string
+		want       any
+		paramCount int
+	}{
+		{
+			name: "data branch create table",
+			sql:  "data branch create table branch from base",
+			want: &tree.DataBranchCreateTable{},
+		},
+		{
+			name: "data branch create database",
+			sql:  "data branch create database branch_db from base_db",
+			want: &tree.DataBranchCreateDatabase{},
+		},
+		{
+			name: "data branch diff",
+			sql:  "data branch diff branch against base output count",
+			want: &tree.DataBranchDiff{},
+		},
+		{
+			name: "data branch merge",
+			sql:  "data branch merge branch into base when conflict accept",
+			want: &tree.DataBranchMerge{},
+		},
+		{
+			name:       "data branch pick parameter",
+			sql:        "data branch pick branch into base keys(?) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name: "data branch delete table",
+			sql:  "data branch delete table branch",
+			want: &tree.DataBranchDeleteTable{},
+		},
+		{
+			name: "data branch delete database",
+			sql:  "data branch delete database branch_db",
+			want: &tree.DataBranchDeleteDatabase{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tt.sql),
+			})
+			require.NoError(t, err)
+			require.Nil(t, resp)
+
+			stmtName := getPrepareStmtName(ses.GetLastStmtId())
+			prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+			require.NoError(t, err)
+			require.IsType(t, tt.want, prepared.PrepareStmt)
+			require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), tt.paramCount)
+		})
+	}
 
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{"review27190.t": "delete from review27190.t"}

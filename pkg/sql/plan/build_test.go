@@ -133,6 +133,57 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
+func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		paramCount int
+	}{
+		{
+			name: "create table",
+			sql:  "prepare stmt from 'data branch create table branch from base'",
+		},
+		{
+			name: "create database",
+			sql:  "prepare stmt from 'data branch create database branch_db from base_db'",
+		},
+		{
+			name: "diff",
+			sql:  "prepare stmt from 'data branch diff branch against base output count'",
+		},
+		{
+			name: "merge",
+			sql:  "prepare stmt from 'data branch merge branch into base when conflict accept'",
+		},
+		{
+			name:       "pick values parameter",
+			sql:        "prepare stmt from 'data branch pick branch into base keys(?) when conflict accept'",
+			paramCount: 1,
+		},
+		{
+			name: "delete table",
+			sql:  "prepare stmt from 'data branch delete table branch'",
+		},
+		{
+			name: "delete database",
+			sql:  "prepare stmt from 'data branch delete database branch_db'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false), t, tt.sql)
+			require.NoError(t, err)
+			prepare := p.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.NotNil(t, prepare.GetPlan())
+			require.Nil(t, prepare.GetPlan().GetQuery())
+			require.Nil(t, prepare.GetPlan().GetDdl())
+			require.Equal(t, tt.paramCount, len(prepare.GetParamTypes()))
+		})
+	}
+}
+
 func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t,

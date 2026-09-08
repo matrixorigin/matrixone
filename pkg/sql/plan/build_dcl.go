@@ -19,6 +19,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -54,9 +55,13 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
-	case *tree.AnalyzeStmt:
-		// ANALYZE is executed entirely by the frontend. Keep an inner plan as the
-		// prepared-statement carrier, but do not make the engine compile it.
+	case *tree.AnalyzeStmt,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		// These statements are executed entirely by the frontend. Keep an inner
+		// plan as the prepared-statement carrier, but do not make the engine
+		// compile it.
 		return &Plan{}, nil, nil
 	default:
 		p, err := BuildPlan(ctx, stmt, true)
@@ -123,6 +128,11 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if dataBranchParamTypes, err := dataBranchPickPrepareParamTypes(ctx, preparedStmt); err != nil {
+		return nil, err
+	} else if dataBranchParamTypes != nil {
+		paramTypes = dataBranchParamTypes
+	}
 	viewSchemas, err := collectPrepareViewSchemas(ctx)
 	if err != nil {
 		return nil, err
@@ -159,6 +169,40 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+// dataBranchPickPrepareParamTypes returns the parameter metadata for DATA
+// BRANCH PICK value keys. These statements execute in the frontend and have no
+// query plan for resetPreparePlan to inspect.
+func dataBranchPickPrepareParamTypes(ctx CompilerContext, stmt tree.Statement) ([]int32, error) {
+	pick, ok := stmt.(*tree.DataBranchPick)
+	if !ok || pick.Keys == nil || pick.Keys.Type != tree.PickKeysValues {
+		return nil, nil
+	}
+
+	paramTypes := make([]int32, 0, len(pick.Keys.KeyExprs))
+	for _, expr := range pick.Keys.KeyExprs {
+		param, ok := unwrapDataBranchPickParam(expr)
+		if !ok {
+			continue
+		}
+		paramTypes = append(paramTypes, int32(types.T_varchar))
+		if param.Offset != len(paramTypes) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
+		}
+	}
+	return paramTypes, nil
+}
+
+func unwrapDataBranchPickParam(expr tree.Expr) (*tree.ParamExpr, bool) {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			param, ok := expr.(*tree.ParamExpr)
+			return param, ok
+		}
+		expr = paren.Expr
+	}
 }
 
 func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*plan.ObjectRef, error) {
