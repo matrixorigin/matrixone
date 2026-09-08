@@ -59,6 +59,7 @@ func startConnectionTracking() (err error) {
 		netfilter.GroupCTDestroy,
 	})
 	if err != nil {
+		_ = c.Close()
 		return err
 	}
 
