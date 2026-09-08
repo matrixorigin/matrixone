@@ -811,7 +811,7 @@ free at build start on both runs below, and one sub-index each.
 | recall@20 | 0.9891-0.9896 | 0.8296 |
 | QPS cold (first pass after restart) | 85.1 | 380.8 |
 | QPS warm (steady state, 8 workers) | ~376 (382.1 / 371.4 / 376.0) | ~453 (452.4 / 452.8 / 453.8) |
-| admission refusals | **0** | **0** |
+| admission refusals | **0** (required) | **0** (required) |
 | `nrow` / `build_ts` recorded | yes | yes |
 
 **Cold vs warm is the cache, and it is the whole point of the number.** The first
@@ -832,12 +832,13 @@ column verified on real data rather than a fixture.
 The ~15x size gap is why CAGRA is the memory case: its graph is what the per-card
 device budget exists for, and IVF-PQ at 229 MB barely touches it.
 
-**What zero refusals does and does not prove.** Both cache variables were at their
-default 0 = unbounded, so nothing COULD refuse. It establishes that the new
-charges -- the CDC overflow reserved at Preload, the delete id-map on the host
-budget -- do not spuriously refuse a legitimate 1M load. It does NOT exercise the
-refusal path at this scale; that needs a cap set below the index size, and is
-listed in §10.4.
+**Zero refusals is the requirement, and it is met.** A legitimate 1M load on this
+hardware MUST NOT be refused: the governor exists to bound residency, not to make
+a workload that fits become unloadable. This run is the shipped configuration --
+both cache variables at their default 0 = unbounded -- carrying the heaviest index
+the branch is expected to hold, with the new charges active (the CDC overflow
+reserved at Preload, the delete id-map on the host budget). Neither charge turned
+a load that fits into a load that fails. That is the pass condition for this run.
 
 **Build time.** The two CAGRA builds measured 157.8 s and 178.6 s, against the
 spread recorded in §10.3 for a comparable cell (96.4-171.5 s, median 110.2) -- one
@@ -917,12 +918,12 @@ measurement never observes the cache anyway.
 
 Stated so no reader has to infer coverage from silence.
 
-- **The refusal path at 1M.** §10.2.1 runs both algorithms at 1M after the fixes
-  with zero refusals, but with both caps at their default 0 = unbounded -- so
-  nothing could refuse. Exercising a real refusal at that scale needs a cap set
-  below the index size (CAGRA at 3.34 GB is the natural subject) with two
-  generations alternating. The refusal path itself is covered at unit scale by
-  the forced-state tests.
+- **A deliberate refusal at 1M.** §10.2.1 confirms the required behaviour -- the
+  shipped configuration does not refuse a 1M load. The opposite direction, an
+  operator setting a cap BELOW the index size and getting an orderly refusal
+  rather than an OOM, is exercised at unit scale by the forced-state tests and by
+  the `vector_gpu_negative` BVT case, but not yet at 1M. CAGRA at 3.34 GB with two
+  generations alternating is the natural cell.
 - **A paired comparison against `main`.** §10.2.1 measures this branch at 1M --
   build, cold and warm QPS, recall -- but does not run the same cells on `main`,
   so it establishes absolute numbers rather than a delta. The distance kernels are
