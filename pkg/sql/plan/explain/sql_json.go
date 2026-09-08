@@ -808,12 +808,13 @@ func sqlJSONBoundTableAlias(node *plan.Node) string {
 		if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) {
 			continue
 		}
-		candidate := col.TblName
+		candidate := ""
+		name := strings.TrimSpace(col.Name)
+		if dot := strings.LastIndexByte(name, '.'); dot > 0 {
+			candidate = name[:dot]
+		}
 		if candidate == "" {
-			name := strings.TrimSpace(col.Name)
-			if dot := strings.LastIndexByte(name, '.'); dot > 0 {
-				candidate = name[:dot]
-			}
+			candidate = col.TblName
 		}
 		if candidate == "" || sqlJSONNameInList(candidate, physicalNames) {
 			continue
