@@ -2821,6 +2821,23 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 	return clone
 }
 
+func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
+	return &plan.Default{
+		Expr: &Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
+					Value: &plan.Literal_U32Val{U32Val: catalog.System_Account},
+				},
+			},
+			Typ: plan.Type{
+				Id:          colType.Id,
+				NotNullable: true,
+			},
+		},
+		NullAbility: false,
+	}
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -3327,9 +3344,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// add cluster table attribute
 	if stmt.IsClusterTable {
 		internal := defines.IsInternalExecutor(ctx.GetContext())
-		_, has := colMap[util.GetClusterTableAttributeName()]
+		colDef, has := colMap[util.GetClusterTableAttributeName()]
 		if has && !internal {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		if has && colDef.Default.GetExpr() == nil {
+			// SHOW CREATE renders the physical account_id column but deliberately
+			// omits its storage-only default. TRUNCATE and unconditional DELETE
+			// replay that DDL through the internal executor, so restore the
+			// system-managed default before publishing the replacement table.
+			colDef.Default = makeClusterTableAttributeDefault(colDef.Typ)
 		}
 		if !has {
 			colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
@@ -3341,21 +3365,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
 				NotNull: true,
-				Default: &plan.Default{
-					Expr: &Expr{
-						Expr: &plan.Expr_Lit{
-							Lit: &Const{
-								Isnull: false,
-								Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
-							},
-						},
-						Typ: plan.Type{
-							Id:          colType.Id,
-							NotNullable: true,
-						},
-					},
-					NullAbility: false,
-				},
+				Default: makeClusterTableAttributeDefault(colType),
 				Comment: "the account_id added by the mo",
 			}
 			colMap[util.GetClusterTableAttributeName()] = colDef
