@@ -4996,12 +4996,18 @@ func executeStmtWithWorkspace(ses FeSession,
 	//1. start txn
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
+	implicitCommitBefore := execCtx.implicitCommitBefore
 	execCtx.txnOpt.Close()
-	effectiveStmt, effectiveDefaultDatabase, err := effectiveStatementForTxn(
-		execCtx.reqCtx, ses, execCtx.stmt,
-	)
-	if err != nil {
-		return err
+	execCtx.txnOpt.implicitCommitBefore = implicitCommitBefore
+	effectiveStmt := execCtx.effectiveTxnStatement
+	effectiveDefaultDatabase := execCtx.effectiveTxnDefaultDatabase
+	if effectiveStmt == nil {
+		effectiveStmt, effectiveDefaultDatabase, err = effectiveStatementForTxn(
+			execCtx.reqCtx, ses, execCtx.stmt,
+		)
+		if err != nil {
+			return err
+		}
 	}
 	if effectiveDefaultDatabase == "" {
 		// Binary execution and wrappers may already expose the prepared inner AST;
@@ -5717,6 +5723,30 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement generation. Reset before authorization/admission, then inject
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
+		// Make the current owner visible to the transaction boundary helper before
+		// authorization.  The helper reuses commitUnsafe, which needs the session
+		// for commit context, metrics, temporary-table ownership, and cleanup.
+		execCtx.ses = ses
+		execCtx.proc = proc
+		execCtx.resper = resper
+		execCtx.stmt = stmt
+		// Resolve prepared EXECUTE once at the generation boundary.  A failed
+		// lookup remains on the existing error path and must not commit a prior
+		// transaction merely because the request selected a prepared name.
+		effectiveStmt, effectiveDefaultDatabase, resolveErr := effectiveStatementForTxn(
+			execCtx.reqCtx, ses, stmt,
+		)
+		if resolveErr == nil {
+			if effectiveDefaultDatabase == "" {
+				effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
+			}
+			execCtx.effectiveTxnStatement = effectiveStmt
+			execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
+			if isTopLevelClientStatement(ses, execCtx, currentInput) &&
+				!ses.GetIsInternal() && isImplicitCommitStatement(effectiveStmt) {
+				execCtx.implicitCommitBefore = true
+			}
+		}
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
@@ -5752,6 +5782,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
+		}
+		// Commit only after the current statement has passed local admission and
+		// has a current statement identity. Authorization and plan construction
+		// still run after this boundary, matching TRUNCATE's implicit-commit
+		// contract while keeping instrumentation failures side-effect free.
+		if execCtx.implicitCommitBefore {
+			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
 		}
 
 		statsInfo.Reset()
