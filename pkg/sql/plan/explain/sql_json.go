@@ -559,6 +559,9 @@ func sqlJSONOrderByValues(ctx context.Context, specs []*plan.OrderBySpec, option
 		if err != nil {
 			return nil, err
 		}
+		if expression == "" {
+			return nil, moerr.NewInvalidInputf(ctx, "order by specification %d has no expression", i)
+		}
 		direction := "DEFAULT"
 		if flag&plan.OrderBySpec_ASC != 0 {
 			direction = "ASC"
@@ -789,9 +792,15 @@ func sqlJSONBoundTableAlias(node *plan.Node) string {
 	if node == nil || node.TableDef == nil || len(node.TableDef.Cols) == 0 {
 		return ""
 	}
-	physical := node.TableDef.Name
-	if node.TableDef.OriginalName != "" {
-		physical = node.TableDef.OriginalName
+	physicalNames := make([]string, 0, 4)
+	for _, name := range []string{node.TableDef.Name, node.TableDef.OriginalName} {
+		if name == "" {
+			continue
+		}
+		physicalNames = append(physicalNames, name)
+		if node.TableDef.DbName != "" {
+			physicalNames = append(physicalNames, node.TableDef.DbName+"."+name)
+		}
 	}
 	var alias string
 	for _, expr := range node.ProjectList {
@@ -806,7 +815,7 @@ func sqlJSONBoundTableAlias(node *plan.Node) string {
 				candidate = name[:dot]
 			}
 		}
-		if candidate == "" || strings.EqualFold(candidate, physical) {
+		if candidate == "" || sqlJSONNameInList(candidate, physicalNames) {
 			continue
 		}
 		if alias == "" {
@@ -816,6 +825,15 @@ func sqlJSONBoundTableAlias(node *plan.Node) string {
 		}
 	}
 	return alias
+}
+
+func sqlJSONNameInList(name string, names []string) bool {
+	for _, candidate := range names {
+		if strings.EqualFold(name, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func sqlJSONObjectRefName(ref *plan.ObjectRef) string {
