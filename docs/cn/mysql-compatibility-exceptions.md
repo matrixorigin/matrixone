@@ -15,7 +15,6 @@ This document records cases where MatrixOne behavior differs from MySQL, includi
 **MO Behavior:** MO implicitly converts the TIME value to DATETIME using the current date, then calculates the difference.
 
 **Example:**
-
 ```sql
 SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 -- MySQL: NULL
@@ -32,18 +31,14 @@ SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 
 ## 📋 Related Issues
 
-
-| Issue ID                                                         | Description                                              | Status                                   |
-| ---------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------- |
+| Issue ID | Description | Status |
+|----------|-------------|--------|
 | [#23464](https://github.com/matrixorigin/matrixone/issues/23464) | TIMEDIFF() and SUBTIME() results incompatible with MySQL | TIMEDIFF: MO behavior is more reasonable |
-
 
 ---
 
 ## 📝 Notes
 
 This document clarifies the following situations:
-
 1. Cases where MO provides more user-friendly behavior than MySQL's strict interpretation
 2. Edge cases requiring explicit documentation
-
