@@ -4350,6 +4350,22 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
+				},
+				newOp: func() executeLogicOfOverload { return SubStrIndexDecimal[types.Decimal64] },
+			},
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
+				},
+				newOp: func() executeLogicOfOverload { return SubStrIndexDecimal[types.Decimal128] },
+			},
+			{
+				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return derivedStringReturnType(parameters, 0, types.T_varchar)
