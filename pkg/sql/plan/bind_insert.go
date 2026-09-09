@@ -1842,7 +1842,17 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			if partsEqual(pkeyNames, referencedNames) {
 				lockTableDef = parentTableDef
 				lockObjRef = parentObjRef
-				if len(childExprs) == 1 {
+				useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), parentTableDef)
+				if v2Err != nil {
+					return 0, nil, v2Err
+				}
+				if useV2 {
+					// Parent PK locks must use exactly the same framed identity as
+					// PK probes and writes.  Serializing the original strings here
+					// would allow two collation-equivalent FK values to lock
+					// different identities.
+					lockExpr, err = makePrimaryKeyV2IdentityExprs(parentTableDef, childExprs)
+				} else if len(childExprs) == 1 {
 					lockExpr = childExprs[0]
 				} else {
 					lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", childExprs)
@@ -1879,20 +1889,34 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					if err != nil {
 						return 0, nil, err
 					}
-					keyParts := make([]*plan.Expr, len(childExprs))
-					for i, expr := range childExprs {
-						keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
-						if err != nil {
-							return 0, nil, err
+					useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), lockTableDef)
+					if v2Err != nil {
+						return 0, nil, v2Err
+					}
+					if useV2 {
+						// The resolved hidden unique relation carries the codec
+						// metadata.  Build the same framed key used by the index
+						// probe, including prefix semantics.
+						lockExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(parentTableDef, matchedIndex, childExprs, prefixLengths)
+					} else {
+						keyParts := make([]*plan.Expr, len(childExprs))
+						for i, expr := range childExprs {
+							keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+							if err != nil {
+								return 0, nil, err
+							}
+						}
+						if indexTableStoresSerializedKey(matchedIndex) {
+							lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+							if err != nil {
+								return 0, nil, err
+							}
+						} else {
+							lockExpr = keyParts[0]
 						}
 					}
-					if indexTableStoresSerializedKey(matchedIndex) {
-						lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
-						if err != nil {
-							return 0, nil, err
-						}
-					} else {
-						lockExpr = keyParts[0]
+					if err != nil {
+						return 0, nil, err
 					}
 				}
 			}

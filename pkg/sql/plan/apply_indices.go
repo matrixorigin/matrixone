@@ -2367,6 +2367,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
+	if idxDef != nil && idxDef.Unique {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableNode.TableDef)
+		if err != nil || useV2 {
+			// v2 index keys are framed identities and cannot safely receive a
+			// residual SQL predicate by substituting the raw source value. Keep
+			// the predicate on the base scan until a decoded-key adapter exists.
+			return
+		}
+	}
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
 		// Invalid metadata must not make an optional filter pushdown affect query
@@ -2553,6 +2562,51 @@ func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos i
 
 func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+	if err != nil {
+		return nil, err
+	}
+	if useV2 {
+		// v2 unique index tables store a complete framed identity.  A raw
+		// SQL literal cannot probe that relation, and a partial composite
+		// prefix has no ordering contract in the v2 envelope.  Let the caller
+		// fall back to the base-table path unless every part is constrained.
+		if len(filterPos) != numParts || len(filterPos) == 0 {
+			return nil, moerr.NewNotSupportedNoCtx("v2 unique-key lookup requires equality for every index part")
+		}
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]*plan.Expr, numParts)
+		prefixes := make([]int, numParts)
+		selectivity := 1.0
+		for i, pos := range filterPos {
+			if pos < 0 || int(pos) >= len(filterList) || filterList[pos] == nil || filterList[pos].GetF() == nil || len(filterList[pos].GetF().Args) < 2 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid v2 unique-key equality filter")
+			}
+			filter := filterList[pos]
+			values[i] = DeepCopyExpr(filter.GetF().Args[1])
+			prefixes[i] = prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])]
+			selectivity *= filter.Selectivity
+		}
+		var keyExpr *plan.Expr
+		if numParts == 1 {
+			keyExpr, err = makeCollationKeyV2Expr(values[0], prefixes[0])
+		} else {
+			keyExpr, err = makeCollationCompositeKeyV2Expr(values, prefixes)
+		}
+		if err != nil {
+			return nil, err
+		}
+		leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+		expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leadingColExpr, keyExpr})
+		if err != nil {
+			return nil, err
+		}
+		expr.Selectivity = selectivity
+		return expr, nil
+	}
 	if numParts == 1 { //directly equal
 		expr := DeepCopyExpr(filterList[filterPos[0]])
 		args := expr.GetF().Args
@@ -2606,6 +2660,15 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 }
 
 func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+	if err != nil {
+		return nil, err
+	}
+	if useV2 {
+		// The framed v2 key is an equality identity, not a range-sort key.
+		// Do not fabricate byte ranges that could under- or over-fetch rows.
+		return nil, moerr.NewNotSupportedNoCtx("v2 unique-key lookup does not support range predicates")
+	}
 	numParts := len(idxDef.Parts)
 	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
@@ -3912,6 +3975,15 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	if idxDef != nil && idxDef.Unique {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), node.TableDef)
+		if err != nil || useV2 {
+			// The v2 index stores only the framed identity, not the original
+			// user value. Do not expose that opaque BLOB as an index-only source
+			// for a VARCHAR/TEXT projection.
+			return -1
+		}
+	}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	if !ok {
@@ -4747,6 +4819,18 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		if err != nil {
 			return -1, err
+		}
+		if idxDef.Unique {
+			useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+			if v2Err != nil {
+				return -1, v2Err
+			}
+			if useV2 {
+				// This join rewrite constructs runtime-filter keys from the raw
+				// join columns.  Until it can frame the complete v2 identity, let
+				// the original join plan handle the predicate.
+				continue
+			}
 		}
 		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
 			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {

@@ -7500,6 +7500,115 @@ func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 }
 
+func TestReplaceEqualConditionUsesFramedV2IdentityForUniqueTextIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status"},
+		Unique: true,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	idxTableDef.Cols[0].Typ = collationKeyV2StorageType()
+	idxTableDef.UniqueKeyCodecVersion = v2PlannerMetadata()
+
+	filter := makeStringEqFilterExpr(0, 3, "active")
+	setIndexFilterArgumentType(filter, v2PlannerTextType(uint32(types.CharsetUTF8)))
+	expr, err := builder.replaceEqualCondition(
+		idxDef,
+		[]*planpb.Expr{filter},
+		[]int32{0},
+		42,
+		idxTableDef,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.Equal(t, function.CollationKeyV2FunctionEncodedID, expr.GetF().Args[1].GetF().GetFunc().GetObj())
+	require.Equal(t, "__mo_collation_key_v2", expr.GetF().Args[1].GetF().GetFunc().GetObjName())
+}
+
+func TestReplaceEqualConditionFramesEveryV2CompositePart(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status", "due"},
+		Unique: true,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	idxTableDef.Cols[0].Typ = collationKeyV2StorageType()
+	idxTableDef.UniqueKeyCodecVersion = v2PlannerMetadata()
+
+	filters := []*planpb.Expr{
+		makeStringEqFilterExpr(0, 3, "active"),
+		makeStringEqFilterExpr(0, 4, "2026-07-02 00:00:00"),
+	}
+	for _, filter := range filters {
+		setIndexFilterArgumentType(filter, v2PlannerTextType(uint32(types.CharsetUTF8)))
+	}
+	expr, err := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.Equal(t, function.CollationCompositeKeyV2FunctionEncodedID, expr.GetF().Args[1].GetF().GetFunc().GetObj())
+	require.Len(t, expr.GetF().Args[1].GetF().Args, 6)
+}
+
+func TestV2UniqueLookupRejectsPartialAndRangePredicates(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status", "due"},
+		Unique: true,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	idxTableDef.Cols[0].Typ = collationKeyV2StorageType()
+	idxTableDef.UniqueKeyCodecVersion = v2PlannerMetadata()
+
+	filter := makeStringEqFilterExpr(0, 3, "active")
+	setIndexFilterArgumentType(filter, v2PlannerTextType(uint32(types.CharsetUTF8)))
+	_, err := builder.replaceEqualCondition(
+		idxDef,
+		[]*planpb.Expr{filter},
+		[]int32{0},
+		42,
+		idxTableDef,
+	)
+	require.Error(t, err)
+
+	filter = makeStringInFilterExpr(0, 3, "active", "expiring")
+	setIndexFilterArgumentType(filter, v2PlannerTextType(uint32(types.CharsetUTF8)))
+	_, err = builder.replaceNonEqualCondition(
+		idxDef,
+		filter,
+		42,
+		idxTableDef,
+	)
+	require.Error(t, err)
+}
+
+func TestApplyExtraFiltersOnIndexDoesNotPushRawPredicateForV2UniqueIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	baseTag := builder.genNewBindTag()
+	indexTag := builder.genNewBindTag()
+	node := &planpb.Node{
+		BindingTags: []int32{baseTag},
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(baseTag, 1, "active")},
+	}
+	setIndexFilterArgumentType(node.FilterList[0], v2PlannerTextType(uint32(types.CharsetUTF8)))
+	idxTableDef := makeTestIndexTableDef()
+	idxTableDef.Cols[0].Typ = collationKeyV2StorageType()
+	idxTableDef.UniqueKeyCodecVersion = v2PlannerMetadata()
+	idxTableNode := &planpb.Node{TableDef: idxTableDef, BindingTags: []int32{indexTag}}
+
+	builder.applyExtraFiltersOnIndex(&planpb.IndexDef{Parts: []string{"status"}, Unique: true}, node, idxTableNode, []int32{0})
+	require.Empty(t, idxTableNode.FilterList)
+}
+
 func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{

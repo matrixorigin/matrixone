@@ -1310,14 +1310,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			alias := dmlCtx.aliases[i]
 
 			if pkNeedUpdate[i] {
-				if len(tableDef.Pkey.Names) > 1 {
+				useV2Table, keyErr := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+				if keyErr != nil {
+					return 0, keyErr
+				}
+				if len(tableDef.Pkey.Names) > 1 || useV2Table {
 					newColName2Idx[alias+"."+catalog.CPrimaryKeyColName] = int32(len(newProjNode.ProjectList))
 					args := make([]*plan.Expr, len(tableDef.Pkey.Names))
 
 					for j, colName := range tableDef.Pkey.Names {
-						colPos := int32(oldColName2Idx[alias+"."+colName])
+						colPos, ok := oldColName2Idx[alias+"."+colName]
+						if !ok {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find primary key column %s", colName)
+						}
 						if updateIdx, ok := newColName2Idx[alias+"."+colName]; ok {
-							colPos = int32(updateIdx)
+							colPos = updateIdx
 						}
 
 						args[j] = &plan.Expr{
@@ -1331,7 +1338,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 					}
 
-					newPkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+					var newPkExpr *plan.Expr
+					if useV2Table {
+						newPkExpr, err = makePrimaryKeyV2IdentityExprs(tableDef, args)
+					} else {
+						newPkExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+					}
+					if err != nil {
+						return 0, err
+					}
 					if isMultiTargetUpdate {
 						newPkExpr, err = guardTargetDedupExpr(i, newPkExpr)
 						if err != nil {
@@ -1456,8 +1471,52 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if err != nil {
 					return 0, err
 				}
+				useV2Idx, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+				if err != nil {
+					return 0, err
+				}
 
-				if len(idxDef.Parts) > 1 {
+				if useV2Idx {
+					oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+					oldValues := make([]*plan.Expr, len(idxDef.Parts))
+					newValues := make([]*plan.Expr, len(idxDef.Parts))
+					for partPos, colName := range idxDef.Parts {
+						colName = catalog.ResolveAlias(colName)
+						oldPos, ok := oldColName2Idx[alias+"."+colName]
+						if !ok {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", colName)
+						}
+						newPos, ok := newColName2Idx[alias+"."+colName]
+						if !ok {
+							newPos = oldPos
+						}
+						oldValues[partPos] = &plan.Expr{Typ: selectNode.ProjectList[oldPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectNodeTag, ColPos: oldPos, Name: colName,
+						}}}
+						newValues[partPos] = &plan.Expr{Typ: selectNode.ProjectList[newPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectNodeTag, ColPos: newPos, Name: colName,
+						}}}
+					}
+					oldUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
+					if err != nil {
+						return 0, err
+					}
+					newProjNode.ProjectList = append(newProjNode.ProjectList, oldUkExpr)
+
+					newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+					newUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, newValues, prefixLengths)
+					if err != nil {
+						return 0, err
+					}
+					if isMultiTargetUpdate {
+						newUkExpr, err = guardTargetDedupExpr(i, newUkExpr)
+						if err != nil {
+							return 0, err
+						}
+						dedupKeyPos[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+					}
+					newProjNode.ProjectList = append(newProjNode.ProjectList, newUkExpr)
+				} else if len(idxDef.Parts) > 1 {
 					oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
 					oldArgs := make([]*plan.Expr, len(idxDef.Parts))
 
@@ -1840,6 +1899,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			var leftExpr *plan.Expr
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, err
+			}
+			useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+			if err != nil {
+				return 0, err
+			}
 			if isSpatialIndexDef(idxDef) {
 				colPos := oldColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 				leftExpr = &plan.Expr{
@@ -1851,13 +1918,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						},
 					},
 				}
-			} else {
-				args := make([]*plan.Expr, len(idxDef.Parts))
-
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			} else if useV2 {
+				values := make([]*plan.Expr, len(idxDef.Parts))
+				for partIdx, part := range idxDef.Parts {
+					partName := catalog.ResolveAlias(part)
+					colPos, ok := oldColName2Idx[alias+"."+partName]
+					if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find v2 index part %s", partName)
+					}
+					values[partIdx] = &plan.Expr{Typ: selectNode.ProjectList[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: colPos, Name: partName,
+					}}}
+				}
+				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
 				if err != nil {
 					return 0, err
 				}
+			} else {
+				args := make([]*plan.Expr, len(idxDef.Parts))
 
 				var colPos int32
 				var ok bool
@@ -2201,9 +2279,33 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if err != nil {
 				return 0, err
 			}
+			useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxNode.TableDef)
+			if err != nil {
+				return 0, err
+			}
 			if !idxDef.Unique || idxNeedUpdate[i][j] {
 				var newIdxExpr *plan.Expr
-				if !indexTableStoresSerializedKey(idxDef) {
+				if useV2 && idxDef.Unique {
+					values := make([]*plan.Expr, len(idxDef.Parts))
+					for partIdx, part := range idxDef.Parts {
+						realColName := catalog.ResolveAlias(part)
+						colPos, ok := oldColName2Idx[alias+"."+realColName]
+						if updateIdx, updated := newColName2Idx[alias+"."+realColName]; updated {
+							colPos = updateIdx
+							ok = true
+						}
+						if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find v2 index part %s", realColName)
+						}
+						values[partIdx] = &plan.Expr{Typ: selectNode.ProjectList[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectNodeTag, ColPos: colPos, Name: realColName,
+						}}}
+					}
+					newIdxExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+					if err != nil {
+						return 0, err
+					}
+				} else if !indexTableStoresSerializedKey(idxDef) {
 					realColName := indexPrimaryPartName(idxDef)
 					colPos := int32(oldColName2Idx[alias+"."+realColName])
 					if updateIdx, ok := newColName2Idx[alias+"."+realColName]; ok {
@@ -3521,6 +3623,10 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if err != nil {
 			return 0, nil, err
 		}
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+		if err != nil {
+			return 0, nil, err
+		}
 		makePartExpr := func(node *plan.Node, tag int32, pos int32, partName string) (*plan.Expr, error) {
 			input := &plan.Expr{
 				Typ: node.ProjectList[pos].Typ,
@@ -3532,35 +3638,62 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			}
 			return builder.makeIndexPartExprFromInputExpr(input, partName, prefixLengths)
 		}
-		oldParts := make([]*plan.Expr, len(idxDef.Parts))
-		newParts := make([]*plan.Expr, len(idxDef.Parts))
-		for partPos, rawPart := range idxDef.Parts {
-			part := catalog.ResolveAlias(rawPart)
-			oldPos, ok := physicalOldPosByCol[part]
-			if !ok {
-				return 0, nil, moerr.NewInternalErrorf(
-					builder.GetContext(), "bind update err, can not find colName = %s", part)
+		var oldKey, newKey *plan.Expr
+		if useV2 {
+			oldValues := make([]*plan.Expr, len(idxDef.Parts))
+			newValues := make([]*plan.Expr, len(idxDef.Parts))
+			for partPos, rawPart := range idxDef.Parts {
+				part := catalog.ResolveAlias(rawPart)
+				oldPos, ok := physicalOldPosByCol[part]
+				if !ok {
+					return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", part)
+				}
+				newPos := currentPosByCol[part]
+				oldValues[partPos] = &plan.Expr{Typ: selectNode.ProjectList[oldPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag, ColPos: oldPos, Name: part,
+				}}}
+				newValues[partPos] = &plan.Expr{Typ: selectNode.ProjectList[newPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag, ColPos: newPos, Name: part,
+				}}}
 			}
-			newPos := currentPosByCol[part]
-			oldParts[partPos], err = makePartExpr(selectNode, selectNodeTag, oldPos, part)
+			oldKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-			newParts[partPos], err = makePartExpr(selectNode, selectNodeTag, newPos, part)
+			newKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, newValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-		}
-		oldKey := oldParts[0]
-		newKey := newParts[0]
-		if len(idxDef.Parts) > 1 {
-			oldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", oldParts)
-			if err != nil {
-				return 0, nil, err
+		} else {
+			oldParts := make([]*plan.Expr, len(idxDef.Parts))
+			newParts := make([]*plan.Expr, len(idxDef.Parts))
+			for partPos, rawPart := range idxDef.Parts {
+				part := catalog.ResolveAlias(rawPart)
+				oldPos, ok := physicalOldPosByCol[part]
+				if !ok {
+					return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find colName = %s", part)
+				}
+				newPos := currentPosByCol[part]
+				oldParts[partPos], err = makePartExpr(selectNode, selectNodeTag, oldPos, part)
+				if err != nil {
+					return 0, nil, err
+				}
+				newParts[partPos], err = makePartExpr(selectNode, selectNodeTag, newPos, part)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
-			newKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", newParts)
-			if err != nil {
-				return 0, nil, err
+			oldKey = oldParts[0]
+			newKey = newParts[0]
+			if len(idxDef.Parts) > 1 {
+				oldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", oldParts)
+				if err != nil {
+					return 0, nil, err
+				}
+				newKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", newParts)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 		}
 		project := make([]*plan.Expr, 0, len(selectNode.ProjectList)+3)
@@ -3601,31 +3734,56 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(pos)}},
 			}
 		}
-		releaseOldParts := make([]*plan.Expr, len(idxDef.Parts))
-		releaseCurrentParts := make([]*plan.Expr, len(idxDef.Parts))
-		for partPos, rawPart := range idxDef.Parts {
-			part := catalog.ResolveAlias(rawPart)
-			oldPos := physicalOldPosByCol[part]
-			currentPos := currentPosByCol[part]
-			releaseOldParts[partPos], err = makePartExpr(currentNode, 0, oldPos, part)
+		var releaseOldKey, releaseCurrentKey *plan.Expr
+		if useV2 {
+			oldValues := make([]*plan.Expr, len(idxDef.Parts))
+			currentValues := make([]*plan.Expr, len(idxDef.Parts))
+			for partPos, rawPart := range idxDef.Parts {
+				part := catalog.ResolveAlias(rawPart)
+				oldPos := physicalOldPosByCol[part]
+				currentPos := currentPosByCol[part]
+				oldValues[partPos] = &plan.Expr{Typ: currentNode.ProjectList[oldPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: oldPos, Name: part,
+				}}}
+				currentValues[partPos] = &plan.Expr{Typ: currentNode.ProjectList[currentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: currentPos, Name: part,
+				}}}
+			}
+			releaseOldKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-			releaseCurrentParts[partPos], err = makePartExpr(currentNode, 0, currentPos, part)
+			releaseCurrentKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, currentValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-		}
-		releaseOldKey := releaseOldParts[0]
-		releaseCurrentKey := releaseCurrentParts[0]
-		if len(idxDef.Parts) > 1 {
-			releaseOldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseOldParts)
-			if err != nil {
-				return 0, nil, err
+		} else {
+			releaseOldParts := make([]*plan.Expr, len(idxDef.Parts))
+			releaseCurrentParts := make([]*plan.Expr, len(idxDef.Parts))
+			for partPos, rawPart := range idxDef.Parts {
+				part := catalog.ResolveAlias(rawPart)
+				oldPos := physicalOldPosByCol[part]
+				currentPos := currentPosByCol[part]
+				releaseOldParts[partPos], err = makePartExpr(currentNode, 0, oldPos, part)
+				if err != nil {
+					return 0, nil, err
+				}
+				releaseCurrentParts[partPos], err = makePartExpr(currentNode, 0, currentPos, part)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
-			releaseCurrentKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseCurrentParts)
-			if err != nil {
-				return 0, nil, err
+			releaseOldKey = releaseOldParts[0]
+			releaseCurrentKey = releaseCurrentParts[0]
+			if len(idxDef.Parts) > 1 {
+				releaseOldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseOldParts)
+				if err != nil {
+					return 0, nil, err
+				}
+				releaseCurrentKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseCurrentParts)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 		}
 		releaseProject[oldKeyPos] = releaseOldKey

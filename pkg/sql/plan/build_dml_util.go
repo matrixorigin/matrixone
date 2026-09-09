@@ -4423,7 +4423,14 @@ func appendPreInsertPlan(
 	if err != nil {
 		return -1, err
 	}
-	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+	// The codec metadata belongs to the physical index relation.  A v2 base
+	// table may still have legacy non-unique secondary indexes, whose hidden
+	// keys retain the existing serial_full/raw representation.  Only a unique
+	// index relation created with the v2 metadata may consume the framed key.
+	useV2 := false
+	if isUK {
+		useV2, err = tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+	}
 	if err != nil {
 		return -1, err
 	}
@@ -4455,7 +4462,7 @@ func appendPreInsertPlan(
 				}},
 			}
 		}
-		keyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+		keyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(uniqueTableDef, idxDef, values, prefixLengths)
 		if err != nil {
 			return -1, err
 		}

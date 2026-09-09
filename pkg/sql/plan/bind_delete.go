@@ -284,6 +284,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			var leftExpr *plan.Expr
 
 			argsLen := len(idxDef.Parts)
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, err
+			}
 			if isSpatialIndexDef(idxDef) {
 				pkPos := colName2Idx[i][tableDef.Pkey.PkeyColName]
 				leftExpr = &plan.Expr{
@@ -295,11 +299,28 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 						},
 					},
 				}
-			} else if !indexTableStoresSerializedKey(idxDef) {
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			} else if useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef); err != nil {
+				return 0, err
+			} else if useV2 {
+				// Unique v2 index tables store the framed identity, not the
+				// source text.  Rebuild that identity from the row being deleted
+				// so DELETE uses the same key as INSERT/ODKU/REPLACE.
+				values := make([]*plan.Expr, len(idxDef.Parts))
+				for partIdx, part := range idxDef.Parts {
+					partName := catalog.ResolveAlias(part)
+					colPos, ok := colName2Idx[i][partName]
+					if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind delete err, can not find v2 index part %s", partName)
+					}
+					values[partIdx] = &plan.Expr{Typ: selectNode.ProjectList[colPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: colPos, Name: partName,
+					}}}
+				}
+				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
 				if err != nil {
 					return 0, err
 				}
+			} else if !indexTableStoresSerializedKey(idxDef) {
 				partName := indexPrimaryPartName(idxDef)
 				colPos, ok := colName2Idx[i][partName]
 				if !ok {
@@ -311,10 +332,6 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-				if err != nil {
-					return 0, err
-				}
 				var colPos int32
 				var ok bool
 				for k, colName := range idxDef.Parts {
