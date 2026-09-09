@@ -3610,7 +3610,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if isFindInSetName(name) && len(args) == 2 && b.ctx != nil {
 		var err error
 		args, findInSetInternalArgs, err = rewriteFindInSetSetProvenance(
-			b.GetContext(), b.ctx, args)
+			b.GetContext(), b.builder, b.ctx, args)
 		if err != nil {
 			return nil, err
 		}
@@ -4279,7 +4279,7 @@ func rewriteFindInSetStoredOperand(args []*Expr) ([]*Expr, bool) {
 // this path is for derived tables/views, whose output is a VARCHAR ColRef but
 // whose BindContext still records the source SET definition.
 func rewriteFindInSetSetProvenance(
-	ctx context.Context, bindCtx *BindContext, args []*Expr,
+	ctx context.Context, builder *QueryBuilder, bindCtx *BindContext, args []*Expr,
 ) ([]*Expr, bool, error) {
 	if bindCtx == nil || len(args) != 2 || args[1] == nil || isSetDisplayValueExpr(args[1]) {
 		return args, false, nil
@@ -4288,6 +4288,14 @@ func rewriteFindInSetSetProvenance(
 	storageType := bindCtx.mysqlSpecialOrderTypeForExpr(args[1])
 	if !isSetPlanType(storageType) {
 		return args, false, nil
+	}
+	if builder != nil && setTypeHasEmptyMember(storageType) {
+		if bitmap, ok := builder.materializeProjectedSetBitmap(args[1], nil); ok {
+			rewritten := make([]*Expr, 0, 3)
+			rewritten = append(rewritten, args[0], bitmap)
+			rewritten = append(rewritten, makePlan2StringConstExprWithType(storageType.Enumvalues))
+			return rewritten, true, nil
+		}
 	}
 
 	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)

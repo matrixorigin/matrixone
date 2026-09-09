@@ -95,11 +95,17 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	duplicateEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
 	set := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y"}
 	ambiguousSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,"}
+	emptyFirstSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: ",x"}
+	emptyMiddleSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,,y"}
 
 	require.True(t, mysqlSpecialOrderTypeReversible(enum))
 	require.False(t, mysqlSpecialOrderTypeReversible(duplicateEnum))
 	require.True(t, mysqlSpecialOrderTypeReversible(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
+	require.True(t, setTypeHasEmptyMember(emptyFirstSet))
+	require.True(t, setTypeHasEmptyMember(emptyMiddleSet))
+	require.True(t, setTypeHasEmptyMember(ambiguousSet))
+	require.False(t, setTypeHasEmptyMember(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
 	require.Equal(t, enumFoldKey("K"), enumFoldKey("K"))
 	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
@@ -201,7 +207,7 @@ func TestFindInSetSetProvenanceThroughBindingBoundary(t *testing.T) {
 	}
 	args := []*plan.Expr{makePlan2StringConstExprWithType("a"), column}
 
-	rewritten, ok, err := rewriteFindInSetSetProvenance(ctx, bindCtx, args)
+	rewritten, ok, err := rewriteFindInSetSetProvenance(ctx, nil, bindCtx, args)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, rewritten, 3)
@@ -209,13 +215,13 @@ func TestFindInSetSetProvenanceThroughBindingBoundary(t *testing.T) {
 	require.Empty(t, rewritten[1].Typ.Enumvalues)
 	require.Equal(t, setType.Enumvalues, rewritten[2].GetLit().GetSval())
 
-	unchanged, didRewrite, err := rewriteFindInSetSetProvenance(ctx, nil, args)
+	unchanged, didRewrite, err := rewriteFindInSetSetProvenance(ctx, nil, nil, args)
 	require.NoError(t, err)
 	require.False(t, didRewrite)
 	require.Equal(t, args, unchanged)
 
 	ordinaryContext := NewBindContext(nil, nil)
-	unchanged, didRewrite, err = rewriteFindInSetSetProvenance(ctx, ordinaryContext, args)
+	unchanged, didRewrite, err = rewriteFindInSetSetProvenance(ctx, nil, ordinaryContext, args)
 	require.NoError(t, err)
 	require.False(t, didRewrite)
 	require.Equal(t, args, unchanged)
@@ -245,18 +251,34 @@ func TestFindInSetInternalArityIsPlannerOnly(t *testing.T) {
 }
 
 func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
-	for _, sql := range []string{
-		"select find_in_set('a', s) from enum_order_t",
-		"select find_in_set('a', s) from (select s from enum_order_t) d",
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		def      string
+		wantType types.T
+	}{
+		{name: "direct", sql: "select find_in_set('a', s) from enum_order_t", def: "red,green,blue", wantType: types.T_uint64},
+		{name: "derived", sql: "select find_in_set('a', s) from (select s from enum_order_t) d", def: "red,green,blue", wantType: types.T_uint64},
+		{name: "derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "cte empty member", sql: "with c as (select s from set_empty_member_t) select find_in_set('', s) from c", def: ",a", wantType: types.T_uint64},
+		{name: "union empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
-		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, sql)
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
 			require.NoError(t, err)
 			findInSet := findPlanFunctionExpr(logicPlan, "find_in_set")
 			require.NotNil(t, findInSet, logicPlan.String())
 			require.Len(t, findInSet.GetF().GetArgs(), 3)
+			require.Equal(t, int32(tc.wantType), findInSet.GetF().GetArgs()[1].Typ.Id)
 			require.Empty(t, findInSet.GetF().GetArgs()[1].Typ.Enumvalues)
-			require.Equal(t, "red,green,blue", findInSet.GetF().GetArgs()[2].GetLit().GetSval())
+			require.Equal(t, tc.def, findInSet.GetF().GetArgs()[2].GetLit().GetSval())
+			if tc.name == "derived empty member" {
+				raw := findInSet.GetF().GetArgs()[1].GetCol()
+				require.NotNil(t, raw)
+				require.Equal(t, int32(0), raw.ColPos)
+			}
 		})
 	}
 }

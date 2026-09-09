@@ -7847,10 +7847,20 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				cachedDefinition = definition
 				memberPositions = make(map[string]uint64)
 				for i, member := range strings.Split(definition, ",") {
-					memberPositions[member] = uint64(i + 1)
+					// Match types.ParseSet: SET definitions are normalized by
+					// trimming trailing ASCII spaces and folding case.
+					key := strings.ToLower(strings.TrimRight(member, " "))
+					memberPositions[key] = uint64(i + 1)
 				}
 			}
-			position, ok := memberPositions[target]
+			// Most SET labels are already normalized at the SQL boundary. Try
+			// the allocation-free exact key first and fold only on a miss for
+			// mixed-case or padded needles.
+			targetKey := strings.TrimRight(target, " ")
+			position, ok := memberPositions[targetKey]
+			if !ok {
+				position, ok = memberPositions[strings.ToLower(targetKey)]
+			}
 			if !ok || position == 0 || position > types.MaxSetMembers {
 				return 0
 			}
