@@ -5660,14 +5660,14 @@ func initTruncateTestCase() []tcTemp {
 		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
-	// truncate with NULL second argument should expect error, we want a const.
+	// NULL precision propagates to the result instead of being rejected.
 	testInputs = append(testInputs, tcTemp{
 		info: "test truncate with NULL second argument",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
 		},
-		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
 	return testInputs
@@ -5681,6 +5681,30 @@ func TestTruncate(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
+	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2, -1, 1, 0}, []bool{false, false, false, false, false, true})
+	expectedRound := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.5, 123.46, 120, -123.5, 0}, []bool{false, false, false, false, false, true})
+	expectedTruncate := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.4, 123.45, 120, -123.4, 0}, []bool{false, false, false, false, false, true})
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		want *FunctionTestResult
+	}{
+		{name: "round", fn: RoundFloat64, want: &expectedRound},
+		{name: "truncate", fn: TruncateFloat64, want: &expectedTruncate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits}, *tc.want, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
