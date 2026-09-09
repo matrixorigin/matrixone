@@ -72,6 +72,23 @@ func (i *IOVector) ReleaseReadResultOnError() {
 	}
 }
 
+// ReleaseReadBuffers drops raw inputs after all cache updates complete. Only
+// independently converted entries qualify: streams and unconverted data retain
+// their normal IOVector ownership. Cached results and sharing leases stay alive.
+func (i *IOVector) ReleaseReadBuffers() {
+	for idx := range i.Entries {
+		e := &i.Entries[idx]
+		if e.CachedData == nil || e.ToCacheData == nil || e.WriterForRead != nil || e.ReadCloserForRead != nil {
+			continue
+		}
+		if e.releaseData != nil {
+			e.releaseData()
+			e.releaseData = nil
+		}
+		e.Data = nil
+	}
+}
+
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 	readFull = i.Policy.CacheFullFile() &&
 		!i.Policy.Any(SkipDiskCache)
