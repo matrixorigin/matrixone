@@ -38,6 +38,10 @@ func TestRelationMetadataV2RequiresExactRegistry(t *testing.T) {
 	if err := legacy.Validate(); !errors.Is(err, ErrMalformedKey) {
 		t.Fatalf("legacy with v2 fields error = %v, want ErrMalformedKey", err)
 	}
+	bytewise := RelationMetadata{Version: BytewiseVersion, ActivationGeneration: 9}
+	if err := bytewise.Validate(); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("bytewise with activation generation error = %v, want ErrMalformedKey", err)
+	}
 
 	withoutGeneration := NewCollationAwareMetadataAtGeneration(0)
 	if err := withoutGeneration.Validate(); !errors.Is(err, ErrMalformedKey) {

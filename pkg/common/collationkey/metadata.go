@@ -75,7 +75,7 @@ func (m RelationMetadata) IsV2() bool     { return m.Version == CollationAwareVe
 func (m RelationMetadata) Validate() error {
 	switch m.Version {
 	case LegacyVersion, BytewiseVersion:
-		if len(m.RegistryDigest) != 0 || m.RegistryVersion != 0 || m.MaxEncodedKeyBytes != 0 {
+		if len(m.RegistryDigest) != 0 || m.RegistryVersion != 0 || m.MaxEncodedKeyBytes != 0 || m.ActivationGeneration != 0 {
 			return wrapCodecError(ErrMalformedKey, "legacy relation carries v2 metadata")
 		}
 		return nil

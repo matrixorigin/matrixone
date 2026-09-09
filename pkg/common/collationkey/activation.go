@@ -194,7 +194,12 @@ func (a Activation) NodeReady(kind NodeKind, ack NodeAcknowledgement) bool {
 	if !ok || wantIncarnation != ack.Incarnation {
 		return false
 	}
-	metadata := NewCollationAwareMetadata()
+	// The acknowledgement is for this exact durable generation. Capability
+	// validation currently uses the codec identity, while Admission separately
+	// fences the relation generation; constructing the metadata with the
+	// activation generation here keeps this boundary explicit and prevents a
+	// future capability implementation from accepting a stale generation.
+	metadata := NewCollationAwareMetadataAtGeneration(a.Generation)
 	return ack.Capability.Supports(metadata, false) && ack.Capability.Supports(metadata, true)
 }
 
