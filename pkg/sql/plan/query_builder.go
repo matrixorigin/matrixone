@@ -3833,6 +3833,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
+		rootID = builder.removeImpliedSemiJoins(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
