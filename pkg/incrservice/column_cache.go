@@ -80,6 +80,14 @@ func newColumnCache(
 	allocator valueAllocator,
 	txnOp client.TxnOperator,
 ) (*columnCache, error) {
+	var err error
+	cfg, err = cfg.forTable(ctx, col.CacheSize)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAutoIDCacheProtocol(ctx, sid, col.CacheSize); err != nil {
+		return nil, err
+	}
 	item := &columnCache{
 		logger:    getLogger(sid).Named("incrservice"),
 		col:       col,
@@ -332,7 +340,8 @@ func (col *columnCache) applyAutoValues(
 	filter func(i int) bool,
 	apply func(int, uint64) error,
 	txnOp client.TxnOperator,
-	options AutoIncrementOptions) error {
+	options AutoIncrementOptions,
+	autoRows int) error {
 	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
 	cul := col.concurrencyApply.Load()
 	col.concurrencyApply.Add(1)
@@ -343,6 +352,7 @@ func (col *columnCache) applyAutoValues(
 		return err
 	}
 
+	remaining := autoRows
 	for i := 0; i < rows; i++ {
 		if filter(i) {
 			continue
@@ -357,6 +367,7 @@ func (col *columnCache) applyAutoValues(
 				if err := apply(i, value); err != nil {
 					return err
 				}
+				remaining--
 				continue
 			}
 		}
@@ -397,7 +408,11 @@ func (col *columnCache) applyAutoValues(
 				break
 			}
 
-			allocationCount, err := autoIncrementAllocationCount(ctx, rows, options)
+			requestRows := rows
+			if col.cfg.demandOnly {
+				requestRows = remaining
+			}
+			allocationCount, err := autoIncrementAllocationCount(ctx, requestRows, options)
 			if err != nil {
 				return err
 			}
@@ -406,6 +421,7 @@ func (col *columnCache) applyAutoValues(
 				return err
 			}
 		}
+		remaining--
 	}
 	return nil
 }
@@ -418,7 +434,7 @@ func (col *columnCache) preAllocate(
 	// Statement-scoped non-default series reserve on demand in applyAutoValues;
 	// prefetching a default block here would consume values from the shared
 	// allocator which may not belong to that series.
-	if !AutoIncrementOptionsFromContext(ctx).isDefault() {
+	if col.cfg.demandOnly || !AutoIncrementOptionsFromContext(ctx).isDefault() {
 		return
 	}
 	col.Lock()
@@ -482,7 +498,7 @@ func (col *columnCache) allocateLocked(
 		return moerr.NewInternalError(ctx, "AUTO_INCREMENT concurrency accounting moved backwards")
 	}
 	concurrent -= beforeApplyCount
-	if concurrent == 0 {
+	if concurrent == 0 || col.cfg.demandOnly {
 		concurrent = 1
 	}
 	maxInt := uint64(^uint(0) >> 1)
@@ -529,7 +545,7 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 	// Non-default series allocate on demand in applyAutoValues, using at least
 	// the configured span. Keep background prefetch disabled: unlike demand
 	// allocation it has no row requirement to size for a large increment.
-	if !options.isDefault() {
+	if col.cfg.demandOnly || !options.isDefault() {
 		return nil
 	}
 	col.Lock()
@@ -678,6 +694,25 @@ func insertAutoValues[T constraints.Integer](
 	autoCount := vec.GetNulls().Count()
 	lastInsertValue := uint64(0)
 
+	// A cold demand-only cache has no constructor reservation. Materialize the
+	// actual mixed-batch demand before displacing ranges for explicit IDs, so an
+	// automatic row preceding a large explicit ID can still use a smaller value.
+	if col.cfg.demandOnly && autoCount > 0 && autoCount < rows {
+		count, err := autoIncrementAllocationCount(ctx, autoCount, options)
+		if err != nil {
+			return 0, err
+		}
+		col.Lock()
+		err = col.waitPrevAllocatingLocked(ctx)
+		if err == nil && !col.overflow && !col.terminal && col.ranges.left() < count {
+			err = col.allocateLocked(ctx, tableID, count-col.ranges.left(), col.concurrencyApply.Load(), txnOp)
+		}
+		col.Unlock()
+		if err != nil {
+			return 0, err
+		}
+	}
+
 	// has manual values, we reuse skipped auto values, and update cache max value to store
 	var skipped *ranges
 	if autoCount < rows {
@@ -748,7 +783,8 @@ func insertAutoValues[T constraints.Integer](
 			return nil
 		},
 		txnOp,
-		options)
+		options,
+		autoCount)
 	if err != nil {
 		return 0, err
 	}

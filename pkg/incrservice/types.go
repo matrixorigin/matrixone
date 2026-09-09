@@ -225,6 +225,8 @@ type AutoColumn struct {
 	ColIndex int
 	Offset   uint64
 	Step     uint64
+	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
+	CacheSize uint64
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
@@ -284,11 +286,12 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:  col.Name,
-				TableID:  def.TblId,
-				Step:     1,
-				Offset:   def.AutoIncrOffset,
-				ColIndex: i,
+				ColName:   col.Name,
+				TableID:   def.TblId,
+				Step:      1,
+				Offset:    def.AutoIncrOffset,
+				ColIndex:  i,
+				CacheSize: def.AutoIdCache,
 			})
 		}
 	}

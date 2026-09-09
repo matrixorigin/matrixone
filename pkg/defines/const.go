@@ -93,7 +93,8 @@ const (
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
-	MORPCLatestVersion       = MORPCVersion57
+	MORPCVersion58     int64 = 58 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCLatestVersion       = MORPCVersion58
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

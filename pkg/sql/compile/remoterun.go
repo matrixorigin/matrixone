@@ -130,6 +130,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -228,6 +231,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -647,6 +653,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if size := t.TableDef.GetAutoIdCache(); size != 0 {
+			if proc == nil {
+				return ctxId, nil, moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE remote execution requires a process")
+			}
+			if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), size); err != nil {
+				return ctxId, nil, err
+			}
+			in.Op = int32(vm.PreInsertAutoIDCache)
+		}
 		if err := validateRemoteStatementLastInsertIDProtocol(
 			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
@@ -1242,8 +1257,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			Engine:          eng,
 		}
 		op = arg
-	case vm.PreInsert:
+	case vm.PreInsert, vm.PreInsertAutoIDCache:
 		t := opr.GetPreInsert()
+		if t == nil || (opr.Op == int32(vm.PreInsertAutoIDCache)) != (t.GetTableDef().GetAutoIdCache() != 0) {
+			return nil, moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE PRE_INSERT wire marker does not match the table policy")
+		}
 		arg := preinsert.NewArgument()
 		arg.SchemaName = t.GetSchemaName()
 		arg.TableDef = t.GetTableDef()
@@ -2392,6 +2410,37 @@ func validateRemoteGroupingSetPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteAutoIDCachePipelineProtocol runs before receiver scope/operator
+// construction. The appended opcode makes old decoders reject the payload; this
+// check also rejects disabled new receivers and malformed/stripped markers.
+func validateRemoteAutoIDCachePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		size := instruction.GetPreInsert().GetTableDef().GetAutoIdCache()
+		marked := instruction.GetOp() == int32(vm.PreInsertAutoIDCache)
+		if size == 0 && !marked {
+			continue
+		}
+		if !marked || size == 0 {
+			return moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE PRE_INSERT wire marker does not match the table policy")
+		}
+		if proc == nil {
+			return moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE remote execution requires a process")
+		}
+		if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), size); err != nil {
+			return err
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteAutoIDCachePipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

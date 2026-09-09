@@ -706,6 +706,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		AutoIncrEpoch:  table.AutoIncrEpoch,
+		AutoIdCache:    table.AutoIdCache,
 		DefaultCharset: table.DefaultCharset,
 		DbName:         table.DbName,
 		DbId:           table.DbId,

@@ -1156,6 +1156,8 @@ func (node *CreateTable) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -3935,6 +3937,8 @@ func (node *Partition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -4068,6 +4072,8 @@ func (node *SubPartition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:

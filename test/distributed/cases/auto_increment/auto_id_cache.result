@@ -1,0 +1,171 @@
+drop database if exists ai_cache_bvt;
+create database ai_cache_bvt;
+use ai_cache_bvt;
+set @saved_increment = @@session.auto_increment_increment;
+set @saved_offset = @@session.auto_increment_offset;
+set auto_increment_increment=1;
+set auto_increment_offset=1;
+create table ai_plain(id bigint) auto_id_cache=0;
+show create table ai_plain;
+➤ Table[12,8,0]  ¦  Create Table[12,54,0]  𝄀
+ai_plain  ¦  CREATE TABLE `ai_plain` (
+  `id` bigint DEFAULT NULL
+)
+create table ai_zero(id bigint auto_increment primary key) auto_id_cache=0;
+show create table ai_zero;
+➤ Table[12,7,0]  ¦  Create Table[12,86,0]  𝄀
+ai_zero  ¦  CREATE TABLE `ai_zero` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+)
+create table ai_one(id bigint auto_increment primary key, v int) auto_id_cache=1;
+select internal_auto_increment(database(),'ai_one');
+➤ internal_auto_increment(database(), ai_one)[-5,64,0]  𝄀
+1
+select internal_auto_increment(database(),'ai_one');
+➤ internal_auto_increment(database(), ai_one)[-5,64,0]  𝄀
+1
+insert into ai_one values (-1,10),(NULL,20),(100,30),(NULL,40);
+select id,v from ai_one order by v;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+-1  ¦  10  𝄀
+1  ¦  20  𝄀
+100  ¦  30  𝄀
+101  ¦  40
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select internal_auto_increment(database(),'ai_one');
+➤ internal_auto_increment(database(), ai_one)[-5,64,0]  𝄀
+102
+show create table ai_one;
+➤ Table[12,6,0]  ¦  Create Table[12,125,0]  𝄀
+ai_one  ¦  CREATE TABLE `ai_one` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+alter table ai_one auto_increment=200;
+insert into ai_one(v) values(50);
+select id from ai_one where v=50;
+➤ id[-5,64,0]  𝄀
+200
+alter table ai_one add column extra int, algorithm=copy;
+show create table ai_one;
+➤ Table[12,6,0]  ¦  Create Table[12,153,0]  𝄀
+ai_one  ¦  CREATE TABLE `ai_one` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+create table ai_like like ai_one;
+show create table ai_like;
+➤ Table[12,7,0]  ¦  Create Table[12,154,0]  𝄀
+ai_like  ¦  CREATE TABLE `ai_like` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+insert into ai_like(v) values(1);
+select id,v from ai_like;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+create table ai_clone clone ai_one;
+show create table ai_clone;
+➤ Table[12,8,0]  ¦  Create Table[12,155,0]  𝄀
+ai_clone  ¦  CREATE TABLE `ai_clone` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+insert into ai_clone(v) values(60);
+select id,v from ai_clone where v=60;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+201  ¦  60
+truncate table ai_one;
+show create table ai_one;
+➤ Table[12,6,0]  ¦  Create Table[12,153,0]  𝄀
+ai_one  ¦  CREATE TABLE `ai_one` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+insert into ai_one(v) values(1);
+select id,v from ai_one;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+set auto_increment_increment=3;
+set auto_increment_offset=2;
+create table ai_series(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=1;
+insert into ai_series values(NULL),(NULL),(NULL);
+select id from ai_series order by id;
+➤ id[-5,64,0]  𝄀
+11  𝄀
+14  𝄀
+17
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+11
+create table ai_span(id bigint auto_increment primary key) auto_id_cache=2;
+insert into ai_span values(NULL),(NULL),(NULL);
+select id from ai_span order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+5  𝄀
+8
+show create table ai_span;
+➤ Table[12,7,0]  ¦  Create Table[12,102,0]  𝄀
+ai_span  ¦  CREATE TABLE `ai_span` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=2
+create table ai_max(id bigint auto_increment primary key) auto_id_cache=1000000;
+show create table ai_max;
+➤ Table[12,6,0]  ¦  Create Table[12,107,0]  𝄀
+ai_max  ¦  CREATE TABLE `ai_max` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1000000
+set auto_increment_increment=1;
+set auto_increment_offset=1;
+begin;
+create temporary table ai_temp(id bigint auto_increment primary key) auto_id_cache=1;
+rollback;
+show create table ai_temp;
+➤ Table[12,7,0]  ¦  Create Table[12,112,0]  𝄀
+ai_temp  ¦  CREATE TEMPORARY TABLE `ai_temp` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+insert into ai_temp values(NULL);
+select id from ai_temp;
+➤ id[-5,64,0]  𝄀
+1
+drop temporary table ai_temp;
+create table ai_bad(id bigint auto_increment) auto_id_cache=1000001;
+invalid input: AUTO_ID_CACHE must be between 0 and 1000000
+create table ai_bad(id bigint auto_increment) auto_id_cache=-1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 61 near "-1;";
+create table ai_bad(id bigint auto_increment) auto_id_cache=1.5;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 63 near "1.5;";
+create table ai_bad(id bigint auto_increment) auto_id_cache=1 auto_id_cache=2;
+invalid input: AUTO_ID_CACHE specified more than once
+create table ai_bad(id bigint) auto_id_cache=1;
+invalid input: AUTO_ID_CACHE requires an AUTO_INCREMENT column
+alter table ai_one auto_id_cache=2;
+invalid input: unsupported alter option in inplace mode: auto_id_cache = 2
+show create table ai_one;
+➤ Table[12,6,0]  ¦  Create Table[12,153,0]  𝄀
+ai_one  ¦  CREATE TABLE `ai_one` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) AUTO_ID_CACHE=1
+set auto_increment_increment=@saved_increment;
+set auto_increment_offset=@saved_offset;
+drop database ai_cache_bvt;
