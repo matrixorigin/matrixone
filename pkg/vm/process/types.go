@@ -478,6 +478,9 @@ type BaseProcess struct {
 	executionResourceBudget             *ExecutionResourceGeneration
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
+	warningAttemptMu                    sync.Mutex
+	warningAttempt                      *warningAttemptState
+	warningAttemptTracking              bool
 	logger                              *log.MOLogger
 	TxnOperator                         client.TxnOperator
 	CloneTxnOperator                    client.TxnOperator

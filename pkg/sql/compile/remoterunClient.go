@@ -106,6 +106,8 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
+	sender.warningAttemptGeneration = c.executionGeneration
+	sender.warningAttemptGenerationSet = true
 	if sink, ok := s.Proc.GetWarningSink().(warningDiagnosticSink); ok {
 		sender.warningSink = sink
 	}
@@ -445,7 +447,9 @@ type messageSenderOnClient struct {
 	// warningSink is the session-owned diagnostic destination on the initiating
 	// process. Remote terminal warnings are applied here only after the remote
 	// pipeline has finished, preserving one warning per actual evaluated row.
-	warningSink warningDiagnosticSink
+	warningSink                 warningDiagnosticSink
+	warningAttemptGeneration    uint64
+	warningAttemptGenerationSet bool
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -955,7 +959,25 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
-	if sender.warningSink != nil {
+	if sender.proc != nil && sender.proc.GetSession() != nil {
+		codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+		messages := make([]string, 0, len(envelope.WarningDiagnostics))
+		for _, warning := range envelope.WarningDiagnostics {
+			codes = append(codes, warning.Code)
+			messages = append(messages, warning.Message)
+		}
+		if sender.warningAttemptGenerationSet {
+			process.AppendWarningBatchForAttempt(
+				sender.proc,
+				sender.warningAttemptGeneration,
+				envelope.WarningCount,
+				codes,
+				messages,
+			)
+		} else {
+			process.AppendWarningBatch(sender.proc, envelope.WarningCount, codes, messages)
+		}
+	} else if sender.warningSink != nil {
 		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
 			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
 			messages := make([]string, 0, len(envelope.WarningDiagnostics))

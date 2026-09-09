@@ -330,6 +330,106 @@ func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
 	require.Equal(t, "second", session.warnings[1].msg)
 }
 
+func TestRemoteTerminalWarningsWithoutAttemptAreForwarded(t *testing.T) {
+	session := &remoteWarningSession{}
+	proc := &process.Process{Base: &process.BaseProcess{}, Session: session}
+	sender := &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    0,
+		warningAttemptGenerationSet: true,
+	}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 1,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: 1062, Message: "nested duplicate"},
+		},
+	})
+	require.NoError(t, err)
+
+	// MergeRun remote fragments do not enter Compile.Run and therefore do not
+	// open an attempt on this process. Their nested terminal warnings remain
+	// valid and must be forwarded directly.
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Equal(t, uint64(1), session.totalWarnings)
+	require.Len(t, session.warnings, 1)
+}
+
+func TestRemoteTerminalWarningsRespectExecutionAttempt(t *testing.T) {
+	session := &remoteWarningSession{}
+	proc := &process.Process{Base: &process.BaseProcess{}, Session: session}
+	sender := &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    0,
+		warningAttemptGenerationSet: true,
+	}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 1,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: 1062, Message: "duplicate"},
+		},
+	})
+	require.NoError(t, err)
+
+	proc.BeginWarningAttempt(0)
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Empty(t, session.warnings)
+	proc.AbortWarningAttempt(0)
+	sender = &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    0,
+		warningAttemptGenerationSet: true,
+	}
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Zero(t, session.totalWarnings, "late terminal from an aborted attempt must be dropped")
+
+	sender = &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    1,
+		warningAttemptGenerationSet: true,
+	}
+	proc.BeginWarningAttempt(1)
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	proc.CommitWarningAttempt(1)
+	require.Equal(t, uint64(1), session.totalWarnings)
+	require.Len(t, session.warnings, 1)
+	sender = &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    1,
+		warningAttemptGenerationSet: true,
+	}
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Equal(t, uint64(1), session.totalWarnings, "late terminal after commit must be dropped")
+}
+
+func TestLateRemoteTerminalWarningsAreDroppedByGeneration(t *testing.T) {
+	session := &remoteWarningSession{}
+	proc := &process.Process{Base: &process.BaseProcess{}, Session: session}
+	sender := &messageSenderOnClient{
+		proc:                        proc,
+		warningSink:                 session,
+		warningAttemptGeneration:    0,
+		warningAttemptGenerationSet: true,
+	}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 1,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: 1062, Message: "stale duplicate"},
+		},
+	})
+	require.NoError(t, err)
+
+	proc.BeginWarningAttempt(1)
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	proc.CommitWarningAttempt(1)
+	require.Zero(t, session.totalWarnings)
+	require.Empty(t, session.warnings)
+}
+
 func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 3}
 	for i := 0; i < 1000; i++ {

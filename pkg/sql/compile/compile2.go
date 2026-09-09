@@ -553,6 +553,23 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = true
 	}
+	warningAttemptOpen := true
+	c.proc.BeginWarningAttempt(c.executionGeneration)
+	abortWarningAttempt := func() {
+		if !warningAttemptOpen {
+			return
+		}
+		c.proc.AbortWarningAttempt(c.executionGeneration)
+		warningAttemptOpen = false
+	}
+	commitWarningAttempt := func() {
+		if !warningAttemptOpen {
+			return
+		}
+		c.proc.CommitWarningAttempt(c.executionGeneration)
+		warningAttemptOpen = false
+	}
+	defer abortWarningAttempt()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			var panicErr error = moerr.NewInternalError(execTopContext, "panic while executing DML RETURNING")
@@ -711,6 +728,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = 0
 		attemptPreRunWall = preRunWall + transitionWall
 		if transitionErr != nil {
+			abortWarningAttempt()
 			err = abortSinkAttempt(transitionErr)
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
@@ -727,6 +745,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 			sinkAttemptOpen = false
 		}
+		abortWarningAttempt()
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 			attemptScopes, attemptAnal, c.addr, true,
@@ -766,6 +785,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			attemptOpen = false
 			return nil, err
 		}
+		c.proc.BeginWarningAttempt(c.executionGeneration)
+		warningAttemptOpen = true
 		runC = nextRunC
 		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
@@ -826,7 +847,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = false
 	}
-
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 		attemptScopes, attemptAnal, c.addr, false,
@@ -842,6 +862,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if isExplainPhyPlan {
 		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
 	}
+	commitWarningAttempt()
 
 	warningsSucceeded = err == nil
 	return queryResult, err
