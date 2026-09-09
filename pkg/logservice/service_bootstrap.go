@@ -155,10 +155,12 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 		ready, err := s.store.waitHAKeeperLeaderReady(ctx, hakeeperDefaultTimeout)
 		if err != nil {
-			if restoreConfigured {
-				return err
+			// Preserve the ordinary bootstrap's cancellation/removed-shard policy,
+			// but do not report success for a failed NodeHost (for example ErrClosed).
+			if !restoreConfigured && (ctx.Err() != nil || errors.Is(err, dragonboat.ErrShardNotFound)) {
+				return nil
 			}
-			return nil
+			return err
 		}
 		if !ready {
 			continue

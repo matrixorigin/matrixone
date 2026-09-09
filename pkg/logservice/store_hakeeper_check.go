@@ -338,9 +338,13 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 
 	switch state.State {
 	case pb.HAKeeperBootstrapping:
-		l.bootstrap(term, state)
+		if err := l.bootstrap(term, state); err != nil {
+			return nil // Retry failures at the configured cadence, not the fast bootstrap cadence.
+		}
 	case pb.HAKeeperBootstrapCommandsReceived:
-		l.checkBootstrap(state)
+		if err := l.checkBootstrap(state); err != nil {
+			return nil
+		}
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
@@ -427,19 +431,19 @@ func (l *store) registerTaskUser() {
 	}
 }
 
-func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
+func (l *store) bootstrap(term uint64, state *pb.CheckerState) error {
 	if state.LogServiceRecoveryPending && !state.LogServiceRecoveryPrepared {
 		if l.bootstrapStatusLogAllowed() {
 			l.runtime.Logger().Info("waiting for LogService recovery ID watermarks before bootstrap")
 		}
-		return
+		return nil
 	}
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
 		if l.bootstrapStatusLogAllowed() {
 			l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
 		}
-		return
+		return err
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
@@ -486,24 +490,25 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			l.bootstrapCommandsAdded()
 		}
 	}
+	return nil
 }
 
-func (l *store) checkBootstrap(state *pb.CheckerState) {
-	l.checkBootstrapWithSetter(state, l.setBootstrapState)
+func (l *store) checkBootstrap(state *pb.CheckerState) error {
+	return l.checkBootstrapWithSetter(state, l.setBootstrapState)
 }
 
 func (l *store) checkBootstrapWithSetter(
 	state *pb.CheckerState,
 	setState func(bool) error,
-) {
-	l.checkBootstrapWithSetterAt(time.Now(), state, setState)
+) error {
+	return l.checkBootstrapWithSetterAt(time.Now(), state, setState)
 }
 
 func (l *store) checkBootstrapWithSetterAt(
 	now time.Time,
 	state *pb.CheckerState,
 	setState func(bool) error,
-) {
+) error {
 	if l.bootstrapCheckDeadline.IsZero() {
 		// A leader can change after bootstrap commands are replicated. The new
 		// leader has no local start timestamp, so establish a bounded budget when
@@ -517,7 +522,7 @@ func (l *store) checkBootstrapWithSetterAt(
 		if !now.Before(l.bootstrapCheckDeadline) {
 			if err := setState(false); err != nil {
 				l.logSetBootstrapStateFailure(false, err)
-				return
+				return err
 			}
 			l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
 		}
@@ -529,14 +534,15 @@ func (l *store) checkBootstrapWithSetterAt(
 			if l.runtime != nil && l.bootstrapStatusLogAllowed() {
 				l.runtime.Logger().Info("bootstrap complete but WAL recovery is pending")
 			}
-			return
+			return nil
 		}
 		if err := setState(true); err != nil {
 			l.logSetBootstrapStateFailure(true, err)
-			return
+			return err
 		}
 		l.assertHAKeeperState(pb.HAKeeperRunning)
 	}
+	return nil
 }
 
 func (l *store) logSetBootstrapStateFailure(success bool, err error) {

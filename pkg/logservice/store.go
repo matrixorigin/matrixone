@@ -1584,7 +1584,14 @@ func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 }
 
 func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Duration) (bool, error) {
-	if leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID); err == nil && ok && leaderID != 0 {
+	if err := ctx.Err(); err != nil {
+		return false, moerr.AttachCause(ctx, err)
+	}
+	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		return false, err
+	}
+	if ok && leaderID != 0 {
 		return true, nil
 	}
 	if maxWait <= 0 {
@@ -1596,16 +1603,19 @@ func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Durati
 	timer := time.NewTimer(maxWait)
 	defer timer.Stop()
 	for {
-		leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
-		if err == nil && ok && leaderID != 0 {
-			return true, nil
-		}
 		select {
 		case <-ctx.Done():
 			return false, moerr.AttachCause(ctx, ctx.Err())
 		case <-timer.C:
 			return false, nil
 		case <-ticker.C:
+		}
+		leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+		if err != nil {
+			return false, err
+		}
+		if ok && leaderID != 0 {
+			return true, nil
 		}
 	}
 }

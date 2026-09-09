@@ -1298,6 +1298,55 @@ func TestRequiredLsn(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestWaitHAKeeperLeaderReady(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		// runStoreTest closes the real NodeHost before test cleanups run.
+		t.Cleanup(func() {
+			ready, err := store.waitHAKeeperLeaderReady(context.Background(), 0)
+			require.ErrorIs(t, err, dragonboat.ErrClosed)
+			require.False(t, ready)
+		})
+		// A missing local shard is an error, not an election to wait for.
+		ready, err := store.waitHAKeeperLeaderReady(context.Background(), 0)
+		require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+		require.False(t, ready)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ready, err = store.waitHAKeeperLeaderReady(ctx, 0)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, ready)
+
+		peers := map[uint64]dragonboat.Target{1: store.id()}
+		require.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		ctx, cancel = context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		ready, err = store.waitHAKeeperLeaderReady(ctx, testIOTimeout)
+		require.NoError(t, err)
+		require.True(t, ready)
+		// Once elected, a zero wait budget still observes the ready leader.
+		ready, err = store.waitHAKeeperLeaderReady(ctx, 0)
+		require.NoError(t, err)
+		require.True(t, ready)
+	})
+}
+
+func TestWaitHAKeeperLeaderReadyWithoutQuorum(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, s *store) {
+		// Only one of three members runs: no scheduling timing can elect it.
+		peers := map[uint64]dragonboat.Target{1: s.id(), 2: uuid.NewString(), 3: uuid.NewString()}
+		require.NoError(t, s.startHAKeeperReplica(1, peers, false))
+		ready, err := s.waitHAKeeperLeaderReady(context.Background(), time.Millisecond)
+		require.NoError(t, err)
+		require.False(t, ready)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		ready, err = s.waitHAKeeperLeaderReady(ctx, testIOTimeout)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.False(t, ready)
+	})
+}
+
 func TestGetLeaderID(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)

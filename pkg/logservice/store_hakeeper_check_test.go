@@ -161,13 +161,17 @@ func TestCheckBootstrapDeadlineBoundaries(t *testing.T) {
 				bootstrapCheckDeadline: deadline,
 			}
 			var calls []bool
-			s.checkBootstrapWithSetterAt(tc.now, tc.state, func(success bool) error {
+			injected := moerr.NewInternalErrorNoCtx("stop after deadline assertion")
+			err := s.checkBootstrapWithSetterAt(tc.now, tc.state, func(success bool) error {
 				calls = append(calls, success)
-				return moerr.NewInternalErrorNoCtx("stop after deadline assertion")
+				return injected
 			})
 			require.Len(t, calls, tc.wantCalls)
 			if tc.wantCalls > 0 {
+				require.ErrorIs(t, err, injected)
 				require.Equal(t, tc.wantSuccess, calls[0])
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -346,19 +350,21 @@ func TestCheckBootstrapRetriesSetBootstrapStateFailure(t *testing.T) {
 
 	calls := 0
 	deadline := s.bootstrapCheckDeadline
-	s.checkBootstrapWithSetter(state, func(success bool) error {
+	err := s.checkBootstrapWithSetter(state, func(success bool) error {
 		calls++
 		require.True(t, success)
 		return moerr.NewInternalErrorNoCtx("injected bootstrap state timeout")
 	})
+	require.Error(t, err)
 
 	require.Equal(t, 1, calls)
 	require.Equal(t, deadline, s.bootstrapCheckDeadline)
-	s.checkBootstrapWithSetter(state, func(success bool) error {
+	err = s.checkBootstrapWithSetter(state, func(success bool) error {
 		calls++
 		require.True(t, success)
 		return moerr.NewInternalErrorNoCtx("injected bootstrap state timeout")
 	})
+	require.Error(t, err)
 	require.Equal(t, 2, calls)
 	require.Equal(t, deadline, s.bootstrapCheckDeadline)
 }
@@ -1000,6 +1006,29 @@ func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
 		require.ErrorContains(t, err, "not ready for ID allocation")
 	}
 	runHAKeeperStoreTest(t, false, fn)
+}
+
+func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
+	runHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
+		require.NoError(t, s.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
+		// No LogStore heartbeat: bootstrap cannot place its replica yet. Exercise
+		// the real checker result consumed by the ticker, not a synthetic nil.
+		state := s.hakeeperCheck()
+		require.Nil(t, state)
+		require.Equal(t, s.cfg.HAKeeperCheckInterval.Duration, s.nextHAKeeperCheckInterval(state))
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		_, err := s.addLogStoreHeartbeat(ctx, s.getHeartbeatMessage())
+		require.NoError(t, err)
+		state = s.hakeeperCheck()
+		require.NotNil(t, state)
+		require.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(state))
+		actual, err := s.getCheckerState()
+		require.NoError(t, err)
+		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, actual.State)
+	})
 }
 
 func TestFailedBootstrap(t *testing.T) {
