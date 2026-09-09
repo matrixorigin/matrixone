@@ -161,6 +161,35 @@ select b, a from t_ctas_source_reordered order by a;
 b    a
 11    10
 21    20
+create table t_ctas_explicit_override_source (a int, b int default (a + 1));
+insert into t_ctas_explicit_override_source (a) values (10);
+create table t_ctas_explicit_override (b int default 0)
+as select b from t_ctas_explicit_override_source;
+select b from t_ctas_explicit_override;
+b
+11
+insert into t_ctas_explicit_override values ();
+select b from t_ctas_explicit_override order by b;
+b
+0
+11
+create table t_ctas_explicit_reference_source (a int, b int default (a + 1), c int);
+insert into t_ctas_explicit_reference_source (a, c) values (10, 30);
+create table t_ctas_explicit_reference (
+    b int default (c + 10),
+    c int,
+    x int default (b + 100)
+) as select b, c from t_ctas_explicit_reference_source;
+select x, b, c from t_ctas_explicit_reference;
+x    b    c
+111    11    30
+insert into t_ctas_explicit_reference (c) values (50);
+select x, b, c from t_ctas_explicit_reference order by c;
+x    b    c
+111    11    30
+160    60    50
+create table t_ctas_missing_source as select b from t_ctas_explicit_override_source;
+invalid input: cannot inherit default for CTAS column 'b': source column position 0 is not in the SELECT output
 create table t_move (a int, b int default (a + 1), c int);
 insert into t_move (a, c) values (10, 30);
 alter table t_move modify column a int after b;

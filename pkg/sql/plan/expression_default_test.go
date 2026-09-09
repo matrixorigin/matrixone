@@ -1048,7 +1048,7 @@ func TestRemapCTASSourceDefaultsUsesSourceAndOutputCoordinates(t *testing.T) {
 		{State: ProvenanceSingleSource, Source: &SourceColumn{RelPos: 7, ColPos: 0}},
 	}
 	require.NoError(t, remapCTASSourceDefaultsToOutput(
-		context.Background(), cols, provenance,
+		context.Background(), cols, provenance, nil,
 	))
 	require.Equal(t, []int32{1}, collectRefColPos(b.Default.Expr))
 
@@ -1057,8 +1057,29 @@ func TestRemapCTASSourceDefaultsUsesSourceAndOutputCoordinates(t *testing.T) {
 		Typ:     typ,
 		Default: &planpb.Default{Expr: expressionDefaultCol(2, 0)},
 	}}
-	err := remapCTASSourceDefaultsToOutput(context.Background(), missing, provenance[:1])
+	err := remapCTASSourceDefaultsToOutput(context.Background(), missing, provenance[:1], nil)
 	require.ErrorContains(t, err, "not in the SELECT output")
+}
+
+func TestRemapCTASSourceDefaultsSkipsExplicitTargetOverride(t *testing.T) {
+	typ := expressionDefaultIntType()
+	cols := []*ColDef{{
+		Name:    "b",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)},
+	}}
+	provenance := []OutputColumnProvenance{{
+		State:  ProvenanceSingleSource,
+		Source: &SourceColumn{RelPos: 7, ColPos: 1},
+	}}
+
+	// The source default refers to source column 0, which is absent from the
+	// SELECT output. An explicit target DEFAULT replaces this metadata before
+	// the final TableDef is published, so it must not be rejected here.
+	require.NoError(t, remapCTASSourceDefaultsToOutput(
+		context.Background(), cols, provenance, map[string]struct{}{"b": {}},
+	))
+	require.Equal(t, []int32{0}, collectRefColPos(cols[0].Default.Expr))
 }
 
 func TestModifyColPositionRemapsChangedColumnDefaults(t *testing.T) {

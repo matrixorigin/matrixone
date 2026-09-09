@@ -1357,7 +1357,12 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
-func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
+func genAsSelectCols(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	explicitTargetColumns map[string]struct{},
+) ([]*ColDef, *Query, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
@@ -1457,7 +1462,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	// buildTableDefs will perform the second, independent mapping from output
 	// order to the final target order (which may prepend explicit columns).
 	if err := remapCTASSourceDefaultsToOutput(
-		ctx.GetContext(), cols, outputColumnProvenance,
+		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -1473,6 +1478,7 @@ func remapCTASSourceDefaultsToOutput(
 	ctx context.Context,
 	cols []*ColDef,
 	provenance []OutputColumnProvenance,
+	explicitTargetColumns map[string]struct{},
 ) error {
 	sourceOutputPositions := make(map[int32]map[int32]int32)
 	for outputPos, p := range provenance {
@@ -1494,6 +1500,12 @@ func remapCTASSourceDefaultsToOutput(
 	for outputPos, col := range cols {
 		if col == nil || col.Default == nil || col.Default.Expr == nil ||
 			outputPos >= len(provenance) {
+			continue
+		}
+		// An explicit target declaration replaces the inherited source column
+		// definition in buildTableDefs. Its default is therefore evaluated in the
+		// target schema and must not be validated against the source SELECT output.
+		if _, overridden := explicitTargetColumns[strings.ToLower(col.Name)]; overridden {
 			continue
 		}
 		p := provenance[outputPos]
@@ -2391,7 +2403,15 @@ func buildCreateTable(
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(ctx, stmt.AsSource, isPrepareStmt); err != nil {
+		explicitTargetColumns := make(map[string]struct{})
+		for _, item := range stmt.Defs {
+			if colDef, ok := item.(*tree.ColumnTableDef); ok && colDef.Name != nil {
+				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
+			}
+		}
+		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
+		); err != nil {
 			return nil, err
 		}
 	}

@@ -146,6 +146,36 @@ create table t_ctas_source_reordered as select b, a from t_ctas_source;
 insert into t_ctas_source_reordered (a) values (20);
 select b, a from t_ctas_source_reordered order by a;
 
+-- An explicit target default replaces an inherited source default. The source
+-- dependency is not in the SELECT output, but it must not reject the valid
+-- target definition or leak into the persisted target metadata.
+create table t_ctas_explicit_override_source (a int, b int default (a + 1));
+insert into t_ctas_explicit_override_source (a) values (10);
+create table t_ctas_explicit_override (b int default 0)
+as select b from t_ctas_explicit_override_source;
+select b from t_ctas_explicit_override;
+insert into t_ctas_explicit_override values ();
+select b from t_ctas_explicit_override order by b;
+
+-- Combine an explicit column-reference override with a target-only default.
+-- The target-only x column is stored before the SELECT columns, while the
+-- explicit b default must be bound to the final target row schema.
+create table t_ctas_explicit_reference_source (a int, b int default (a + 1), c int);
+insert into t_ctas_explicit_reference_source (a, c) values (10, 30);
+create table t_ctas_explicit_reference (
+    b int default (c + 10),
+    c int,
+    x int default (b + 100)
+) as select b, c from t_ctas_explicit_reference_source;
+select x, b, c from t_ctas_explicit_reference;
+insert into t_ctas_explicit_reference (c) values (50);
+select x, b, c from t_ctas_explicit_reference order by c;
+
+-- Without an explicit override, an inherited default whose source dependency
+-- is omitted remains invalid and is rejected at DDL time.
+-- @regex("cannot inherit default", true)
+create table t_ctas_missing_source as select b from t_ctas_explicit_override_source;
+
 -- Moving a source column must update references in neighboring DEFAULTs.
 -- This specifically covers the old-position slot, which a delete/insert
 -- shift cannot represent.
