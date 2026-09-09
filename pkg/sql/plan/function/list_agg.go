@@ -425,7 +425,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -443,7 +443,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -461,7 +461,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -479,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -751,6 +751,30 @@ func typeInList(typ types.T, supported []types.T) bool {
 		}
 	}
 	return false
+}
+
+// mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
+// and standard-deviation aggregates. Unlike SUM, these aggregates accept
+// string and temporal expressions and evaluate their numeric representation.
+func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+
+	t := inputs[0]
+	switch {
+	case t.Oid == types.T_any:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case typeInList(t.Oid, SumSupportedTypes):
+		return newCheckResultWithSuccess(0)
+	case t.Oid.IsMySQLString():
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case t.Oid == types.T_date || t.Oid == types.T_time ||
+		t.Oid == types.T_datetime || t.Oid == types.T_timestamp:
+		return newCheckResultWithCast(0, []types.Type{types.T_decimal128.ToType()})
+	default:
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
 }
 
 var SumSupportedTypes = []types.T{
