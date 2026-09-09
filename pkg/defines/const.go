@@ -92,7 +92,7 @@ const (
 	MORPCVersion54     int64 = 54 // catalog-authenticated proxy cache reuse
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
-	MORPCVersion57     int64 = 57 // identity-bound materialized views and multi-source ISCP
+	MORPCVersion57     int64 = 57 // identity-bound materialized views, multi-source ISCP, and Arrow LOAD external-scan pipeline payload
 	MORPCLatestVersion       = MORPCVersion57
 )
 

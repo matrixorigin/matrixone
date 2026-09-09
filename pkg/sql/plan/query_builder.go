@@ -3833,6 +3833,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
+		rootID = builder.removeImpliedSemiJoins(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -12686,6 +12687,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	if ctx.bindingTree != nil {
+		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
+		ctx.bindingTree.rightJoinUsingStar = joinType == plan.Node_RIGHT &&
+			(hasUsingClause || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT)
 	}
 
 	node := &plan.Node{
