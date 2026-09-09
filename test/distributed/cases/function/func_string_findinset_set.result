@@ -92,7 +92,7 @@ FROM find_in_set_set_empty_28221 ORDER BY id;
 1  ¦    ¦  0  ¦  0  𝄀
 2  ¦    ¦  1  ¦  0  𝄀
 3  ¦  a  ¦  0  ¦  2  𝄀
-4  ¦    ¦  0  ¦  0  𝄀
+4  ¦    ¦  0  ¦  0
 SELECT id, FIND_IN_SET('', v) AS derived_empty_pos
 FROM (SELECT id, v FROM find_in_set_set_empty_28221) AS d ORDER BY id;
 ➤ id[4,32,0]  ¦  derived_empty_pos[-5,64,0]  𝄀
