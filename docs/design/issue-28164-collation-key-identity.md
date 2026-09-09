@@ -3,7 +3,7 @@
 - Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7`
+- Frozen baseline for implementation increment: `53c2aa274e1d7b7b9d073a7a9f1a2879655c224b` (`upstream/main` at the execution freeze)
 - Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
@@ -55,8 +55,9 @@ INSERT INTO ci VALUES (3, 'Alpha ', 30)
 
 The reported result was three rows instead of one row `(1, 'Alpha', 30)`.
 That is historical runtime evidence only until a current build is run. The
-current-main baseline used for the executable evidence is frozen at
-`c51bb4ed868219af720cb5c019fb103bc1e7bcc7`. The correction run
+the executable correction run used the then-current historical freeze
+`c51bb4ed868219af720cb5c019fb103bc1e7bcc7`; it is retained as baseline
+evidence and is distinct from the implementation freeze above. The correction run
 `artifacts/issue-28164-design/20260909T000000Z/` executes the complete sequence
 once in each of three independent databases (`r1`, `r2`, and `r3`). Every
 sample still leaves three rows, and a forced unique-index read returns the same
@@ -831,9 +832,9 @@ checks remain proportional to input rows and constraints, not a full-table scan.
 | Design trigger | Crosses planner, executor, lock, storage, catalog, upgrade, and hot-path boundaries; persistent compatibility and concurrency triggers apply |
 | Selected direction | Shared versioned codec with explicit stop-write migration |
 | Public SQL/API change in this delivery | None |
-| Production implementation | PR8 adds guarded planner/index-probe integration; v2 remains disabled and the complete storage/migration/query series is not implemented |
+| Production implementation | This increment adds guarded planner/index-probe integration; v2 remains disabled and the complete storage/migration/query series is not implemented |
 | QA decision | Required for implementation: user-visible uniqueness, persistence, concurrency, and compatibility behavior |
-| Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
+| Baseline reproduction | **PASS / REPRODUCED** on historical freeze `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
 | Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 3; maintainer approval is still pending |
 
 Open review findings must be recorded against this exact revision. Any change to
