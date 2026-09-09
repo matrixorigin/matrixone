@@ -1168,9 +1168,10 @@ dependency-light reference for TN/catalog integration; it is not a process
 global index and is not itself connected to the production hidden-table write
 path yet.
 
-### 10.16 Implementation series status (PR8 planner and index-probe increment)
+### 10.16 Implementation series status (planner and index-probe increment)
 
-PR8 carries the first production-planner integration of the v2 identity bytes.
+This implementation increment carries the first production-planner integration
+of the v2 identity bytes.
 Primary-key and UNIQUE projections, ODKU/REPLACE/UPDATE/DELETE conflict probes,
 foreign-key parent locks, and unique-index maintenance now materialize the
 relation-local framed identity rather than falling back to the legacy `serial`
@@ -1186,7 +1187,7 @@ TN/catalog sidecar persistence or commit-time validation yet. Global SQL
 collation/hash/group consumers, bulk-ingestion paths, migration management,
 and production heartbeat/activation wiring remain required before a v2 table
 can be exposed. The existing `pkg/common/collationkey.SidecarStore` and
-`MigrationGate` are reference contracts, not storage implementations. PR8
-therefore supplies planner and fallback safety for the eventual format but is
-not the complete #28164 fix; `production_fix` and `qa_acceptance` remain
-incomplete and the issue stays open.
+`MigrationGate` are reference contracts, not storage implementations. This
+increment therefore supplies planner and fallback safety for the eventual
+format but is not the complete #28164 fix; `production_fix` and
+`qa_acceptance` remain incomplete and the issue stays open.
