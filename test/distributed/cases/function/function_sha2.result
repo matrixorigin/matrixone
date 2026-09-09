@@ -25,6 +25,18 @@ null
 select sha2(null, null);
 sha2(null, null)
 null
+select sha2('hello', '256tail');
+sha2(hello, 256tail)
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+select sha2('hello', 'abc');
+sha2(hello, abc)
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+select sha2('hello', '');
+sha2(hello, )
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+select sha2(_binary x'ff00', _binary x'3235367461696c');
+sha2(_binary x'ff00', _binary x'3235367461696c')
+ea5dbf9596d187e9500f23e9a680109475341cf4e81f7e043f7d97152c10772f
 create table shatwo01 (a text);
 insert into shatwo01 values("网络安全"),("database"),(null);
 select a,sha2(a,0) from shatwo01;

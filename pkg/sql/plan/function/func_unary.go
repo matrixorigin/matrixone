@@ -4956,7 +4956,11 @@ func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 const (
-	MaxAllowedValue = 8000
+	// SPACE returns a VARCHAR. Keep the execution bound aligned with the
+	// largest inline SQL string instead of an unrelated, smaller constant.
+	// The bound is still finite: a count supplied by a table must not turn one
+	// row into an unbounded allocation.
+	MaxAllowedValue = types.MaxVarcharLen
 )
 
 func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
@@ -4964,16 +4968,52 @@ func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
 	if v < 0 {
 		ilen = 0
 	} else {
-		ilen = int(v)
-		if ilen > MaxAllowedValue || ilen < 0 {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || float64(v) > MaxAllowedValue {
 			return "", moerr.NewInvalidInputNoCtxf("the space count is greater than max allowed value %d", MaxAllowedValue)
 		}
+		ilen = int(v)
 	}
 	return strings.Repeat(" ", ilen), nil
 }
 
 func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, FillSpaceNumber[T], selectList)
+}
+
+func fillSpaceNumberFromIntegerString(value string) (string, error) {
+	// Decimal-to-integer conversion for SPACE follows MySQL's half-up
+	// rounding. decimalInt64Explicit clamps values outside int64; that is safe
+	// here because every positive value above the SPACE bound is rejected and
+	// every negative value produces the empty string.
+	number, err := decimalInt64Explicit(value)
+	if err != nil {
+		return "", err
+	}
+	return FillSpaceNumber(number)
+}
+
+func SpaceDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal64](ivecs, result, proc, length,
+		func(value types.Decimal64) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal64RoundedIntegerString(value, scale))
+		}, selectList)
+}
+
+func SpaceDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal128](ivecs, result, proc, length,
+		func(value types.Decimal128) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal128RoundedIntegerString(value, scale))
+		}, selectList)
+}
+
+func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal256](ivecs, result, proc, length,
+		func(value types.Decimal256) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal256RoundedIntegerString(value, scale))
+		}, selectList)
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
