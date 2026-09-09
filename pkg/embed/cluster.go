@@ -105,6 +105,7 @@ type cluster struct {
 func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
+	started := time.Now()
 	c := &cluster{
 		id:      atomic.AddUint64(&clusterID, 1),
 		state:   stopped,
@@ -114,16 +115,20 @@ func NewCluster(
 		opt(c)
 	}
 	if err := c.adjust(); err != nil {
+		c.logTestSetup("cluster-construct", time.Since(started), err)
 		return nil, err
 	}
 
 	if err := c.initConfigs(); err != nil {
+		c.logTestSetup("cluster-construct", time.Since(started), err)
 		return cleanupClusterOnError(c, err)
 	}
 
 	if err := c.createServiceOperators(0); err != nil {
+		c.logTestSetup("cluster-construct", time.Since(started), err)
 		return cleanupClusterOnError(c, err)
 	}
+	c.logTestSetup("cluster-construct", time.Since(started), nil)
 	return c, nil
 }
 
@@ -153,9 +158,12 @@ func (c *cluster) Start() (err error) {
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
+	phaseStarted := time.Now()
 	if err = c.ensurePortLeaseLocked(); err != nil {
+		c.logTestSetup("port-lease", time.Since(phaseStarted), err)
 		return err
 	}
+	c.logTestSetup("port-lease", time.Since(phaseStarted), nil)
 
 	if c.options.testing {
 		if c.testAdmission != nil {
@@ -167,20 +175,27 @@ func (c *cluster) Start() (err error) {
 		if c.options.allowConcurrentTestClusters {
 			mode = clusteradmission.AllowConcurrent
 		}
+		admissionStarted := time.Now()
 		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
 		if acquireErr != nil {
+			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr
 		}
 		c.testAdmission = admission
+		timing := admission.Timing()
+		c.logTestSetup("admission-acquire", timing.WaitDuration, nil)
 	}
 
+	phaseStarted = time.Now()
 	if err = c.doStartLocked(0); err != nil {
+		c.logTestSetup("service-start", time.Since(phaseStarted), err)
 		cleanupErr := c.closeServicesFromLocked(0)
 		if cleanupErr == nil {
 			cleanupErr = c.releaseTestAdmissionLocked()
 		}
 		return errors.Join(err, cleanupErr)
 	}
+	c.logTestSetup("service-start", time.Since(phaseStarted), nil)
 	c.state = started
 	return nil
 }
@@ -233,12 +248,16 @@ func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
+	started := time.Now()
 	err := c.closeServicesLocked()
+	c.logTestSetup("service-close", time.Since(started), err)
 	if err == nil {
 		err = c.releaseTestAdmissionLocked()
 	}
 	if err == nil {
+		started = time.Now()
 		err = c.releasePortLeaseLocked()
+		c.logTestSetup("port-lease-release", time.Since(started), err)
 	}
 	return err
 }
@@ -752,11 +771,38 @@ func (c *cluster) releaseTestAdmissionLocked() error {
 	if c.testAdmission == nil {
 		return nil
 	}
-	if err := c.testAdmission.Release(); err != nil {
+	admission := c.testAdmission
+	started := time.Now()
+	if err := admission.Release(); err != nil {
+		c.logTestSetup("admission-release", time.Since(started), err)
 		return err
 	}
+	c.logTestSetup("admission-release", time.Since(started), nil)
 	c.testAdmission = nil
 	return nil
+}
+
+func (c *cluster) logTestSetup(phase string, duration time.Duration, err error) {
+	if !c.options.testing {
+		return
+	}
+	status := "ready"
+	if err != nil {
+		status = "error"
+	}
+	extra := ""
+	if c.testAdmission != nil {
+		timing := c.testAdmission.Timing()
+		extra = fmt.Sprintf(
+			" wait=%s hold=%s admission_released=%t",
+			timing.WaitDuration,
+			timing.HoldDuration,
+			!timing.ReleasedAt.IsZero(),
+		)
+	}
+	fmt.Fprintf(os.Stderr,
+		"MO_UT_SETUP fixture=embedded-cluster cluster_id=%d pid=%d phase=%s duration=%s status=%s%s\n",
+		c.id, os.Getpid(), phase, duration, status, extra)
 }
 
 func genConfig(

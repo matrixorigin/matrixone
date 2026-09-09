@@ -27,13 +27,13 @@ insert into ip_deterministic_generated (id, ip_text, ip_binary) values
 select id, ip_text, ipv4_number, ipv4_text, hex(ip6_binary), ip6_text,
 is_ipv4, is_ipv6, is_ipv4_compat, is_ipv4_mapped
 from ip_deterministic_generated order by id;
-➤ id[4,32,0]  ¦  ip_text[12,39,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  hex(ip6_binary)[12,65535,0]  ¦  ip6_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  ¦  is_ipv4_compat[4,32,0]  ¦  is_ipv4_mapped[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  ip_text[12,39,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  hex(ip6_binary)[12,32,0]  ¦  ip6_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  ¦  is_ipv4_compat[4,32,0]  ¦  is_ipv4_mapped[4,32,0]  𝄀
 1  ¦  192.168.1.1  ¦  3232235777  ¦  192.168.1.1  ¦  C0A80101  ¦  192.168.1.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
 2  ¦  2001:db8::1  ¦  null  ¦  null  ¦  20010DB8000000000000000000000001  ¦  2001:db8::1  ¦  0  ¦  1  ¦  0  ¦  0  𝄀
 3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 4  ¦  invalid  ¦  null  ¦  null  ¦  null  ¦  ::1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
 5  ¦  ::ffff:192.0.2.1  ¦  3221225985  ¦  192.0.2.1  ¦  C0000201  ¦  192.0.2.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
-6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::c000:201  ¦  0  ¦  1  ¦  1  ¦  0
+6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::192.0.2.1  ¦  0  ¦  1  ¦  1  ¦  0
 select name, column_name
 from mo_catalog.mo_indexes as i
 join mo_catalog.mo_tables as t on i.table_id = t.rel_id
@@ -92,24 +92,24 @@ inet6_ntoa(unhex('01')) is null,
 is_ipv4('10.0.0.1'), is_ipv6('2001:db8::1'),
 is_ipv4_compat(unhex('000000000000000000000000c0000201')),
 is_ipv4_mapped(unhex('00000000000000000000ffffc0a80101'));
-➤ inet_aton(10.0.0.1)[-5,64,0]  ¦  inet_aton(invalid) is null[-7,1,0]  ¦  inet_ntoa(167772161)[12,65535,0]  ¦  inet6_ntoa(unhex(c0a80101))[12,65535,0]  ¦  inet6_ntoa(unhex(01)) is null[-7,1,0]  ¦  is_ipv4(10.0.0.1)[-5,64,0]  ¦  is_ipv6(2001:db8::1)[-5,64,0]  ¦  is_ipv4_compat(unhex(000000000000000000000000c0000201))[-5,64,0]  ¦  is_ipv4_mapped(unhex(00000000000000000000ffffc0a80101))[-5,64,0]  𝄀
+➤ inet_aton(10.0.0.1)[-5,64,0]  ¦  inet_aton(invalid) is null[-7,1,0]  ¦  inet_ntoa(167772161)[12,31,0]  ¦  inet6_ntoa(unhex(c0a80101))[12,39,0]  ¦  inet6_ntoa(unhex(01)) is null[-7,1,0]  ¦  is_ipv4(10.0.0.1)[-5,64,0]  ¦  is_ipv6(2001:db8::1)[-5,64,0]  ¦  is_ipv4_compat(unhex(000000000000000000000000c0000201))[-5,64,0]  ¦  is_ipv4_mapped(unhex(00000000000000000000ffffc0a80101))[-5,64,0]  𝄀
 167772161  ¦  1  ¦  10.0.0.1  ¦  192.168.1.1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
 prepare ip_conversion_reuse from 'select inet_aton(?), inet6_ntoa(?)';
 set @ip_value = '192.168.1.1', @binary_value = unhex('c0a80101');
 execute ip_conversion_reuse using @ip_value, @binary_value;
-➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,39,0]  𝄀
 3232235777  ¦  192.168.1.1
 set @ip_value = 'invalid', @binary_value = unhex('01');
 execute ip_conversion_reuse using @ip_value, @binary_value;
-➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,39,0]  𝄀
 null  ¦  null
 set @ip_value = null, @binary_value = null;
 execute ip_conversion_reuse using @ip_value, @binary_value;
-➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,39,0]  𝄀
 null  ¦  null
 set @ip_value = '10.0.0.1', @binary_value = unhex('0a000001');
 execute ip_conversion_reuse using @ip_value, @binary_value;
-➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,65535,0]  𝄀
+➤ inet_aton(?)[-5,64,0]  ¦  inet6_ntoa(?)[12,39,0]  𝄀
 167772161  ¦  10.0.0.1
 deallocate prepare ip_conversion_reuse;
 drop table if exists ip_nullable_generated;
@@ -121,7 +121,7 @@ ip6_text varchar(39) generated always as (inet6_ntoa(ip_binary)) stored
 );
 insert into ip_nullable_generated (ip_text, ip_binary) values ('invalid', unhex('01'));
 select ip_text, hex(ip_binary), ipv4_number, ip6_text from ip_nullable_generated;
-➤ ip_text[12,39,0]  ¦  hex(ip_binary)[12,65535,0]  ¦  ipv4_number[-5,64,0]  ¦  ip6_text[12,39,0]  𝄀
+➤ ip_text[12,39,0]  ¦  hex(ip_binary)[12,32,0]  ¦  ipv4_number[-5,64,0]  ¦  ip6_text[12,39,0]  𝄀
 invalid  ¦  01  ¦  null  ¦  null
 select column_name, is_nullable
 from information_schema.columns

@@ -120,6 +120,75 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	assertAttempts(t, counter, arguments, 3)
 }
 
+func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
+	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(t.TempDir(), "ut.json")
+	report := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=2s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster2","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=500ms status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster3","Output":"    MO_UT_SETUP fixture=shared-cluster phase=slow-start duration=1m2.5s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster4","Output":"    MO_UT_SETUP fixture=shared-cluster phase=hour-start duration=1h2m3s status=ready\n"}`,
+		`null`,
+		`[]`,
+		`{"Action":"output","Package":"example/issues","Test":"TestIssue","Output":"    MO_UT_SETUP fixture=issue26875 phase=database-create duration=100ms status=error\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster5","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=service-start duration=3s status=ready wait=2s hold=5s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-release duration=1ms status=ready wait=2s hold=5s admission_released=true\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster6","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=admission-acquire duration=100ms status=ready wait=100ms hold=100ms\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=service-start duration=4s status=ready wait=100ms hold=4.1s\n"}`,
+		"not json",
+	}, "\n")
+	runSummary := func(reportPath, report string) string {
+		t.Helper()
+		if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command("python3", scriptPath, reportPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("summarize setup timing: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+
+	text := runSummary(reportPath, report)
+	if !strings.Contains(text, "fixture=shared-cluster phase=cluster-start count=2 total=2.50s max=2.00s") {
+		t.Fatalf("missing cumulative setup summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=slow-start count=1 total=1.04m max=1.04m") {
+		t.Fatalf("missing compound duration summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=hour-start count=1 total=62.05m max=62.05m") {
+		t.Fatalf("missing hour duration summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
+		t.Fatalf("missing setup error summary: %s", text)
+	}
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=2 admission_wait(total=2.10s max=2.00s) service_start(total=7.00s max=4.00s) admission_hold_observed_max=5.00s admission_unreleased=1") {
+		t.Fatalf("missing embedded cluster diagnosis: %s", text)
+	}
+
+	// Reusing a cluster object after a successful Close creates a new
+	// admission lease with the same (pid, cluster_id).  The old release must
+	// not make the second, still-active lease look released.
+	reacquired := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "reacquired.json"), reacquired)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased=1") {
+		t.Fatalf("reacquired lease was not reported as active: %s", text)
+	}
+
+	// Once that second lease is released, the current state must converge back
+	// to zero rather than retaining a stale unreleased generation.
+	released := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=3s hold=3s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "released.json"), released)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased=0") {
+		t.Fatalf("released reacquired lease was not accounted for: %s", text)
+	}
+}
+
 func writeScopeFixture(t *testing.T, root, name, contents string) {
 	t.Helper()
 

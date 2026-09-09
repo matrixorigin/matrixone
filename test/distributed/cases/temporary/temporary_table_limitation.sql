@@ -3,11 +3,11 @@
 -- ============================================================================
 
 -- ============================================================================
--- 测试分类 1: truncate table (不支持)
+-- 测试分类 1: truncate table
 -- ============================================================================
 
 -- 测试用例 1.1: truncate 临时表
--- 预期结果: 报错，不支持 truncate
+-- 预期结果: 临时表被清空
 drop database if exists unnormal_db;
 create database unnormal_db;
 use unnormal_db;
@@ -19,7 +19,7 @@ create temporary table temp_truncate_test (
 insert into temp_truncate_test values (1, 'test1');
 insert into temp_truncate_test values (2, 'test2');
 
-truncate table temp_truncate_test;  -- 失败
+truncate table temp_truncate_test;
 
 -- 替代方案: 使用 delete
 delete from temp_truncate_test;
