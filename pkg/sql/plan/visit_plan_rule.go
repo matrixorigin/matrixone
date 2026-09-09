@@ -1671,7 +1671,7 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 			return rule.preparedExecutionExprType(exprImpl.Lit.Src)
 		}
 		return preparedType, false, exprImpl.Lit != nil && exprImpl.Lit.GetIsnull() &&
-			exprImpl.Lit.GetStringSource() == 0, nil
+			exprImpl.Lit.Src == nil && exprImpl.Lit.GetStringSource() == 0, nil
 	case *plan.Expr_Sub:
 		if exprImpl.Sub != nil {
 			return rule.preparedExecutionExprType(exprImpl.Sub.Child)
@@ -1704,6 +1704,7 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 			}
 			argTypes[i] = currentType
 			if i < stringOperands {
+				stringDomainModes[i] = regexpStaticOperandCheckMode(arg)
 				if childDomainless {
 					stringDomainModes[i] = planfunction.StringDomainCheckDomainless
 				} else if _, directMarker := preparedParamPosition(arg); directMarker {
@@ -1743,6 +1744,7 @@ func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(
 	}
 	modes := make([]planfunction.StringDomainCheckMode, len(boundArgs))
 	for i := 0; i < stringOperands && i < len(originalArgs); i++ {
+		modes[i] = regexpStaticOperandCheckMode(originalArgs[i])
 		currentType, dynamic, currentDomainless, err :=
 			rule.preparedExecutionExprType(originalArgs[i])
 		if err != nil {
@@ -1752,8 +1754,30 @@ func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(
 			modes[i] = planfunction.StringDomainCheckDomainless
 			continue
 		}
-		if _, directMarker := preparedParamPosition(originalArgs[i]); directMarker {
+		if position, directMarker := preparedParamPosition(originalArgs[i]); directMarker {
 			modes[i] = planfunction.StringDomainCheckParamMarker
+			// SQL EXECUTE can substitute a literal before this consumer binds.
+			// Preserve the marker owner on this REGEXP argument only, rather
+			// than changing the shared parameter used by unrelated consumers.
+			boundArgs[i] = DeepCopyExpr(boundArgs[i])
+			value := boundArgs[i]
+			for value != nil {
+				cast := value.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" ||
+					len(cast.Args) == 0 || isExplicitPreparedCast(value) {
+					break
+				}
+				value = cast.Args[0]
+			}
+			if value != nil && value.GetLit() != nil {
+				source := types.StringSourceSQLPrepare
+				if position < len(rule.paramValues) {
+					if param, ok := rule.paramValues[position].(ParamValue); ok && param.IsBinaryProtocol {
+						source = types.StringSourceCOMStmt
+					}
+				}
+				value.GetLit().StringSource = uint32(source) + 1
+			}
 		}
 		if !dynamic {
 			continue

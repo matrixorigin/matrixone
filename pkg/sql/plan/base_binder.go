@@ -4653,10 +4653,10 @@ func bindMixedInListComparison(
 	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
-// preparedRegexpStringDomainCheckModes identifies operands whose string domain
-// is owned by the current EXECUTE rather than by the prepared plan. Keep this
-// expression-aware: parameter markers are represented as TEXT while cached,
-// so their Type alone cannot distinguish them from a statically text value.
+// preparedRegexpStringDomainCheckModes separates MySQL item classification
+// from runtime decoding. PREPARE checks the current declared charset, including
+// the text default of a marker; EXECUTE may change its bytes but cannot make a
+// statically incompatible statement legal after it has been prepared.
 func preparedRegexpStringDomainCheckModes(
 	name string, args []*Expr,
 ) []function.StringDomainCheckMode {
@@ -4668,15 +4668,54 @@ func preparedRegexpStringDomainCheckModes(
 	var modes []function.StringDomainCheckMode
 	for i := 0; i < stringOperands; i++ {
 		arg := args[i]
-		if arg == nil || !preparedExprStringDomainDependsOnRuntime(arg) || isExplicitPreparedCast(arg) {
+		mode := regexpStaticOperandCheckMode(arg)
+		if mode == function.StringDomainCheckKnown && !preparedExprStringDomainDependsOnRuntime(arg) {
 			continue
 		}
 		if modes == nil {
 			modes = make([]function.StringDomainCheckMode, len(args))
 		}
-		modes[i] = function.StringDomainCheckDeferred
+		modes[i] = mode
 	}
 	return modes
+}
+
+// MySQL distinguishes a fixed-width binary column from an explicit BINARY
+// cast, and a bare variable from a statically typed binary expression. Keep
+// this item classification separate from the type consumed by the kernel.
+func regexpStaticOperandCheckMode(expr *Expr) function.StringDomainCheckMode {
+	if expr == nil {
+		return function.StringDomainCheckKnown
+	}
+	if _, directMarker := preparedParamPosition(expr); directMarker {
+		// MySQL resolves a bare marker as text at PREPARE. It is not an
+		// unknown charset that can hide a fixed binary peer until EXECUTE.
+		return function.StringDomainCheckParamMarker
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.Src != nil {
+			return regexpStaticOperandCheckMode(literal.Src)
+		}
+		switch literal.GetLiteralForm() {
+		case plan.StringLiteralForm_STRING_LITERAL_HEX, plan.StringLiteralForm_STRING_LITERAL_BIT:
+			return function.StringDomainCheckBinaryLiteral
+		}
+		// Fixed-width binary constants are produced by BINARY casts. Folding
+		// may discard the cast node, but retains its expression-owned source.
+		// A BINARY column is a ColRef, and a marker has a different owner.
+		if expr.Typ.Id == int32(types.T_binary) &&
+			literal.GetStringSource() == uint32(types.StringSourceExpression)+1 {
+			return function.StringDomainCheckBinaryCast
+		}
+	}
+	if isExplicitPreparedCast(expr) &&
+		types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainBinary {
+		return function.StringDomainCheckBinaryCast
+	}
+	if variable := expr.GetV(); variable != nil && !variable.System {
+		return function.StringDomainCheckUserVariable
+	}
+	return function.StringDomainCheckKnown
 }
 
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
@@ -4829,9 +4868,9 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	}
 
 	preparedDomain := types.StaticStringDomain(makeTypeByPlan2Expr(expr))
-	if preparedRegexpResultDomainDependsOnDynamicOperands(
-		fn.Func.GetObjName(), fn.Args, dynamicArgs, preparedDomain) {
-		return true
+	if preparedRegexpResultStringOperandCount(fn.Func.GetObjName(), len(fn.Args)) > 0 {
+		return preparedRegexpResultDomainDependsOnDynamicOperands(
+			fn.Func.GetObjName(), fn.Args, dynamicArgs, preparedDomain)
 	}
 	for _, dynamicArg := range dynamicArgs {
 		candidates := preparedRuntimeParamTypeCandidates()
@@ -4854,12 +4893,12 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 }
 
 // preparedRegexpResultDomainDependsOnDynamicOperands models the result-domain
-// transfer performed by the REGEXP execution kernels. SUBSTR and REPLACE select
-// binary mode only from their subject-pattern pair; REPLACE's replacement is a
-// compatibility operand but never owns the result domain. Model that
-// two-element lattice directly instead of trying one parameter type at a time.
-// The latter cannot discover a legal binary/binary state when each intermediate
-// binary/text combination is rejected by static regexp compatibility checks.
+// transfer performed by the REGEXP execution kernels. The subject-pattern
+// pair owns the result domain, except that direct markers retain their text
+// charset across executions. REPLACE's replacement never owns the result
+// domain. Computed operands and user variables can still change domain; model
+// their two-element lattice without treating a marker's BLOB packet as a
+// change to the prepared result charset.
 func preparedRegexpResultDomainDependsOnDynamicOperands(
 	name string,
 	args []*plan.Expr,
@@ -4874,7 +4913,8 @@ func preparedRegexpResultDomainDependsOnDynamicOperands(
 	dynamic := make([]bool, stringOperands)
 	for _, position := range dynamicArgs {
 		if position >= 0 && position < stringOperands {
-			dynamic[position] = true
+			_, marker := preparedParamPosition(args[position])
+			dynamic[position] = !marker
 		}
 	}
 

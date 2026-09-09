@@ -178,12 +178,22 @@ const (
 	StringDomainCheckParamMarker
 	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
 	StringDomainCheckDomainless
+	// StringDomainCheckBinaryCast classifies CAST(... AS BINARY) as MySQL's
+	// binary VARCHAR item, independently of MO's fixed-width runtime type.
+	StringDomainCheckBinaryCast
+	// A bare user variable has the marker's static compatibility exception,
+	// but unlike a marker it contributes its current charset to the result.
+	StringDomainCheckUserVariable
+	// Raw hex/bit literals are binary VARCHAR items even when MO stores an
+	// empty literal in a CHAR-shaped container.
+	StringDomainCheckBinaryLiteral
 )
 
 // GetFunctionByNameWithStringDomainCheckModes resolves a function while
 // preserving the provenance needed by regexp charset checks. Ordinary argument
-// types remain authoritative for overload selection, casts, result metadata,
-// and the executor's effective text/binary domain.
+// types remain authoritative for overload selection and executor input casts.
+// REGEXP marker result metadata is derived from its PREPARE-time text charset,
+// independently of the runtime operand encoding.
 func GetFunctionByNameWithStringDomainCheckModes(
 	ctx context.Context, name string, args []types.Type, modes []StringDomainCheckMode,
 ) (r FuncGetResult, err error) {
@@ -192,7 +202,32 @@ func GetFunctionByNameWithStringDomainCheckModes(
 			ctx, "string domain check mode count %d does not match argument count %d",
 			len(modes), len(args))
 	}
-	return getFunctionByName(ctx, name, args, modes)
+	r, err = getFunctionByName(ctx, name, args, modes)
+	if err != nil || (name != "regexp_substr" && name != "regexp_replace") {
+		return r, err
+	}
+	// Runtime marker bytes own matching, not the prepared result charset.
+	// Recompute only result metadata; never change executor input casts.
+	var resultArgs []types.Type
+	for i := 0; i < min(RegexpMatchStringOperandCount, len(args), len(modes)); i++ {
+		if modes[i] != StringDomainCheckParamMarker {
+			continue
+		}
+		if resultArgs == nil {
+			resultArgs = append([]types.Type(nil), args...)
+			if r.needCast {
+				copy(resultArgs, r.targetTypes)
+			}
+		}
+		// Marker result bounds are PREPARE-time bounds, not the length/type
+		// of the current packet. Otherwise BLOB -> STRING changes VARCHAR
+		// versus TEXT metadata even though both executions return text.
+		resultArgs[i] = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+	}
+	if resultArgs != nil {
+		r.retType = allSupportedFunctions[r.fid].Overloads[r.overloadId].retType(resultArgs)
+	}
+	return r, nil
 }
 
 func getFunctionByName(

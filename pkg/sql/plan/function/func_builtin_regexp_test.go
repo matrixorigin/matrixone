@@ -102,13 +102,20 @@ func Test_BuiltIn_RegexpMultibytePositions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "甲😀乙X丙", got)
 
-	for _, pos := range []int64{0, 6} {
+	for _, pos := range []int64{0, 6, 7} {
 		_, err = op.regMap.regularInstr("😀", subject, pos, 1, 0)
 		require.Error(t, err, pos)
-		_, _, err = op.regMap.regularSubstr("😀", subject, pos, 1)
-		require.Error(t, err, pos)
-		_, err = op.regMap.regularReplace("😀", subject, "X", pos, 1)
-		require.Error(t, err, pos)
+		matched, _, substrErr := op.regMap.regularSubstr("😀", subject, pos, 1)
+		replaced, replaceErr := op.regMap.regularReplace("😀", subject, "X", pos, 1)
+		if pos == 6 {
+			require.NoError(t, substrErr)
+			require.False(t, matched)
+			require.NoError(t, replaceErr)
+			require.Equal(t, subject, replaced)
+		} else {
+			require.Error(t, substrErr, pos)
+			require.Error(t, replaceErr, pos)
+		}
 	}
 }
 
@@ -497,6 +504,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
 		op.builtInRegexpInstr)
 	require.NoError(t, instr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	require.NoError(t, instr.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info := instr.Run()
 	require.True(t, ok, info)
 
@@ -504,6 +512,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
 		op.builtInRegexpSubstr)
 	require.NoError(t, substr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	require.NoError(t, substr.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info = substr.Run()
 	require.True(t, ok, info)
 	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
@@ -512,6 +521,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 	// Reuse one operator and result wrapper as prepared execution does. Resetting
 	// the parameter domain must change semantics and clear the old result domain.
 	substr.parameters[0].SetIsBinaryString(false)
+	substr.parameters[1].SetIsBinaryString(false)
 	substr.expected.wanted = []string{"中", "中"}
 	ok, info = substr.Run()
 	require.True(t, ok, info)
@@ -519,6 +529,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 
 	substr.parameters[0].SetIsBinaryString(true)
+	substr.parameters[1].SetIsBinaryString(true)
 	ok, info = substr.Run()
 	require.True(t, ok, info)
 	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
@@ -534,6 +545,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
 		op.builtInRegexpReplace)
 	require.NoError(t, replace.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+	require.NoError(t, replace.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info = replace.Run()
 	require.True(t, ok, info)
 	require.True(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
@@ -558,9 +570,10 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		{name: "regexp_like", fn: newOpBuiltInRegexp().builtInRegexpLike},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want := []bool{true, false}
+			// A binary pattern does not split the text subject into bytes.
+			want := []bool{false, false}
 			if tc.name == "not_regexp" {
-				want = []bool{false, true}
+				want = []bool{true, true}
 			}
 			testCase := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
@@ -580,7 +593,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
 		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, nil),
 		newOpBuiltInRegexp().builtInRegexpInstr)
 	setFirstRowBinary(t, &instr, 1)
 	ok, info := instr.Run()
@@ -592,12 +605,12 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
 		},
-		NewFunctionTestResult(varchar, false, []string{"中", "中"}, nil),
+		NewFunctionTestResult(varchar, false, []string{"", "中"}, []bool{true, false}),
 		newOpBuiltInRegexp().builtInRegexpSubstr)
 	setFirstRowBinary(t, &substr, 1)
 	ok, info = substr.Run()
 	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+	require.True(t, substr.GetResultVectorDirectly().IsNull(0))
 	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 
 	for _, tc := range []struct {
@@ -607,7 +620,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		wantBinary      bool
 	}{
 		{name: "subject selects binary matching", binaryParameter: 0, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
-		{name: "pattern selects binary matching", binaryParameter: 1, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
+		{name: "pattern preserves text subject positions", binaryParameter: 1, want: []string{"\xff", "X"}, wantBinary: true},
 	} {
 		t.Run("regexp_replace_"+tc.name, func(t *testing.T) {
 			replace := NewFunctionTestCase(proc,
@@ -993,31 +1006,31 @@ func TestRegexpFunctionsHonorStringDomainCheckModes(t *testing.T) {
 		wantDomain types.StringDomain
 	}{
 		{
-			name: "substr binary pattern marker owns result domain",
+			name: "substr binary pattern marker preserves text result domain",
 			fn:   "regexp_substr",
 			args: []types.Type{types.New(types.T_varchar, 10, 0), binary},
 			modes: []StringDomainCheckMode{
 				StringDomainCheckParamMarker, StringDomainCheckParamMarker,
 			},
-			wantDomain: types.StringDomainBinary,
+			wantDomain: types.StringDomainText,
 		},
 		{
-			name: "replace binary subject marker owns result domain",
+			name: "replace binary subject marker preserves text result domain",
 			fn:   "regexp_replace",
 			args: []types.Type{binary, text, text},
 			modes: []StringDomainCheckMode{
 				StringDomainCheckParamMarker, StringDomainCheckParamMarker, StringDomainCheckParamMarker,
 			},
-			wantDomain: types.StringDomainBinary,
+			wantDomain: types.StringDomainText,
 		},
 		{
-			name: "replace binary pattern marker owns result domain",
+			name: "replace binary pattern marker preserves text result domain",
 			fn:   "regexp_replace",
 			args: []types.Type{text, binary, text},
 			modes: []StringDomainCheckMode{
 				StringDomainCheckParamMarker, StringDomainCheckParamMarker, StringDomainCheckParamMarker,
 			},
-			wantDomain: types.StringDomainBinary,
+			wantDomain: types.StringDomainText,
 		},
 		{
 			name: "replace binary replacement marker does not own result domain",
@@ -1052,6 +1065,11 @@ func TestRegexpStringDomainCheckModeMatrix(t *testing.T) {
 	states := []operandState{
 		{name: "known_text", typ: text, mode: StringDomainCheckKnown, text: true},
 		{name: "known_binary", typ: binary, mode: StringDomainCheckKnown, trigger: true},
+		{name: "binary_column", typ: types.T_binary.ToType(), mode: StringDomainCheckKnown},
+		{name: "blob_column", typ: types.T_blob.ToType(), mode: StringDomainCheckKnown},
+		{name: "binary_cast", typ: types.T_binary.ToType(), mode: StringDomainCheckBinaryCast, trigger: true},
+		{name: "variable_binary", typ: binary, mode: StringDomainCheckUserVariable},
+		{name: "variable_text", typ: text, mode: StringDomainCheckUserVariable, text: true},
 		{name: "marker_text", typ: text, mode: StringDomainCheckParamMarker, text: true},
 		{name: "marker_binary", typ: binary, mode: StringDomainCheckParamMarker},
 		{name: "deferred_text", typ: text, mode: StringDomainCheckDeferred},
@@ -1233,8 +1251,9 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 		require.Error(t, err)
 	}
 
-	_, err = op.regMap.regularInstr("^$", "", 1, 0, 0)
-	require.Error(t, err)
+	index, err = op.regMap.regularInstr("^$", "", 1, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), index)
 	_, err = op.regMap.regularInstr("^$", "", 1, 1, -1)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
@@ -1268,8 +1287,10 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 		})
 	}
 
-	_, _, err = op.regMap.regularSubstr("^$", "", 1, 0)
-	require.Error(t, err)
+	matched, value, err := op.regMap.regularSubstr("^$", "", 1, 0)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Empty(t, value)
 	_, _, err = op.regMap.regularSubstr("*", "", 1, 1)
 	require.Error(t, err)
 }

@@ -405,7 +405,9 @@ func regexpStringDomainFixedTypeMatchN(
 			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
 			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
 			// values remain byte-domain operands without making text peers illegal.
-			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+			if mode == StringDomainCheckParamMarker || mode == StringDomainCheckUserVariable ||
+				(inputs[i].Oid != types.T_varbinary && inputs[i].Oid != types.T_varchar &&
+					mode != StringDomainCheckBinaryCast && mode != StringDomainCheckBinaryLiteral) {
 				continue
 			}
 			if hasText {

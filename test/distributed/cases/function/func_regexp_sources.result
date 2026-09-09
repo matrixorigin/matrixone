@@ -1,0 +1,116 @@
+drop database if exists regexp_operand_sources;
+create database regexp_operand_sources;
+use regexp_operand_sources;
+create table operands(t varchar(16), b blob, f binary(3), v varbinary(16));
+insert into operands values ('éa', _binary'éa', _binary'éa', _binary'éa');
+select regexp_instr(t,b), regexp_instr(t,f), regexp_instr(b,'a'), regexp_instr(f,'a') from operands;
+➤ regexp_instr(t, b)[-5,64,0]  ¦  regexp_instr(t, f)[-5,64,0]  ¦  regexp_instr(b, a)[-5,64,0]  ¦  regexp_instr(f, a)[-5,64,0]  𝄀
+0  ¦  0  ¦  3  ¦  3
+select hex(regexp_substr(b,'.')), hex(regexp_substr(b,'.',2)), hex(regexp_substr(b,'.',2,1)) from operands;
+➤ hex(regexp_substr(b, .))[-1,16383,0]  ¦  hex(regexp_substr(b, ., 2))[-1,16383,0]  ¦  hex(regexp_substr(b, ., 2, 1))[-1,16383,0]  𝄀
+C3  ¦  A9  ¦  A9
+select regexp_instr(t,v) from operands;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+select regexp_like(_binary'abc','a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_instr('abc',x'61');
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+select regexp_substr(cast('abc' as binary),'.');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+select regexp_replace('abc','a',cast('X' as binary));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+select cast(null as binary) regexp 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+select cast(null as char) regexp _binary'a';
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+select null regexp _binary'a', cast(null as binary) regexp _binary'a';
+➤ null reg_match a[-7,1,0]  ¦  cast(null as binary) reg_match a[-7,1,0]  𝄀
+null  ¦  null
+select _binary'abc' rlike _binary'a', _binary'abc' not regexp _binary'z';
+➤ abc reg_match a[-7,1,0]  ¦  abc not reg_match z[-7,1,0]  𝄀
+1  ¦  1
+prepare regexp_reject_binary from 'select regexp_instr(?, _binary''a'')';
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+prepare regexp_reject_nested from 'select regexp_instr(regexp_substr(?, ?), _binary''.'')';
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+set @rs=_binary'éa', @rp=_binary'é';
+select 'éa' regexp @rp, 'éa' rlike @rp, 'éa' not regexp @rp;
+➤ éa reg_match @rp[-7,1,0]  ¦  éa reg_match @rp[-7,1,0]  ¦  éa not reg_match @rp[-7,1,0]  𝄀
+0  ¦  0  ¦  1
+select regexp_like('éa',@rp), regexp_like('éa',@rp,'c');
+➤ regexp_like(éa, @rp)[-7,1,0]  ¦  regexp_like(éa, @rp, c)[-7,1,0]  𝄀
+0  ¦  0
+select regexp_instr(@rs,'é'), regexp_instr('éa',@rp), regexp_instr(@rs,@rp);
+➤ regexp_instr(@rs, é)[-5,64,0]  ¦  regexp_instr(éa, @rp)[-5,64,0]  ¦  regexp_instr(@rs, @rp)[-5,64,0]  𝄀
+0  ¦  0  ¦  1
+select hex(regexp_substr(@rs,'é')), hex(regexp_substr('éa',@rp)), hex(regexp_substr(@rs,@rp));
+➤ hex(regexp_substr(@rs, é))[12,6,0]  ¦  hex(regexp_substr(éa, @rp))[12,16,0]  ¦  hex(regexp_substr(@rs, @rp))[12,6,0]  𝄀
+null  ¦  null  ¦  C3A9
+set @rp=_binary'a';
+select regexp_instr('éa',@rp), regexp_instr('éa',@rp,2), regexp_instr('éa',@rp,2,1), regexp_instr('éa',@rp,2,1,1);
+➤ regexp_instr(éa, @rp)[-5,64,0]  ¦  regexp_instr(éa, @rp, 2)[-5,64,0]  ¦  regexp_instr(éa, @rp, 2, 1)[-5,64,0]  ¦  regexp_instr(éa, @rp, 2, 1, 1)[-5,64,0]  𝄀
+2  ¦  2  ¦  2  ¦  3
+select regexp_instr(@rs,'a'), regexp_instr(@rs,'a',2), regexp_instr(@rs,'a',2,1), regexp_instr(@rs,'a',2,1,1);
+➤ regexp_instr(@rs, a)[-5,64,0]  ¦  regexp_instr(@rs, a, 2)[-5,64,0]  ¦  regexp_instr(@rs, a, 2, 1)[-5,64,0]  ¦  regexp_instr(@rs, a, 2, 1, 1)[-5,64,0]  𝄀
+3  ¦  3  ¦  3  ¦  4
+select hex(regexp_substr(@rs,'.')), hex(regexp_substr(@rs,'.',2)), hex(regexp_substr(@rs,'.',2,1));
+➤ hex(regexp_substr(@rs, .))[12,6,0]  ¦  hex(regexp_substr(@rs, ., 2))[12,6,0]  ¦  hex(regexp_substr(@rs, ., 2, 1))[12,6,0]  𝄀
+C3  ¦  A9  ¦  A9
+select hex(regexp_substr('éa',@rp)), hex(regexp_substr('éa',@rp,2)), hex(regexp_substr('éa',@rp,2,1));
+➤ hex(regexp_substr(éa, @rp))[12,16,0]  ¦  hex(regexp_substr(éa, @rp, 2))[12,16,0]  ¦  hex(regexp_substr(éa, @rp, 2, 1))[12,16,0]  𝄀
+61  ¦  61  ¦  61
+select hex(regexp_replace(@rs,'.','X')), hex(regexp_replace(@rs,'.','X',2)), hex(regexp_replace(@rs,'.','X',2,1));
+➤ hex(regexp_replace(@rs, ., X))[12,38,0]  ¦  hex(regexp_replace(@rs, ., X, 2))[12,38,0]  ¦  hex(regexp_replace(@rs, ., X, 2, 1))[12,38,0]  𝄀
+585858  ¦  C35858  ¦  C35861
+select hex(regexp_replace('éa',@rp,'X')), hex(regexp_replace('éa',@rp,'X',2)), hex(regexp_replace('éa',@rp,'X',2,1));
+➤ hex(regexp_replace(éa, @rp, X))[12,88,0]  ¦  hex(regexp_replace(éa, @rp, X, 2))[12,88,0]  ¦  hex(regexp_replace(éa, @rp, X, 2, 1))[12,88,0]  𝄀
+E958  ¦  E958  ¦  E958
+select regexp_instr(@rs,'a',0), regexp_substr(@rs,'.',0);
+invalid input: regexp_instr: Index out of bounds in regular expression search. Search start position: 0, Search string length: 3
+select regexp_substr(@rs,'.',4), regexp_substr(@rs,'.',1,4);
+➤ regexp_substr(@rs, ., 4)[-3,3,0]  ¦  regexp_substr(@rs, ., 1, 4)[-3,3,0]  𝄀
+null  ¦  null
+select hex(regexp_substr(@rs,'$',4)), hex(regexp_replace(@rs,'$','X',4));
+➤ hex(regexp_substr(@rs, $, 4))[12,6,0]  ¦  hex(regexp_replace(@rs, $, X, 4))[12,38,0]  𝄀
+  ¦  C3A96158
+select regexp_substr(@rs,'.',5);
+invalid input: regexp_substr: Index out of bounds in regular expression search. Search start position: 5, Search string length: 3
+select regexp_instr(@rs,'.',1,0), hex(regexp_substr(@rs,'.',1,-1)), hex(regexp_replace(@rs,'.','X',1,-1));
+➤ regexp_instr(@rs, ., 1, 0)[-5,64,0]  ¦  hex(regexp_substr(@rs, ., 1, -1))[12,6,0]  ¦  hex(regexp_replace(@rs, ., X, 1, -1))[12,38,0]  𝄀
+1  ¦  C3  ¦  58A961
+select regexp_replace(@rs,'.','X',0);
+invalid input: regexp_replace: Index out of bounds in regular expression search. Search start position: 0, Search string length: 3
+select regexp_instr(@rs,'a',null), regexp_instr(@rs,'a',1,null), regexp_instr(@rs,'a',1,1,null);
+➤ regexp_instr(@rs, a, null)[-5,64,0]  ¦  regexp_instr(@rs, a, 1, null)[-5,64,0]  ¦  regexp_instr(@rs, a, 1, 1, null)[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+select regexp_substr(@rs,'.',null), regexp_substr(@rs,'.',1,null);
+➤ regexp_substr(@rs, ., null)[-3,3,0]  ¦  regexp_substr(@rs, ., 1, null)[-3,3,0]  𝄀
+null  ¦  null
+select regexp_replace(@rs,'.',null), regexp_replace(@rs,'.','X',null), regexp_replace(@rs,'.','X',1,null);
+➤ regexp_replace(@rs, ., null)[-4,2147483647,0]  ¦  regexp_replace(@rs, ., X, null)[-3,19,0]  ¦  regexp_replace(@rs, ., X, 1, null)[-3,19,0]  𝄀
+null  ¦  null  ¦  null
+set @rs=x'ff61';
+select @rs regexp 'a', regexp_like(@rs,'a'), regexp_instr(@rs,'a'), hex(regexp_substr(@rs,'.')), hex(regexp_replace(@rs,'a','X'));
+➤ @rs reg_match a[-7,1,0]  ¦  regexp_like(@rs, a)[-7,1,0]  ¦  regexp_instr(@rs, a)[-5,64,0]  ¦  hex(regexp_substr(@rs, .))[-1,16383,0]  ¦  hex(regexp_replace(@rs, a, X))[-1,16383,0]  𝄀
+1  ¦  1  ¦  2  ¦  FF  ¦  FF58
+prepare regexp_markers from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
+set @rs=_binary'éa', @rp=_binary'.';
+execute regexp_markers using @rs,@rp,@rs,@rp,@rs,@rp;
+➤ regexp_instr(?, ?)[-5,64,0]  ¦  hex(regexp_substr(?, ?))[-1,16383,0]  ¦  hex(regexp_replace(?, ?, X))[-1,16383,0]  𝄀
+1  ¦  C383  ¦  585858
+set @rs='éa', @rp='.';
+execute regexp_markers using @rs,@rp,@rs,@rp,@rs,@rp;
+➤ regexp_instr(?, ?)[-5,64,0]  ¦  hex(regexp_substr(?, ?))[-1,16383,0]  ¦  hex(regexp_replace(?, ?, X))[-1,16383,0]  𝄀
+1  ¦  C3A9  ¦  5858
+set @rs=_binary'éa', @rp=_binary'.';
+execute regexp_markers using @rs,@rp,@rs,@rp,@rs,@rp;
+➤ regexp_instr(?, ?)[-5,64,0]  ¦  hex(regexp_substr(?, ?))[-1,16383,0]  ¦  hex(regexp_replace(?, ?, X))[-1,16383,0]  𝄀
+1  ¦  C383  ¦  585858
+deallocate prepare regexp_markers;
+prepare regexp_fresh from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
+execute regexp_fresh using @rs,@rp,@rs,@rp,@rs,@rp;
+➤ regexp_instr(?, ?)[-5,64,0]  ¦  hex(regexp_substr(?, ?))[-1,16383,0]  ¦  hex(regexp_replace(?, ?, X))[-1,16383,0]  𝄀
+1  ¦  C383  ¦  585858
+deallocate prepare regexp_fresh;
+set @rs=null, @rp=null;
+drop database regexp_operand_sources;

@@ -849,6 +849,7 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 		wantInstr         int64
 		wantReplace       string
 		wantReplaceBinary bool
+		wantNestedNull    bool
 	}{
 		{
 			name:       "all text",
@@ -858,32 +859,32 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 		{
 			name:       "all binary rebind",
 			mysqlTypes: typesWithBinary(0, 1, 2, 3, 4, 5, 6, 7),
-			wantInstr:  4, wantReplace: "XXX", wantReplaceBinary: true,
+			wantInstr:  4, wantReplace: "XXX",
 		},
 		{
 			name:       "binary direct instr subject marker with text pattern marker",
 			mysqlTypes: typesWithBinary(0),
-			wantInstr:  4, wantReplace: "X",
+			wantInstr:  0, wantReplace: "X",
 		},
 		{
 			name:       "binary direct instr pattern marker with text subject marker",
 			mysqlTypes: typesWithBinary(1),
-			wantInstr:  4, wantReplace: "X",
+			wantInstr:  0, wantReplace: "X",
 		},
 		{
 			name:       "binary direct replacement subject marker with text peers",
 			mysqlTypes: typesWithBinary(2),
-			wantInstr:  2, wantReplace: "XXX", wantReplaceBinary: true,
+			wantInstr:  2, wantReplace: "XXX",
 		},
 		{
 			name:       "binary direct replacement pattern marker with text peers",
 			mysqlTypes: typesWithBinary(3),
-			wantInstr:  2, wantReplace: "XXX", wantReplaceBinary: true,
+			wantInstr:  2, wantReplace: "X",
 		},
 		{
 			name:       "binary direct replacement match pair with text replacement",
 			mysqlTypes: typesWithBinary(2, 3),
-			wantInstr:  2, wantReplace: "XXX", wantReplaceBinary: true,
+			wantInstr:  2, wantReplace: "XXX",
 		},
 		{
 			name:        "binary direct replacement latin1 byte with text peer markers",
@@ -911,15 +912,18 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 		{
 			name:       "binary nested result with binary direct outer pattern marker",
 			mysqlTypes: typesWithBinary(5, 7),
-			wantInstr:  2, wantReplace: "X",
+			wantInstr:  2, wantReplace: "X", wantNestedNull: true,
 		},
 		{
-			// A binary pattern makes the inner result byte-domain, but its
-			// unbounded text subject gives that result BLOB width. BLOB is
-			// binary-compatible without being a MySQL 3995 trigger.
+			// Independent decoding makes the inner SUBSTR a text-typed NULL.
 			name:       "blob nested pattern result with text outer pattern marker",
 			mysqlTypes: typesWithBinary(6),
-			wantInstr:  2, wantReplace: "X",
+			wantInstr:  2, wantReplace: "X", wantNestedNull: true,
+		},
+		{
+			name:       "binary nested subject result with text outer pattern marker",
+			mysqlTypes: typesWithBinary(5),
+			wantInstr:  2, wantReplace: "X", wantNestedNull: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -969,7 +973,10 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			defer nestedExecutor.Free()
 			nestedResult, err := nestedExecutor.Eval(cw.proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
-			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](nestedResult, 0))
+			require.Equal(t, tc.wantNestedNull, nestedResult.IsNull(0))
+			if !tc.wantNestedNull {
+				require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](nestedResult, 0))
+			}
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
 			require.NoError(t, err)
@@ -977,32 +984,6 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 		})
 	}
 
-	for _, tc := range []struct {
-		name   string
-		binary []int
-	}{
-		{name: "binary nested subject result with text outer pattern marker", binary: []int{5}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mysqlTypes := typesWithBinary(tc.binary...)
-			require.NoError(t, proto.ParseExecuteData(
-				execCtx.reqCtx, cw.proc, prepareStmt, buildPacket(mysqlTypes, values), 0))
-
-			_, _, executionStmt, _, owned, err := initExecuteStmtParam(
-				execCtx, ses, cw, nil, prepareStmt.Name)
-			if owned && executionStmt != nil {
-				executionStmt.Free()
-			}
-			require.Error(t, err)
-			var moErr *moerr.Error
-			require.ErrorAs(t, err, &moErr)
-			require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
-
-			after, marshalErr := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
-			require.NoError(t, marshalErr)
-			require.Equal(t, cachedPlan, after, "failed rebinding must leave the cached plan reusable")
-		})
-	}
 }
 
 func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
@@ -1012,9 +993,18 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select 'abc' not regexp _binary'a'",
 		"select regexp_like(_binary'abc', 'a')",
 		"select regexp_instr('abc', _binary'b')",
+		"select regexp_instr('abc', x'61')",
+		"select regexp_instr(x'616263', 'a')",
+		"select regexp_like('abc', x'')",
+		"select regexp_replace('abc', 'a', b'01011000')",
 		"select regexp_substr(_binary'abc123', '[0-9]+')",
 		"select regexp_replace(_binary'abc123', _binary'[0-9]+', 'X')",
 		"select regexp_replace('abc123', '[0-9]+', _binary'X')",
+		"select cast(null as binary) regexp 'a'",
+		"select cast('abc' as binary(3)) regexp 'a'",
+		"select regexp_instr('abc', cast('a' as binary(1)))",
+		"select regexp_substr('abc', cast(null as binary(3)))",
+		"select regexp_replace('abc', 'a', cast('X' as binary))",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1032,7 +1022,8 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select _binary'abc' regexp _binary'a'",
 		"select regexp_like(null, 'a')",
 		"select regexp_instr(123, _binary'2')",
-		"select cast(null as binary) regexp 'a'",
+		"select null regexp _binary'a'",
+		"select cast(null as binary) regexp _binary'a'",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1043,16 +1034,13 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 	}
 }
 
-func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
+func TestBuildPlanRegexpChecksMarkerCharsetsAtPrepare(t *testing.T) {
 	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
 	for _, sql := range []string{
-		"select regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)",
-		"select regexp_replace(?, cast(_binary'中' as varbinary(3)), cast(_binary'X' as varbinary(1)))",
-		"select regexp_instr(concat(?, ''), cast(_binary'中' as varbinary(3)), 2)",
-		"select regexp_instr(concat(concat(?, ''), ''), cast(_binary'中' as varbinary(3)), 2)",
-		"select regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)",
+		"select regexp_instr(?, ?, 2)",
+		"select regexp_replace(?, ?, ?)",
+		"select regexp_instr(regexp_substr(?, ?), ?, 1)",
 		"select regexp_instr(regexp_replace('a', 'a', ?), 'a', 1)",
-		"select regexp_instr(regexp_replace(cast(_binary'a' as varbinary(1)), cast(_binary'a' as varbinary(1)), ?), cast(_binary'a' as varbinary(1)), 1)",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier("regexp_dynamic"), sql)
@@ -1062,6 +1050,12 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	}
 
 	for _, sql := range []string{
+		"select regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)",
+		"select regexp_replace(?, cast(_binary'中' as varbinary(3)), cast(_binary'X' as varbinary(1)))",
+		"select regexp_instr(concat(?, ''), cast(_binary'中' as varbinary(3)), 2)",
+		"select regexp_instr(concat(concat(?, ''), ''), cast(_binary'中' as varbinary(3)), 2)",
+		"select regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)",
+		"select regexp_instr(regexp_replace(cast(_binary'a' as varbinary(1)), cast(_binary'a' as varbinary(1)), ?), cast(_binary'a' as varbinary(1)), 1)",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(hex(?), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(concat(hex(?), ''), cast(_binary'中' as varbinary(3)), 2)",
@@ -1083,7 +1077,7 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 }
 
 func TestPreparedRegexpDynamicStringDomainValidatedAtExecuteRebind(t *testing.T) {
-	const query = "select regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)"
+	const query = "select regexp_instr(?, ?, 2)"
 	_, prepareStmt, _, _ := newPreparedExecuteEnvForSQL(t, 118, query)
 	defer prepareStmt.Close()
 	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
@@ -1091,9 +1085,8 @@ func TestPreparedRegexpDynamicStringDomainValidatedAtExecuteRebind(t *testing.T)
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name    string
-		value   plan2.ParamValue
-		wantErr bool
+		name  string
+		value plan2.ParamValue
 	}{
 		{
 			name: "binary protocol binary string",
@@ -1104,9 +1097,8 @@ func TestPreparedRegexpDynamicStringDomainValidatedAtExecuteRebind(t *testing.T)
 			name: "sql execute text variable",
 			value: plan2.ParamValue{Value: "中中", SourceType: types.T_text.ToType(),
 				HasSourceType: true},
-			wantErr: true,
 		},
-		{name: "null retains prepared text domain", value: plan2.ParamValue{}, wantErr: true},
+		{name: "null retains prepared text domain", value: plan2.ParamValue{}},
 		{
 			name: "later binary execution remains valid",
 			value: plan2.ParamValue{Value: "中中", IsBin: true, IsBinaryProtocol: true,
@@ -1115,15 +1107,10 @@ func TestPreparedRegexpDynamicStringDomainValidatedAtExecuteRebind(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				context.Background(), preparedPlan, []any{tc.value})
-			if tc.wantErr {
-				require.Error(t, err)
-				var moErr *moerr.Error
-				require.ErrorAs(t, err, &moErr)
-				require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
-			} else {
-				require.NoError(t, err)
-			}
+				context.Background(), preparedPlan, []any{tc.value, plan2.ParamValue{
+					Value: "中", IsBinaryString: true, IsBinaryProtocol: true,
+				}})
+			require.NoError(t, err)
 			after, err := preparedPlan.Marshal()
 			require.NoError(t, err)
 			require.Equal(t, cached, after, "execute-time rebinding must not mutate the cached plan")
@@ -1132,7 +1119,7 @@ func TestPreparedRegexpDynamicStringDomainValidatedAtExecuteRebind(t *testing.T)
 }
 
 func TestPreparedRegexpNestedNullResultRetainsPreparedDomainAtExecuteRebind(t *testing.T) {
-	const query = "select regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)"
+	const query = "select regexp_instr(regexp_substr(?, ?), ?, 1)"
 	_, prepareStmt, _, _ := newPreparedExecuteEnvForSQL(t, 119, query)
 	defer prepareStmt.Close()
 	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
@@ -1141,11 +1128,10 @@ func TestPreparedRegexpNestedNullResultRetainsPreparedDomainAtExecuteRebind(t *t
 
 	_, _, err = plan2.FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), preparedPlan,
-		[]any{plan2.ParamValue{}, plan2.ParamValue{}})
-	require.Error(t, err)
-	var moErr *moerr.Error
-	require.ErrorAs(t, err, &moErr)
-	require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
+		[]any{plan2.ParamValue{}, plan2.ParamValue{}, plan2.ParamValue{
+			Value: ".", IsBinaryString: true, IsBinaryProtocol: true,
+		}})
+	require.NoError(t, err)
 	after, err := preparedPlan.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, cached, after, "nested NULL rebinding must not mutate the cached plan")
@@ -1183,17 +1169,29 @@ func TestPreparedRegexpTypedNullRetainsStaticDomainAtExecuteRebind(t *testing.T)
 			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
 		},
 		{
-			name:  "binary null with text direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			name:    "binary null with text direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			wantErr: true,
 		},
 		{
-			name:  "binary null with binary direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryString: true, IsBinaryProtocol: true},
+			name:    "binary null with binary direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryString: true, IsBinaryProtocol: true},
+			wantErr: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.wantErr {
+				ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+				_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(),
+					tree.NewPrepareString("regexp_typed_null", tc.query))
+				require.Error(t, err)
+				var moErr *moerr.Error
+				require.ErrorAs(t, err, &moErr)
+				require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
+				return
+			}
 			_, prepareStmt, _, _ := newPreparedExecuteEnvForSQL(t, uint32(121+i), tc.query)
 			defer prepareStmt.Close()
 			preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
