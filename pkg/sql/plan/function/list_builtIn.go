@@ -1162,6 +1162,20 @@ var supportedStringBuiltIns = []FuncNew{
 					return FindInSet
 				},
 			},
+			{
+				overloadId: 1,
+				// Internal form for a SET second operand:
+				// (search string, stored bitmap, SET definition). The
+				// definition is planner metadata and is never part of the
+				// public FIND_IN_SET SQL arity.
+				args: []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FindInSet
+				},
+			},
 		},
 	},
 
