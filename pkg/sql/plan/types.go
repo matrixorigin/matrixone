@@ -1041,6 +1041,12 @@ type BindingTreeNode struct {
 
 	left  *BindingTreeNode
 	right *BindingTreeNode
+
+	// rightJoinUsingStar records the SQL surface order for an explicit
+	// RIGHT JOIN ... USING or NATURAL RIGHT JOIN. The merged columns are
+	// emitted before this node's children; the preserved right child then
+	// precedes the left child for an unqualified star.
+	rightJoinUsingStar bool
 }
 
 type Binder interface {
