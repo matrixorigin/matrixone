@@ -1322,14 +1322,39 @@ func checkTableColumnNameValid(name string) bool {
 
 // Check the expr has paramExpr
 func checkExprHasParamExpr(exprs []tree.Expr) bool {
+	checker := paramExprChecker{}
 	for _, expr := range exprs {
-		if _, ok := expr.(*tree.ParamExpr); ok {
+		if expr == nil {
+			continue
+		}
+		_, _ = expr.Accept(&checker)
+		if checker.found {
 			return true
-		} else if e, ok := expr.(*tree.FuncExpr); ok {
-			return checkExprHasParamExpr(e.Exprs)
 		}
 	}
 	return false
+}
+
+// paramExprChecker walks every expression node through the parser's visitor
+// contract. The no-key INSERT fallback does not execute an ODKU expression,
+// but its parameter markers still belong to the prepared statement. Using the
+// visitor keeps markers in all expression forms (including comparison, CASE,
+// casts, and nested function arguments), rather than maintaining a partial
+// type switch here.
+type paramExprChecker struct {
+	found bool
+}
+
+func (v *paramExprChecker) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if _, ok := expr.(*tree.ParamExpr); ok {
+		v.found = true
+		return expr, true
+	}
+	return expr, false
+}
+
+func (v *paramExprChecker) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, !v.found
 }
 
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "

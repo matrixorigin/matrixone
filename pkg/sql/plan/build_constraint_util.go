@@ -2049,42 +2049,24 @@ func buildValueScan(
 
 	onUpdateExprs := make([]*plan.Expr, 0)
 	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
-		for _, expr := range OnDuplicateUpdate {
-			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
-			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
-				updateExpr = &plan.Expr{
-					Typ: constTextType,
-					Expr: &plan.Expr_P{
-						P: &plan.ParamRef{
-							Pos: int32(nv.Offset),
-						},
-					},
-				}
-			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
-				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv, 0, true)
-					if err != nil {
-						return err
-					}
-				}
-			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
-				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
-					if err != nil {
-						return err
-					}
-				}
+		for _, update := range OnDuplicateUpdate {
+			if update == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
+				continue
 			}
-			if updateExpr != nil {
-				onUpdateExprs = append(onUpdateExprs, updateExpr)
+			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			binder.builder = builder
+			binder.ctx = bindCtx
+			// The update action is intentionally discarded by the no-key
+			// fallback, but every marker in its RHS still belongs to the
+			// prepared statement. Bind the complete expression so a binary
+			// expression contributes parameters from both operands, in lexical
+			// order, rather than retaining only the right operand.
+			updateExpr, err := binder.BindExpr(update.Expr, 0, true)
+			if err != nil {
+				return err
 			}
+			onUpdateExprs = append(onUpdateExprs, updateExpr)
 		}
 	}
 	rowsetData.RowCount = int32(len(slt.Rows))
