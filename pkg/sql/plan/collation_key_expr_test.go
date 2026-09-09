@@ -75,11 +75,8 @@ func TestMakeCollationCompositeKeyV2ExprFramesAllParts(t *testing.T) {
 }
 
 func TestMakeUniqueIndexKeyExprFromInputExprsRejectsUnsupportedV2Part(t *testing.T) {
-	table := &planpb.TableDef{UniqueKeyCodecVersion: v2PlannerMetadata()}
-	idx := &planpb.IndexDef{Parts: []string{"name"}}
 	value := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_char), Charset: uint32(types.CharsetUTF8)}}
-	builder := &QueryBuilder{}
-	_, err := builder.makeUniqueIndexKeyExprFromInputExprs(table, idx, []*planpb.Expr{value}, nil)
+	_, err := makeCollationKeyV2Expr(value, 0)
 	require.Error(t, err)
 }
 
