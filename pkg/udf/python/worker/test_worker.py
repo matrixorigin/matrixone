@@ -6,6 +6,7 @@ import json
 import pathlib
 import sys
 import unittest
+import uuid
 
 import pyarrow as pa
 
@@ -50,6 +51,23 @@ class WorkerContractTest(unittest.TestCase):
         self.assertTrue(array[2].is_valid)
         self.assertEqual(True, array.field("is_zero")[0].as_py())
         self.assertEqual(datetime.date(1970, 1, 1), array.field("value")[0].as_py())
+
+    def test_json_input_is_canonicalized_before_handler(self):
+        descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
+        array = pa.array(['{"b": [true, null, "中"], "a": 1}'], type=pa.string())
+        self.assertEqual(
+            '{"b":[true,null,"中"],"a":1}',
+            worker._scalar_input(array, 0, descriptor),
+        )
+
+    def test_uuid_scalar_round_trip_keeps_uuid_object_until_array_encoding(self):
+        descriptor = {"type_id": worker.UUID, "offset_width": 0}
+        value = uuid.UUID("123e4567-e89b-12d3-a456-426614174000")
+        checked = worker._check_scalar(value, descriptor)
+        self.assertIsInstance(checked, uuid.UUID)
+        array = worker._output_array([checked, None], descriptor, 2)
+        self.assertEqual(value.bytes, array[0].as_py())
+        self.assertIsNone(array[1].as_py())
 
     def test_scalar_value_domain_is_checked_before_arrow_encoding(self):
         string_descriptor = {"type_id": worker.VARCHAR, "width": 3, "offset_width": 32}
