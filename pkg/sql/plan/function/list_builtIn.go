@@ -13097,6 +13097,27 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	// Internal strict range check used by prepared unsigned arithmetic.
+	{
+		functionId: INTERNAL_UNSIGNED_ARITHMETIC_BOUND,
+		class:      plan.Function_STRICT | plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_decimal128},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return UnsignedArithmeticBound
+				},
+			},
+		},
+	},
+
 	// Internal helper used by the interval binder for dynamic string values.
 	{
 		functionId: TO_INTERVAL,
