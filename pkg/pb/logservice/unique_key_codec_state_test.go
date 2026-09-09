@@ -154,7 +154,11 @@ func TestUniqueKeyMigrationGateWireAdapterRoundTripsRSMState(t *testing.T) {
 		t.Fatalf("migration gate conversion differs: got=%+v want=%+v", converted, gate)
 	}
 
-	state := HAKeeperRSMState{UniqueKeyMigrationGate: &decoded}
+	state := HAKeeperRSMState{
+		UniqueKeyMigrationGates: map[uint64]UniqueKeyMigrationGate{
+			decoded.RelationId: decoded,
+		},
+	}
 	stateWire, err := state.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -163,8 +167,9 @@ func TestUniqueKeyMigrationGateWireAdapterRoundTripsRSMState(t *testing.T) {
 	if err := restored.Unmarshal(stateWire); err != nil {
 		t.Fatal(err)
 	}
-	if restored.UniqueKeyMigrationGate == nil || !reflect.DeepEqual(restored.UniqueKeyMigrationGate, &decoded) {
-		t.Fatalf("RSM migration gate was not restored: %+v", restored.UniqueKeyMigrationGate)
+	gotGate, ok := restored.UniqueKeyMigrationGates[decoded.RelationId]
+	if !ok || !reflect.DeepEqual(gotGate, decoded) {
+		t.Fatalf("RSM migration gate was not restored: %+v", restored.UniqueKeyMigrationGates)
 	}
 
 	wire.ClaimToken[0] ^= 1

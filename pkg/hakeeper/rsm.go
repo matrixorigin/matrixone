@@ -1828,7 +1828,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
 		UniqueKeyCodecActivation:     s.state.UniqueKeyCodecActivation,
-		UniqueKeyMigrationGate:       s.state.UniqueKeyMigrationGate,
+		UniqueKeyMigrationGates:      s.state.UniqueKeyMigrationGates,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -2103,8 +2103,8 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	// reused state machine cannot retain an activation from a newer snapshot.
 	s.state.UniqueKeyCodecActivation = nil
 	// A snapshot written before the migration-gate field was introduced does
-	// not carry this pointer. Clear it before unmarshalling so recovery on a
-	// reused state machine cannot retain a gate from a newer snapshot.
-	s.state.UniqueKeyMigrationGate = nil
+	// not carry this map. Clear it before unmarshalling so recovery on a reused
+	// state machine cannot retain gates from a newer snapshot.
+	s.state.UniqueKeyMigrationGates = nil
 	return s.state.Unmarshal(data)
 }

@@ -851,7 +851,7 @@ message CheckerState {
   bool LogServiceRecoveryPrepared = 17;
   bool LogServiceRecoveryCompleted = 18;
   UniqueKeyCodecActivation unique_key_codec_activation = 19;
-  UniqueKeyMigrationGate unique_key_migration_gate = 20;
+  map<uint64, UniqueKeyMigrationGate> unique_key_migration_gates = 20 [(gogoproto.nullable) = false];
 }
 
 message DeletedStore {
@@ -941,11 +941,11 @@ message HAKeeperRSMState {
   // versioned unique-key codec.  It is kept in the RSM state so snapshots,
   // replay, backup and restore cannot lose an enabled generation.
   UniqueKeyCodecActivation UniqueKeyCodecActivation = 43;
-  // UniqueKeyMigrationGate is the durable stop-write/atomic-publication
-  // state for one physical relation.  It is intentionally separate from the
+  // UniqueKeyMigrationGates stores one durable stop-write/atomic-publication
+  // gate per physical relation. It is intentionally separate from the
   // cluster codec activation: an enabled codec does not imply that a table
   // migration is in progress or that a published gate may be rolled back.
-  UniqueKeyMigrationGate UniqueKeyMigrationGate = 44;
+  map<uint64, UniqueKeyMigrationGate> UniqueKeyMigrationGates = 44 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

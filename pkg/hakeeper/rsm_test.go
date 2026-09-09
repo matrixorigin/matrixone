@@ -71,7 +71,9 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	migrationGateWire, err := pb.NewUniqueKeyMigrationGate(migrationGate)
 	require.NoError(t, err)
-	tsm1.state.UniqueKeyMigrationGate = migrationGateWire
+	tsm1.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		migrationGate.RelationID: *migrationGateWire,
+	}
 	tsm1.state.ScheduleCommands["tn-1"] = pb.CommandBatch{
 		BatchID:    9,
 		Commands:   []pb.ScheduleCommand{{UUID: "tn-1", ServiceType: pb.TNService}},
@@ -88,13 +90,45 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.True(t, tsm2.state.CommandDeliveryEnabled)
 	assert.True(t, tsm2.state.CommandDeliveryCommandIDsAssigned)
 	assert.Equal(t, tsm1.state.UniqueKeyCodecActivation, tsm2.state.UniqueKeyCodecActivation)
-	gotGate, err := tsm2.state.UniqueKeyMigrationGate.ToCollationKeyMigrationGate()
+	gotGateWire := tsm2.state.UniqueKeyMigrationGates[migrationGate.RelationID]
+	gotGate, err := gotGateWire.ToCollationKeyMigrationGate()
 	require.NoError(t, err)
-	wantGate, err := tsm1.state.UniqueKeyMigrationGate.ToCollationKeyMigrationGate()
+	wantGateWire := tsm1.state.UniqueKeyMigrationGates[migrationGate.RelationID]
+	wantGate, err := wantGateWire.ToCollationKeyMigrationGate()
 	require.NoError(t, err)
 	assert.Equal(t, wantGate, gotGate)
 	assert.Equal(t, tsm1.state.ScheduleCommands, tsm2.state.ScheduleCommands)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
+}
+
+func TestHAKeeperStateMachineSnapshotPreservesMigrationGatesPerRelation(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm2 := NewStateMachine(0, 2).(*stateMachine)
+
+	first, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	second, err := collationkey.NewMigrationGate(92, 13)
+	require.NoError(t, err)
+	firstWire, err := pb.NewUniqueKeyMigrationGate(first)
+	require.NoError(t, err)
+	secondWire, err := pb.NewUniqueKeyMigrationGate(second)
+	require.NoError(t, err)
+	tsm1.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		first.RelationID:  *firstWire,
+		second.RelationID: *secondWire,
+	}
+
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, tsm1.SaveSnapshot(buf, nil, nil))
+	require.NoError(t, tsm2.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
+	require.Len(t, tsm2.state.UniqueKeyMigrationGates, 2)
+	for _, want := range []collationkey.MigrationGate{first, second} {
+		wire, ok := tsm2.state.UniqueKeyMigrationGates[want.RelationID]
+		require.True(t, ok)
+		got, err := wire.ToCollationKeyMigrationGate()
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestHAKeeperSnapshotWithoutCodecActivationClearsReusedState(t *testing.T) {
@@ -112,12 +146,12 @@ func TestHAKeeperSnapshotWithoutCodecActivationClearsReusedState(t *testing.T) {
 		CnTargets:        map[string]uint64{"cn-1": 4},
 		TnTargets:        map[string]uint64{"tn-1": 5},
 	}
-	reused.state.UniqueKeyMigrationGate = &pb.UniqueKeyMigrationGate{
-		RelationId: 91,
+	reused.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		91: {RelationId: 91},
 	}
 	require.NoError(t, reused.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
 	require.Nil(t, reused.state.UniqueKeyCodecActivation)
-	require.Nil(t, reused.state.UniqueKeyMigrationGate)
+	require.Nil(t, reused.state.UniqueKeyMigrationGates)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {
@@ -663,17 +697,22 @@ func TestStateQueryPreservesUniqueKeyMigrationGate(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	gate, err := collationkey.NewMigrationGate(91, 12)
 	require.NoError(t, err)
-	rsm.state.UniqueKeyMigrationGate, err = pb.NewUniqueKeyMigrationGate(gate)
+	wire, err := pb.NewUniqueKeyMigrationGate(gate)
 	require.NoError(t, err)
+	rsm.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		gate.RelationID: *wire,
+	}
 
 	value, err := rsm.Lookup(&StateQuery{})
 	require.NoError(t, err)
 	state := value.(*pb.CheckerState)
-	require.Equal(t, rsm.state.UniqueKeyMigrationGate, state.UniqueKeyMigrationGate)
-	state.UniqueKeyMigrationGate.ClaimToken = []byte{9}
-	state.UniqueKeyMigrationGate.RelationId = 99
-	require.Empty(t, rsm.state.UniqueKeyMigrationGate.ClaimToken)
-	require.Equal(t, uint64(91), rsm.state.UniqueKeyMigrationGate.RelationId)
+	require.Equal(t, rsm.state.UniqueKeyMigrationGates, state.UniqueKeyMigrationGates)
+	observed := state.UniqueKeyMigrationGates[gate.RelationID]
+	observed.ClaimToken = []byte{9}
+	observed.RelationId = 99
+	state.UniqueKeyMigrationGates[gate.RelationID] = observed
+	require.Empty(t, rsm.state.UniqueKeyMigrationGates[gate.RelationID].ClaimToken)
+	require.Equal(t, uint64(91), rsm.state.UniqueKeyMigrationGates[gate.RelationID].RelationId)
 }
 
 func TestUniqueKeyCodecActivationUpdateRequiresTargetCapabilities(t *testing.T) {

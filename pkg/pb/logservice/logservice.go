@@ -96,17 +96,18 @@ func (m LogRecord) Clone() LogRecord {
 // NewRSMState creates a new HAKeeperRSMState instance.
 func NewRSMState() HAKeeperRSMState {
 	return HAKeeperRSMState{
-		NextIDByKey:            make(map[string]uint64),
-		ScheduleCommands:       make(map[string]CommandBatch),
-		CommandDeliveryReady:   make(map[string]bool),
-		CommandDeliveryCNReady: make(map[string]bool),
-		CommandDeliveryTNReady: make(map[string]bool),
-		LogShards:              make(map[string]uint64),
-		CNState:                NewCNState(),
-		TNState:                NewTNState(),
-		LogState:               NewLogState(),
-		ProxyState:             NewProxyState(),
-		ClusterInfo:            newClusterInfo(),
+		NextIDByKey:             make(map[string]uint64),
+		ScheduleCommands:        make(map[string]CommandBatch),
+		CommandDeliveryReady:    make(map[string]bool),
+		CommandDeliveryCNReady:  make(map[string]bool),
+		CommandDeliveryTNReady:  make(map[string]bool),
+		UniqueKeyMigrationGates: make(map[uint64]UniqueKeyMigrationGate),
+		LogShards:               make(map[string]uint64),
+		CNState:                 NewCNState(),
+		TNState:                 NewTNState(),
+		LogState:                NewLogState(),
+		ProxyState:              NewProxyState(),
+		ClusterInfo:             newClusterInfo(),
 	}
 }
 
