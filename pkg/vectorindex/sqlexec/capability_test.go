@@ -42,12 +42,12 @@ func TestClusterCapabilityReadsBothSqlProcessShapes(t *testing.T) {
 	procShape := NewSqlProcess(testutil.NewProcess(t))
 	require.NotNil(t, procShape.Proc)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
 	require.True(t, ClusterHasIndexProvenance(sqlCtxShape),
 		"the CDC writer must see an activated deployment, or no tail frame row is ever written")
 	require.True(t, ClusterHasIndexProvenance(procShape))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58-1)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59-1)
 	require.False(t, ClusterHasIndexProvenance(sqlCtxShape), "and must still respect the gate")
 	require.False(t, ClusterHasIndexProvenance(procShape))
 

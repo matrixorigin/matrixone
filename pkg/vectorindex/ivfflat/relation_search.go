@@ -87,6 +87,13 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	filters []*plan.Expr,
 	limit uint,
 ) (executor.Result, error) {
+	return idx.scanEntriesInDomain(sqlproc, idxcfg, tblcfg, query, version, centroidIDs, includeCols, filters, limit, false)
+}
+
+func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
+	sqlproc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig,
+	query []T, version int64, centroidIDs []int64, includeCols []string, filters []*plan.Expr, limit uint, allCentroids bool,
+) (executor.Result, error) {
 	queryBytes, queryType, err := idx.entryQueryBytes(idxcfg, query)
 	if err != nil {
 		return executor.Result{}, err
@@ -104,6 +111,11 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	}
 	storageTopK := canUseStorageTopK(sqlproc, centroidIDs, filters, limit, rangeSupported)
 	filteredStorageTopK := canUseFilteredStorageTopK(sqlproc, centroidIDs, filters, limit, rangeSupported)
+	if allCentroids && sqlproc.IvfHasMembershipFilter {
+		storageTopK = storageTopKPredicates(sqlproc, filters, limit, rangeSupported)
+		filteredStorageTopK = filteredStorageTopKPredicates(sqlproc, filters, limit, rangeSupported)
+	}
+	filteredStorageTopK = filteredStorageTopK && !storageTopK
 	var (
 		filter       *plan.Expr
 		prefixFilter *plan.Expr
@@ -112,15 +124,18 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		Limit:   ivfUint64Expr(uint64(limit)),
 		OrderBy: []*plan.OrderBySpec{{Flag: orderFlag}},
 	}
-	if len(centroidIDs) > 0 {
+	if len(centroidIDs) > 0 || allCentroids && sqlproc.IvfHasMembershipFilter {
 		// The entries table is ordered by (version, centroid, source PK). Keep
 		// this physical prefix predicate even when an INCLUDE predicate needs an
 		// exact residual filter; otherwise the scan reads every centroid before
 		// filtering rows in the selected nprobe lists.
 		cpkeyPos := int32(len(columns))
 		columns = append(columns, catalog.CPrimaryKeyColName)
-		prefixFilter, err = ivfCentroidPrefixFilter(
-			sqlproc.GetContext(), sqlproc.Proc.Mp(), version, centroidIDs, cpkeyPos)
+		if allCentroids {
+			prefixFilter, err = ivfVersionPrefixFilter(sqlproc.GetContext(), sqlproc.Proc.Mp(), version, cpkeyPos)
+		} else {
+			prefixFilter, err = ivfCentroidPrefixFilter(sqlproc.GetContext(), sqlproc.Proc.Mp(), version, centroidIDs, cpkeyPos)
+		}
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -159,7 +174,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 			}
 			allFilters = append(allFilters, versionFilter)
 		}
-		if sqlproc.IvfHasMembershipFilter {
+		if sqlproc.IvfHasMembershipFilter && !((storageTopK || filteredStorageTopK) && exactStorageMembership(sqlproc)) {
 			membershipFilter, membershipErr := ivfRuntimeMembershipExpr(
 				sqlproc.GetContext(), sqlproc.IvfRuntimeFilterData,
 				ivfColExpr(2, plan.Type{Id: tblcfg.PKeyType}))
@@ -179,10 +194,10 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		blockFilters = []*plan.Expr{prefixFilter}
 	}
 	filterHint := engine.FilterHint{}
-	if storageTopK && sqlproc.IvfHasMembershipFilter {
-		// Preserve the bounded-recall PRE policy: readers rank each bounded
-		// centroid candidate set first, then apply membership. The exact SEMI
-		// join in the outer plan remains the final SQL predicate check.
+	if (storageTopK || filteredStorageTopK) && exactStorageMembership(sqlproc) {
+		filterHint.BF = sqlproc.IvfMembershipFilterObject.Share()
+	} else if storageTopK && sqlproc.IvfHasMembershipFilter {
+		// Optional domains retain their existing transported-filter contract.
 		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
 	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
@@ -277,17 +292,23 @@ func canUseStorageTopK(
 	limit uint,
 	rangeSupported bool,
 ) bool {
-	// Storage vector Top-N currently ranks only ascending distances. Optional
-	// membership may retain the documented approximate PRE policy, but a required
-	// membership predicate must use the filter-before-local-TopK path. Ordinary
-	// user predicates remain filter-first. Distance ranges
-	// are safe only after storageDistanceRange has translated them into the
-	// stored metric domain; objectio applies those bounds before heap admission.
-	if sqlproc == nil || !rangeSupported || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
-		sqlproc.IvfMembershipFilterRequired || ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
+	return len(centroidIDs) > 0 && storageTopKPredicates(sqlproc, filters, limit, rangeSupported)
+}
+
+func exactStorageMembership(sqlproc *sqlexec.SqlProcess) bool {
+	return sqlproc != nil && sqlproc.IvfMembershipFilterObject != nil &&
+		sqlproc.IvfMembershipFilterObject.Valid() && sqlproc.IvfMembershipFilterObject.Exact()
+}
+
+func storageTopKPredicates(sqlproc *sqlexec.SqlProcess, filters []*plan.Expr, limit uint, rangeSupported bool) bool {
+	if sqlproc == nil || !rangeSupported || len(filters) != 0 || limit == 0 ||
+		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
 		return false
 	}
-	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
+	if sqlproc.IvfMembershipFilterRequired && !exactStorageMembership(sqlproc) {
+		return false
+	}
+	if sqlproc.IvfHasMembershipFilter && !exactStorageMembership(sqlproc) && len(sqlproc.IvfMembershipFilter) == 0 {
 		return false
 	}
 	return true
@@ -300,11 +321,33 @@ func canUseFilteredStorageTopK(
 	limit uint,
 	rangeSupported bool,
 ) bool {
-	// Exact INCLUDE predicates are eligible for filter-before-TopK. Membership
-	// filtering intentionally retains its separate bounded-recall PRE policy.
-	return sqlproc != nil && rangeSupported && len(centroidIDs) > 0 && len(filters) > 0 &&
-		limit > 0 && !sqlproc.IvfHasMembershipFilter &&
+	return len(centroidIDs) > 0 && filteredStorageTopKPredicates(sqlproc, filters, limit, rangeSupported)
+}
+
+func filteredStorageTopKPredicates(sqlproc *sqlexec.SqlProcess, filters []*plan.Expr, limit uint, rangeSupported bool) bool {
+	return sqlproc != nil && rangeSupported && limit > 0 &&
+		(len(filters) > 0 && !sqlproc.IvfHasMembershipFilter || sqlproc.IvfMembershipFilterRequired) &&
 		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC == 0
+}
+
+func ivfVersionPrefixFilter(ctx context.Context, mp *mpool.MPool, version int64, cpkeyPos int32) (*plan.Expr, error) {
+	versions, err := vector.NewConstFixed(types.T_int64.ToType(), version, 1, mp)
+	if err != nil {
+		return nil, err
+	}
+	defer versions.Free(mp)
+	encode, err := function.NewSerialValueEncoder(versions)
+	if err != nil {
+		return nil, err
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+	encode(versions, 0, packer)
+	typ := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Charset: uint32(types.CharsetBinary)}
+	left := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: catalog.CPrimaryKeyColName, ColPos: cpkeyPos}}}
+	right := ivfStringExpr(string(packer.Bytes()))
+	right.Typ = typ
+	return ivfFuncExpr(ctx, function.PrefixEqualFunctionName, left, right)
 }
 
 // storageDistanceRange admits only ranges that cannot change the ascending

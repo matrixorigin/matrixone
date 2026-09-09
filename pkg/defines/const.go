@@ -93,8 +93,9 @@ const (
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
-	MORPCVersion58     int64 = 58 // index metadata provenance columns (nrow, build_ts)
-	MORPCLatestVersion       = MORPCVersion58
+	MORPCVersion58     int64 = 58 // binary-string function semantics and runtime-domain metadata
+	MORPCVersion59     int64 = 59 // index metadata provenance columns (nrow, build_ts)
+	MORPCLatestVersion       = MORPCVersion59
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -58,5 +58,5 @@ func ClusterHasIndexProvenance(sqlproc *SqlProcess) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion58
+	return ok && version >= defines.MORPCVersion59
 }

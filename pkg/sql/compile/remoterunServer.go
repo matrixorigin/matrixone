@@ -996,6 +996,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		mpool.DeleteMPool(mp)
 		return nil, err
 	}
+	runtimeStringDomains, err := process.RuntimeStringDomainPrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.RuntimeStringDomains,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -1019,6 +1029,18 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 			prepareParamMetadata,
 			binaryStringMetadata,
 		)
+		if len(runtimeStringDomains) > 0 {
+			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
+			for i, domain := range runtimeStringDomains {
+				domains[i] = types.RuntimeStringDomain(domain)
+			}
+			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				mpool.DeleteMPool(mp)
+				return nil, err
+			}
+		}
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.

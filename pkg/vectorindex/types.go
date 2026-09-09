@@ -366,6 +366,10 @@ type RuntimeConfig struct {
 	SearchRoundLimit uint
 	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
+	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
+	IvfPrepareRouteOnly bool
+	// IvfRoutePrepared distinguishes an empty prepared route from an uninitialized cursor.
+	IvfRoutePrepared bool
 }
 
 type IvfIncludeResult struct {
