@@ -115,6 +115,18 @@ class WorkerContractTest(unittest.TestCase):
             worker.MAX_TERMINAL_RECORDS = old_records
             worker.MAX_TERMINAL_BYTES = old_bytes
 
+    def test_active_fence_cannot_be_admitted_twice(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        key = (1, "statement", "group", 1, "invocation", 1)
+        server._admit(key)
+        with self.assertRaisesRegex(ValueError, "fence is active"):
+            server._admit(key)
+        with self.assertRaisesRegex(ValueError, "fencing tuple changed"):
+            worker._require_tuple(
+                {"account_id": 1, "statement_id": "other", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
+                {"account_id": 1, "statement_id": "statement", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
