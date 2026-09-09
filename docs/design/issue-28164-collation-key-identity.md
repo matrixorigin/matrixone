@@ -971,3 +971,12 @@ not change existing relation behavior, create a management command, or claim
 that any DML entry point is v2-capable. The final implementation must replace
 this temporary rejection only after all required producers and consumers share
 the same activation generation and recovery protocol.
+
+The same revision also rejects v2 relations at the ordinary table-scan binding
+boundary. A planner that has not yet proved the versioned point-probe, scan,
+join, and fallback consumers cannot open a v2 relation for SELECT or an index
+lookup while allowing legacy bytewise readers to continue. Missing metadata and
+the explicitly bytewise format remain unchanged; malformed v2 metadata fails
+closed as an internal error. This read-side fence is intentionally a temporary
+admission rule and is not a capability publication or storage-reader
+implementation.
