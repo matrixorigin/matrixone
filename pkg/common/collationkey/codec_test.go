@@ -288,6 +288,25 @@ func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	if _, err := EncodeComposite(make([]byte, MaxKeyBytes-1), []Part{{Domain: generalDomain(0), Value: []byte("a")}}); err == nil {
 		t.Fatal("key exceeding maximum size accepted")
 	}
+	validDecimal, err := EncodePart(nil, Part{Domain: Domain{Type: Decimal, Width: 8, Scale: 2}, Value: []byte("1.20")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDecimalSign := append([]byte(nil), validDecimal...)
+	badDecimalSign[22] = 2
+	if err := ValidateEncoded(badDecimalSign); err == nil {
+		t.Fatal("invalid decimal sign accepted")
+	}
+	badDecimalScale := append([]byte(nil), validDecimal...)
+	badDecimalScale[23] = 0xff
+	if err := ValidateEncoded(badDecimalScale); err == nil {
+		t.Fatal("out-of-range decimal scale accepted")
+	}
+	badDecimalCoeff := append([]byte(nil), validDecimal...)
+	badDecimalCoeff[31] = 0
+	if err := ValidateEncoded(badDecimalCoeff); err == nil {
+		t.Fatal("non-minimal decimal coefficient accepted")
+	}
 }
 
 func TestRegistryDigestIsStableAndCopied(t *testing.T) {
