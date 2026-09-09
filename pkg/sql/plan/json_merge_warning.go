@@ -66,6 +66,32 @@ func WithJSONMergeWarningContext(
 	})
 }
 
+// AttachJSONMergeWarningContext reuses the warning lifecycle already attached
+// to ctx. Planning a single user statement can bind the same AST more than
+// once (for example CTAS metadata/privilege planning or a definition retry),
+// so replacing the seen set at every build-plan entry would duplicate the
+// diagnostic. A caller that starts a new user statement must use
+// WithJSONMergeWarningContext instead.
+func AttachJSONMergeWarningContext(
+	ctx context.Context,
+	sink JSONMergeWarningSink,
+	origin JSONMergeWarningOrigin,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	current, _ := ctx.Value(jsonMergeWarningContextKey{}).(*jsonMergeWarningContext)
+	if current == nil {
+		return WithJSONMergeWarningContext(ctx, sink, origin)
+	}
+	copy := *current
+	if sink != nil {
+		copy.sink = sink
+	}
+	copy.origin = origin
+	return context.WithValue(ctx, jsonMergeWarningContextKey{}, &copy)
+}
+
 // WithJSONMergeWarningOrigin changes only the lifecycle origin, preserving the
 // sink and syntactic-call-site state already attached to the planning context.
 func WithJSONMergeWarningOrigin(ctx context.Context, origin JSONMergeWarningOrigin) context.Context {

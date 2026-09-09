@@ -114,3 +114,17 @@ select id, json_merge(doc, preserve_doc) from json_merge_docs order by id;
 show warnings;
 
 drop table json_merge_docs;
+
+-- A deprecated alias is rebound for each ordinary COM_QUERY so every
+-- statement gets its own 1287 warning, including the plan-cache path.
+select json_merge('[1]', '[2]');
+show warnings;
+select json_merge('[1]', '[2]');
+show warnings;
+
+-- CTAS performs source planning more than once, but the call site warns once.
+drop table if exists json_merge_ctas_docs;
+create table json_merge_ctas_docs as select json_merge('[1]', '[2]') as doc;
+show warnings;
+select doc from json_merge_ctas_docs;
+drop table json_merge_ctas_docs;

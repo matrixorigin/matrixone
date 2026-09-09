@@ -1922,6 +1922,7 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
 		ses.resetDiagnostics()
+		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
 	}
 }
 
@@ -3824,7 +3825,7 @@ func buildPlanWithPrepareMode(
 	if ses != nil {
 		warningSink, _ = ses.(plan2.JSONMergeWarningSink)
 	}
-	planContext = plan2.WithJSONMergeWarningContext(planContext, warningSink, warningOrigin)
+	planContext = plan2.AttachJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 
@@ -4009,6 +4010,13 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 
 func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
+		return nil
+	}
+	if containsJSONMergeCall(input.getSql()) {
+		// A pre-existing entry may have been created before this compatibility
+		// guard was reached. Remove it so a later request cannot bypass binding
+		// and silently lose warning 1287.
+		ses.removeCachedPlan(input.getHash())
 		return nil
 	}
 	if !reusablePlanGenerationSupported(ses.proc) {
@@ -5696,6 +5704,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		!containsJSONMergeCall(input.getSql()) &&
 		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {

@@ -298,6 +298,19 @@ func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
 	require.False(t, ses.isCached(input.getHash()))
 }
 
+func TestJSONMergePlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	input := &UserInput{sql: "select json_merge('[1]', '[2]')"}
+	input.genHash()
+	pc.cache(input.getHash(), []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}

@@ -2950,7 +2950,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && strings.EqualFold(funcName, "json_merge") {
+		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	return expr, err
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -3681,9 +3685,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		e, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
-			if strings.EqualFold(name, "json_merge") {
-				appendJSONMergeWarning(b.GetContext(), astExpr)
-			}
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
 					if source == nil || i >= len(fn.Args) {
@@ -3730,9 +3731,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args, false, nil, false)
 		if err == nil {
-			if strings.EqualFold(name, "json_merge") {
-				appendJSONMergeWarning(b.GetContext(), astExpr)
-			}
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}

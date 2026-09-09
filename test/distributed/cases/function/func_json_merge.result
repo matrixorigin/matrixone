@@ -209,3 +209,24 @@ show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
 drop table json_merge_docs;
+select json_merge('[1]', '[2]');
+➤ json_merge([1], [2])[-1,2147483647,0]  𝄀
+[1, 2]
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+select json_merge('[1]', '[2]');
+➤ json_merge([1], [2])[-1,2147483647,0]  𝄀
+[1, 2]
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+drop table if exists json_merge_ctas_docs;
+create table json_merge_ctas_docs as select json_merge('[1]', '[2]') as doc;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+select doc from json_merge_ctas_docs;
+➤ doc[-1,2147483647,0]  𝄀
+[1, 2]
+drop table json_merge_ctas_docs;

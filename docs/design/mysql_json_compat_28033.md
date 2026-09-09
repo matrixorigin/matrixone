@@ -4,11 +4,11 @@
 
 This document proposes the contracts for JSON_MERGE, JSON_DEPTH,
 JSON_ARRAY_INSERT, and JSON_SEARCH, using MySQL 8.0.45 as the oracle.
-This initial PR revision is design-only. Explicit design approval precedes
-adding JSON_MERGE implementation to the same PR. Four partial implementation
-PRs merge in the order MERGE, DEPTH, ARRAY_INSERT, SEARCH. Each subsequent PR
-starts from main after its predecessor merges; unpublished local prototypes
-are not accepted validation evidence for those future heads.
+The design was approved before the JSON_MERGE implementation was added to this
+PR. Four partial implementation PRs merge in the order MERGE, DEPTH,
+ARRAY_INSERT, SEARCH. Each subsequent PR starts from main after its predecessor
+merges; unpublished local prototypes are not accepted validation evidence for
+those future heads.
 
 JSON_MERGE implementation waits for #28090, #28091, and #28096 to merge,
 because they modify shared function registration and binder code.
@@ -34,10 +34,15 @@ the session diagnostic sink, while an internal `rebuildPreparePlan` during
 EXECUTE (for schema, SQL-mode or protocol invalidation) suppresses the
 duplicate deprecation diagnostic. Rebuilding the executable plan is still
 required; only the warning side effect is suppressed. A later user PREPARE is
-a new bind lifecycle and warns once per call site. CREATE VIEW warns at
-creation; stored-view expansion and any internal plan rebuild while consuming
-that view suppress the warning. Changing SHOW CREATE VIEW or persisted SQL
-spelling is outside this issue.
+a new bind lifecycle and warns once per call site. The frontend owns that
+lifecycle at the top-level statement boundary: CTAS source metadata and
+privilege planning, plus definition-change retry planning, reuse the same
+call-site set. Ordinary COM_QUERY statements containing JSON_MERGE are
+deliberately excluded from the plan cache, so each new statement binds and
+restores its warning instead of reusing a diagnostic-free cached plan. CREATE
+VIEW warns at creation; stored-view expansion and any internal plan rebuild
+while consuming that view suppress the warning. Changing SHOW CREATE VIEW or
+persisted SQL spelling is outside this issue.
 
 ## JSON_DEPTH
 
@@ -114,8 +119,9 @@ for packages with direct or transitive CGo dependencies. No sleep or skip
 workarounds; preserve exact expected errors.
 
 - MERGE: alias equivalence, three arguments, NULL, invalid JSON, arity,
-  warning sink absence, scans, two call sites, initial PREPARE, schema-change
-  reprepare followed by EXECUTE/SHOW WARNINGS, and views.
+  warning sink absence, scans, two call sites, initial PREPARE, CTAS and
+  ordinary plan-cache bypass, schema-change reprepare followed by
+  EXECUTE/SHOW WARNINGS, compile-retry planning, and views.
   Extend func_json_merge.test/.result, including exact warning 1287.
 - DEPTH: scalars, empty/nonempty and mixed containers, maximum depth,
   over-limit JSON, malformed documents, NULL and rejected types.
@@ -134,7 +140,6 @@ workarounds; preserve exact expected errors.
 
 Implementation revisions require full diff review, relevant tests, preflight,
 self-review, git diff --check and matching local/remote/PR SHAs before Ready.
-The design-only revision has no runtime behavior to exercise in BVT.
 QA is required for the implementation series. After all four merge, run a
 joint smoke on exact main and hand off to an identified tester using MySQL
 8.0.45. Keep issue #28033 open until explicit QA PASS/FAIL includes MatrixOne
