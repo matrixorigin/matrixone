@@ -176,9 +176,9 @@ b
 create table t_ctas_explicit_reference_source (a int, b int default (a + 1), c int);
 insert into t_ctas_explicit_reference_source (a, c) values (10, 30);
 create table t_ctas_explicit_reference (
-    b int default (c + 10),
-    c int,
-    x int default (b + 100)
+b int default (c + 10),
+c int,
+x int default (b + 100)
 ) as select b, c from t_ctas_explicit_reference_source;
 select x, b, c from t_ctas_explicit_reference;
 x    b    c
