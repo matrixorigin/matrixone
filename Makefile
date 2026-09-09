@@ -511,8 +511,9 @@ else
 	# The race suite is internally partitioned into light/HNSW, exclusive issues,
 	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
 	# the per-package timeout so an expanded main branch cannot be killed while a
-	# selected stage is still making progress.
-	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
+	# selected stage is still making progress. GNU timeout sends TERM first so
+	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
+	@cd optools && timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -520,7 +521,21 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 UT_SHARD ?= all
-export UT_SHARD
+# The outer lifecycle budget is separate from each Go test's UT_TIMEOUT. Keep
+# enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 70m
+# Build embedded test packages ahead of their execution while the issues
+# fixture is active. This is an explicit A/B knob: compile-only work still
+# consumes CPU, memory, and linker capacity, so it remains opt-in until a
+# same-resource measurement proves a critical-path gain.
+UT_PREBUILD_EMBEDDED ?= 0
+# Plan overlap is an explicit A/B knob; it consumes one heavy process slot and
+# remains off until the runner's resource budget proves a gain.
+UT_OVERLAP_PLAN ?= 0
+# Parent cancellation waits long enough for helper-owned child process groups
+# to receive TERM and bounded KILL cleanup in sequence.
+UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_SHARD UT_HARD_TIMEOUT UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
