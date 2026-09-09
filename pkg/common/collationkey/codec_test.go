@@ -317,6 +317,23 @@ func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	if err := ValidateEncoded(badNullPayload); err == nil {
 		t.Fatal("NULL part with payload accepted")
 	}
+	badGeneralPad := append([]byte(nil), valid...)
+	badGeneralPad[len(badGeneralPad)-4] = 0
+	badGeneralPad[len(badGeneralPad)-3] = 0
+	badGeneralPad[len(badGeneralPad)-2] = 0
+	badGeneralPad[len(badGeneralPad)-1] = ' '
+	if err := ValidateEncoded(badGeneralPad); err == nil {
+		t.Fatal("non-canonical general-ci PAD SPACE payload accepted")
+	}
+	validBin, err := EncodePart(nil, Part{Domain: binTextDomain(0), Value: []byte("Alpha")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badBinPad := append([]byte(nil), validBin...)
+	badBinPad[len(badBinPad)-1] = ' '
+	if err := ValidateEncoded(badBinPad); err == nil {
+		t.Fatal("non-canonical utf8-bin PAD SPACE payload accepted")
+	}
 	if _, err := EncodeComposite(nil, make([]Part, MaxParts+1)); err == nil {
 		t.Fatal("too many parts accepted")
 	}

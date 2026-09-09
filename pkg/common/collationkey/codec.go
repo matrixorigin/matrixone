@@ -514,7 +514,15 @@ func validGeneralPayload(payload []byte) bool {
 		return false
 	}
 	for i := 0; i < len(payload); i += 4 {
-		if binary.BigEndian.Uint32(payload[i:i+4]) > 0xffff {
+		weight := binary.BigEndian.Uint32(payload[i : i+4])
+		if weight > 0xffff {
+			return false
+		}
+		// normalizeText applies PAD SPACE before emitting weights. A trailing
+		// ASCII-space weight can therefore never be produced by the encoder;
+		// rejecting it keeps ValidateEncoded fail-closed for hand-crafted or
+		// corrupted keys instead of accepting a non-canonical identity.
+		if i+4 == len(payload) && weight == uint32(' ') {
 			return false
 		}
 	}
@@ -525,7 +533,7 @@ func validatePayload(spec familySpec, params, payload []byte) error {
 	switch spec.typ {
 	case Text:
 		if spec.charset == CharsetUTF8MB4Bin {
-			if !utf8.Valid(payload) {
+			if !utf8.Valid(payload) || (len(payload) > 0 && payload[len(payload)-1] == ' ') {
 				return wrapCodecError(ErrMalformedKey, "malformed utf8-bin payload")
 			}
 		} else if !validGeneralPayload(payload) {
