@@ -97,6 +97,14 @@ func TestListIndexMetadataTables(t *testing.T) {
 		require.Contains(t, seen, typ)
 	}
 	require.Contains(t, seen, catalog.MO_INDEXES)
+
+	// It must also require the index table to EXIST. mo_indexes names the table; mo_tables is
+	// what says there is one. A row that outlives its table would reach the ALTER below, fail
+	// on the missing table, and abort HandleTenantUpgrade for the whole tenant -- identically on
+	// every retry, so one orphaned catalog row would wedge that tenant short of 4.0.7 forever.
+	require.Contains(t, seen, "it.relname = i.index_table_name",
+		"the listing must join what exists, not trust the name in mo_indexes")
+	require.Contains(t, seen, "it.reldatabase = t.reldatabase")
 }
 
 func TestListIndexMetadataTablesPropagatesError(t *testing.T) {

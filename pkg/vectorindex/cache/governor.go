@@ -362,6 +362,13 @@ func (g *VectorIndexGovernor) makeRoom(sqlproc *sqlexec.SqlProcess, key string, 
 			account = a
 		}
 	}
+	// Publish the owner HERE, not after the load. Preload already wrote this entry's byte
+	// totals (captureSize), so from this point snapshotResidents counts it -- and an entry whose
+	// accountID is still the zero value is counted against account 0 rather than its owner. A
+	// second arrival from the real owner then reads that tenant's usage as empty, takes the
+	// sole-occupant bypass in overBudget, and is admitted past a cap it should have hit.
+	// chargeAndEnforce re-stores the same value after Load; this only moves it earlier.
+	entry.accountID.Store(account)
 	tenant, sys, sizeErrs := g.limits(sqlproc)
 	// A sizing failure only blocks an arena this arrival OCCUPIES. A host-only index does not
 	// care that the GPU could not be counted, and refusing it for that reason takes a CN with
@@ -1201,6 +1208,12 @@ func (g *VectorIndexGovernor) refreshSysLimit(cnUUID string) caps {
 	if !firstFetch {
 		g.sysLimit.mu.Unlock()
 	} else {
+		// The FIRST fetch holds the lock across the query on purpose: it is the single-flight.
+		// There is no previous value to serve, so the alternatives are to let every concurrent
+		// miss issue its own catalog query (a storm exactly when the CN is coldest), or to hand
+		// them an unset cap and admit past a budget nobody has read yet. Waiters block for at
+		// most the query timeout below and then read the real value. Every later refresh has a
+		// last-known value to serve, which is why that path unlocks first.
 		defer g.sysLimit.mu.Unlock()
 	}
 	if cnUUID == "" {

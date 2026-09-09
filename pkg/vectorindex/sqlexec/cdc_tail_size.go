@@ -104,12 +104,12 @@ func CdcTailRowsUpperBound(sqlproc *SqlProcess, db, metaTable, storageTable stri
 func tailFrameCoverage(sqlproc *SqlProcess, db, metaTable string) (rows, chunks int64, err error) {
 	sql := fmt.Sprintf(
 		"SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED) "+
-			"FROM %s WHERE %s LIKE %s",
+			"FROM %s WHERE %s",
 		catalog.IndexMetadata_TblCol_Nrow,
 		catalog.IndexMetadata_TblCol_Filesize,
 		vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize,
 		sqlquote.QualifiedIdent(db, metaTable),
-		catalog.IndexMetadata_TblCol_Index_Id, sqlquote.String(vectorindex.TailFrameMetaPrefix+"%"))
+		vectorindex.TailFrameSQL(catalog.IndexMetadata_TblCol_Index_Id))
 	res, err := coverageRead(sqlproc, sql)
 	if err != nil {
 		return 0, 0, err

@@ -254,12 +254,22 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	// uses it when no tag=0 sub-index is loaded; with a sub-index
 	// loaded the search prefers the model tar's colMetaJSON, so the
 	// redundancy is harmless.
-	sqls, chunkSums, serr := cuvscdc.CdcAppendEventsSqlChecksummed(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	sqls, chunkMetas, serr := cuvscdc.CdcAppendEventsSqlChecksummed(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
 	if serr == nil && len(sqls) > 0 {
-		// One metadata row for the frame this flush wrote, keyed by the chunk id it starts
-		// at, carrying its byte length, its record count, and the base-table version it
-		// applied. Written in THIS transaction with the chunks it describes, so an index's
+		// One metadata row per CHUNK this flush wrote, each keyed by its own chunk id and
+		// carrying that chunk's stored length, record count, and the base-table version it
+		// applied. Written in THIS transaction with the chunks they describe, so an index's
 		// recorded coverage cannot disagree with the bytes it stores.
+		//
+		// Per chunk, not per flush, because the reader derives the chunks a row covers as
+		// ceil(filesize / MaxChunkSize) and one row per flush cannot make that exact: a flush
+		// packs records into a payload budget of MaxChunkSize minus the frame overhead and the
+		// embedded colMetaJSON header, and never splits a record, so its record-byte total
+		// always divides into FEWER chunks than it actually wrote. Every fully described tail
+		// then read as partly undescribed, and CdcTailRowsUpperBound added a chunk's worth of
+		// phantom rows for each -- inflating the overflow reservation and refusing loads that
+		// fit. Here one frame is one chunk, so each row owns exactly one and the division is
+		// exact. This is the shape fulltext2 already writes (one row per frame).
 		// The frame row is written ONLY once the table has the provenance columns, which is
 		// also what makes it safe to write. A row without build_ts is still a row, and an
 		// un-upgraded CN reads this table with SELECT * and treats every row as a sub-index --
@@ -273,11 +283,20 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 			sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
 				catalog.Ivfpq_TblCol_Metadata_Build_Ts)
 		if provenance {
-			sqls = append(sqls, catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance,
-				[]string{catalog.IndexMetadataRow(provenance, vectorindex.TailFrameMetaId(nextId),
-					vectorindex.CdcChunkSetChecksum(chunkSums),
-					time.Now().UnixMicro(), int64(len(s.pendingRecords)),
-					int64(len(s.pendingSizes)), s.buildTS)}))
+			now := time.Now().UnixMicro()
+			rows := make([]string, 0, len(chunkMetas))
+			for _, c := range chunkMetas {
+				rows = append(rows, catalog.IndexMetadataRow(provenance,
+					vectorindex.TailFrameMetaId(c.ChunkId),
+					vectorindex.CdcChunkSetChecksum([]uint32{c.Checksum}),
+					now, int64(c.FrameLen), int64(c.Records), s.buildTS))
+			}
+			for len(rows) > 0 {
+				n := min(len(rows), vectorindex.MaxMetadataInsertTuples)
+				sqls = append(sqls, catalog.IndexMetadataInsertSql(
+					s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, rows[:n]))
+				rows = rows[n:]
+			}
 		}
 	}
 	if serr != nil {

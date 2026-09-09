@@ -19,6 +19,7 @@ package cagra
 import (
 	"encoding/hex"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -572,4 +573,73 @@ func TestCagraSyncWritesTheFrameRowOnceTheTableHasIt(t *testing.T) {
 	}
 	require.Contains(t, metaSql, "'cdc_tail:0'", "keyed by the chunk id the frame starts at")
 	require.Contains(t, metaSql, "4242", "and carrying the version this flush applied")
+}
+
+// A flush that spans SEVERAL chunks writes one metadata row per chunk, each carrying that
+// chunk's own stored length -- not one row carrying the flush's record total.
+//
+// The reader derives the chunks a row covers as ceil(filesize / MaxChunkSize) and compares the
+// sum against the chunks actually stored. Record bytes always divide into fewer chunks than were
+// written (records are packed under MaxChunkSize minus frame overhead and header, and never
+// split), so one row per flush reported a fully described tail as partly undescribed, and
+// CdcTailRowsUpperBound added a chunk's worth of phantom rows for every chunk it could not see.
+func TestCagraSyncWritesOneFrameRowPerChunk(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	defer installNextChunkIdMock(t, proc, 0)()
+	rec := &recordingTxn{}
+	defer rec.install(t)()
+
+	const meta = "__meta_frame_rows_per_chunk"
+	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
+		idxdefs(meta, "__storage"), 4, types.T_array_float32, "")
+	require.NoError(t, err)
+
+	sqlexec.MarkProvenanceColumns("db", meta)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape("db", meta) })
+
+	// Records enough to fill several chunks: 9 + 4*4 bytes each.
+	const nrec = 4 * vectorindex.MaxChunkSize / 25
+	entries := make([]vectorindex.VectorIndexCdcEntry[float32], 0, nrec)
+	for i := 0; i < nrec; i++ {
+		entries = append(entries, vectorindex.VectorIndexCdcEntry[float32]{
+			Type: vectorindex.CDC_INSERT, PKey: int64(i + 1), Vec: []float32{1, 2, 3, 4},
+		})
+	}
+	require.NoError(t, s.Update(sqlproc, &vectorindex.VectorIndexCdc[float32]{Data: entries}))
+	require.NoError(t, s.Save(sqlproc))
+
+	var metaSql, chunkSql string
+	for _, st := range rec.statements {
+		if strings.Contains(st, meta) {
+			metaSql += st
+		} else if strings.Contains(st, "__storage") {
+			chunkSql += st
+		}
+	}
+	storedChunks := strings.Count(chunkSql, "'cdc_tail', ")
+	require.Greater(t, storedChunks, 1, "the fixture must span several chunks")
+
+	ids := regexp.MustCompile(`'cdc_tail:(\d+)'`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, ids, storedChunks, "one metadata row per stored chunk, not one per flush")
+	for i, m := range ids {
+		require.Equal(t, strconv.Itoa(i), m[1], "keyed by its own chunk id, contiguous")
+	}
+
+	// Every row's filesize is one chunk's framed length, so the reader's ceil resolves to
+	// exactly one chunk per row and the coverage sum equals the chunks stored.
+	sizes := regexp.MustCompile(`'cdc_tail:\d+', '[^']*', \d+, (\d+),`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, sizes, storedChunks)
+	covered := 0
+	for _, m := range sizes {
+		n, err := strconv.Atoi(m[1])
+		require.NoError(t, err)
+		require.Positive(t, n)
+		require.LessOrEqual(t, n, vectorindex.MaxChunkSize)
+		covered += (n + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize
+	}
+	require.Equal(t, storedChunks, covered,
+		"the tail is fully described: no uncovered chunk, so no phantom rows in the estimate")
 }

@@ -123,7 +123,9 @@ func preloadStub(t *testing.T, mp *mpool.MPool, ndoc, bytes, tailBytes int64) {
 	t.Helper()
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
-		case strings.Contains(sql, TailFrameMetaPrefix) && !strings.Contains(sql, "NOT LIKE"):
+		// Keyed on the predicate the production code builds, not on a dialect spelling: the
+		// two reads both name the tail prefix, and only the base totals NEGATE it.
+		case strings.Contains(sql, TailFrameMetaPrefix) && !strings.Contains(sql, notTailFrame()):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, tailBytes, 0)}}, nil
 		case strings.Contains(sql, "COUNT(*)"):
 			// The legacy fallback: no frame rows to sum, so it counts chunks instead.

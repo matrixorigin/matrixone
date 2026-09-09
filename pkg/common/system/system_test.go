@@ -539,3 +539,35 @@ func TestHierarchicalHeadroomDoesNotChargeReclaimableCache(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(limit), got, "clamped to the limit, never wrapped")
 }
+
+// The single-level fallback and the hierarchy walk must read the SAME quantity, or one host
+// reports two different amounts of reclaimable cache depending on which path answered. cgroup v1
+// exposes both a cgroup-LOCAL `inactive_file` and a hierarchical `total_inactive_file`; the walk
+// asks for the hierarchical one, so reading the local key here under-reported reclaimable cache
+// -- and therefore available memory -- whenever the process's cgroup had children.
+func TestReclaimableCgroupCachePrefersTheHierarchicalKey(t *testing.T) {
+	dir := t.TempDir()
+
+	v1 := filepath.Join(dir, "v1.stat")
+	require.NoError(t, os.WriteFile(v1, []byte(
+		"cache 100\ninactive_file 4096\ntotal_cache 900\ntotal_inactive_file 65536\n"), 0644))
+	got, ok := reclaimableCgroupCache(v1)
+	require.True(t, ok)
+	require.Equal(t, uint64(65536), got, "v1: the hierarchical key, the one the walk uses")
+
+	// v2 has no total_ prefix at all, so the plain key is the answer rather than a fallback
+	// that never fires.
+	v2 := filepath.Join(dir, "v2.stat")
+	require.NoError(t, os.WriteFile(v2, []byte("anon 10\ninactive_file 8192\nslab 3\n"), 0644))
+	got, ok = reclaimableCgroupCache(v2)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192), got)
+
+	_, ok = reclaimableCgroupCache(filepath.Join(dir, "absent.stat"))
+	require.False(t, ok, "an unreadable stat file is not a zero reading")
+
+	none := filepath.Join(dir, "none.stat")
+	require.NoError(t, os.WriteFile(none, []byte("anon 10\nslab 3\n"), 0644))
+	_, ok = reclaimableCgroupCache(none)
+	require.False(t, ok)
+}

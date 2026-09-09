@@ -1371,3 +1371,57 @@ func TestResidentPlusConcurrentCdcArrivalsCannotOversubscribe(t *testing.T) {
 	require.True(t, isResident(c, busy),
 		"and the resident was never evicted to seat an arrival")
 }
+
+// ownerProbeSearch parks inside Load so a test can look at the entry in the window between
+// admission and the post-load charge.
+type ownerProbeSearch struct {
+	countingSearch
+	inLoad  chan struct{}
+	release chan struct{}
+}
+
+func (s *ownerProbeSearch) Load(*sqlexec.SqlProcess) error {
+	close(s.inLoad)
+	<-s.release
+	return nil
+}
+
+// The owner has to be on the entry BEFORE the load, not after it.
+//
+// Preload publishes the entry's byte totals, so from admission onward snapshotResidents counts
+// this entry -- and an entry still carrying the zero accountID is counted against account 0
+// rather than its tenant. A second arrival from the real owner then reads that tenant's usage as
+// empty, takes the sole-occupant bypass in overBudget, and is admitted past a cap it should have
+// hit. Storing it only in chargeAndEnforce left that window open for the whole load.
+func TestGovernorAttributesTheOwnerBeforeLoadNotAfter(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, hostCap(1<<30), caps{})
+	const owner = uint32(42)
+	sp.WithExecutionIdentity(owner, "")
+
+	key := "__mo_index_secondary_owner_window"
+	algo := &ownerProbeSearch{
+		countingSearch: countingSearch{host: 300},
+		inLoad:         make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Search(sp, key, algo, nil, vectorindex.RuntimeConfig{})
+		done <- err
+	}()
+
+	select {
+	case <-algo.inLoad:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the load never started")
+	}
+	// Admitted, sized, and not yet charged: exactly the window a concurrent arrival sees.
+	require.EqualValues(t, owner, entryOf(t, c, key).accountID.Load(),
+		"an entry counted as resident must already name the tenant it is charged to")
+
+	close(algo.release)
+	require.NoError(t, <-done)
+	require.EqualValues(t, owner, entryOf(t, c, key).accountID.Load(),
+		"and the post-load charge agrees rather than correcting it")
+}

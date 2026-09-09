@@ -396,14 +396,14 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 		case strings.Contains(sql, "SUM("):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
 		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT") &&
-			!strings.Contains(sql, "NOT LIKE"): // tail chunk data
+			!strings.Contains(sql, notTailFrame()): // tail chunk data
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
 		default: // DELETE / INSERT writes succeed
 			// The bases' metadata delete is the one that SPARES the tail frame rows;
-			// DeleteTailSqls' own delete names the same prefix with a plain LIKE.
-			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, "NOT LIKE") {
+			// DeleteTailSqls' own delete names the same prefix without the negation.
+			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, notTailFrame()) {
 				deleteAllRan = true
 			}
 			if strings.HasPrefix(sql, "INSERT") {

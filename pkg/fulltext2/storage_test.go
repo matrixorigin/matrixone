@@ -57,7 +57,7 @@ func TestDeleteSqls(t *testing.T) {
 	// A REBUILD clears the bases and KEEPS the tail's bytes, so the tail's frame rows have to
 	// survive with them: stripping the rows off chunks that are still there loses their
 	// build_ts and leaves tailPeakBytes summing whichever frames a later flush appends.
-	require.Contains(t, all[1], "NOT LIKE", "the bases' delete must spare the tail frame rows")
+	require.Contains(t, all[1], notTailFrame(), "the bases' delete must spare the tail frame rows")
 	require.Contains(t, all[1], TailFrameMetaPrefix)
 	require.NotContains(t, all[1], "WHERE TRUE")
 
@@ -294,7 +294,7 @@ func TestTailFrameRowsAreNeverReadAsBases(t *testing.T) {
 	}
 
 	tsSQL, _ := StaleGenSqls(cfg)
-	require.Contains(t, tsSQL, "NOT LIKE",
+	require.Contains(t, tsSQL, notTailFrame(),
 		"a tail flush must not read as a new base generation")
 }
 

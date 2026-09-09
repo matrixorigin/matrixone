@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -72,6 +73,10 @@ const (
 // time alongside the real sub-index models.
 const CdcTailId = "cdc_tail"
 
+// MaxMetadataInsertTuples bounds the metadata rows per INSERT statement. A tail flush writes one
+// row per chunk, so a large flush would otherwise build one statement out of hundreds of tuples.
+const MaxMetadataInsertTuples = 500
+
 // TailFrameMetaId names the metadata row describing ONE tail frame, keyed by the chunk id the
 // frame starts at. That key is what lets the row be referred back to its bytes: chunk ids are
 // assigned contiguously in frame order, so a frame owns
@@ -85,13 +90,30 @@ func TailFrameMetaId(startChunkId int64) string {
 // "<index table>:<ts>:<n>" or ":<n>:<n>:<n>", so they cannot begin with this.
 const TailFrameMetaPrefix = CdcTailId + ":"
 
-// NotTailFrameSQL is the predicate a metadata query needs when it means "the bases".
+// TailFrameSQL and NotTailFrameSQL are the two predicates a metadata query needs: the tail
+// frames, and their complement, the bases.
 //
 // The metadata table holds two kinds of row: one per base/sub-index, and one per CDC tail frame.
 // A reader that forgets this loads a tail frame AS a base, or folds the tail's bytes into the
 // base totals.
+//
+// The test is prefix_eq, NOT `LIKE 'cdc_tail:%'`. `_` is LIKE's single-character wildcard, so
+// that pattern also matches `cdcXtail:...` for any X -- and this predicate is the load-bearing
+// boundary between "base generation" and "tail frame": a row on the wrong side is excluded from
+// LoadMetadata (a sub-index that never loads), kept by DeleteAllBasesSqls, and deleted by
+// DeleteTailSqls. Today's generated ids cannot collide, but the classification must not rest on
+// that, and escaping the wildcard would put the answer at the mercy of how one more layer
+// handles a backslash.
+//
+// prefix_eq is bytes.HasPrefix (pkg/sql/plan/function/func_prefix.go): no pattern to interpret,
+// and the planner recognizes it as a range predicate, so unlike a substring() comparison it can
+// still be served by a prefix scan on index_id.
+func TailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
+}
+
 func NotTailFrameSQL(indexIdCol string) string {
-	return fmt.Sprintf("%s NOT LIKE '%s%%'", indexIdCol, TailFrameMetaPrefix)
+	return fmt.Sprintf("NOT prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
 }
 
 type DistributionMode uint16

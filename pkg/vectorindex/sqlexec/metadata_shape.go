@@ -17,6 +17,7 @@ package sqlexec
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -25,10 +26,33 @@ import (
 )
 
 // provenanceShape memoizes, per index metadata table, whether it carries the appended provenance
-// columns. Only a POSITIVE answer is cached: a table gains those columns when its tenant's
-// v4_0_7 migration runs, so "not yet" is a transient answer, while "has them" is permanent --
-// nothing drops them again.
-var provenanceShape sync.Map // "db.table" -> struct{}
+// columns. BOTH answers are cached, and both EXPIRE.
+//
+// Neither answer is permanent, which is what a cache-forever got wrong in both directions:
+//
+//   - "has them" is not permanent. The memo is keyed by qualified name, and a RESTORE / PITR /
+//     CLONE can put a generation from before the v4_0_7 widening back under that same name. A
+//     memo that never expires keeps answering true, every writer keeps naming build_ts, and
+//     every CDC flush and rebuild for that index fails with "unknown column" until someone
+//     restarts the CN.
+//   - "not yet" was not cached at all, so an index whose tenant has not migrated paid a
+//     mo_catalog.mo_columns round-trip on EVERY flush, forever -- a catalog query in the CDC
+//     write path, which is the one place it should not be.
+//
+// A TTL fixes both without a distributed invalidation: writers re-probe once per interval per
+// table instead of once per write, and any shape change -- a migration widening the table, or a
+// restore narrowing it -- is picked up within one interval.
+var provenanceShape sync.Map // "db.table" -> provenanceShapeEntry
+
+// provenanceShapeTTL bounds how long a writer may act on a remembered shape. Short enough that a
+// restored table heals on its own well inside an operator's attention span, long enough that the
+// catalog probe is amortized across the flushes of a busy index rather than paid by each one.
+const provenanceShapeTTL = time.Minute
+
+type provenanceShapeEntry struct {
+	has     bool
+	fetched time.Time
+}
 
 // HasProvenanceColumns reports whether db.table already carries col, the appended provenance
 // column, and is how a writer stays correct during a rolling upgrade.
@@ -43,14 +67,17 @@ var provenanceShape sync.Map // "db.table" -> struct{}
 // Getting it wrong in the conservative direction costs only provenance: the columns default to
 // 0, which is already the documented "unknown" sentinel.
 //
-// A read failure answers false for the same reason -- degrade to the shape that works on both.
+// A read failure answers false for the same reason -- degrade to the shape that works on both --
+// and is NOT memoized, so the next writer retries rather than inheriting a guess.
 func HasProvenanceColumns(sqlproc *SqlProcess, db, table, col string) (ok bool) {
 	if db == "" || table == "" || col == "" {
 		return false
 	}
 	key := db + "." + table
-	if _, ok := provenanceShape.Load(key); ok {
-		return true
+	if v, loaded := provenanceShape.Load(key); loaded {
+		if e, cast := v.(provenanceShapeEntry); cast && time.Since(e.fetched) < provenanceShapeTTL {
+			return e.has
+		}
 	}
 	if sqlproc == nil {
 		return false
@@ -89,21 +116,24 @@ func HasProvenanceColumns(sqlproc *SqlProcess, db, table, col string) (ok bool) 
 			count += n
 		}
 	}
+	// A definite answer either way is memoized; a failed or panicking probe is NOT, so the next
+	// writer retries rather than inheriting a guess.
 	if count == 0 {
+		provenanceShape.Store(key, provenanceShapeEntry{has: false, fetched: time.Now()})
 		return false
 	}
-	provenanceShape.Store(key, struct{}{})
+	provenanceShape.Store(key, provenanceShapeEntry{has: true, fetched: time.Now()})
 	return true
 }
 
-// MarkProvenanceColumns records that db.table is known to carry the provenance columns, so the
-// next writer skips the catalog probe. A caller that just created the table knows this without
-// asking -- CREATE INDEX builds the current shape.
+// MarkProvenanceColumns records that db.table is known to carry the provenance columns, so
+// writers skip the catalog probe until the memo expires. A caller that just created the table
+// knows this without asking -- CREATE INDEX builds the current shape.
 func MarkProvenanceColumns(db, table string) {
 	if db == "" || table == "" {
 		return
 	}
-	provenanceShape.Store(db+"."+table, struct{}{})
+	provenanceShape.Store(db+"."+table, provenanceShapeEntry{has: true, fetched: time.Now()})
 }
 
 // ForgetProvenanceShape drops the memo for one table. For tests, and for a DROP that could see

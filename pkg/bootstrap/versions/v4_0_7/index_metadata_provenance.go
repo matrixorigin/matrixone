@@ -55,7 +55,16 @@ func indexMetadataProvenanceColumns(tblType string) []string {
 }
 
 // listIndexMetadataTables returns (database, table, algo_table_type) for every index metadata
-// table this account owns.
+// table this account owns AND that still exists.
+//
+// The existence join is not belt-and-braces. mo_indexes names the index table; mo_tables is what
+// says there is one. A row that outlives its table -- a DROP INDEX that failed partway, a table
+// removed underneath the catalog -- would otherwise reach the ALTER below, where
+// hasIndexMetadataColumn answers "no such column" (it counts mo_columns rows, and a table that
+// is gone has none), the ALTER fails on the missing table, and that error aborts
+// HandleTenantUpgrade for the whole tenant. The retry re-reads the same stale row and fails
+// identically, so the tenant would never reach 4.0.7 -- an upgrade wedged by one orphaned
+// catalog row. Joining what exists skips it instead.
 func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]string, error) {
 	quoted := make([]string, 0, len(indexMetadataProvenanceTypes))
 	for _, t := range indexMetadataProvenanceTypes {
@@ -64,8 +73,9 @@ func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]s
 	sql := fmt.Sprintf(
 		"select distinct t.reldatabase, i.index_table_name, i.algo_table_type "+
 			"from %s.mo_indexes i join %s.mo_tables t on t.rel_id = i.table_id "+
+			"join %s.mo_tables it on it.reldatabase = t.reldatabase and it.relname = i.index_table_name "+
 			"where i.algo_table_type in (%s) and i.index_table_name is not null and i.index_table_name != ''",
-		catalog.MO_CATALOG, catalog.MO_CATALOG, strings.Join(quoted, ","))
+		catalog.MO_CATALOG, catalog.MO_CATALOG, catalog.MO_CATALOG, strings.Join(quoted, ","))
 
 	res, err := txn.Exec(sql, versions.UpgradeStatementOption(accountId))
 	if err != nil {

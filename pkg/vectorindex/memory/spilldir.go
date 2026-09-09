@@ -102,9 +102,14 @@ var sweeping sync.Map
 //
 // Three things make the delete safe. Only this CN's own subdirectory is touched, so a
 // neighbour sharing the volume is never affected. It runs before this process creates
-// anything here, so it cannot reach a file this process is about to map. And if an earlier
-// process is somehow still winding down with a file mapped, unlinking it does not disturb
-// that mapping -- the inode outlives the name for as long as the mapping holds it.
+// anything here, so it cannot reach a file this process is about to map. And the directory is
+// keyed by the CN uuid, which is the service identity: one live process owns it, so the files
+// found here belong to a process that is gone.
+//
+// That last point is the real precondition, and it is the CN uuid that guarantees it -- NOT the
+// inode outliving its name. A load fetches a tar and reopens it BY PATH later (FetchArtifact
+// writes idx.Path, LoadIndex opens it), so a second live process sharing this uuid would fail
+// the first one's load with ENOENT, not survive it through an open mapping.
 //
 // Deliberately lazy rather than wired into CN startup: a CN that never loads a vector index
 // has nothing here to reclaim, and this keeps the reclaim beside the code that owns the

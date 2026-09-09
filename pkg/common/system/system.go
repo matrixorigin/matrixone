@@ -217,6 +217,20 @@ func readCgroupStatKey(path, key string) (uint64, bool) {
 
 // cgroupStatPath locates memory.stat for a pid on the single-level fallback path,
 // trying cgroup v2 first and then v1's memory controller.
+// reclaimableCgroupCache reads the reclaimable page cache from a memory.stat, under whichever
+// key the cgroup version uses. v1 exposes BOTH a cgroup-local `inactive_file` and a
+// hierarchical `total_inactive_file`; the hierarchy walk asks for the hierarchical one
+// (minHierarchicalHeadroom), and reading the local key here instead reported less reclaimable
+// cache than that walk for the same host whenever the process's cgroup had children --
+// under-reporting available memory, which is the undercount this correction exists to remove.
+// v2 has no `total_` prefix, so the plain key is the fallback rather than the first choice.
+func reclaimableCgroupCache(statPath string) (uint64, bool) {
+	if v, ok := readCgroupStatKey(statPath, "total_inactive_file"); ok {
+		return v, true
+	}
+	return readCgroupStatKey(statPath, "inactive_file")
+}
+
 func cgroupStatPath(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
@@ -482,7 +496,7 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 		}
 		// Same correction as the hierarchy walk: cgroup usage counts page cache and
 		// this function promises reclaimable cache is available.
-		if reclaimable, rok := readCgroupStatKey(cgroupStatPath(pid), "inactive_file"); rok && uint64(used) > reclaimable {
+		if reclaimable, rok := reclaimableCgroupCache(cgroupStatPath(pid)); rok && uint64(used) > reclaimable {
 			used -= int64(reclaimable)
 		}
 		if uint64(used) >= limit {

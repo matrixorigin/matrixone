@@ -366,9 +366,9 @@ func DeleteAllBasesSqls(cfg TableConfig) []string {
 	return []string{
 		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_ModelChunk)),
-		fmt.Sprintf("DELETE FROM %s WHERE %s NOT LIKE %s",
+		fmt.Sprintf("DELETE FROM %s WHERE %s",
 			sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
-			catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%")),
+			notTailFrame()),
 	}
 }
 
@@ -380,8 +380,8 @@ func DeleteTailSqls(cfg TableConfig) []string {
 		// The frames' metadata rows go with their bytes. Leaving them would report a tail that
 		// no longer exists: the next load would reserve memory for it, and its build_ts would
 		// claim coverage the folded generation now carries instead.
-		fmt.Sprintf("DELETE FROM %s WHERE %s LIKE %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
-			catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%")),
+		fmt.Sprintf("DELETE FROM %s WHERE %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+			vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id)),
 	}
 }
 
@@ -758,12 +758,12 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (peak int64, un
 func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, chunks int64, err error) {
 	sql := fmt.Sprintf(
 		"SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED) "+
-			"FROM %s WHERE %s LIKE %s",
+			"FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Metadata_Filesize,
 		catalog.FullText2Index_TblCol_Metadata_Filesize,
 		vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(TailFrameMetaPrefix+"%"))
+		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, 0, err
