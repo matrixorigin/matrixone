@@ -196,6 +196,152 @@ func TestDefaultExprExpanderRejectsCycle(t *testing.T) {
 	require.ErrorContains(t, err, "circular dependency")
 }
 
+func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	nodeCtx := NewBindContext(builder, nil)
+	intTyp := expressionDefaultIntType()
+	childID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_VALUE_SCAN,
+		TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "source", Typ: intTyp},
+		}},
+	}, nodeCtx)
+
+	const depth = 128
+	projection := make([]*planpb.Expr, depth)
+	colIdxToProjPos := make(map[int32]int32, depth)
+	expressions := make(map[int32]*planpb.Expr, depth)
+	materialize := make(map[int32]bool, depth)
+	order := make([]int32, depth)
+	for i := 0; i < depth; i++ {
+		colIdx := int32(i)
+		colIdxToProjPos[colIdx] = colIdx
+		materialize[colIdx] = true
+		order[i] = colIdx
+		if i == 0 {
+			expressions[colIdx] = expressionDefaultInt(7)
+		} else {
+			expressions[colIdx] = expressionDefaultAdd(
+				expressionDefaultCol(int32(i-1), 0), expressionDefaultInt(1))
+		}
+		null := makePlan2NullConstExprWithType()
+		null.Typ = intTyp
+		projection[i] = null
+	}
+
+	lastID, finalTag, err := builder.appendMaterializedExprProjections(
+		nodeCtx, childID, builder.genNewBindTag(), projection,
+		colIdxToProjPos, expressions, materialize, order,
+	)
+	require.NoError(t, err)
+	// One initial image plus one fixed-width stage per dependency. The plan
+	// stays linear in schema depth instead of embedding an exponentially copied
+	// expression tree.
+	require.Equal(t, depth+2, len(builder.qry.Nodes)-int(childID))
+	final := builder.qry.Nodes[lastID]
+	require.Equal(t, finalTag, final.BindingTags[0])
+	require.Equal(t, depth, len(final.ProjectList))
+	for i := 1; i < depth; i++ {
+		stage := builder.qry.Nodes[childID+2+int32(i)]
+		arg := stage.ProjectList[i].GetF().GetArgs()[0].GetCol()
+		require.NotNil(t, arg)
+		previous := builder.qry.Nodes[stage.Children[0]]
+		require.Equal(t, previous.BindingTags[0], arg.RelPos)
+		require.Equal(t, int32(i-1), arg.ColPos)
+	}
+}
+
+func TestDefaultExprExpanderHonorsCancellationBeforeExpansion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	expander := newDefaultExprExpander(ctx, func(int32) (*planpb.Expr, bool) {
+		return expressionDefaultInt(1), true
+	})
+	_, err := expander.expandExpr(expressionDefaultAdd(
+		expressionDefaultCol(0, 0), expressionDefaultInt(1)))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	const (
+		tableName = "expression_default_dml"
+		tableID   = uint64(29001)
+	)
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table expression_default_dml (id int primary key, a double default (rand()), b double default (a))", 1)
+	require.NoError(t, err)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	stmt.Free()
+	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()
+	tableDef.Name = tableName
+	tableDef.TblId = tableID
+	qualifiedName := mockQualifiedTableName("tpch", tableName)
+	objRef := &planpb.ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: int64(tableID)}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.objects[tableName] = objRef
+	mock.ctxt.tablesByQualifiedName[qualifiedName] = tableDef
+	mock.ctxt.objectsByQualifiedName[qualifiedName] = objRef
+	mock.ctxt.legacyTableOwners[tableName] = qualifiedName
+	mock.ctxt.legacyObjectOwners[tableName] = qualifiedName
+	mock.ctxt.id2name[tableID] = qualifiedName
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into expression_default_dml(id) values (1)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	foundMaterializedDependency := false
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) < 3 {
+			continue
+		}
+		bExpr := node.ProjectList[2]
+		bCol := bExpr.GetCol()
+		if bCol == nil || len(node.Children) != 1 {
+			continue
+		}
+		child := query.Nodes[node.Children[0]]
+		if bCol.ColPos != 1 {
+			continue
+		}
+		// createQuery may normalize a single-child relation to RelPos=0 and
+		// remove the planner-only binding tag. Before normalization the same
+		// reference points at the preceding stage's binding tag.
+		if len(child.BindingTags) > 0 && bCol.RelPos != child.BindingTags[0] {
+			continue
+		}
+		foundMaterializedDependency = true
+		break
+	}
+	require.True(t, foundMaterializedDependency,
+		"the dependent default must read the preceding materialized a value")
+
+	// When the dependency is omitted from the user column list, VALUE_SCAN must
+	// carry it as an internal input column. Otherwise b's DEFAULT(a) would
+	// inline rand() and the later table projection would evaluate a second,
+	// unrelated rand() for the stored a value.
+	logicPlan, err = runOneStmt(mock, t,
+		"insert into expression_default_dml(id, b) values (1, default)")
+	require.NoError(t, err)
+	query = logicPlan.GetQuery()
+	var valueScan *planpb.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == planpb.Node_VALUE_SCAN {
+			valueScan = node
+			break
+		}
+	}
+	require.NotNil(t, valueScan)
+	require.Len(t, valueScan.TableDef.Cols, 3,
+		"the omitted a dependency must be carried through VALUE_SCAN")
+	require.Len(t, valueScan.RowsetData.Cols, 3)
+	require.Equal(t, []int32{2}, collectRefColPos(valueScan.RowsetData.Cols[1].Data[0].Expr),
+		"b's row expression must read the appended a input, not inline rand()")
+}
+
 func TestExpandDefaultExprsInValueScanIsRowLocal(t *testing.T) {
 	tableDef := &TableDef{
 		Name2ColIndex: map[string]int32{"a": 0, "b": 1},
@@ -227,9 +373,38 @@ func TestExpandDefaultExprsInValueScanIsRowLocal(t *testing.T) {
 	require.NoError(t, expandDefaultExprsInValueScan(
 		context.Background(), tableDef, []string{"a", "b"}, rowset,
 	))
-	require.Empty(t, collectRefColPos(rowset.Cols[1].Data[0].Expr))
-	require.Equal(t, int64(10), rowset.Cols[1].Data[0].Expr.GetF().GetArgs()[0].GetLit().GetI64Val())
+	// Supplied values remain row-local references so VALUE_SCAN reads the
+	// materialized source once; the reference is remapped to the input vector
+	// position rather than inlined (which would replay volatile expressions).
+	require.Equal(t, []int32{0}, collectRefColPos(rowset.Cols[1].Data[0].Expr))
+	require.Equal(t, int32(0), rowset.Cols[1].Data[0].Expr.GetF().GetArgs()[0].GetCol().GetColPos())
 	require.Equal(t, int64(99), rowset.Cols[1].Data[1].Expr.GetLit().GetI64Val())
+}
+
+func TestExpandDefaultExprsInValueScanRemapsExplicitColumnOrder(t *testing.T) {
+	intTyp := expressionDefaultIntType()
+	tableDef := &TableDef{
+		Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+		Cols: []*ColDef{
+			{Name: "a", Typ: intTyp},
+			{Name: "b", Typ: intTyp},
+		},
+	}
+	// The synthetic VALUE_SCAN vectors follow the explicit INSERT order b,a;
+	// the expression is still written in table-column coordinates initially.
+	rowset := &planpb.RowsetData{
+		RowCount: 1,
+		Cols: []*planpb.ColData{
+			{Data: []*planpb.RowsetExpr{{Expr: expressionDefaultAdd(
+				expressionDefaultCol(0, 0), expressionDefaultInt(1),
+			)}}},
+			{Data: []*planpb.RowsetExpr{{Expr: expressionDefaultInt(7)}}},
+		},
+	}
+	require.NoError(t, expandDefaultExprsInValueScan(
+		context.Background(), tableDef, []string{"b", "a"}, rowset,
+	))
+	require.Equal(t, int32(1), rowset.Cols[0].Data[0].Expr.GetF().GetArgs()[0].GetCol().GetColPos())
 }
 
 func TestValidateDefaultColumnDependenciesCoversInvalidAndSharedGraphs(t *testing.T) {

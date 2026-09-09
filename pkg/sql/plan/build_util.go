@@ -1077,6 +1077,196 @@ type defaultExprExpander struct {
 	resolve func(int32) (*plan.Expr, bool)
 	state   map[int32]uint8
 	memo    map[int32]*plan.Expr
+	nodes   int
+}
+
+// A few planner-only callers still need expression inlining (for example,
+// checks that are not attached to a writable projection). Keep those callers
+// fail-fast when a malformed or adversarial dependency graph would otherwise
+// produce an exponential protobuf tree. DML write paths use
+// appendMaterializedExprProjections and do not depend on this limit.
+const maxDefaultExpansionNodes = 1 << 20
+
+// appendMaterializedExprProjections evaluates row-local expressions in dependency
+// order. A PROJECT cannot safely read a sibling expression from the same
+// projection: each sibling is evaluated against the child batch. Inlining a
+// dependency therefore both duplicates work and re-evaluates volatile defaults
+// (for example, b DEFAULT (a) where a DEFAULT (rand())). Keep one fixed-width
+// row image and add a projection boundary for each expression that has local
+// dependencies. Every dependent expression then reads the already materialized
+// value from the preceding boundary.
+//
+// projection contains one expression per output position. expressions maps a
+// table-column position to the raw expression supplying that column, and order
+// is the deterministic table-column order in which those expressions were
+// collected. materialize marks the expressions that must be evaluated after the
+// initial projection (normally defaults/generated columns containing local
+// references). The helper preserves projection width and positions throughout,
+// so downstream PRE_INSERT and index projections need only retag their column
+// references to the returned tag.
+func (builder *QueryBuilder) appendMaterializedExprProjections(
+	nodeCtx *BindContext,
+	childID int32,
+	initialTag int32,
+	projection []*plan.Expr,
+	colIdxToProjPos map[int32]int32,
+	expressions map[int32]*plan.Expr,
+	materialize map[int32]bool,
+	order []int32,
+) (int32, int32, error) {
+	initial := DeepCopyExprList(projection)
+	for colIdx, needsStage := range materialize {
+		if !needsStage {
+			continue
+		}
+		projPos, ok := colIdxToProjPos[colIdx]
+		raw, rawOK := expressions[colIdx]
+		if !ok || projPos < 0 || int(projPos) >= len(initial) || !rawOK || raw == nil {
+			return 0, 0, moerr.NewInvalidInputf(builder.GetContext(),
+				"expression for column position %d cannot be materialized", colIdx)
+		}
+		// The value is filled by a later stage. A typed NULL keeps the initial
+		// projection executable while preserving the target column metadata.
+		nullExpr := makePlan2NullConstExprWithType()
+		nullExpr.Typ = raw.Typ
+		nullExpr.Typ.NotNullable = false
+		initial[projPos] = nullExpr
+	}
+	for pos, expr := range initial {
+		if expr == nil {
+			return 0, 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"nil expression at projection position %d", pos)
+		}
+	}
+
+	currentID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: initial,
+		Children:    []int32{childID},
+		BindingTags: []int32{initialTag},
+	}, nodeCtx)
+	currentTag := initialTag
+	currentProjection := initial
+	state := make(map[int32]uint8, len(materialize))
+
+	var visit func(int32) error
+	visit = func(colIdx int32) error {
+		if !materialize[colIdx] {
+			return nil
+		}
+		switch state[colIdx] {
+		case 1:
+			return moerr.NewInvalidInputf(builder.GetContext(),
+				"expression has a circular dependency at column position %d", colIdx)
+		case 2:
+			return nil
+		}
+		raw, ok := expressions[colIdx]
+		if !ok || raw == nil {
+			return moerr.NewInvalidInputf(builder.GetContext(),
+				"expression for column position %d is missing", colIdx)
+		}
+		state[colIdx] = 1
+		for _, refIdx := range collectRefColPos(raw) {
+			if _, mapped := colIdxToProjPos[refIdx]; !mapped {
+				return moerr.NewInvalidInputf(builder.GetContext(),
+					"expression for column position %d references unavailable column position %d",
+					colIdx, refIdx)
+			}
+			if materialize[refIdx] {
+				if err := visit(refIdx); err != nil {
+					return err
+				}
+			}
+		}
+
+		rewritten, err := rewriteLocalRefsToProjection(builder.GetContext(), raw, currentTag, colIdxToProjPos)
+		if err != nil {
+			return err
+		}
+		projPos := colIdxToProjPos[colIdx]
+		stage := make([]*plan.Expr, len(currentProjection))
+		for pos, expr := range currentProjection {
+			stage[pos] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: currentTag,
+					ColPos: int32(pos),
+				}},
+			}
+		}
+		stage[projPos] = rewritten
+		nextTag := builder.genNewBindTag()
+		currentID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: stage,
+			Children:    []int32{currentID},
+			BindingTags: []int32{nextTag},
+		}, nodeCtx)
+		currentTag = nextTag
+		currentProjection = stage
+		state[colIdx] = 2
+		return nil
+	}
+
+	for _, colIdx := range order {
+		if err := visit(colIdx); err != nil {
+			return 0, 0, err
+		}
+	}
+	return currentID, currentTag, nil
+}
+
+// rewriteLocalRefsToProjection makes a single expression read the current
+// materialized row image. Outer references (RelPos != 0) are intentionally
+// untouched; only the default/generated-column local namespace is remapped.
+func rewriteLocalRefsToProjection(
+	ctx context.Context,
+	expr *plan.Expr,
+	tag int32,
+	colIdxToProjPos map[int32]int32,
+) (*plan.Expr, error) {
+	ret := DeepCopyExpr(expr)
+	var rewrite func(*plan.Expr) error
+	rewrite = func(node *plan.Expr) error {
+		if node == nil {
+			return nil
+		}
+		switch impl := node.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col == nil || impl.Col.RelPos != 0 {
+				return nil
+			}
+			projPos, ok := colIdxToProjPos[impl.Col.ColPos]
+			if !ok {
+				return moerr.NewInvalidInputf(ctx,
+					"local expression references unavailable column position %d", impl.Col.ColPos)
+			}
+			name := impl.Col.Name
+			node.Expr = &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: tag,
+				ColPos: projPos,
+				Name:   name,
+			}}
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				if err := rewrite(arg); err != nil {
+					return err
+				}
+			}
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				if err := rewrite(item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := rewrite(ret); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func newDefaultExprExpander(ctx context.Context, resolve func(int32) (*plan.Expr, bool)) *defaultExprExpander {
@@ -1094,7 +1284,7 @@ func (e *defaultExprExpander) expandColumn(colIdx int32) (*plan.Expr, error) {
 		return nil, moerr.NewInvalidInputf(e.ctx,
 			"default expression has a circular dependency at column position %d", colIdx)
 	case 2:
-		return DeepCopyExpr(e.memo[colIdx]), nil
+		return e.copyExpandedExpr(e.memo[colIdx])
 	}
 	raw, ok := e.resolve(colIdx)
 	if !ok || raw == nil {
@@ -1107,7 +1297,7 @@ func (e *defaultExprExpander) expandColumn(colIdx int32) (*plan.Expr, error) {
 	}
 	e.state[colIdx] = 2
 	e.memo[colIdx] = expanded
-	return DeepCopyExpr(expanded), nil
+	return e.copyExpandedExpr(expanded)
 }
 
 func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
@@ -1116,6 +1306,9 @@ func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
 	}
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
 		if impl.Col == nil || impl.Col.RelPos != 0 {
 			return DeepCopyExpr(expr), nil
 		}
@@ -1125,7 +1318,13 @@ func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
 		}
 		return e.expandColumn(impl.Col.ColPos)
 	case *plan.Expr_F:
-		ret := DeepCopyExpr(expr)
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
+		ret := &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_F{F: &plan.Function{}}}
+		*ret.GetF() = *impl.F
+		ret.GetF().Args = make([]*plan.Expr, len(impl.F.Args))
+		ret.GetF().AggConfig = bytes.Clone(impl.F.AggConfig)
 		retFunc := ret.GetF()
 		for i, arg := range impl.F.Args {
 			child, err := e.expandExpr(arg)
@@ -1136,8 +1335,12 @@ func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
 		}
 		return ret, nil
 	case *plan.Expr_List:
-		ret := DeepCopyExpr(expr)
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
+		ret := &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{}}}
 		retList := ret.GetList()
+		retList.List = make([]*plan.Expr, len(impl.List.List))
 		for i, item := range impl.List.List {
 			child, err := e.expandExpr(item)
 			if err != nil {
@@ -1147,8 +1350,54 @@ func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
 		}
 		return ret, nil
 	default:
+		if err := e.consumeTree(expr); err != nil {
+			return nil, err
+		}
 		return DeepCopyExpr(expr), nil
 	}
+}
+
+func (e *defaultExprExpander) consumeNode() error {
+	if err := e.ctx.Err(); err != nil {
+		return err
+	}
+	if e.nodes >= maxDefaultExpansionNodes {
+		return moerr.NewInvalidInput(e.ctx,
+			"default expression expansion exceeds the planner limit")
+	}
+	e.nodes++
+	return nil
+}
+
+func (e *defaultExprExpander) consumeTree(expr *plan.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	if err := e.consumeNode(); err != nil {
+		return err
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if err := e.consumeTree(arg); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if err := e.consumeTree(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *defaultExprExpander) copyExpandedExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if err := e.consumeTree(expr); err != nil {
+		return nil, err
+	}
+	return DeepCopyExpr(expr), nil
 }
 
 // expandDefaultExprsInProjection expands only the projection entries listed
@@ -1205,6 +1454,7 @@ func expandDefaultExprsInValueScan(
 		return nil
 	}
 	inputToTable := make(map[int]int, len(inputColumns))
+	tableToInput := make(map[int32]int32, len(inputColumns))
 	for inputPos, name := range inputColumns {
 		tablePos, ok := tableDef.Name2ColIndex[name]
 		if !ok {
@@ -1220,6 +1470,10 @@ func expandDefaultExprsInValueScan(
 			return moerr.NewInvalidInputf(ctx, "insert column '%s' does not exist", name)
 		}
 		inputToTable[inputPos] = int(tablePos)
+		if _, exists := tableToInput[tablePos]; exists {
+			return moerr.NewInvalidInputf(ctx, "insert column '%s' is specified more than once", name)
+		}
+		tableToInput[tablePos] = int32(inputPos)
 	}
 	rowCount := int(rowsetData.RowCount)
 	for row := 0; row < rowCount; row++ {
@@ -1230,7 +1484,8 @@ func expandDefaultExprsInValueScan(
 		needsExpansion := false
 		for inputPos := range inputToTable {
 			if inputPos >= len(rowsetData.Cols) || rowsetData.Cols[inputPos] == nil ||
-				row >= len(rowsetData.Cols[inputPos].Data) || rowsetData.Cols[inputPos].Data[row] == nil {
+				row >= len(rowsetData.Cols[inputPos].Data) || rowsetData.Cols[inputPos].Data[row] == nil ||
+				rowsetData.Cols[inputPos].Data[row].Expr == nil {
 				return moerr.NewInvalidInputf(ctx, "invalid VALUES rowset at row %d", row+1)
 			}
 			if exprHasLocalColumnRef(rowsetData.Cols[inputPos].Data[row].Expr) {
@@ -1249,8 +1504,12 @@ func expandDefaultExprsInValueScan(
 		defaultExprs := make(map[int32]*plan.Expr, len(tableDef.Cols))
 		var resolveErr error
 		expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
-			if expr, ok := raw[colIdx]; ok {
-				return expr, true
+			// Values supplied by this row already have an executable vector
+			// position. Keep their local reference intact so the VALUE_SCAN
+			// operator can read the materialized source value instead of replaying
+			// a volatile expression (a DEFAULT (a) chain is the canonical case).
+			if _, ok := raw[colIdx]; ok {
+				return nil, false
 			}
 			if colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
 				return nil, false
@@ -1279,10 +1538,93 @@ func expandDefaultExprsInValueScan(
 			if resolveErr != nil {
 				return resolveErr
 			}
+			if err := remapValueScanLocalRefs(ctx, expr, tableToInput); err != nil {
+				return err
+			}
 			rowsetData.Cols[inputPos].Data[row].Expr = expr
 		}
 	}
 	return nil
+}
+
+// valueScanColumnsWithDefaultDependencies returns the input columns plus any
+// target-table columns required by row-local expressions in the VALUES rowset.
+// VALUE_SCAN owns the row image used to evaluate those expressions.  Keeping
+// an omitted dependency in that image is important for volatile defaults:
+//
+//	a DEFAULT (rand()), b DEFAULT (a), INSERT INTO t(b) VALUES (DEFAULT)
+//
+// must evaluate rand() once and let both stored columns observe that value.
+// The closure follows persisted default expressions transitively and emits
+// newly discovered columns in deterministic first-reference order.
+func valueScanColumnsWithDefaultDependencies(
+	ctx context.Context,
+	tableDef *TableDef,
+	inputColumns []string,
+	rowsetData *plan.RowsetData,
+) ([]string, error) {
+	if tableDef == nil {
+		return append([]string(nil), inputColumns...), nil
+	}
+	columns := append([]string(nil), inputColumns...)
+	tableToInput := make(map[int32]struct{}, len(columns))
+	for _, name := range columns {
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			for i, col := range tableDef.Cols {
+				if col != nil && strings.EqualFold(col.Name, name) {
+					pos = int32(i)
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"insert column '%s' does not exist", name)
+		}
+		if _, duplicate := tableToInput[pos]; duplicate {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"insert column '%s' is specified more than once", name)
+		}
+		tableToInput[pos] = struct{}{}
+	}
+
+	refs := make([]int32, 0)
+	if rowsetData != nil {
+		for _, col := range rowsetData.Cols {
+			if col == nil {
+				continue
+			}
+			for _, row := range col.Data {
+				if row != nil {
+					refs = append(refs, collectRefColPos(row.Expr)...)
+				}
+			}
+		}
+	}
+	for next := 0; next < len(refs); next++ {
+		ref := refs[next]
+		if ref < 0 || int(ref) >= len(tableDef.Cols) || tableDef.Cols[ref] == nil {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"VALUES expression references invalid column position %d", ref)
+		}
+		if _, present := tableToInput[ref]; !present {
+			col := tableDef.Cols[ref]
+			if col.GeneratedCol != nil {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"VALUES expression cannot depend on generated column '%s'", col.Name)
+			}
+			if col.Typ.AutoIncr {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"VALUES expression cannot depend on auto-increment column '%s'", col.Name)
+			}
+			tableToInput[ref] = struct{}{}
+			columns = append(columns, col.Name)
+			refs = append(refs, collectRefColPos(col.Default.GetExpr())...)
+		}
+	}
+	return columns, nil
 }
 
 func exprHasLocalColumnRef(expr *plan.Expr) bool {
@@ -1306,6 +1648,47 @@ func exprHasLocalColumnRef(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+// remapValueScanLocalRefs changes table-column positions in a VALUES expression
+// to positions in the synthetic VALUE_SCAN batch. INSERT permits an explicit
+// column list in any order (for example, INSERT INTO t(b, a) ...), while the
+// rowset vectors follow that input order. References retained for supplied
+// values therefore must use the input position, not the physical table
+// position. References to omitted columns are expanded away before this pass.
+func remapValueScanLocalRefs(
+	ctx context.Context,
+	expr *plan.Expr,
+	tableToInput map[int32]int32,
+) error {
+	if expr == nil {
+		return nil
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col == nil || impl.Col.RelPos != 0 {
+			return nil
+		}
+		inputPos, ok := tableToInput[impl.Col.ColPos]
+		if !ok {
+			return moerr.NewInvalidInputf(ctx,
+				"VALUES expression references unavailable column position %d", impl.Col.ColPos)
+		}
+		impl.Col.ColPos = inputPos
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if err := remapValueScanLocalRefs(ctx, arg, tableToInput); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if err := remapValueScanLocalRefs(ctx, item, tableToInput); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // remapGeneratedColExpr rewrites ColRef positions in a generated column expression

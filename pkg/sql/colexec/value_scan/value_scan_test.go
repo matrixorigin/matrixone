@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -83,6 +85,115 @@ func TestValueScan(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
+	plus, err := function.GetFunctionByName(proc.Ctx, "+", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	localCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: pos,
+		}}}
+	}
+	addOne := func(expr *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: plus.GetEncodedOverloadID(), ObjName: "+"},
+			Args: []*planpb.Expr{expr, {
+				Typ:  intType,
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}},
+			}},
+		}}}
+	}
+	rowset := &planpb.RowsetData{
+		RowCount: 2,
+		Cols: []*planpb.ColData{
+			{Data: []*planpb.RowsetExpr{
+				{RowPos: 0, Expr: addOne(localCol(1))},
+				{RowPos: 1, Expr: addOne(localCol(1))},
+			}},
+			{Data: []*planpb.RowsetExpr{
+				{RowPos: 0, Expr: &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}}}},
+				{RowPos: 1, Expr: &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 20}}}}},
+			}},
+		},
+	}
+	bat := batch.NewWithSize(2)
+	bat.SetRowCount(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{0, 0}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{0, 0}, nil, proc.Mp()))
+	vs := &ValueScan{
+		NodeType:   planpb.Node_VALUE_SCAN,
+		ColCount:   2,
+		Batchs:     []*batch.Batch{bat, nil},
+		RowsetData: rowset,
+	}
+	require.NoError(t, vs.Prepare(proc))
+	result, err := vs.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{11, 21}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{10, 20}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+	vs.Free(proc, false, nil)
+}
+
+func TestValueScanDependencyCanReadConstantSourceColumn(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
+	localCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: pos,
+		}}}
+	}
+	batchData := batch.NewWithSize(3)
+	batchData.SetRowCount(2)
+	for i := range batchData.Vecs {
+		batchData.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+	}
+	// Column 2 represents a constant expression already folded by
+	// constructValueScan and therefore has no RowsetData entries. The
+	// dependent column still has to evaluate against this source vector.
+	require.NoError(t, vector.AppendFixedList(batchData.Vecs[0], []int64{1, 2}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(batchData.Vecs[1], []int64{0, 0}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(batchData.Vecs[2], []int64{10, 20}, nil, proc.Mp()))
+	rowset := &planpb.RowsetData{
+		RowCount: 2,
+		Cols: []*planpb.ColData{
+			{},
+			{Data: []*planpb.RowsetExpr{
+				{RowPos: 0, Expr: localCol(2)},
+				{RowPos: 1, Expr: localCol(2)},
+			}},
+			{},
+		},
+	}
+	vs := &ValueScan{
+		NodeType:   planpb.Node_VALUE_SCAN,
+		ColCount:   3,
+		Batchs:     []*batch.Batch{batchData, nil},
+		RowsetData: rowset,
+	}
+	require.NoError(t, vs.Prepare(proc))
+	result, err := vs.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{10, 20}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+	vs.Free(proc, false, nil)
+}
+
+func TestRowsetExprHasLocalColumnRef(t *testing.T) {
+	require.False(t, rowsetExprHasLocalColumnRef(nil))
+	require.False(t, rowsetExprHasLocalColumnRef(&planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1}}}))
+	require.True(t, rowsetExprHasLocalColumnRef(&planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0}}},
+	}}}}))
 }
 
 func resetBatchs(arg *ValueScan, m *mpool.MPool) {
