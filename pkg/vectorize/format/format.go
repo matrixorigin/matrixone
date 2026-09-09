@@ -16,11 +16,10 @@ package format
 
 import (
 	"bytes"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // FormatFunc is the locale format function signature.
@@ -33,10 +32,13 @@ func GetNumberFormat(number, scale, locale string) (string, error) {
 // GetFormatFunctionWithLocate get the format function for sepcific locale.
 func getFormatFunctionWithLocale(locale string) FormatFunc {
 	formatFunc, exist := localeToFormatFunction[locale]
-	if !exist {
-		return formatENUS
+	if exist {
+		return formatFunc
 	}
-	return formatFunc
+	if formatFunc, exist = localeToFormatFunctionInsensitive[strings.ToLower(locale)]; exist {
+		return formatFunc
+	}
+	return formatENUS
 }
 
 // localeToFormatFunction is the string represent of locale format function.
@@ -62,7 +64,7 @@ var localeToFormatFunction = map[string]FormatFunc{
 	"en_AU": formatENUS,
 	"en_CA": formatENUS,
 	"en_GB": formatENUS,
-	"en_IN": formatENUS,
+	"en_IN": formatIndian,
 	"en_NZ": formatENUS,
 	"en_PH": formatENUS,
 	"en_US": formatENUS,
@@ -83,8 +85,8 @@ var localeToFormatFunction = map[string]FormatFunc{
 	"ja_JP": formatENUS,
 	"ko_KR": formatENUS,
 	"ms_MY": formatENUS,
-	"ta_IN": formatENUS,
-	"te_IN": formatENUS,
+	"ta_IN": formatIndian,
+	"te_IN": formatIndian,
 	"th_TH": formatENUS,
 	"ur_PK": formatENUS,
 	"zh_CN": formatENUS,
@@ -166,6 +168,17 @@ var localeToFormatFunction = map[string]FormatFunc{
 	"rm_CH": formatITCH,
 }
 
+// Keep the canonical map readable while making locale lookup case-insensitive.
+// The second map is built once, so a row-wise FORMAT(..., locale) call does not
+// scan all locale names or mutate shared state.
+var localeToFormatFunctionInsensitive = func() map[string]FormatFunc {
+	result := make(map[string]FormatFunc, len(localeToFormatFunction))
+	for locale, formatFunc := range localeToFormatFunction {
+		result[strings.ToLower(locale)] = formatFunc
+	}
+	return result
+}()
+
 // format number like 20,000,000.0000
 func formatENUS(number string, scale string) (string, error) {
 	return format(number, scale, []byte{','}, []byte{'.'})
@@ -201,141 +214,218 @@ func formatITCH(number string, scale string) (string, error) {
 	return format(number, scale, []byte{'\''}, []byte{','})
 }
 
-func format(number string, scale string, comma, decimalPoint []byte) (string, error) {
-	var buffer bytes.Buffer
+func formatIndian(number string, scale string) (string, error) {
+	return formatWithGrouping(number, scale, []byte{','}, []byte{'.'}, 3, 2)
+}
 
+const maxFormatDecimals = 30
+
+func format(number, scale string, comma, decimalPoint []byte) (string, error) {
+	return formatWithGrouping(number, scale, comma, decimalPoint, 3, 3)
+}
+
+func formatWithGrouping(
+	number, scale string,
+	comma, decimalPoint []byte,
+	primaryGroupSize, secondaryGroupSize int,
+) (string, error) {
 	if len(number) == 0 {
 		return "", nil
 	}
-	//handle scale
-	if unicode.IsDigit(rune(scale[0])) {
-		for i, v := range scale {
-			if unicode.IsDigit(v) {
-				continue
+
+	decimals := parseFormatScale(scale)
+	integer, fraction, negative, scientific, token, ok := parseFormatNumber(number)
+	if !ok {
+		integer = "0"
+		fraction = ""
+		negative = false
+	}
+
+	if scientific {
+		value, err := strconv.ParseFloat(token, 64)
+		if err != nil || math.IsInf(value, 0) {
+			switch {
+			case math.IsInf(value, 1):
+				integer, fraction, negative = maxFloatComponents(false)
+			case math.IsInf(value, -1):
+				integer, fraction, negative = maxFloatComponents(true)
+			default:
+				// A range error with a zero value is an underflow. It is safe to
+				// format it as zero at FORMAT's maximum 30 decimal places.
+				integer, fraction, negative = "0", "", false
 			}
-			scale = scale[:i]
-			break
-		}
-	} else {
-		scale = "0"
-	}
-
-	//handle number
-	if number[0] == '-' && number[1] == '.' {
-		number = strings.Replace(number, "-", "-0", 1)
-	} else if number[0] == '.' {
-		number = strings.Replace(number, ".", "0.", 1)
-	}
-
-	if (number[:1] == "-" && !unicode.IsDigit(rune(number[1]))) ||
-		(!unicode.IsDigit(rune(number[0])) && number[:1] != "-") {
-		buffer.Write([]byte{'0'})
-		position, err := strconv.ParseUint(scale, 10, 64)
-		if err == nil && position > 0 {
-			buffer.Write([]byte{'.'})
-			buffer.WriteString(strings.Repeat("0", int(position)))
-		}
-		return buffer.String(), nil
-	} else if number[:1] == "-" {
-		buffer.Write([]byte{'-'})
-		number = number[1:]
-	}
-
-	// Check for scientific notition.
-	for _, v := range number {
-		if v == 'E' || v == 'e' {
-			num, err := strconv.ParseFloat(number, 64)
-			if err != nil {
-				return "", err
-			}
-			// Convert to non-scientific notition.
-			number = strconv.FormatFloat(num, 'f', -1, 64)
-			break
-		}
-	}
-
-	for i, v := range number {
-		if unicode.IsDigit(v) {
-			continue
-		} else if i == 1 && number[1] == '.' {
-			continue
-		} else if v == '.' && number[1] != '.' {
-			continue
 		} else {
-			number = number[:i]
-			break
+			expanded := strconv.FormatFloat(value, 'f', -1, 64)
+			integer, fraction, negative, _, _, ok = parseFormatNumber(expanded)
+			if !ok {
+				integer, fraction, negative = "0", "", false
+			}
 		}
 	}
 
-	parts := strings.Split(number, ".")
+	integer = strings.TrimLeft(integer, "0")
+	if integer == "" {
+		integer = "0"
+	}
 
+	roundUp := decimals < len(fraction) && fraction[decimals] >= '5'
+	if len(fraction) > decimals {
+		fraction = fraction[:decimals]
+	}
+	if len(fraction) < decimals {
+		fraction += strings.Repeat("0", decimals-len(fraction))
+	}
+	if roundUp {
+		combined := incrementDecimalDigits(integer + fraction)
+		if decimals == 0 {
+			integer = combined
+			fraction = ""
+		} else {
+			split := len(combined) - decimals
+			integer = combined[:split]
+			fraction = combined[split:]
+		}
+	}
+
+	if isZeroFormatNumber(integer, fraction) {
+		negative = false
+	}
+	var buffer bytes.Buffer
+	if negative {
+		buffer.WriteByte('-')
+	}
 	if len(comma) != 0 {
-		addComma(comma, &buffer, parts[0])
+		addGrouped(comma, &buffer, integer, primaryGroupSize, secondaryGroupSize)
 	} else {
-		buffer.WriteString(parts[0])
+		buffer.WriteString(integer)
 	}
-
-	//According to the scale to process the decimal parts
-	position, err := strconv.ParseUint(scale, 10, 64)
-	if err != nil {
-		return "", err
-	}
-
-	if position > 0 {
+	if decimals > 0 {
 		buffer.Write(decimalPoint)
-		if len(parts) == 2 {
-			if uint64(len(parts[1])) == position {
-				buffer.WriteString(parts[1][:position])
-			} else if uint64(len(parts[1])) > position {
-				//need to cast decimal's length
-				if parts[1][position:position+1] >= "5" {
-					buffer.Reset()
-					floatVar, err := strconv.ParseFloat(parts[0]+"."+parts[1], 64)
-					if err != nil {
-						return "", moerr.NewInvalidArgNoCtx("format parser error", parts[0]+"."+parts[1])
-					}
-					newNumber := strconv.FormatFloat(floatVar, 'f', int(position), 64)
-					newParts := strings.Split(newNumber, ".")
-
-					if len(comma) != 0 {
-						addComma(comma, &buffer, newParts[0])
-					} else {
-						buffer.WriteString(newParts[0])
-					}
-
-					buffer.Write(decimalPoint)
-					buffer.WriteString(newParts[1])
-				} else {
-					buffer.WriteString(parts[1][:position])
-				}
-			} else {
-				buffer.WriteString(parts[1])
-				buffer.WriteString(strings.Repeat("0", int(position)-len(parts[1])))
-			}
-		} else {
-			buffer.WriteString(strings.Repeat("0", int(position)))
-		}
+		buffer.WriteString(fraction)
 	}
-
 	return buffer.String(), nil
 }
 
-func addComma(comma []byte, buffer *bytes.Buffer, formatString string) {
-	pos := 0
-
-	//Add foramt comma for Integr parts
-	//If the integer part's length larger than 3
-	if len(formatString)%3 != 0 {
-		pos += len(formatString) % 3
-		buffer.WriteString(formatString[:pos])
-		buffer.Write(comma)
+func parseFormatScale(scale string) int {
+	scale = strings.TrimLeftFunc(scale, unicode.IsSpace)
+	if len(scale) == 0 {
+		return 0
 	}
-	//Add a format comma every three digits
-	for ; pos < len(formatString); pos += 3 {
-		buffer.WriteString(formatString[pos : pos+3])
-		buffer.Write(comma)
+	if scale[0] == '-' {
+		return 0
 	}
+	if scale[0] == '+' {
+		scale = scale[1:]
+	}
+	decimals := 0
+	for i := 0; i < len(scale); i++ {
+		if scale[i] < '0' || scale[i] > '9' {
+			break
+		}
+		if decimals < maxFormatDecimals {
+			decimals = decimals*10 + int(scale[i]-'0')
+			if decimals > maxFormatDecimals {
+				return maxFormatDecimals
+			}
+		}
+	}
+	return decimals
+}
 
-	buffer.Truncate(buffer.Len() - 1)
+func parseFormatNumber(number string) (
+	integer, fraction string,
+	negative, scientific bool,
+	token string,
+	ok bool,
+) {
+	number = strings.TrimLeftFunc(number, unicode.IsSpace)
+	if len(number) == 0 {
+		return "", "", false, false, "", false
+	}
+	i := 0
+	negative = number[i] == '-'
+	if negative || number[i] == '+' {
+		i++
+	}
+	integerStart := i
+	for i < len(number) && number[i] >= '0' && number[i] <= '9' {
+		i++
+	}
+	integer = number[integerStart:i]
+	if i < len(number) && number[i] == '.' {
+		i++
+		fractionStart := i
+		for i < len(number) && number[i] >= '0' && number[i] <= '9' {
+			i++
+		}
+		fraction = number[fractionStart:i]
+	}
+	if len(integer) == 0 && len(fraction) == 0 {
+		return "", "", false, false, "", false
+	}
+	tokenEnd := i
+	if i < len(number) && (number[i] == 'e' || number[i] == 'E') {
+		j := i + 1
+		if j < len(number) && (number[j] == '+' || number[j] == '-') {
+			j++
+		}
+		exponentStart := j
+		for j < len(number) && number[j] >= '0' && number[j] <= '9' {
+			j++
+		}
+		if j > exponentStart {
+			scientific = true
+			tokenEnd = j
+		}
+	}
+	return integer, fraction, negative, scientific, number[:tokenEnd], true
+}
 
+func maxFloatComponents(negative bool) (integer, fraction string, isNegative bool) {
+	value := strconv.FormatFloat(math.MaxFloat64, 'f', -1, 64)
+	point := strings.IndexByte(value, '.')
+	if point < 0 {
+		return value, "", negative
+	}
+	return value[:point], value[point+1:], negative
+}
+
+func incrementDecimalDigits(value string) string {
+	digits := []byte(value)
+	for i := len(digits) - 1; i >= 0; i-- {
+		if digits[i] != '9' {
+			digits[i]++
+			return string(digits)
+		}
+		digits[i] = '0'
+	}
+	return "1" + string(digits)
+}
+
+func isZeroFormatNumber(integer, fraction string) bool {
+	return strings.Trim(integer+fraction, "0") == ""
+}
+
+func addGrouped(
+	comma []byte,
+	buffer *bytes.Buffer,
+	formatString string,
+	primaryGroupSize, secondaryGroupSize int,
+) {
+	if len(formatString) <= primaryGroupSize {
+		buffer.WriteString(formatString)
+		return
+	}
+	first := len(formatString) - primaryGroupSize
+	firstGroupSize := first % secondaryGroupSize
+	if firstGroupSize == 0 {
+		firstGroupSize = secondaryGroupSize
+	}
+	buffer.WriteString(formatString[:firstGroupSize])
+	for pos := firstGroupSize; pos < first; pos += secondaryGroupSize {
+		buffer.Write(comma)
+		buffer.WriteString(formatString[pos : pos+secondaryGroupSize])
+	}
+	buffer.Write(comma)
+	buffer.WriteString(formatString[first:])
 }

@@ -3938,6 +3938,39 @@ func initFormat2Or3TestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-0.12"}, []bool{false}),
 		},
+		{
+			info: "2",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"-", "1.25", "1234.56"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"2", "", "2"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"0.00", "1", "1,234.56"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"123456789.12", "-123456789.12", "123456789.12", "1234.56"},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"2", "2", "2", "2"},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"en_IN", "ta_IN", "te_IN", "de_de"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"12,34,56,789.12", "-12,34,56,789.12", "12,34,56,789.12", "1.234,56"},
+				[]bool{false, false, false, false}),
+		},
 	}
 }
 
