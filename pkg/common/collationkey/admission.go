@@ -71,3 +71,15 @@ func AdmissionFromContext(ctx context.Context) (Admission, bool) {
 	a, ok := ctx.Value(admissionContextKey{}).(Admission)
 	return a, ok
 }
+
+// cloneAdmission takes ownership-safe copies of all nested capability and
+// activation fields. A transaction retains its begin-time admission across
+// pooled heartbeat buffers and must not observe a caller mutating a map or
+// digest after Begin returns.
+func cloneAdmission(admission Admission) Admission {
+	admission.Activation.RegistryDigest = append([]byte(nil), admission.Activation.RegistryDigest...)
+	admission.Activation.CnTargets = cloneUint64Map(admission.Activation.CnTargets)
+	admission.Activation.TnTargets = cloneUint64Map(admission.Activation.TnTargets)
+	admission.Node.Capability.RegistryDigest = append([]byte(nil), admission.Node.Capability.RegistryDigest...)
+	return admission
+}

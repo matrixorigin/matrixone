@@ -160,6 +160,48 @@ func TestSidecarTxnRejectsStaleGenerationAndWrongRelation(t *testing.T) {
 	tx.Rollback()
 }
 
+func TestSidecarTxnRechecksAdmissionAtCommit(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(8)
+	store, err := NewSidecarStore(18, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := sidecarTestKey(t)
+	beginAdmission := sidecarTestAdmission(8)
+	tx, err := store.Begin(beginAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Put(key, RowLocator{RelationID: 18, PrimaryKey: []byte("pk")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The relation may still be v2, but a capability loss or activation
+	// demotion after Begin must fence the TN commit before any sidecar bytes are
+	// published.
+	staleAdmission := beginAdmission
+	staleAdmission.Activation.Phase = ActivationPreparing
+	if err := tx.CommitWithAdmission(staleAdmission); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("demoted activation commit error = %v", err)
+	}
+	if got := store.Snapshot(); len(got.Entries) != 0 {
+		t.Fatalf("stale admission published entries: %+v", got.Entries)
+	}
+
+	// A caller cannot reuse the closed transaction after the failed commit;
+	// retry starts from a fresh snapshot and carries a fresh admission.
+	retry, err := store.Begin(beginAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.Put(key, RowLocator{RelationID: 18, PrimaryKey: []byte("pk")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSidecarTxnSkipsNullBearingUniqueKeys(t *testing.T) {
 	metadata := NewCollationAwareMetadataAtGeneration(7)
 	store, err := NewSidecarStore(31, metadata)

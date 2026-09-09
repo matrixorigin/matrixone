@@ -108,6 +108,7 @@ func (s *SidecarStore) Begin(admission Admission) (*SidecarTxn, error) {
 	}
 	return &SidecarTxn{
 		store:        s,
+		admission:    cloneAdmission(admission),
 		baseRevision: baseRevision,
 		writes:       make(map[string]*SidecarEntry),
 		touched:      make(map[string]struct{}),
@@ -185,6 +186,7 @@ func RestoreSidecarStore(snapshot SidecarSnapshot) (*SidecarStore, error) {
 // vectors and WAL buffers around the transaction boundary.
 type SidecarTxn struct {
 	store        *SidecarStore
+	admission    Admission
 	baseRevision uint64
 	writes       map[string]*SidecarEntry
 	touched      map[string]struct{}
@@ -314,16 +316,32 @@ func (tx *SidecarTxn) Delete(key []byte, expected *RowLocator) error {
 	return nil
 }
 
-// Commit atomically applies all staged key mappings.  A conflict closes the
-// transaction without applying any write; callers must retry from a fresh
-// snapshot and transaction.
+// Commit atomically applies all staged key mappings. The admission captured by
+// Begin is checked again immediately before the store lock is mutated. A
+// conflict or a stale capability closes the transaction without applying any
+// write; callers must retry from a fresh snapshot and transaction.
 func (tx *SidecarTxn) Commit() error {
+	return tx.commit(tx.admission)
+}
+
+// CommitWithAdmission is the commit-time capability fence for a storage
+// adapter that can obtain a fresh durable activation/heartbeat view. Begin's
+// admission is still checked for the read snapshot, while this value is the
+// authoritative write admission at the TN linearization point.
+func (tx *SidecarTxn) CommitWithAdmission(admission Admission) error {
+	return tx.commit(admission)
+}
+
+func (tx *SidecarTxn) commit(admission Admission) error {
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
 	defer func() { tx.closed = true }()
 	tx.store.mu.Lock()
 	defer tx.store.mu.Unlock()
+	if err := admission.Validate(tx.store.metadata, true); err != nil {
+		return err
+	}
 	for key := range tx.touched {
 		if tx.store.keyVersion[key] > tx.baseRevision {
 			return ErrSidecarConflict
