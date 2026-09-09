@@ -106,24 +106,118 @@ func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
 	cmpFn func(v1, v2 []byte) (bool, error),
 	selectList *FunctionSelectList,
 ) error {
-	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+	rsNull := rsVec.GetNulls()
 
-	// Result of <=> is never NULL. Keep the same masked-row behavior as the
-	// existing NULL-safe bytewise helper.
-	rsVec.GetNulls().Reset()
+	// Result of <=> is never NULL for evaluated rows.  A select list is the
+	// executor's short-circuit mask: rows outside it must remain NULL and must
+	// not invoke the comparator.  Reset first because the same result vector is
+	// reused across batches and a stale mask must not leak past length.
+	rsNull.Reset()
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			limit := len(selectList.SelectList)
+			if limit > length {
+				limit = length
+			}
+			for i := 0; i < limit; i++ {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	// Keep the scalar fast paths while checking the mask before reading a
+	// vector row.  This is important when an unselected row contains malformed
+	// text: the masked branch must not call cmpFn or report its error.
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetStrValue(0)
+		v2, null2 := p2.GetStrValue(0)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			if null1 && null2 {
+				rss[i] = true
+			} else if null1 || null2 {
+				rss[i] = false
+			} else {
+				matched, err := cmpFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = matched
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v2, null2 := p2.GetStrValue(i)
+			if null1 && null2 {
+				rss[i] = true
+			} else if null1 || null2 {
+				rss[i] = false
+			} else {
+				matched, err := cmpFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = matched
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetStrValue(0)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, null1 := p1.GetStrValue(i)
+			if null1 && null2 {
+				rss[i] = true
+			} else if null1 || null2 {
+				rss[i] = false
+			} else {
+				matched, err := cmpFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = matched
+			}
+		}
+		return nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
+		if rsNull.Contains(i) {
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
-		switch {
-		case null1 && null2:
+		if null1 && null2 {
 			rss[i] = true
-		case null1 || null2:
+		} else if null1 || null2 {
 			rss[i] = false
-		default:
+		} else {
 			matched, err := cmpFn(v1, v2)
 			if err != nil {
 				return err

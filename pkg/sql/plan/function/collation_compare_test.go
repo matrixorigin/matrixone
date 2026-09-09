@@ -109,3 +109,65 @@ func TestCollationKeyDomainRejectsUnsupportedTypes(t *testing.T) {
 	_, ok := collationKeyTextDomain(accepted, otherCharset)
 	require.False(t, ok, "mixed comparison domains must fail closed")
 }
+
+func TestCollationKeyNullSafeHonorsSelectionMask(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(typ, []string{"Alpha", "beta"}, []bool{false, false}),
+		NewFunctionTestInput(typ, []string{"alpha", "BETA"}, []bool{false, false}),
+	}
+	// SelectList marks row 1 as not selected.  The comparator must not run for
+	// that row and the expression framework represents it as a NULL result.
+	testCase := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, true}),
+		CollationKeyNullSafeEqual).WithSelectList(&FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, false},
+	})
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestCollationKeyNullSafeSelectionMaskConstAndStaleRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	t.Run("constant left", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestConstInput(typ, []string{"Alpha"}, []bool{false}),
+			NewFunctionTestInput(typ, []string{"Alpha", "alpha"}, []bool{false, false}),
+		}
+		testCase := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false}, []bool{false, true}),
+			CollationKeyNullSafeEqual).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		})
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("stale tail is ignored", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(typ, []string{"Alpha", "Alpha"}, []bool{false, false}),
+			NewFunctionTestInput(typ, []string{"alpha", "Alpha"}, []bool{false, false}),
+		}
+		testCase := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true}, []bool{true, false}),
+			CollationKeyNullSafeEqual).WithSelectList(&FunctionSelectList{
+			AnyNull: true,
+			// The third entry is from a previous, longer batch and must not
+			// affect this two-row evaluation.
+			SelectList: []bool{false, true, false},
+		})
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+}
