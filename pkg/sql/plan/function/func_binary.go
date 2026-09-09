@@ -170,13 +170,10 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 	cb mathMultiFun[T], selectList *FunctionSelectList) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
-		if !ivecs[1].IsConst() {
+		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
 			if funcName != "round" && funcName != "truncate" {
 				return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 			}
-			return opBinaryFixedFixedToFixed[T, int64, T](ivecs, result, proc, length, cb, selectList)
-		}
-		if ivecs[1].IsConstNull() {
 			return opBinaryFixedFixedToFixed[T, int64, T](ivecs, result, proc, length, cb, selectList)
 		}
 		if ivecs[1].GetType().Oid != types.T_int64 {

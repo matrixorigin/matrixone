@@ -5684,6 +5684,39 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestMathPrecisionNullContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fn        fEvalFn
+		wantError bool
+	}{
+		{"ceil", CeilFloat64, true},
+		{"floor", FloorFloat64, true},
+		{"round", RoundFloat64, false},
+		{"truncate", TruncateFloat64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			for _, nullValue := range []bool{false, true} {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, []bool{nullValue}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				}, NewFunctionTestResult(types.T_float64.ToType(), tc.wantError, []float64{0}, []bool{true}), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+			if tc.wantError {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1}, nil),
+				}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+		})
+	}
+}
+
 func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
