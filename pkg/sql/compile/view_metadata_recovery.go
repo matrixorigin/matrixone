@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -99,21 +100,10 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 	defer cancel()
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
 		statements := viewMetadataRequireRevalidationSQL()
-		result, err := txn.Exec(statements[0], executor.StatementOption{})
+		gatePresent, err := lockViewMetadataRecoveryLifecycle(txn.Exec)
 		if err != nil {
 			return err
 		}
-		result.Close()
-		result, err = txn.Exec(statements[1], executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		gatePresent := false
-		result.ReadRows(func(rows int, _ []*vector.Vector) bool {
-			gatePresent = rows > 0
-			return !gatePresent
-		})
-		result.Close()
 		if !gatePresent {
 			return moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH)
 		}
@@ -272,13 +262,7 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
-		if err := catalog.LockViewMetadataLifecycle(func(sql string) error {
-			gate, err := txn.Exec(sql, executor.StatementOption{})
-			if err == nil {
-				gate.Close()
-			}
-			return err
-		}); err != nil {
+		if _, err := lockViewMetadataRecoveryLifecycle(txn.Exec); err != nil {
 			return err
 		}
 
@@ -552,7 +536,15 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 	if !viewMetadataRecoveryEnabled(proc.GetService()) {
 		return 0, nil
 	}
-	if err := lockViewMetadataLifecycleGate(proc); err != nil {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return 0, moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
+	}
+	if _, err := lockViewMetadataRecoveryLifecycle(func(sql string, option executor.StatementOption) (executor.Result, error) {
+		return v.(executor.SQLExecutor).Exec(proc.Ctx, sql, executor.Options{}.
+			WithDisableIncrStatement().WithTxn(proc.GetTxnOperator()).
+			WithAccountID(catalog.System_Account).WithStatementOption(option))
+	}); err != nil {
 		return 0, err
 	}
 	var command viewMetadataRecoveryCommand
@@ -587,6 +579,35 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 	}
 	defer result.Close()
 	return int(result.AffectedRows), nil
+}
+
+// lockViewMetadataRecoveryLifecycle must run before background catalog work.
+// Explicit owner transactions retain catalog locks but intentionally defer the
+// SNAPSHOT write barrier until COMMIT. Waiting for their View gate while holding
+// SNAPSHOT would force their FastFail commit to abort (or deadlock later DDL).
+// Wait for View first, then TRY SNAPSHOT: never introduce a reverse wait edge
+// against frontend/older-CN SNAPSHOT -> View ordering. On failure the caller must
+// end the transaction; on success both legacy-compatible gates remain held.
+func lockViewMetadataRecoveryLifecycle(
+	exec func(string, executor.StatementOption) (executor.Result, error),
+) (bool, error) {
+	gate, err := exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+	present := false
+	gate.ReadRows(func(rows int, _ []*vector.Vector) bool {
+		present = rows > 0
+		return !present
+	})
+	gate.Close()
+	snapshot, err := exec(catalog.SnapshotLifecycleGateSQL,
+		executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
+	if err != nil {
+		return false, err
+	}
+	snapshot.Close()
+	return present, nil
 }
 
 func lockViewMetadataLifecycleGate(proc *process.Process) error {

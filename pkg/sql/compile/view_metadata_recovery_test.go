@@ -46,6 +46,7 @@ import (
 type viewMetadataCleanupRecordingExecutor struct {
 	sqls            []string
 	systemCTELimits []bool
+	waitPolicies    []lock.WaitPolicy
 	results         []executor.Result
 	failures        map[int]error
 }
@@ -72,8 +73,9 @@ func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
 	ctx context.Context,
 	sql string,
-	_ executor.Options,
+	opts executor.Options,
 ) (executor.Result, error) {
+	e.waitPolicies = append(e.waitPolicies, opts.StatementOption().WaitPolicy())
 	e.sqls = append(e.sqls, sql)
 	e.systemCTELimits = append(e.systemCTELimits, process.HasSystemCTELimits(ctx))
 	call := len(e.sqls)
@@ -571,7 +573,8 @@ func TestEnabledViewMetadataCommandRoutesLifecycleOperations(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.count, count)
 			require.NotEmpty(t, exec.sqls)
-			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
+			require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls[:2])
+			require.Equal(t, []lock.WaitPolicy{lock.WaitPolicy_Wait, lock.WaitPolicy_FastFail}, exec.waitPolicies[:2])
 			require.Contains(t, strings.Join(exec.sqls, "\n"), tc.contains)
 		})
 	}
@@ -1698,6 +1701,50 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 	})
 }
 
+func TestViewMetadataRecoveryLifecycleNeverWaitsForSnapshotWhileHoldingView(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		failAt int
+		err    error
+	}{
+		{name: "success"},
+		{name: "view lock failure", failAt: 1, err: moerr.NewInternalErrorNoCtx("view gate unavailable")},
+		{name: "snapshot owned by frontend", failAt: 2, err: moerr.NewLockConflictNoCtx()},
+		{name: "cancelled", failAt: 2, err: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sqls []string
+			present, err := lockViewMetadataRecoveryLifecycle(func(sql string, option executor.StatementOption) (executor.Result, error) {
+				sqls = append(sqls, sql)
+				if len(sqls) == 1 {
+					// While this call waits for a catalog owner, SNAPSHOT is still
+					// free for that owner's commit-time write barrier.
+					require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, sql)
+					require.Equal(t, lock.WaitPolicy_Wait, option.WaitPolicy())
+				} else {
+					// An older CN may own SNAPSHOT and be waiting for our View
+					// gate. Fail instead of adding the reverse wait edge.
+					require.Equal(t, catalog.SnapshotLifecycleGateSQL, sql)
+					require.Equal(t, lock.WaitPolicy_FastFail, option.WaitPolicy())
+				}
+				if len(sqls) == tc.failAt {
+					return executor.Result{}, tc.err
+				}
+				return viewMetadataLifecycleGateTestResult(), nil
+			})
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				require.False(t, present)
+				require.Len(t, sqls, tc.failAt)
+			} else {
+				require.NoError(t, err)
+				require.True(t, present)
+				require.Len(t, sqls, 2)
+			}
+		})
+	}
+}
+
 func TestBeginViewMetadataRevalidationResetsDurableCursor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{AffectedRows: 1}}}
@@ -1732,12 +1779,12 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		return result.GetResult()
 	}
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, viewMetadataLifecycleGateTestResult(), {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
+		viewMetadataLifecycleGateTestResult(), {}, {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
 	require.Len(t, exec.sqls, 10)
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
+	require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls[:2])
 	require.Contains(t, exec.sqls[2], "select source_account_id")
 	require.Contains(t, exec.sqls[3],
 		"where not exists")
@@ -1749,7 +1796,7 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
 	require.Contains(t, exec.sqls[4], "where account_id=0")
 	require.Contains(t, exec.sqls[5], "select source_account_id")
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[6:8])
+	require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls[6:8])
 	require.Contains(t, exec.sqls[8], "select source_account_id")
 	require.Contains(t, exec.sqls[9],
 		"source_relation_kind='REVALIDATE_SCAN'")
@@ -1787,7 +1834,7 @@ func TestRunViewMetadataRecoveryAdvancesRequiredSentinels(t *testing.T) {
 	require.NoError(t, RunViewMetadataRecovery(context.Background(), exec, "worker"))
 	require.Len(t, exec.sqls, 5)
 	require.Contains(t, exec.sqls[0], "select source_relation_kind")
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[1:3])
+	require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls[1:3])
 	require.Contains(t, exec.sqls[4], "where target_relation_id=0")
 	require.NotContains(t, exec.sqls[4], "where account_id=0")
 }
@@ -1804,11 +1851,11 @@ func TestRequireViewMetadataRevalidationFastReturnsWhenAlreadyRequired(t *testin
 		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
 	require.NoError(t, executor.AppendFixedRows(current, 2, []uint64{7}))
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, viewMetadataLifecycleGateTestResult(), current.GetResult(),
+		viewMetadataLifecycleGateTestResult(), {}, current.GetResult(),
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.Len(t, exec.sqls, 3)
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
+	require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls[:2])
 	require.Contains(t, exec.sqls[2], "for update")
 }
 
@@ -1928,13 +1975,13 @@ func TestRequireViewMetadataRevalidationRejectsMissingRefreshGate(t *testing.T) 
 	err := RequireViewMetadataRevalidation(context.Background(), exec)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	require.Len(t, exec.sqls, 2)
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls)
+	require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL, catalog.SnapshotLifecycleGateSQL}, exec.sqls)
 }
 
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
 	testErr := moerr.NewInternalErrorNoCtx("catalog unavailable")
 	gateResult := func() []executor.Result {
-		return []executor.Result{{}, viewMetadataLifecycleGateTestResult()}
+		return []executor.Result{viewMetadataLifecycleGateTestResult(), {}}
 	}
 
 	t.Run("required marker probe", func(t *testing.T) {
