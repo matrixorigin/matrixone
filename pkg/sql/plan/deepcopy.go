@@ -101,6 +101,7 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 		result[i] = &plan.UpdateCtx{
 			ObjRef:                DeepCopyObjectRef(ctx.ObjRef),
 			TableDef:              DeepCopyTableDef(ctx.TableDef, true),
+			PartitionIndexCtx:     deepCopyPartitionIndexCtx(ctx.PartitionIndexCtx),
 			InsertCols:            slices.Clone(ctx.InsertCols),
 			DeleteCols:            slices.Clone(ctx.DeleteCols),
 			PartitionCols:         slices.Clone(ctx.PartitionCols),
@@ -127,6 +128,17 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	}
 
 	return result
+}
+
+func deepCopyPartitionIndexCtx(ctx *plan.PartitionIndexCtx) *plan.PartitionIndexCtx {
+	if ctx == nil {
+		return nil
+	}
+	return &plan.PartitionIndexCtx{
+		ParentRef:    DeepCopyObjectRef(ctx.ParentRef),
+		ParentTable:  DeepCopyTableDef(ctx.ParentTable, true),
+		PartitionCol: ctx.PartitionCol,
+	}
 }
 
 func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {

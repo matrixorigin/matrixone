@@ -46,8 +46,8 @@ rollback;
 select id from ft_sync where match(body) against('rollback') order by id;
 select id from ft_sync where match(body) against('new') order by id;
 
--- The synchronous-index PK rejection happens before locks or mutations and
--- must leave both the base identity and hidden payload unchanged.
+-- A synchronous FULLTEXT primary-key update migrates both the base identity
+-- and its hidden postings in one statement.
 update ft_sync set id = 3, body = 'sync failed token' where id = 1;
 -- TEXT/VARCHAR JDBC width differs between direct CN and proxy; values remain exact.
 -- @metacmp(false)

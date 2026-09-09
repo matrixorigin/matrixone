@@ -51,6 +51,7 @@ type TableDefType = plan.TableDef_DefType
 type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
+type PartitionIndexCtx = plan.PartitionIndexCtx
 type ColRef = plan.ColRef
 type Stats = plan.Stats
 type Const = plan.Literal
@@ -548,7 +549,10 @@ type QueryBuilder struct {
 	// which can differ from the new PK when the conflict is on a non-PK unique key.
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
-	irregularMaintIndexes     []*plan.IndexDef
+	// irregularMaintDeleteRoutePos identifies the old-row partition ordinal in
+	// the materialized maintenance source. It is -1 when no routed delete exists.
+	irregularMaintDeleteRoutePos int32
+	irregularMaintIndexes        []*plan.IndexDef
 	// irregularMaintInsertOnlyIndexes are logical irregular indexes whose parts
 	// cannot change in an ODKU conflict. Their insert maintenance reads only
 	// non-conflicting rows from irregularMaintInsertOnlySourceStep; delete
@@ -600,6 +604,9 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+	// irregularMaintRouteRefs keeps old-row partition ordinals alive through
+	// column pruning until the post-createQuery maintenance branches are built.
+	irregularMaintRouteRefs map[[2]int32]struct{}
 
 	// cteRefs contains only non-recursive CTEs that were actually bound. It is
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
@@ -612,6 +619,7 @@ type irregularUpdateMaintenance struct {
 	deleteStep              int32
 	deletePkPos             int32
 	deletePkTyp             plan.Type
+	deleteRoutePos          int32
 	indexes                 []*plan.IndexDef
 	insertOnlySourceStep    int32
 	insertOnlyIndexes       []*plan.IndexDef
