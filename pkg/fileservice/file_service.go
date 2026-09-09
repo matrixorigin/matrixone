@@ -144,6 +144,12 @@ type IOEntry struct {
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
 	CachedData fscache.Data
+	// admitCachedData reserves caller-owned capacity before a memory-cache hit
+	// retains its backing. releaseCachedData drops that reservation after the
+	// retained cache reference is released. Both are internal FileService
+	// ownership hooks and must move with the entry.
+	admitCachedData   fscache.DataCachePinAdmission
+	releaseCachedData func()
 	// CachedDataSize is the expected size of the final cache representation.
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.
