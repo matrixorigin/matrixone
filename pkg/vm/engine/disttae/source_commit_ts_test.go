@@ -19,7 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,10 +48,48 @@ func TestSourceCommitTSFailsClosedOnLocalWrite(t *testing.T) {
 	require.Error(t, err)
 }
 
-// combinedTxnTable delegates to its primary.
-func TestCombinedTxnTableSourceCommitTS(t *testing.T) {
-	ct := &combinedTxnTable{primary: failClosedTxnTable(t)}
-	_, err := ct.SourceCommitTS(context.Background())
+// newViewPathTxnTable builds a txnTable whose getPartitionState takes the
+// view/created-in-txn branch, returning an empty partition state without
+// subscribing. The caller decides whether to attach a process.
+func newViewPathTxnTable(t *testing.T) (*txnTable, *process.Process) {
+	proc := testutil.NewProc(t)
+	eng := &Engine{
+		fs:         proc.GetFileService(),
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+	}
+	txn := &Transaction{engine: eng}
+	op := newTxnOperatorForTestWithWorkspace(t, txn)
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 100}).AnyTimes()
+	txn.op = op
+	tbl := &txnTable{
+		tableId: 42, relKind: "V", fake: true, eng: eng,
+		db: &txnDatabase{op: op, databaseId: 10},
+	}
+	return tbl, proc
+}
+
+// With an empty partition state SourceCommitTS runs end to end and reports a
+// bound without error for a table with no visible source data.
+func TestSourceCommitTSEmptyPartitionState(t *testing.T) {
+	tbl, proc := newViewPathTxnTable(t)
+	tbl.proc.Store(proc)
+	_, err := tbl.SourceCommitTS(context.Background())
+	require.NoError(t, err)
+}
+
+// SourceCommitTSAt needs a process for its file service and mpool; with none it
+// fails closed rather than proceeding.
+func TestSourceCommitTSNoProcess(t *testing.T) {
+	tbl, _ := newViewPathTxnTable(t)
+	_, err := tbl.SourceCommitTS(context.Background())
+	require.Error(t, err)
+}
+
+// A combined (partitioned) table cannot prove coverage across its members, so it
+// declines outright — without consulting the primary. A nil primary proves the
+// primary is never dereferenced (the old primary-only delegation would panic).
+func TestCombinedTxnTableSourceCommitTSFailsClosed(t *testing.T) {
+	_, err := (&combinedTxnTable{}).SourceCommitTS(context.Background())
 	require.Error(t, err)
 }
 
@@ -60,7 +101,7 @@ func TestTxnTableDelegateSourceCommitTS(t *testing.T) {
 
 	combined := &txnTableDelegate{}
 	combined.combined.is = true
-	combined.combined.tbl = &combinedTxnTable{primary: failClosedTxnTable(t)}
+	combined.combined.tbl = &combinedTxnTable{}
 	_, err = combined.SourceCommitTS(context.Background())
 	require.Error(t, err)
 }

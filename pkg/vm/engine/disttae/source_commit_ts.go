@@ -71,5 +71,11 @@ func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context) (types.TS, erro
 }
 
 func (t *combinedTxnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
-	return t.primary.SourceCommitTS(ctx)
+	// A combined table aggregates a partitioned table's members. Proving async
+	// index coverage would require the max source commit AND a transaction-local
+	// write check across every member, not just the primary; the primary alone
+	// under-reports both. Until that exists, fail closed so the mandatory probe
+	// declines to a table scan rather than firing against an index that may be
+	// missing a non-primary member's committed rows.
+	return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable for a partitioned table")
 }

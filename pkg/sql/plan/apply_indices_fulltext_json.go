@@ -356,7 +356,8 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
 		return true
 	}
-	if builder == nil || builder.compCtx == nil || scanNode.TableDef.TblId == 0 {
+	if builder == nil || builder.compCtx == nil || scanNode == nil ||
+		scanNode.TableDef == nil || scanNode.TableDef.TblId == 0 {
 		return false
 	}
 	proc := builder.compCtx.GetProcess()

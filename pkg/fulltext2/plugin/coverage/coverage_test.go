@@ -172,7 +172,11 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	noTxn.Txn = nil
 	noTable := full
 	noTable.TableID = 0
-	for _, r := range []coverage.Request{noIdx, noTxn, noTable} {
+	// An empty source commit ts is no evidence: any watermark is >= zero, so
+	// accepting it would fail open. It must decline before touching the catalog.
+	noSourceTS := full
+	noSourceTS.SourceCommitTS = types.TS{}
+	for _, r := range []coverage.Request{noIdx, noTxn, noTable, noSourceTS} {
 		covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 		require.NoError(t, err)
 		require.False(t, covered)
@@ -189,7 +193,7 @@ func TestCoversSnapshotLookupError(t *testing.T) {
 	}
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)})
 	require.Error(t, err)
 	require.False(t, covered)
 }
@@ -199,7 +203,7 @@ func TestCoversSnapshotNoAccount(t *testing.T) {
 	mockLog(t, []logRow{{watermark: ts(200).ToString(), state: iscpJobStateRunning}})
 	covered, err := Hooks{}.CoversSnapshot(context.Background(), coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)})
 	require.Error(t, err)
 	require.False(t, covered)
 }

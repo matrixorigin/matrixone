@@ -107,9 +107,11 @@ func parseWatermark(s string) (types.TS, bool) {
 //
 // Fails closed everywhere: a missing job, a dropped one, a job that is not
 // running cleanly, a NULL/unparsable watermark, or any lookup error all report
-// false. Only an explicit "watermark >= snapshot" on a live job returns true.
+// false. Only an explicit "watermark >= source commit ts" on a live job returns
+// true. An empty source commit ts is treated as no evidence and declines: any
+// watermark is >= the zero timestamp, so accepting it would fail open.
 func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
-	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
+	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 || req.SourceCommitTS.IsEmpty() {
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
