@@ -303,6 +303,56 @@ func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
 	require.Equal(t, int32(0), arg.ColPos)
 }
 
+func TestMaterializedProjectionGroupsIndependentDependencyLevels(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	nodeCtx := NewBindContext(builder, nil)
+	intTyp := expressionDefaultIntType()
+	childID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_VALUE_SCAN,
+		TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "source", Typ: intTyp},
+		}},
+	}, nodeCtx)
+
+	// Columns 0 and 1 are independent roots; columns 2 and 3 each depend on
+	// one root. The two roots can share a projection and the two dependents can
+	// share the next projection without reading a sibling from the same stage.
+	projection := make([]*planpb.Expr, 4)
+	colIdxToProjPos := make(map[int32]int32, len(projection))
+	expressions := make(map[int32]*planpb.Expr, len(projection))
+	materialize := make(map[int32]bool, len(projection))
+	for i := range projection {
+		colIdx := int32(i)
+		colIdxToProjPos[colIdx] = colIdx
+		materialize[colIdx] = true
+		null := makePlan2NullConstExprWithType()
+		null.Typ = intTyp
+		projection[i] = null
+	}
+	expressions[0] = expressionDefaultInt(7)
+	expressions[1] = expressionDefaultInt(11)
+	expressions[2] = expressionDefaultAdd(expressionDefaultCol(0, 0), expressionDefaultInt(1))
+	expressions[3] = expressionDefaultAdd(expressionDefaultCol(1, 0), expressionDefaultInt(1))
+
+	_, finalTag, err := builder.appendMaterializedExprProjections(
+		nodeCtx, childID, builder.genNewBindTag(), projection,
+		colIdxToProjPos, expressions, materialize, []int32{0, 1, 2, 3},
+	)
+	require.NoError(t, err)
+	// Child + initial image + one stage for each dependency level.
+	require.Equal(t, 4, len(builder.qry.Nodes)-int(childID))
+	firstStage := builder.qry.Nodes[childID+2]
+	secondStage := builder.qry.Nodes[childID+3]
+	require.Equal(t, finalTag, secondStage.BindingTags[0])
+	require.Equal(t, int64(7), firstStage.ProjectList[0].GetLit().GetI64Val())
+	require.Equal(t, int64(11), firstStage.ProjectList[1].GetLit().GetI64Val())
+	for _, pos := range []int32{2, 3} {
+		arg := secondStage.ProjectList[pos].GetF().GetArgs()[0].GetCol()
+		require.NotNil(t, arg)
+		require.Equal(t, firstStage.BindingTags[0], arg.RelPos)
+	}
+}
+
 func TestDefaultExprExpanderHonorsCancellationBeforeExpansion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

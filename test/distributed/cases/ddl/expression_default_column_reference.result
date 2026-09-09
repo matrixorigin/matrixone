@@ -2,11 +2,11 @@ drop database if exists expression_default_colref_28450;
 create database expression_default_colref_28450;
 use expression_default_colref_28450;
 create table t_chain (
-    id int primary key,
-    a int,
-    b int default (a + 1),
-    c int default (b + 1),
-    key idx_b (b)
+id int primary key,
+a int,
+b int default (a + 1),
+c int default (b + 1),
+key idx_b (b)
 );
 insert into t_chain (id, a) values (1, 10), (2, 20);
 insert into t_chain (id, a, b, c) values (3, 30, default, default);
@@ -28,15 +28,15 @@ id    b
 3    31
 4    41
 create table t_volatile (
-    id int primary key,
-    a double default (rand()),
-    b double default (a)
+id int primary key,
+a double default (rand()),
+b double default (a)
 );
 insert into t_volatile (id) values (1), (2);
 insert into t_volatile (id, b) values (3, default), (4, 7);
 select id,
-       case when a = b then 'same-source' else 're-evaluated' end as dependency,
-       case when b = 7 then 'explicit' else 'default' end as b_origin
+case when a = b then 'same-source' else 're-evaluated' end as dependency,
+case when b = 7 then 'explicit' else 'default' end as b_origin
 from t_volatile order by id;
 id    dependency    b_origin
 1    same-source    default
@@ -44,9 +44,9 @@ id    dependency    b_origin
 3    same-source    default
 4    re-evaluated    explicit
 create table t_rows (
-    id int primary key,
-    a int,
-    b int default (a + 1)
+id int primary key,
+a int,
+b int default (a + 1)
 );
 insert into t_rows (id, a, b) values (1, 10, default), (2, 20, 99), (3, null, default);
 insert into t_rows (b, id, a) values (default, 4, 40);
@@ -59,9 +59,9 @@ id    a    b
 create table t_select_source (id int, a int);
 insert into t_select_source values (5, 50), (6, null);
 create table t_select (
-    id int primary key,
-    a int,
-    b int default (a + 1)
+id int primary key,
+a int,
+b int default (a + 1)
 );
 insert into t_select (id, a) select id, a from t_select_source;
 select id, a, b from t_select order by id;
@@ -69,9 +69,9 @@ id    a    b
 5    50    51
 6    null    null
 create table t_update (
-    id int primary key,
-    a int default 5,
-    b int default (a + 1)
+id int primary key,
+a int default 5,
+b int default (a + 1)
 );
 insert into t_update values (1, 10, 20);
 update t_update set a = 100 where id = 1;
@@ -83,9 +83,9 @@ select id, a, b from t_update;
 id    a    b
 1    5    6
 create table t_replace (
-    id int primary key,
-    a int default 7,
-    b int default (a + 1)
+id int primary key,
+a int default 7,
+b int default (a + 1)
 );
 insert into t_replace values (1, 10, 20);
 replace into t_replace (id) values (1);
@@ -93,9 +93,9 @@ select id, a, b from t_replace;
 id    a    b
 1    7    8
 create table t_odku (
-    id int primary key,
-    a int default 8,
-    b int default (a + 1)
+id int primary key,
+a int default 8,
+b int default (a + 1)
 );
 insert into t_odku values (1, 10, 20);
 insert into t_odku (id) values (1) on duplicate key update a = default, b = default;

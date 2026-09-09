@@ -1094,9 +1094,10 @@ const maxDefaultExpansionNodes = 1 << 20
 // projection: each sibling is evaluated against the child batch. Inlining a
 // dependency therefore both duplicates work and re-evaluates volatile defaults
 // (for example, b DEFAULT (a) where a DEFAULT (rand())). Keep one fixed-width
-// row image and add a projection boundary for each expression that has local
-// dependencies. Every dependent expression then reads the already materialized
-// value from the preceding boundary.
+// row image and add a projection boundary for each dependency level. Independent
+// expressions share a boundary, so a wide schema does not pay one full-width
+// projection per materialized column. Every dependent expression then reads the
+// already materialized value from the preceding boundary.
 //
 // projection contains one expression per output position. expressions maps a
 // table-column position to the raw expression supplying that column, and order
@@ -1211,44 +1212,70 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 	}, nodeCtx)
 	currentTag := initialTag
 	currentProjection := initial
+	// Compute the longest materialized dependency distance for each column.
+	// Columns with the same distance can be evaluated against the same input
+	// image: none of them may depend on another column in that group. Besides
+	// reducing plan depth, this preserves the rule that every local reference
+	// reads a value from an earlier projection boundary.
 	state := make(map[int32]uint8, len(materialized))
-
-	var visit func(int32) error
-	visit = func(colIdx int32) error {
+	level := make(map[int32]int, len(materialized))
+	var levelOf func(int32) (int, error)
+	levelOf = func(colIdx int32) (int, error) {
 		if !materialized[colIdx] {
-			return nil
+			return -1, nil
 		}
 		switch state[colIdx] {
 		case 1:
-			return moerr.NewInvalidInputf(builder.GetContext(),
+			return 0, moerr.NewInvalidInputf(builder.GetContext(),
 				"expression has a circular dependency at column position %d", colIdx)
 		case 2:
-			return nil
+			return level[colIdx], nil
 		}
 		raw, ok := expressions[colIdx]
 		if !ok || raw == nil {
-			return moerr.NewInvalidInputf(builder.GetContext(),
+			return 0, moerr.NewInvalidInputf(builder.GetContext(),
 				"expression for column position %d is missing", colIdx)
 		}
 		state[colIdx] = 1
+		columnLevel := 0
 		for _, refIdx := range collectRefColPos(raw) {
 			if _, mapped := colIdxToProjPos[refIdx]; !mapped {
-				return moerr.NewInvalidInputf(builder.GetContext(),
+				return 0, moerr.NewInvalidInputf(builder.GetContext(),
 					"expression for column position %d references unavailable column position %d",
 					colIdx, refIdx)
 			}
-			if materialized[refIdx] {
-				if err := visit(refIdx); err != nil {
-					return err
-				}
+			if !materialized[refIdx] {
+				continue
+			}
+			refLevel, err := levelOf(refIdx)
+			if err != nil {
+				return 0, err
+			}
+			if refLevel+1 > columnLevel {
+				columnLevel = refLevel + 1
 			}
 		}
+		state[colIdx] = 2
+		level[colIdx] = columnLevel
+		return columnLevel, nil
+	}
 
-		rewritten, err := rewriteLocalRefsToProjection(builder.GetContext(), raw, currentTag, colIdxToProjPos)
+	maxLevel := -1
+	for _, colIdx := range materializationOrder {
+		columnLevel, err := levelOf(colIdx)
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
-		projPos := colIdxToProjPos[colIdx]
+		if columnLevel > maxLevel {
+			maxLevel = columnLevel
+		}
+	}
+	levels := make([][]int32, maxLevel+1)
+	for _, colIdx := range materializationOrder {
+		levels[level[colIdx]] = append(levels[level[colIdx]], colIdx)
+	}
+
+	for _, columns := range levels {
 		stage := make([]*plan.Expr, len(currentProjection))
 		for pos, expr := range currentProjection {
 			stage[pos] = &plan.Expr{
@@ -1259,7 +1286,14 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 				}},
 			}
 		}
-		stage[projPos] = rewritten
+		for _, colIdx := range columns {
+			raw := expressions[colIdx]
+			rewritten, err := rewriteLocalRefsToProjection(builder.GetContext(), raw, currentTag, colIdxToProjPos)
+			if err != nil {
+				return 0, 0, err
+			}
+			stage[colIdxToProjPos[colIdx]] = rewritten
+		}
 		nextTag := builder.genNewBindTag()
 		currentID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -1269,14 +1303,6 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 		}, nodeCtx)
 		currentTag = nextTag
 		currentProjection = stage
-		state[colIdx] = 2
-		return nil
-	}
-
-	for _, colIdx := range materializationOrder {
-		if err := visit(colIdx); err != nil {
-			return 0, 0, err
-		}
 	}
 	return currentID, currentTag, nil
 }
