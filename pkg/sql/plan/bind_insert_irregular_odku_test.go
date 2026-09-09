@@ -347,6 +347,45 @@ func TestBindStoredValueEqualityUsesStoredBytes(t *testing.T) {
 		require.NotNil(t, fn.Args[0].GetCol())
 		require.NotNil(t, fn.Args[1].GetCol())
 	})
+
+	t.Run("rejects nil expressions", func(t *testing.T) {
+		_, err := bindStoredValueEquality(context.Background(), nil, &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("returns cast error for old expression", func(t *testing.T) {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 3, Name: "new.body"}},
+		}
+		castErr := moerr.NewInternalErrorNoCtx("test cast failure")
+		_, err := bindStoredValueEqualityWithCaster(context.Background(), text, text,
+			func(context.Context, *planpb.Expr, planpb.Type) (*planpb.Expr, error) {
+				return nil, castErr
+			})
+		require.Error(t, err)
+	})
+
+	t.Run("returns cast error for new expression", func(t *testing.T) {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 2, Name: "old.body"}},
+		}
+		castErr := moerr.NewInternalErrorNoCtx("test cast failure")
+		calls := 0
+		_, err := bindStoredValueEqualityWithCaster(context.Background(), text, text,
+			func(_ context.Context, expr *planpb.Expr, _ planpb.Type) (*planpb.Expr, error) {
+				calls++
+				if calls == 2 {
+					return nil, castErr
+				}
+				return expr, nil
+			})
+		require.Error(t, err)
+		require.Equal(t, 2, calls)
+	})
 }
 
 func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
