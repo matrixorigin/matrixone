@@ -3816,6 +3816,12 @@ func makeCompPkeyExprForTable(ctx context.Context, tableDef *plan.TableDef, name
 	if !useV2 {
 		return makeCompPkeyExpr(tableDef, name2ColIndex), nil
 	}
+	if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName || tableDef.Pkey.CompPkeyCol == nil {
+		// A v2 relation must expose one hidden binary identity column. Falling
+		// back to serial() here would make PRE_INSERT disagree with the probes
+		// and leave the base table on the legacy bytewise primary-key path.
+		return nil, moerr.NewInternalErrorNoCtx("v2 primary key is missing its hidden identity column")
+	}
 	if len(tableDef.Pkey.Names) == 0 {
 		return nil, moerr.NewInternalError(ctx, "v2 composite primary key has no source columns")
 	}

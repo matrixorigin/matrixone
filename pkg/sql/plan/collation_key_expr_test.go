@@ -168,6 +168,20 @@ func TestV2CompositePrimaryKeyRejectsMissingSource(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestV2PrimaryKeyRejectsMissingHiddenIdentity(t *testing.T) {
+	table := &planpb.TableDef{
+		Name: "t_v2_pk_without_hidden",
+		Cols: []*planpb.ColDef{{Name: "id", Typ: v2PlannerTextType(uint32(types.CharsetUTF8))}},
+		Pkey: &planpb.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+	_, err := makeCompPkeyExprForTable(context.Background(), table, map[string]int32{"id": 0})
+	require.Error(t, err)
+}
+
 func TestV2CompositePrimaryKeyFramesEverySourcePart(t *testing.T) {
 	hidden := &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: collationKeyV2StorageType(), Hidden: true}
 	table := &planpb.TableDef{
