@@ -86,6 +86,18 @@ func TestCollectGeneratedColumnDependents(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"other": {}}, possiblyChanged)
 }
 
+func TestPartitionColumnsUpdatedIncludesGeneratedDependencies(t *testing.T) {
+	tableDef := generatedDependencyTestTable()
+	tableDef.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{
+		Def: generatedColumnRefExpr(tableDef.Cols[2].Typ, 2, "tail"),
+	}}}
+
+	require.True(t, partitionColumnsUpdated(tableDef, map[string]struct{}{"source": {}}),
+		"an update to a generated column source can move the row to another partition")
+	require.False(t, partitionColumnsUpdated(tableDef, map[string]struct{}{"other": {}}),
+		"an unrelated update must not force partition-aware index maintenance")
+}
+
 func TestCollectGeneratedColumnDependentsRejectsInvalidColPos(t *testing.T) {
 	for _, tc := range []struct {
 		name string
