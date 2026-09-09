@@ -54,7 +54,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioMerger *IOMerger
+	ioMerger     *IOMerger
+	decodedReads *decodedReadRegistry
 
 	parallelMode ParallelMode
 }
@@ -282,6 +283,9 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.remoteCache = caches.remote
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
+	if s.memCache != nil {
+		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
+	}
 	return nil
 }
 
@@ -575,6 +579,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	var finishDecode func()
+	var decodePrepared bool
+	defer func() {
+		if finishDecode != nil {
+			finishDecode()
+		}
+	}()
 	// A merge leader must not wake its waiters until caller-visible cache work
 	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
@@ -672,6 +683,13 @@ read_memory_cache:
 	}
 
 read_disk_cache:
+	if !decodePrepared {
+		decodePrepared = true
+		finishDecode, err = s.prepareSharedDecode(vector)
+		if err != nil {
+			return err
+		}
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -1497,7 +1515,11 @@ var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
-	caches.close(ctx)
+	if s.decodedReads != nil {
+		s.decodedReads.close(func() { caches.close(ctx) })
+	} else {
+		caches.close(ctx)
+	}
 }
 
 func (s *S3FS) FlushCache(ctx context.Context) {

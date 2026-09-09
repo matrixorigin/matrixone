@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,432 +26,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewCDCStatementBuilder(t *testing.T) {
-	t.Run("ValidBuilder_SinglePK", func(t *testing.T) {
-		tableDef := &plan.TableDef{
-			Name: "test_table",
-			Cols: []*plan.ColDef{
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
-				{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				Names: []string{"id"},
-			},
-			Name2ColIndex: map[string]int32{"id": 0, "name": 1},
-		}
+var (
+	builderFromTS = types.BuildTS(100, 0)
+	builderToTS   = types.BuildTS(200, 0)
+)
 
-		builder, err := NewCDCStatementBuilder("test_db", "test_table", tableDef, 1024*1024, false)
-
-		require.NoError(t, err)
-		require.NotNil(t, builder)
-		assert.Equal(t, "test_db", builder.dbName)
-		assert.Equal(t, "test_table", builder.tableName)
-		assert.Equal(t, 2, len(builder.insertColTypes))
-		assert.Equal(t, 1, len(builder.pkColNames))
-		assert.Equal(t, "id", builder.pkColNames[0])
-		assert.True(t, builder.isSinglePK)
-		assert.False(t, builder.isMO)
+func newBuilderTestMPool(t *testing.T) *mpool.MPool {
+	t.Helper()
+	mp, err := mpool.NewMPool(t.Name(), 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB(), "fixture must release all mpool memory")
+		mpool.DeleteMPool(mp)
 	})
-
-	t.Run("ValidBuilder_CompositePK", func(t *testing.T) {
-		tableDef := &plan.TableDef{
-			Name: "test_table",
-			Cols: []*plan.ColDef{
-				{Name: "id1", Typ: plan.Type{Id: int32(types.T_int64)}},
-				{Name: "id2", Typ: plan.Type{Id: int32(types.T_int64)}},
-				{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				Names: []string{"id1", "id2"},
-			},
-			Name2ColIndex: map[string]int32{"id1": 0, "id2": 1, "name": 2},
-		}
-
-		builder, err := NewCDCStatementBuilder("test_db", "test_table", tableDef, 1024*1024, true)
-
-		require.NoError(t, err)
-		require.NotNil(t, builder)
-		assert.Equal(t, 3, len(builder.insertColTypes))
-		assert.Equal(t, 2, len(builder.pkColNames))
-		assert.Equal(t, []string{"id1", "id2"}, builder.pkColNames)
-		assert.False(t, builder.isSinglePK)
-		assert.True(t, builder.isMO)
-	})
-
-	t.Run("ExcludesInternalColumns", func(t *testing.T) {
-		tableDef := &plan.TableDef{
-			Name: "test_table",
-			Cols: []*plan.ColDef{
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
-				{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
-				{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}}, // Internal column
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				Names: []string{"id"},
-			},
-			Name2ColIndex: map[string]int32{"id": 0, "name": 1, catalog.Row_ID: 2},
-		}
-
-		builder, err := NewCDCStatementBuilder("test_db", "test_table", tableDef, 1024*1024, false)
-
-		require.NoError(t, err)
-		// Should only have 2 columns (id, name), excluding __mo_rowid
-		assert.Equal(t, 2, len(builder.insertColTypes))
-	})
-
-	t.Run("NilTableDef", func(t *testing.T) {
-		_, err := NewCDCStatementBuilder("test_db", "test_table", nil, 1024*1024, false)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "tableDef is required")
-	})
+	return mp
 }
 
-func TestCDCStatementBuilder_BuildInsertSQL(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
-		Name: "users",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
-			{Name: "age", Typ: plan.Type{Id: int32(types.T_int32)}},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"id"},
-		},
-		Name2ColIndex: map[string]int32{"id": 0, "name": 1, "age": 2},
-	}
-
-	builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
-	require.NoError(t, err)
-
-	t.Run("SimpleInsert_OneRow", func(t *testing.T) {
-		// Create batch with 1 row
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp)
-		vector.AppendFixed(bat.Vecs[2], int32(25), false, mp)
-		bat.SetRowCount(1)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1, "Should generate exactly 1 SQL statement")
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated SQL: %s", sql)
-
-		// Verify SQL structure
-		assert.Contains(t, sql, "/* [100-0, 200-0) */")
-		assert.Contains(t, sql, "REPLACE INTO `test_db`.`users` VALUES")
-		assert.Contains(t, sql, "(1,'Alice',25)")
-		assert.True(t, strings.HasSuffix(sql, ";"))
-	})
-
-	t.Run("SimpleInsert_MultipleRows", func(t *testing.T) {
-		// Create batch with 3 rows
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp)
-		vector.AppendFixed(bat.Vecs[2], int32(25), false, mp)
-
-		vector.AppendFixed(bat.Vecs[0], int32(2), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp)
-		vector.AppendFixed(bat.Vecs[2], int32(30), false, mp)
-
-		vector.AppendFixed(bat.Vecs[0], int32(3), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("Charlie"), false, mp)
-		vector.AppendFixed(bat.Vecs[2], int32(35), false, mp)
-
-		bat.SetRowCount(3)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated SQL: %s", sql)
-
-		// Verify all rows are included
-		assert.Contains(t, sql, "(1,'Alice',25)")
-		assert.Contains(t, sql, "(2,'Bob',30)")
-		assert.Contains(t, sql, "(3,'Charlie',35)")
-
-		// Verify comma separation
-		assert.Contains(t, sql, "),(")
-	})
-
-	t.Run("EmptyBatch", func(t *testing.T) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-		bat.SetRowCount(0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		assert.Nil(t, sqls, "Should return nil for empty batch")
-	})
-
-	t.Run("NilBatch", func(t *testing.T) {
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, nil, fromTs, toTs)
-
-		require.NoError(t, err)
-		assert.Nil(t, sqls)
-	})
-
-	t.Run("NullValues", func(t *testing.T) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], nil, true, mp)      // NULL value
-		vector.AppendFixed(bat.Vecs[2], int32(0), true, mp) // NULL value
-		bat.SetRowCount(1)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated SQL: %s", sql)
-
-		// Verify NULL handling
-		assert.Contains(t, sql, "(1,NULL,NULL)")
-	})
-
-	t.Run("SpecialCharactersInString", func(t *testing.T) {
-		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("It's a test"), false, mp) // Single quote
-		vector.AppendFixed(bat.Vecs[2], int32(25), false, mp)
-		bat.SetRowCount(1)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated SQL: %s", sql)
-
-		// Verify special characters are escaped
-		assert.Contains(t, sql, "It\\'s a test")
-	})
-}
-
-func TestCDCStatementBuilder_buildAtomicInsertSQL(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	builder, err := NewCDCStatementBuilder("test_db", "test", createStandardTableDef(), 1024*1024, false)
-	require.NoError(t, err)
-
-	atmBatch := NewAtomicBatch(mp)
-	defer atmBatch.Close()
-	packer := types.NewPacker()
-	defer packer.Close()
-
-	// Append source batches in reverse commit order. The atomic iterator must
-	// preserve commit order when it builds a single coalesced statement.
-	atmBatch.Append(packer, createTestBatchForAtomicBatch(t, mp, types.BuildTS(3, 0), []int32{3}), 2, 0)
-	atmBatch.Append(packer, createTestBatchForAtomicBatch(t, mp, types.BuildTS(2, 0), []int32{1, 2}), 2, 0)
-
-	sqls, err := builder.buildAtomicInsertSQL(context.Background(), atmBatch, types.BuildTS(1, 0), types.BuildTS(4, 0))
-	require.NoError(t, err)
-	require.Len(t, sqls, 1)
-
-	sql := string(sqls[0][v2SQLBufReserved:])
-	first := strings.Index(sql, "(1,'test')")
-	second := strings.Index(sql, "(2,'test')")
-	third := strings.Index(sql, "(3,'test')")
-	require.GreaterOrEqual(t, first, 0)
-	require.Greater(t, second, first)
-	require.Greater(t, third, second)
-}
-
-func TestCDCStatementBuilder_BuildInsertSQL_SizeLimit(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
-		Name: "large_table",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "data", Typ: plan.Type{Id: int32(types.T_varchar)}},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"id"},
-		},
-		Name2ColIndex: map[string]int32{"id": 0, "data": 1},
-	}
-
-	// Small max size to force splitting
-	builder, err := NewCDCStatementBuilder("test_db", "large_table", tableDef, 300, false)
-	require.NoError(t, err)
-
-	t.Run("SplitLargeBatch", func(t *testing.T) {
-		// Create batch with multiple rows
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-
-		// Add rows that will exceed 300 bytes when combined
-		for i := 0; i < 10; i++ {
-			vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
-			vector.AppendBytes(bat.Vecs[1], []byte(strings.Repeat("X", 20)), false, mp)
-		}
-		bat.SetRowCount(10)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		assert.Greater(t, len(sqls), 1, "Should split into multiple SQL statements")
-
-		// Verify all SQLs have proper structure
-		for i, sql := range sqls {
-			sqlStr := string(sql[v2SQLBufReserved:])
-			t.Logf("SQL %d (len=%d): %s", i+1, len(sql), sqlStr)
-
-			assert.Contains(t, sqlStr, "REPLACE INTO")
-			assert.True(t, strings.HasSuffix(sqlStr, ";"))
-
-			// Each SQL should be within size limit
-			assert.LessOrEqual(t, len(sql), 300, "Each SQL should be within size limit")
-		}
-
-		// Verify we got multiple SQL statements (proving splitting works)
-		assert.GreaterOrEqual(t, len(sqls), 2, "Should split into at least 2 SQL statements")
-	})
-}
-
-func TestCDCStatementBuilder_BuildPKColumnList(t *testing.T) {
-	t.Run("SinglePK", func(t *testing.T) {
-		tableDef := &plan.TableDef{
-			Name: "test",
-			Cols: []*plan.ColDef{
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			},
-			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-			Name2ColIndex: map[string]int32{"id": 0},
-		}
-
-		builder, err := NewCDCStatementBuilder("db", "test", tableDef, 1024, false)
-		require.NoError(t, err)
-
-		pkList := builder.buildPKColumnList()
-		assert.Equal(t, "id", pkList)
-	})
-
-	t.Run("CompositePK", func(t *testing.T) {
-		tableDef := &plan.TableDef{
-			Name: "test",
-			Cols: []*plan.ColDef{
-				{Name: "id1", Typ: plan.Type{Id: int32(types.T_int32)}},
-				{Name: "id2", Typ: plan.Type{Id: int32(types.T_int32)}},
-				{Name: "id3", Typ: plan.Type{Id: int32(types.T_int32)}},
-			},
-			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id1", "id2", "id3"}},
-			Name2ColIndex: map[string]int32{"id1": 0, "id2": 1, "id3": 2},
-		}
-
-		builder, err := NewCDCStatementBuilder("db", "test", tableDef, 1024, false)
-		require.NoError(t, err)
-
-		pkList := builder.buildPKColumnList()
-		assert.Equal(t, "(id1,id2,id3)", pkList)
-	})
-}
-
-func TestCDCStatementBuilder_EstimateRowSize(t *testing.T) {
-	tableDef := &plan.TableDef{
-		Name: "test",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
-			{Name: "age", Typ: plan.Type{Id: int32(types.T_int32)}},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "name": 1, "age": 2},
-	}
-
-	builder, err := NewCDCStatementBuilder("db", "test", tableDef, 1024, false)
-	require.NoError(t, err)
-
-	t.Run("EstimateInsertSize", func(t *testing.T) {
-		size := builder.EstimateInsertRowSize()
-		// 3 columns * 50 bytes = 150 bytes
-		assert.Equal(t, 150, size)
-	})
-
-	t.Run("EstimateDeleteSize_SinglePK", func(t *testing.T) {
-		size := builder.EstimateDeleteRowSize()
-		assert.Equal(t, 50, size)
-	})
-}
-
-// Additional test cases based on old sinker tests
-
-func TestCDCStatementBuilder_BuildDeleteSQL_SinglePK(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
+func standardBuilderTableDef() *plan.TableDef {
+	return &plan.TableDef{
 		Name: "users",
 		Cols: []*plan.ColDef{
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
@@ -459,452 +55,424 @@ func TestCDCStatementBuilder_BuildDeleteSQL_SinglePK(t *testing.T) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 	}
+}
 
-	builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
-	require.NoError(t, err)
+func directInsertBatch(t *testing.T, mp *mpool.MPool, ids []int32, names []string) *batch.Batch {
+	t.Helper()
+	require.Len(t, names, len(ids))
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { bat.Clean(mp) })
+	for i, id := range ids {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(names[i]), false, mp))
+	}
+	bat.SetRowCount(len(ids))
+	return bat
+}
 
-	t.Run("DeleteSingleRow", func(t *testing.T) {
-		// Create AtomicBatch
-		atmBatch := NewAtomicBatch(mp)
-		packer := types.NewPacker()
-		defer packer.Close()
-
-		// Create batch with PK and TS columns
-		// For single PK, the layout is: [pk_col, ts_col]
-		bat := batch.New([]string{"id", "ts"})
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], int32(5), false, mp)
-		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
-		bat.SetRowCount(1)
-
-		// Append to atomic batch (tsColIdx=1, pkColIdx=0)
-		atmBatch.Append(packer, bat, 1, 0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated DELETE SQL: %s", sql)
-
-		// Verify SQL structure for single PK
-		assert.Contains(t, sql, "/* [100-0, 200-0) */")
-		assert.Contains(t, sql, "DELETE FROM `test_db`.`users`")
-		assert.Contains(t, sql, "WHERE id IN")
-		assert.Contains(t, sql, "(5)")
-		assert.True(t, strings.HasSuffix(sql, ");"))
-	})
-
-	t.Run("DeleteMultipleRows", func(t *testing.T) {
-		atmBatch := NewAtomicBatch(mp)
-		packer := types.NewPacker()
-		defer packer.Close()
-
-		// Create batch with 3 rows
-		bat := batch.New([]string{"id", "ts"})
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-
-		for i := 0; i < 3; i++ {
-			vector.AppendFixed(bat.Vecs[0], int32(10+i), false, mp)
-			vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+func atomicStringBatch(t *testing.T, mp *mpool.MPool, values []string) *AtomicBatch {
+	t.Helper()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	owned := true
+	t.Cleanup(func() {
+		if owned {
+			bat.Clean(mp)
 		}
-		bat.SetRowCount(3)
-
-		atmBatch.Append(packer, bat, 1, 0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated DELETE SQL: %s", sql)
-
-		// Verify all PK values are included
-		assert.Contains(t, sql, "WHERE id IN")
-		// The order might vary due to btree, so just check they're all present
-		assert.Contains(t, sql, "(10)")
-		assert.Contains(t, sql, "(11)")
-		assert.Contains(t, sql, "(12)")
 	})
-
-	t.Run("EmptyAtomicBatch", func(t *testing.T) {
-		atmBatch := NewAtomicBatch(mp)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
-		require.NoError(t, err)
-		assert.Nil(t, sqls)
-	})
+	for _, value := range values {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], builderFromTS, false, mp))
+	}
+	bat.SetRowCount(len(values))
+	atomic := NewAtomicBatch(mp)
+	packer := types.NewPacker()
+	atomic.Append(packer, bat, 1, 0)
+	owned = false
+	packer.Close()
+	t.Cleanup(atomic.Close)
+	return atomic
 }
 
-func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MySQL(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+func unpaddedSQL(sql []byte) string { return string(sql[v2SQLBufReserved:]) }
 
-	tableDef := &plan.TableDef{
-		Name: "orders",
-		Cols: []*plan.ColDef{
-			{Name: "order_id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "customer_id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_float64)}},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"order_id", "customer_id"}},
-		Name2ColIndex: map[string]int32{"order_id": 0, "customer_id": 1, "amount": 2},
-	}
-
-	// MySQL mode (isMO = false)
-	builder, err := NewCDCStatementBuilder("test_db", "orders", tableDef, 1024*1024, false)
-	require.NoError(t, err)
-	assert.False(t, builder.isSinglePK)
-
-	t.Run("CompositePK_MySQL_Format", func(t *testing.T) {
-		atmBatch := NewAtomicBatch(mp)
-		packer := types.NewPacker()
-		defer packer.Close()
-
-		// For composite PK, need to create a batch with composite PK column
-		// The composite PK is stored as a packed value in a single column
-		// Layout: [composited_pk, ts]
-		bat := batch.New([]string{"cpk", "ts"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType()) // Packed composite PK
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-
-		// For the actual test, we'll append and let it encode
-		// Then verify the SQL format is correct
-		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
-
-		// Pack (order_id=1, customer_id=100) as tuple manually
-		packer.EncodeInt32(1)
-		packer.EncodeInt32(100)
-		pkBytes := packer.GetBuf()
-
-		vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
-		bat.SetRowCount(1)
-
-		atmBatch.Append(packer, bat, 1, 0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated DELETE SQL (MySQL format): %s", sql)
-
-		// MySQL format: WHERE (order_id,customer_id) IN ((val1,val2))
-		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
-		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN")
-		assert.Contains(t, sql, "(1,100)")
-		assert.True(t, strings.HasSuffix(sql, ");"))
-	})
-}
-
-func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MO(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
-		Name: "orders",
-		Cols: []*plan.ColDef{
-			{Name: "order_id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "customer_id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_float64)}},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"order_id", "customer_id"}},
-		Name2ColIndex: map[string]int32{"order_id": 0, "customer_id": 1, "amount": 2},
-	}
-
-	// MO mode (isMO = true)
-	builder, err := NewCDCStatementBuilder("test_db", "orders", tableDef, 1024*1024, true)
-	require.NoError(t, err)
-	assert.False(t, builder.isSinglePK)
-
-	t.Run("CompositePK_MO_Format_SingleRow", func(t *testing.T) {
-		atmBatch := NewAtomicBatch(mp)
-		packer := types.NewPacker()
-		defer packer.Close()
-
-		bat := batch.New([]string{"cpk", "ts"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-
-		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
-
-		// Pack (order_id=1, customer_id=100) as tuple
-		packer.EncodeInt32(1)
-		packer.EncodeInt32(100)
-		pkBytes := packer.GetBuf()
-
-		vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
-		bat.SetRowCount(1)
-
-		atmBatch.Append(packer, bat, 1, 0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated DELETE SQL (MO format): %s", sql)
-
-		// Current MO supports row-constructor IN for composite primary keys.
-		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
-		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN ((1,100))")
-		assert.True(t, strings.HasSuffix(sql, ";"))
-	})
-
-	t.Run("CompositePK_MO_Format_MultipleRows", func(t *testing.T) {
-		atmBatch := NewAtomicBatch(mp)
-		packer := types.NewPacker()
-		defer packer.Close()
-
-		bat := batch.New([]string{"cpk", "ts"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-
-		// Add multiple rows
-		tuples := [][]any{
-			{int32(1), int32(100)},
-			{int32(2), int32(200)},
-			{int32(3), int32(300)},
+func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
+	t.Run("pk only uses upsert and quotes once", func(t *testing.T) {
+		def := &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "select", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "a`b``c", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"select"}},
+			Name2ColIndex: map[string]int32{"select": 0, "a`b``c": 1},
 		}
-
-		for _, tuple := range tuples {
-			vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
-
-			// Encode tuple manually
-			packer.Reset()
-			packer.EncodeInt32(tuple[0].(int32))
-			packer.EncodeInt32(tuple[1].(int32))
-			pkBytes := packer.GetBuf()
-
-			vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
-		}
-		bat.SetRowCount(3)
-
-		atmBatch.Append(packer, bat, 1, 0)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
-
+		builder, err := NewCDCStatementBuilder("库`名", "order", def, 1024, false)
 		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated DELETE SQL (MO format): %s", sql)
-
-		// Tuple IN is substantially smaller and cheaper to plan than an OR tree.
-		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
-		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN")
-		assert.Contains(t, sql, "(1,100)")
-		assert.Contains(t, sql, "(2,200)")
-		assert.Contains(t, sql, "(3,300)")
-		assert.NotContains(t, sql, " or ")
-		assert.True(t, strings.HasSuffix(sql, ";"))
+		require.Equal(t, "INSERT INTO `库``名`.`order` VALUES ", string(builder.insertStem))
+		require.Equal(t, " ON DUPLICATE KEY UPDATE `select`=VALUES(`select`),`a``b````c`=VALUES(`a``b````c`);", string(builder.insertSuffix))
+		require.Equal(t, "DELETE FROM `库``名`.`order` WHERE `select` IN (", string(builder.deleteStem))
 	})
-}
 
-func TestCDCStatementBuilder_VariousDataTypes(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
-		Name: "type_test",
-		Cols: []*plan.ColDef{
-			{Name: "col_uint64", Typ: plan.Type{Id: int32(types.T_uint64)}},
-			{Name: "col_varchar", Typ: plan.Type{Id: int32(types.T_varchar)}},
-			{Name: "col_bool", Typ: plan.Type{Id: int32(types.T_bool)}},
-			{Name: "col_float64", Typ: plan.Type{Id: int32(types.T_float64)}},
-		},
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"col_uint64"}},
-		Name2ColIndex: map[string]int32{
-			"col_uint64": 0, "col_varchar": 1, "col_bool": 2, "col_float64": 3,
-		},
-	}
-
-	builder, err := NewCDCStatementBuilder("test_db", "type_test", tableDef, 1024*1024, false)
-	require.NoError(t, err)
-
-	t.Run("MultipleDataTypes", func(t *testing.T) {
-		bat := batch.NewWithSize(4)
-		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_float64.ToType())
-
-		vector.AppendFixed(bat.Vecs[0], uint64(12345), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte("test"), false, mp)
-		vector.AppendFixed(bat.Vecs[2], true, false, mp)
-		vector.AppendFixed(bat.Vecs[3], float64(3.14), false, mp)
-		bat.SetRowCount(1)
-
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
-
-		sql := string(sqls[0][v2SQLBufReserved:])
-		t.Logf("Generated SQL: %s", sql)
-
-		assert.Contains(t, sql, "12345")  // uint64
-		assert.Contains(t, sql, "'test'") // varchar
-		assert.Contains(t, sql, "true")   // bool
-		assert.Contains(t, sql, "3.14")   // float64
-	})
-}
-
-func TestCDCStatementBuilder_StringEscaping(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableDef := &plan.TableDef{
-		Name: "test",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "text", Typ: plan.Type{Id: int32(types.T_varchar)}},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "text": 1},
-	}
-
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
-	require.NoError(t, err)
-
-	testCases := []struct {
-		name     string
-		input    string
-		expected string
+	for _, tc := range []struct {
+		name    string
+		indexes []*plan.IndexDef
+		replace bool
 	}{
-		{
-			name:     "Backslash",
-			input:    "path\\to\\file",
-			expected: "path\\\\to\\\\file",
-		},
-		{
-			name:     "SingleQuote",
-			input:    "It's",
-			expected: "It\\'s",
-		},
-		{
-			name:     "BackslashAndQuote",
-			input:    "path\\'s",
-			expected: "path\\\\\\'s",
-		},
-		{
-			name:     "EmptyString",
-			input:    "",
-			expected: "''",
-		},
-		{
-			name:     "Unicode",
-			input:    "测试_中文",
-			expected: "测试_中文",
-		},
+		{name: "nonunique", indexes: []*plan.IndexDef{{IndexName: "idx"}}},
+		{name: "single unique", indexes: []*plan.IndexDef{{IndexName: "uk", Unique: true}}, replace: true},
+		{name: "composite nullable unique", indexes: []*plan.IndexDef{{IndexName: "uk", Parts: []string{"id", "name"}, Unique: true}}, replace: true},
+		{name: "any of two unique", indexes: []*plan.IndexDef{{IndexName: "idx"}, {IndexName: "uk", Unique: true}}, replace: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := standardBuilderTableDef()
+			def.Indexes = tc.indexes
+			builder, err := NewCDCStatementBuilder("db", "users", def, 1024, true)
+			require.NoError(t, err)
+			if tc.replace {
+				require.Equal(t, "REPLACE INTO `db`.`users` VALUES ", string(builder.insertStem))
+				require.Equal(t, ";", string(builder.insertSuffix))
+			} else {
+				require.Equal(t, "INSERT INTO `db`.`users` VALUES ", string(builder.insertStem))
+				require.Contains(t, string(builder.insertSuffix), "ON DUPLICATE KEY UPDATE")
+			}
+		})
 	}
 
-	for _, tc := range testCases {
+	t.Run("composite primary key is fully quoted", func(t *testing.T) {
+		def := standardBuilderTableDef()
+		def.Cols[0].Name, def.Cols[1].Name = "a`b", "名"
+		def.Pkey.Names = []string{"a`b", "名"}
+		def.Name2ColIndex = map[string]int32{"a`b": 0, "名": 1}
+		builder, err := NewCDCStatementBuilder("db", "t", def, 1024, false)
+		require.NoError(t, err)
+		require.Equal(t, "DELETE FROM `db`.`t` WHERE (`a``b`,`名`) IN (", string(builder.deleteStem))
+		require.Equal(t, 100, builder.EstimateDeleteRowSize())
+	})
+
+	base := standardBuilderTableDef()
+	badMapping := standardBuilderTableDef()
+	badMapping.Name2ColIndex["id"] = 1
+	badIndex := standardBuilderTableDef()
+	badIndex.Name2ColIndex["id"] = 3
+	internalOnly := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.Row_ID}}, Name2ColIndex: map[string]int32{catalog.Row_ID: 0},
+	}
+	for _, tc := range []struct {
+		name string
+		def  *plan.TableDef
+	}{
+		{name: "nil table"},
+		{name: "nil column", def: &plan.TableDef{Cols: []*plan.ColDef{nil}}},
+		{name: "empty column name", def: &plan.TableDef{Cols: []*plan.ColDef{{Name: ""}}}},
+		{name: "no visible columns", def: internalOnly},
+		{name: "nil primary key", def: &plan.TableDef{Cols: base.Cols, Name2ColIndex: base.Name2ColIndex}},
+		{name: "empty primary key", def: &plan.TableDef{Cols: base.Cols, Pkey: &plan.PrimaryKeyDef{}, Name2ColIndex: base.Name2ColIndex}},
+		{name: "missing mapping", def: &plan.TableDef{Cols: base.Cols, Pkey: base.Pkey}},
+		{name: "mismatched mapping", def: badMapping},
+		{name: "invalid mapping", def: badIndex},
+		{name: "nil index", def: &plan.TableDef{Cols: base.Cols, Pkey: base.Pkey, Name2ColIndex: base.Name2ColIndex, Indexes: []*plan.IndexDef{nil}}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-
-			vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-			vector.AppendBytes(bat.Vecs[1], []byte(tc.input), false, mp)
-			bat.SetRowCount(1)
-
-			ctx := context.Background()
-			fromTs := types.BuildTS(100, 0)
-			toTs := types.BuildTS(200, 0)
-
-			sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
-
-			require.NoError(t, err)
-			require.Len(t, sqls, 1)
-
-			sql := string(sqls[0][v2SQLBufReserved:])
-			t.Logf("Input: %q -> SQL: %s", tc.input, sql)
-
-			assert.Contains(t, sql, tc.expected, "Should properly handle: %s", tc.name)
+			builder, err := NewCDCStatementBuilder("db", "t", tc.def, 1024, false)
+			require.Error(t, err)
+			require.Nil(t, builder)
 		})
 	}
 }
 
-func TestCDCStatementBuilder_LargeValues(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+func TestCDCStatementBuilder_InsertExactSQLAndOwnership(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+	def := standardBuilderTableDef()
+	def.Cols = append(def.Cols, &plan.ColDef{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}})
+	builder, err := NewCDCStatementBuilder("test_db", "users", def, ^uint64(0), false)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	bat := directInsertBatch(t, mp, []int32{1, 2}, []string{"Alice", ""})
+	sqls, err := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Equal(t, "/* [100-0, 200-0) */ INSERT INTO `test_db`.`users` VALUES (1,'Alice'),(2,'') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
+	require.Less(t, cap(sqls[0]), 1024, "capacity must follow payload, not an unused uint64 limit")
 
-	tableDef := &plan.TableDef{
-		Name: "test",
+	before := append([]byte(nil), sqls[0]...)
+	other := directInsertBatch(t, mp, []int32{3}, []string{"other"})
+	second, err := builder.BuildInsertSQL(context.Background(), other, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	second[0][v2SQLBufReserved] = 'X'
+	require.Equal(t, before, sqls[0], "results from separate builds must not share mutable storage")
+	require.Equal(t, []string{"id"}, def.Pkey.Names, "construction/building must not mutate source metadata")
+}
+
+func TestCDCStatementBuilder_InsertNullTypesAndEscaping(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+	def := &plan.TableDef{
 		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: "data", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "u", Typ: plan.Type{Id: int32(types.T_uint64)}}, {Name: "s", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_bool)}}, {Name: "f", Typ: plan.Type{Id: int32(types.T_float64)}},
 		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "data": 1},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"u"}}, Name2ColIndex: map[string]int32{"u": 0, "s": 1, "b": 2, "f": 3},
+	}
+	builder, err := NewCDCStatementBuilder("db", "t", def, 4096, false)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType()), vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[2], bat.Vecs[3] = vector.NewVec(types.T_bool.ToType()), vector.NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { bat.Clean(mp) })
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], ^uint64(0), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("path\\'测试"), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], true, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], 3.14, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint64(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], nil, true, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], false, true, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], 0.0, true, mp))
+	bat.SetRowCount(2)
+	sqls, err := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Contains(t, unpaddedSQL(sqls[0]), "(18446744073709551615,'path\\\\\\'测试',true,3.14),(1,NULL,NULL,NULL)")
+}
+
+func TestCDCStatementBuilder_InsertBoundsAndPostFlush(t *testing.T) {
+	for _, useReplace := range []bool{false, true} {
+		name := "upsert"
+		if useReplace {
+			name = "replace"
+		}
+		t.Run(name, func(t *testing.T) { testInsertBoundsAndPostFlush(t, useReplace) })
+	}
+}
+
+func testInsertBoundsAndPostFlush(t *testing.T, useReplace bool) {
+	t.Helper()
+	mp := newBuilderTestMPool(t)
+	def := standardBuilderTableDef()
+	if useReplace {
+		def.Indexes = []*plan.IndexDef{{IndexName: "uk_name", Parts: []string{"name"}, Unique: true}}
+	}
+	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false)
+	require.NoError(t, err)
+	one := directInsertBatch(t, mp, []int32{1}, []string{"small"})
+	oneSQL, err := probe.BuildInsertSQL(context.Background(), one, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	exact := uint64(len(oneSQL[0]))
+	for _, tc := range []struct {
+		name    string
+		limit   uint64
+		wantErr bool
+	}{
+		{name: "exact", limit: exact}, {name: "one below", limit: exact - 1, wantErr: true},
+		{name: "zero", wantErr: true}, {name: "tiny", limit: v2SQLBufReserved, wantErr: true}, {name: "huge uint", limit: ^uint64(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, buildErr := NewCDCStatementBuilder("db", "t", def, tc.limit, false)
+			require.NoError(t, buildErr)
+			sqls, buildErr := builder.BuildInsertSQL(context.Background(), one, builderFromTS, builderToTS)
+			if tc.wantErr {
+				require.Error(t, buildErr)
+				require.Nil(t, sqls)
+				return
+			}
+			require.NoError(t, buildErr)
+			require.Len(t, sqls, 1)
+			require.LessOrEqual(t, uint64(len(sqls[0])), tc.limit)
+		})
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	largeOnly := directInsertBatch(t, mp, []int32{2}, []string{strings.Repeat("L", 120)})
+	largeSQL, err := probe.BuildInsertSQL(context.Background(), largeOnly, builderFromTS, builderToTS)
 	require.NoError(t, err)
+	splitLimit := uint64(len(largeSQL[0]))
+	builder, err := NewCDCStatementBuilder("db", "t", def, splitLimit, false)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		ids   []int32
+		names []string
+	}{
+		{name: "small large", ids: []int32{1, 2}, names: []string{"s", strings.Repeat("L", 120)}},
+		{name: "large small", ids: []int32{2, 1}, names: []string{strings.Repeat("L", 120), "s"}},
+		{name: "small large small", ids: []int32{1, 2, 3}, names: []string{"s", strings.Repeat("L", 120), "s"}},
+		{name: "three split rows", ids: []int32{1, 2, 3}, names: []string{strings.Repeat("L", 120), strings.Repeat("L", 120), strings.Repeat("L", 120)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bat := directInsertBatch(t, mp, tc.ids, tc.names)
+			sqls, buildErr := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
+			require.NoError(t, buildErr)
+			require.Len(t, sqls, len(tc.ids))
+			for i, sql := range sqls {
+				require.LessOrEqual(t, uint64(len(sql)), splitLimit)
+				verb, suffix := "INSERT", " ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);"
+				if useReplace {
+					verb, suffix = "REPLACE", ";"
+				}
+				require.Equal(t, fmt.Sprintf("/* [100-0, 200-0) */ %s INTO `db`.`t` VALUES (%d,'%s')%s", verb, tc.ids[i], tc.names[i], suffix), unpaddedSQL(sql))
+			}
+			first := append([]byte(nil), sqls[0]...)
+			sqls[1][v2SQLBufReserved] = 'X'
+			require.Equal(t, first, sqls[0], "split statements must own independent buffers")
+		})
+	}
+	oversized := directInsertBatch(t, mp, []int32{1, 2}, []string{"s", strings.Repeat("X", 500)})
+	sqls, err := builder.BuildInsertSQL(context.Background(), oversized, builderFromTS, builderToTS)
+	require.Error(t, err)
+	require.Nil(t, sqls, "a size error after a valid flushed row must discard completed statements")
+}
 
-	t.Run("VeryLongString", func(t *testing.T) {
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+type failingBuilderIterator struct {
+	rows   [][]any
+	offset int
+	closed bool
+}
 
-		longStr := strings.Repeat("A", 10000)
-		vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte(longStr), false, mp)
-		bat.SetRowCount(1)
+func (i *failingBuilderIterator) Next() bool { i.offset++; return i.offset <= len(i.rows) }
+func (i *failingBuilderIterator) Row(_ context.Context, row []any) error {
+	if i.offset == len(i.rows) {
+		return context.Canceled
+	}
+	copy(row, i.rows[i.offset])
+	return nil
+}
+func (i *failingBuilderIterator) Close() { i.closed = true }
 
-		ctx := context.Background()
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
+func TestCDCStatementBuilder_IteratorErrorAfterFlushIsAtomic(t *testing.T) {
+	def := standardBuilderTableDef()
+	probe, err := NewCDCStatementBuilder("db", "t", def, ^uint64(0), false)
+	require.NoError(t, err)
+	row, err := probe.formatInsertRow(context.Background(), []any{int32(1), []byte(strings.Repeat("x", 80))})
+	require.NoError(t, err)
+	limit := uint64(v2SQLBufReserved + len(probe.buildInsertPrefix(builderFromTS, builderToTS)) + len(row) + len(probe.insertSuffix))
+	builder, err := NewCDCStatementBuilder("db", "t", def, limit, false)
+	require.NoError(t, err)
+	iter := &failingBuilderIterator{offset: -1, rows: [][]any{{int32(1), []byte(strings.Repeat("x", 80))}, {int32(2), []byte(strings.Repeat("y", 80))}}}
+	sqls, err := builder.buildInsertSQL(context.Background(), iter, builderFromTS, builderToTS)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, sqls)
+	require.True(t, iter.closed)
+}
 
-		sqls, err := builder.BuildInsertSQL(ctx, bat, fromTs, toTs)
+func TestCDCStatementBuilder_DeleteExactSQLCompositeAndBounds(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+	singleDef := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: "key`word", Typ: plan.Type{Id: int32(types.T_varchar)}}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"key`word"}}, Name2ColIndex: map[string]int32{"key`word": 0},
+	}
+	probe, err := NewCDCStatementBuilder("d`b", "表", singleDef, ^uint64(0), false)
+	require.NoError(t, err)
+	one := atomicStringBatch(t, mp, []string{"small"})
+	oneSQL, err := probe.BuildDeleteSQL(context.Background(), one, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Equal(t, "/* [100-0, 200-0) */ DELETE FROM `d``b`.`表` WHERE `key``word` IN (('small'));", unpaddedSQL(oneSQL[0]))
+	exact := uint64(len(oneSQL[0]))
+	for _, delta := range []uint64{0, 1} {
+		builder, buildErr := NewCDCStatementBuilder("d`b", "表", singleDef, exact-delta, false)
+		require.NoError(t, buildErr)
+		sqls, buildErr := builder.BuildDeleteSQL(context.Background(), one, builderFromTS, builderToTS)
+		if delta == 0 {
+			require.NoError(t, buildErr)
+			require.Len(t, sqls, 1)
+		} else {
+			require.Error(t, buildErr)
+			require.Nil(t, sqls)
+		}
+	}
 
-		require.NoError(t, err)
-		require.Len(t, sqls, 1)
+	largeOnly := atomicStringBatch(t, mp, []string{strings.Repeat("L", 100)})
+	largeSQL, err := probe.BuildDeleteSQL(context.Background(), largeOnly, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	limit := uint64(len(largeSQL[0]))
+	builder, err := NewCDCStatementBuilder("d`b", "表", singleDef, limit, false)
+	require.NoError(t, err)
+	mixed := atomicStringBatch(t, mp, []string{"a", strings.Repeat("L", 100), "z"})
+	sqls, err := builder.BuildDeleteSQL(context.Background(), mixed, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, sqls, 2)
+	require.Contains(t, unpaddedSQL(sqls[0]), strings.Repeat("L", 100))
+	require.Equal(t, "/* [100-0, 200-0) */ DELETE FROM `d``b`.`表` WHERE `key``word` IN (('a'),('z'));", unpaddedSQL(sqls[1]))
+	for _, sql := range sqls {
+		require.LessOrEqual(t, uint64(len(sql)), limit)
+	}
+	tooLarge := atomicStringBatch(t, mp, []string{"a", strings.Repeat("X", 300)})
+	sqls, err = builder.BuildDeleteSQL(context.Background(), tooLarge, builderFromTS, builderToTS)
+	require.Error(t, err)
+	require.Nil(t, sqls)
 
-		sql := string(sqls[0][v2SQLBufReserved:])
-		assert.Contains(t, sql, longStr)
-		assert.Greater(t, len(sql), 10000)
-	})
+	compositeDef := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: "order", Typ: plan.Type{Id: int32(types.T_int32)}}, {Name: "客户", Typ: plan.Type{Id: int32(types.T_int32)}}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"order", "客户"}}, Name2ColIndex: map[string]int32{"order": 0, "客户": 1},
+	}
+	composite, err := NewCDCStatementBuilder("db", "t", compositeDef, 1024, true)
+	require.NoError(t, err)
+	packer := types.NewPacker()
+	packer.EncodeInt32(1)
+	packer.EncodeInt32(100)
+	row, err := composite.formatDeleteRow(context.Background(), append([]byte(nil), packer.GetBuf()...))
+	packer.Close()
+	require.NoError(t, err)
+	require.Equal(t, "(1,100)", string(row))
+	keys := types.NewPacker()
+	defer keys.Close()
+	keys.EncodeInt32(1)
+	keys.EncodeInt32(100)
+	firstKey := string(keys.GetBuf())
+	keys.Reset()
+	keys.EncodeInt32(2)
+	keys.EncodeInt32(200)
+	packedBatch := atomicStringBatch(t, mp, []string{firstKey, string(keys.GetBuf())})
+	compositeSQL, err := composite.BuildDeleteSQL(context.Background(), packedBatch, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, compositeSQL, 1)
+	require.Equal(t, "/* [100-0, 200-0) */ DELETE FROM `db`.`t` WHERE (`order`,`客户`) IN ((1,100),(2,200));", unpaddedSQL(compositeSQL[0]))
+	_, err = composite.formatDeleteRow(context.Background(), int32(1))
+	require.ErrorContains(t, err, "composite PK must be []byte")
+	badPacker := types.NewPacker()
+	badPacker.EncodeInt32(1)
+	_, err = composite.formatDeleteRow(context.Background(), append([]byte(nil), badPacker.GetBuf()...))
+	badPacker.Close()
+	require.ErrorContains(t, err, "PK tuple length mismatch")
+}
+
+func TestCDCStatementBuilder_AtomicInsertOrderAndDedup(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 1024, false)
+	require.NoError(t, err)
+	atomic := NewAtomicBatch(mp)
+	t.Cleanup(atomic.Close)
+	packer := types.NewPacker()
+	defer packer.Close()
+	appendTestBatchToAtomic(t, atomic, packer, mp, types.BuildTS(3, 0), []int32{3})
+	appendTestBatchToAtomic(t, atomic, packer, mp, types.BuildTS(2, 0), []int32{1, 2})
+	appendTestBatchToAtomic(t, atomic, packer, mp, types.BuildTS(2, 0), []int32{1})
+	sqls, err := builder.buildAtomicInsertSQL(context.Background(), atomic, types.BuildTS(1, 0), types.BuildTS(4, 0))
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Equal(t, 1, atomic.DuplicateRows())
+	require.Equal(t, "/* [1-0, 4-0) */ INSERT INTO `db`.`t` VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
+}
+
+func TestCDCStatementBuilder_EmptyInputs(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+	builder, err := NewCDCStatementBuilder("db", "t", standardBuilderTableDef(), 0, false)
+	require.NoError(t, err)
+	sqls, err := builder.BuildInsertSQL(context.Background(), nil, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Nil(t, sqls)
+	sqls, err = builder.BuildDeleteSQL(context.Background(), nil, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Nil(t, sqls)
+	empty := directInsertBatch(t, mp, nil, nil)
+	sqls, err = builder.BuildInsertSQL(context.Background(), empty, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Nil(t, sqls)
+	atomic := NewAtomicBatch(mp)
+	t.Cleanup(atomic.Close)
+	sqls, err = builder.buildAtomicInsertSQL(context.Background(), atomic, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Nil(t, sqls)
+	sqls, err = builder.BuildDeleteSQL(context.Background(), atomic, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Nil(t, sqls)
 }

@@ -3356,6 +3356,13 @@ func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
 	})
 }
 
+func lockSnapshotLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
+	// Keep the caller's transaction; only account resolution changes for this SQL.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.SnapshotLifecycleGateSQL)
+}
+
 func prepareViewMetadataMutation(
 	ctx context.Context,
 	bh BackgroundExec,

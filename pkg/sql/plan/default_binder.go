@@ -77,7 +77,10 @@ func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dep
 }
 
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	if !b.allowSubquery {
+		return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	}
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *DefaultBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

@@ -3256,6 +3256,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
+		remapGeneratedColExprsToTableOrder(createTable.TableDef.Cols, allColDefs)
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
@@ -3270,6 +3271,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		cols := createTable.TableDef.Cols
 		firstCol := true
 		for i := range cols {
+			// Generated columns are computed by the target table. They are not
+			// implicit INSERT targets, so do not add a placeholder before the
+			// source projection. Otherwise a destination-only generated column
+			// shifts the source columns and makes CTAS fail with a column-count
+			// error.
+			if cols[i].GeneratedCol != nil {
+				continue
+			}
 			// insert default values if col[i] only in create clause
 			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
 				if !firstCol {
@@ -4769,13 +4778,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
-		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
-		// not supported for temporary tables. Reject the visible temporary table
-		// here so execution can never fall through to the hidden permanent table.
-		if tableDef.GetIsTemporary() {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-		}
-
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
