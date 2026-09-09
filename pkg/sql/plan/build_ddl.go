@@ -4462,7 +4462,6 @@ func maybeEnableCollationKeyV2ForCreate(
 			// second time when v2 is enabled.
 			tableDef.Pkey.PkeyColName = catalog.CPrimaryKeyColName
 			tableDef.Pkey.CompPkeyCol = hidden
-			colMap[catalog.CPrimaryKeyColName] = hidden
 		}
 	}
 	metadata := collationkey.NewCollationAwareMetadataAtGeneration(admission.Activation.Generation)
