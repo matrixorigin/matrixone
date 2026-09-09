@@ -21,9 +21,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type resetTrackingClient struct {
@@ -38,6 +42,90 @@ func (c *resetTrackingClient) ResetBackend(context.Context, string) error {
 }
 
 func (c *resetTrackingClient) Close() error { return nil }
+
+type membershipTrackingClient struct {
+	resetTrackingClient
+	inventory *client
+	checks    int
+	sends     int
+}
+
+func (c *membershipTrackingClient) activeTxnOwnerPresent(ctx context.Context, sid string) (bool, error) {
+	c.checks++
+	return c.inventory.activeTxnOwnerPresent(ctx, sid)
+}
+
+func (c *membershipTrackingClient) Send(context.Context, *pb.Request) (*pb.Response, error) {
+	c.sends++
+	resp := acquireResponse()
+	resp.GetActiveTxn.Valid = true
+	resp.GetActiveTxn.Txn = [][]byte{[]byte("orphan")}
+	return resp, nil
+}
+
+func TestAbsentActiveTxnOwnerQuiescesUntilMembershipReturns(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		tracking := &membershipTrackingClient{inventory: a.client.(*client)}
+		require.NoError(t, a.client.Close())
+		a.client = tracking
+		sid := getServiceIdentifier("departed", 1)
+		ctl := a.getCtl(sid)
+		ctl.tryCannotCommit("orphan")
+
+		// Forty-five default cleaner sweeps correspond to fifteen minutes.
+		// Membership-only checks must send no RPC and create no reset/log storm.
+		for range 45 {
+			a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Hour)
+		}
+		require.Equal(t, 45, tracking.checks)
+		require.Zero(t, tracking.sends)
+		require.Zero(t, tracking.resets.Load())
+		require.Equal(t, 1, logs.FilterMessage("active txn owner absent; retaining commit fences").Len())
+		require.Zero(t, logs.FilterLevelExact(zap.ErrorLevel).Len())
+		require.True(t, a.HasInvalidService(sid))
+		_, exists := ctl.getCommitState("orphan")
+		require.True(t, exists, "absence must not stand in for a negative GetActiveTxn response")
+		_, err := a.Valid(sid, []byte("late"), nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+
+		tracking.inventory.cluster.AddCN(metadata.CNService{
+			ServiceID: "departed", LockServiceAddress: "restored:1234",
+		})
+		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Hour)
+		require.Equal(t, 1, tracking.sends, "membership restoration must allow the next sweep to probe")
+		_, exists = ctl.getCommitState("orphan")
+		require.True(t, exists)
+		a.resumeService(sid)
+		_, err = a.Valid(sid, []byte("new"), nil)
+		require.NoError(t, err)
+		a.FinishCommit(sid, []byte("new"))
+
+		tracking.inventory.cluster.RemoveCN("departed")
+		a.inactiveService.Store(sid, time.Now().Add(-2*time.Hour))
+		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Hour)
+		_, exists = a.ctl.Load(sid)
+		require.False(t, exists, "skipping network probes must not skip local expiry")
+		require.False(t, a.HasInvalidService(sid))
+		require.Equal(t, 1, tracking.sends)
+	}, func(a *lockTableAllocator) {
+		a.logger = log.GetServiceLogger(zap.New(core), metadata.ServiceType_TN, "")
+	})
+}
+
+func TestAbsentActiveTxnObservationCannotRefenceAfterResume(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		ctl := a.getCtl("s1")
+		ctl.tryCannotCommit("orphan")
+		a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+			a.resumeService("s1")
+			return false, nil, errActiveTxnOwnerAbsent
+		}, time.Hour)
+		require.False(t, a.HasInvalidService("s1"))
+		_, exists := ctl.getCommitState("orphan")
+		require.True(t, exists)
+	})
+}
 
 func TestCleanCommitStateRetriesTransientBackendClose(t *testing.T) {
 	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {

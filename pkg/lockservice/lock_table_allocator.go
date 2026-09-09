@@ -45,6 +45,11 @@ const (
 	getActiveTxnRetryDelay  = 100 * time.Millisecond
 )
 
+// Local cleaner observation, never sent on the wire. An absent owner still
+// needs admission fencing and retained commit state, but has no endpoint to
+// probe/reset until the periodically refreshed membership view contains it.
+var errActiveTxnOwnerAbsent = moerr.NewInternalErrorNoCtx("active txn owner absent from cluster inventory")
+
 type lockTableAllocator struct {
 	service         string
 	logger          *log.MOLogger
@@ -709,6 +714,35 @@ func (l *lockTableAllocator) validateTimeoutBinds(
 	return true
 }
 
+func (l *lockTableAllocator) getActiveTxn(parent context.Context, sid string) (bool, [][]byte, error) {
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseCleanCommitState)
+	defer cancel()
+	if checker, ok := l.client.(interface {
+		activeTxnOwnerPresent(context.Context, string) (bool, error)
+	}); ok {
+		present, err := checker.activeTxnOwnerPresent(ctx, sid)
+		if err != nil {
+			return false, nil, err
+		}
+		if !present {
+			return false, nil, errActiveTxnOwnerAbsent
+		}
+	}
+	req := acquireRequest()
+	defer releaseRequest(req)
+	req.Method = pb.Method_GetActiveTxn
+	req.GetActiveTxn.ServiceID = sid
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return false, nil, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	if !resp.GetActiveTxn.Valid {
+		return false, nil, nil
+	}
+	return true, resp.GetActiveTxn.Txn, nil
+}
+
 func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 	defer l.logger.InfoAction("clean cannot commit task")()
 
@@ -717,28 +751,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 	getActiveTxnFunc := l.options.getActiveTxnFunc
 	if getActiveTxnFunc == nil {
-		getActiveTxnFunc = func(parent context.Context, sid string) (bool, [][]byte, error) {
-			ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseCleanCommitState)
-			defer cancel()
-
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_GetActiveTxn
-			req.GetActiveTxn.ServiceID = sid
-
-			resp, err := l.client.Send(ctx, req)
-			if err != nil {
-				return false, nil, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-
-			if !resp.GetActiveTxn.Valid {
-				return false, nil, nil
-			}
-
-			return true, resp.GetActiveTxn.Txn, nil
-		}
+		getActiveTxnFunc = l.getActiveTxn
 	}
 
 	removeDisconnectDuration := l.options.removeDisconnectDuration
@@ -833,6 +846,16 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 			// incomplete observation.
 			if ctx.Err() != nil {
 				return
+			}
+			if errors.Is(err, errActiveTxnOwnerAbsent) {
+				if l.markServiceInactive(sid, snapshot.ctl, snapshot.recoveryEpoch, true) &&
+					snapshot.inactiveAt.IsZero() {
+					l.logger.Info("active txn owner absent; retaining commit fences",
+						zap.String("serviceID", sid))
+				}
+				// Membership is checked again next sweep. Do not retry/reset an
+				// endpoint that does not exist, or emit the same error each sweep.
+				break
 			}
 
 			if !morpc.IsConnectionError(err) {
