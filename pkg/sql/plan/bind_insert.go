@@ -302,6 +302,14 @@ func irregularIndexGroupKey(indexdef *plan.IndexDef) string {
 // comparison. The hook is responsible for rejecting types whose stored
 // representation cannot be proven this way.
 func bindStoredValueEquality(ctx context.Context, oldCol, newCol *plan.Expr) (*plan.Expr, error) {
+	return bindStoredValueEqualityWithCaster(ctx, oldCol, newCol, appendComparisonCastBeforeExpr)
+}
+
+func bindStoredValueEqualityWithCaster(
+	ctx context.Context,
+	oldCol, newCol *plan.Expr,
+	cast func(context.Context, *plan.Expr, Type) (*plan.Expr, error),
+) (*plan.Expr, error) {
 	if oldCol == nil || newCol == nil {
 		return nil, moerr.NewInternalErrorNoCtx("irregular index stored-value comparison received nil expression")
 	}
@@ -319,11 +327,11 @@ func bindStoredValueEquality(ctx context.Context, oldCol, newCol *plan.Expr) (*p
 			binaryType = types.T_blob.ToType()
 		}
 		var err error
-		oldCol, err = appendComparisonCastBeforeExpr(ctx, oldCol, makePlan2Type(&binaryType))
+		oldCol, err = cast(ctx, oldCol, makePlan2Type(&binaryType))
 		if err != nil {
 			return nil, err
 		}
-		newCol, err = appendComparisonCastBeforeExpr(ctx, newCol, makePlan2Type(&binaryType))
+		newCol, err = cast(ctx, newCol, makePlan2Type(&binaryType))
 		if err != nil {
 			return nil, err
 		}
