@@ -53,17 +53,18 @@ const (
 // appended resource facts from a legacy bare PhyPlan payload.
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
-	TerminalResourceVersion   uint32                           `json:"terminal_resource_version,omitempty"`
-	StatementLastInsertID     uint64                           `json:"statement_last_insert_id,omitempty"`
-	WarningCount              uint64                           `json:"warning_count,omitempty"`
-	WarningDiagnostics        []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
-	Delta                     resource.Delta                   `json:"resource_delta"`
-	Memory                    resource.MemoryTotals            `json:"memory"`
-	Allocation                resource.AllocationAccountTotals `json:"allocation_account"`
-	MissingFragmentCount      uint64                           `json:"missing_fragment_count,omitempty"`
-	MissingMemoryDomainCount  uint64                           `json:"missing_memory_domain_count,omitempty"`
-	PendingAllocationGroups   []remoteAllocationGroupPending   `json:"pending_allocation_groups,omitempty"`
-	CompletedAllocationGroups []string                         `json:"completed_allocation_groups,omitempty"`
+	TerminalResourceVersion        uint32                           `json:"terminal_resource_version,omitempty"`
+	StatementLastInsertID          uint64                           `json:"statement_last_insert_id,omitempty"`
+	StatementLastInsertIDGenerated bool                             `json:"statement_last_insert_id_generated,omitempty"`
+	WarningCount                   uint64                           `json:"warning_count,omitempty"`
+	WarningDiagnostics             []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
+	Delta                          resource.Delta                   `json:"resource_delta"`
+	Memory                         resource.MemoryTotals            `json:"memory"`
+	Allocation                     resource.AllocationAccountTotals `json:"allocation_account"`
+	MissingFragmentCount           uint64                           `json:"missing_fragment_count,omitempty"`
+	MissingMemoryDomainCount       uint64                           `json:"missing_memory_domain_count,omitempty"`
+	PendingAllocationGroups        []remoteAllocationGroupPending   `json:"pending_allocation_groups,omitempty"`
+	CompletedAllocationGroups      []string                         `json:"completed_allocation_groups,omitempty"`
 }
 
 type remoteAllocationGroupPending struct {

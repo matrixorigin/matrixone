@@ -949,11 +949,11 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
+	if sender.proc != nil && envelope.StatementLastInsertIDGenerated {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
-		// A non-zero value in this envelope can only come from the remote
-		// auto-increment path. Preserve its generated-row provenance locally so
-		// response arbitration does not mistake it for an expression value.
+		// The explicit bit is the provenance contract. A numeric value alone is
+		// insufficient because an allocator candidate can be non-zero without a
+		// committed INSERT, and a valid generated value can be zero.
 		sender.proc.MarkStatementLastInsertIDGenerated()
 	}
 	if len(envelope.LocalScope) > 0 {

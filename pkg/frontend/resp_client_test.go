@@ -99,7 +99,7 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 		StatementLastInsertID: new(uint64),
 	}}
 	proc.SetLastInsertID(7)
-	proc.SetStatementLastInsertID(0)
+	proc.SetStatementLastInsertID(7)
 	proc.MarkStatementLastInsertIDGenerated()
 	proc.InitSeq()
 	writer := &countingMysqlWriter{
@@ -116,8 +116,9 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 
 	require.NoError(t, resper.respStatus(ses, execCtx))
 	require.Len(t, writer.responses, 1)
-	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(7), writer.responses[0].lastInsertId)
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
+	require.Equal(t, uint64(7), proc.GetLastInsertID())
 
 	proc.SetStatementLastInsertID(11)
 	proc.MarkStatementLastInsertIDGenerated()
@@ -126,6 +127,9 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	require.Len(t, writer.responses, 2)
 	require.Equal(t, uint64(11), writer.responses[1].lastInsertId)
 	require.Equal(t, uint64(11), ses.GetLastInsertID())
+	// The next statement in the same COM_QUERY must observe the committed
+	// generated key through Process as well as Session.
+	require.Equal(t, uint64(11), proc.GetLastInsertID())
 }
 
 func TestRespStatusUpdateUsesExprAndODKUNoOpCanPublishZero(t *testing.T) {

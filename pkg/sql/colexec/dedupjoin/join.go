@@ -590,8 +590,6 @@ func (ctr *container) appendBuildSelectionRow(
 	proc *process.Process,
 ) error {
 	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-	generated := false
-	var generatedValue uint64
 	for j, rp := range ap.Result {
 		if rp.Rel == 1 {
 			if err := dst.Vecs[j].UnionOne(
@@ -601,27 +599,48 @@ func (ctr *container) appendBuildSelectionRow(
 		} else if err := dst.Vecs[j].UnionNull(proc.Mp()); err != nil {
 			return err
 		}
-		if int32(j) == ap.AutoIncrementGeneratedResultPos && rp.Rel == 1 {
-			generated = !ctr.batches[idx1].Vecs[rp.Pos].IsNull(uint64(idx2)) &&
-				vector.MustFixedColNoTypeCheck[bool](ctr.batches[idx1].Vecs[rp.Pos])[idx2]
-		}
-		if int32(j) == ap.AutoIncrementGeneratedValueResultPos && rp.Rel == 1 &&
-			!ctr.batches[idx1].Vecs[rp.Pos].IsNull(uint64(idx2)) {
-			generatedValue = autoIncrementGeneratedValue(ctr.batches[idx1].Vecs[rp.Pos], int(idx2))
-		}
 	}
 	dst.AddRowCount(1)
-	if generated {
-		// This callback is reached only for an unmatched build group, after
-		// duplicate-key arbitration. A matched ODKU action uses probe/finalize
-		// action rows and cannot publish the PRE_INSERT candidate.
-		if ap.AutoIncrementGeneratedValueResultPos >= 0 {
-			proc.MarkStatementLastInsertIDGeneratedWithValue(generatedValue)
-		} else {
-			proc.MarkStatementLastInsertIDGenerated()
+	ctr.markGeneratedBuildRow(ap, sel, proc)
+	return nil
+}
+
+// markGeneratedBuildRow is called only for a build row that survived duplicate
+// arbitration as a new insert. The marker is separate from the allocator value:
+// PRE_INSERT may have filled a candidate for a row that later becomes an UPDATE.
+func (ctr *container) markGeneratedBuildRow(ap *DedupJoin, sel int32, proc *process.Process) {
+	if ap.AutoIncrementGeneratedResultPos < 0 || proc == nil || sel < 0 {
+		return
+	}
+	markerPos := int(ap.AutoIncrementGeneratedResultPos)
+	if markerPos >= len(ap.Result) {
+		return
+	}
+	marker := ap.Result[markerPos]
+	if marker.Rel != 1 {
+		return
+	}
+	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+	if int(idx1) >= len(ctr.batches) || ctr.batches[idx1] == nil || marker.Pos < 0 || int(marker.Pos) >= len(ctr.batches[idx1].Vecs) {
+		return
+	}
+	markerVec := ctr.batches[idx1].Vecs[marker.Pos]
+	if markerVec == nil || markerVec.IsNull(uint64(idx2)) ||
+		!vector.MustFixedColNoTypeCheck[bool](markerVec)[idx2] {
+		return
+	}
+	if valuePos := int(ap.AutoIncrementGeneratedValueResultPos); valuePos >= 0 && valuePos < len(ap.Result) {
+		value := ap.Result[valuePos]
+		if value.Rel == 1 && value.Pos >= 0 && int(value.Pos) < len(ctr.batches[idx1].Vecs) {
+			valueVec := ctr.batches[idx1].Vecs[value.Pos]
+			if valueVec != nil && !valueVec.IsNull(uint64(idx2)) {
+				proc.MarkStatementLastInsertIDGeneratedWithValue(
+					autoIncrementGeneratedValue(valueVec, int(idx2)))
+				return
+			}
 		}
 	}
-	return nil
+	proc.MarkStatementLastInsertIDGenerated()
 }
 
 func autoIncrementGeneratedValue(vec *vector.Vector, row int) uint64 {
@@ -729,6 +748,7 @@ func (ctr *container) finalizeODKUActionRows(
 			ctr.finalizeActionIdx = 1
 			ctr.finalizeLogicalAffect = 1
 			ctr.finalizeActionActive = true
+			ctr.markGeneratedBuildRow(ap, sels[0], proc)
 			if err := ctr.appendFinalizeActionRow(
 				ap, ctr.rbat, 0, false, false,
 				ctr.allForeignKeysEligible(ap.ForeignKeyChecks), proc); err != nil {
@@ -1105,6 +1125,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					}
 				}
 			}
+			for _, sel := range sels[fillCnt : fillCnt+batSize] {
+				ctr.markGeneratedBuildRow(ap, sel, proc)
+			}
 			ap.ctr.buf[batIdx].SetRowCount(batSize)
 			fillCnt += batSize
 			batIdx++
@@ -1216,6 +1239,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				}
+				ctr.markGeneratedBuildRow(ap, sels[0], proc)
 			} else {
 				var logicalAffectedRows uint64 = 1 // the first row is an INSERT
 				err := colexec.SetJoinBatchValues(ctr.joinBat1, ctr.batches[idx1], int64(idx2), 1, ctr.cfs1)
@@ -1263,6 +1287,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				if err != nil {
 					return err
 				}
+				ctr.markGeneratedBuildRow(ap, sels[0], proc)
 			}
 			ap.ctr.buf[batIdx].AddRowCount(1)
 			rowIdx++

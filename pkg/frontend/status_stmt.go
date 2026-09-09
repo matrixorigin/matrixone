@@ -418,6 +418,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.HasStatementLastInsertIDGenerated() {
 				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
+				execCtx.proc.SetLastInsertID(res.lastInsertId)
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
@@ -428,6 +429,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.HasStatementLastInsertIDGenerated() {
 				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
+				execCtx.proc.SetLastInsertID(res.lastInsertId)
 			}
 		case *tree.MultiInsert:
 			// A multi-table INSERT has one PRE_INSERT per target, each publishing
@@ -444,6 +446,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
+				execCtx.proc.SetLastInsertID(res.lastInsertId)
 			} else {
 				// Declining to report the ambiguous value is not enough. The
 				// targets' PRE_INSERTs published through
@@ -479,6 +482,9 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		}
 
+		if generatedPublished {
+			execCtx.proc.GetSessionInfo().LastInsertID = res.lastInsertId
+		}
 		applyLastInsertIDExprResponse(ses, execCtx, res, generatedPublished)
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			if isIssue3482 {

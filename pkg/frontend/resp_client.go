@@ -145,6 +145,7 @@ func publishLastInsertIDExprState(ses *Session, execCtx *ExecCtx, value uint64) 
 	}
 	ses.SetLastInsertID(value)
 	execCtx.proc.SetLastInsertID(value)
+	execCtx.proc.GetSessionInfo().LastInsertID = value
 }
 
 func publishLastInsertIDExprBeforeResponse(ses *Session, execCtx *ExecCtx) {

@@ -441,6 +441,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				receiver.statementLastInsertIDGenerated = runCompile.proc.HasStatementLastInsertIDGenerated()
 				runCompile.clear()
 				return nil
 			}))
@@ -842,6 +843,7 @@ type messageReceiverOnServer struct {
 	warningCount                      uint64
 	warningDiagnostics                []remoteWarningDiagnostic
 	statementLastInsertID             uint64
+	statementLastInsertIDGenerated    bool
 }
 
 func newMessageReceiverOnServer(
@@ -1257,16 +1259,17 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
-		TerminalResourceVersion:   remoteTerminalResourceVersion,
-		StatementLastInsertID:     receiver.statementLastInsertID,
-		WarningCount:              receiver.warningCount,
-		Delta:                     receiver.resourceDelta,
-		Memory:                    receiver.resourceMemory,
-		Allocation:                receiver.resourceAllocation,
-		MissingFragmentCount:      receiver.resourceMissingFragments,
-		MissingMemoryDomainCount:  receiver.resourceMissingMemoryDomains,
-		PendingAllocationGroups:   receiver.resourcePendingAllocationGroups,
-		CompletedAllocationGroups: receiver.resourceCompletedAllocationGroups,
+		TerminalResourceVersion:        remoteTerminalResourceVersion,
+		StatementLastInsertID:          receiver.statementLastInsertID,
+		StatementLastInsertIDGenerated: receiver.statementLastInsertIDGenerated,
+		WarningCount:                   receiver.warningCount,
+		Delta:                          receiver.resourceDelta,
+		Memory:                         receiver.resourceMemory,
+		Allocation:                     receiver.resourceAllocation,
+		MissingFragmentCount:           receiver.resourceMissingFragments,
+		MissingMemoryDomainCount:       receiver.resourceMissingMemoryDomains,
+		PendingAllocationGroups:        receiver.resourcePendingAllocationGroups,
+		CompletedAllocationGroups:      receiver.resourceCompletedAllocationGroups,
 	}
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan

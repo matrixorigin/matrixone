@@ -246,6 +246,29 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	proc.GetSessionInfo().Buf.Free()
 }
 
+func TestRetryGenerationKeepsCommittedLastInsertIDBaseline(t *testing.T) {
+	lastInsertID := uint64(41)
+	statementLastInsertID := uint64(0)
+	proc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          &lastInsertID,
+		StatementLastInsertID: &statementLastInsertID,
+		SessionInfo:           process.SessionInfo{LastInsertID: 73},
+	}}
+
+	proc.SetStatementLastInsertID(73)
+	proc.MarkStatementLastInsertIDGenerated()
+	proc.SetLastInsertID(73)
+
+	// This is the state after a successful setter has published its result.
+	// Starting the next retry generation must clear statement provenance while
+	// retaining the committed session baseline instead of restoring 41.
+	proc.ResetStatementLastInsertID()
+	proc.SetLastInsertID(proc.GetSessionInfo().LastInsertID)
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
+	require.Zero(t, proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(73), proc.GetLastInsertID())
+}
+
 func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)

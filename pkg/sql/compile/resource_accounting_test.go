@@ -360,8 +360,9 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 			Version:    "1.0",
 			LocalScope: []models.PhyScope{{Magic: "Merge"}},
 		},
-		TerminalResourceVersion: remoteTerminalResourceVersion,
-		StatementLastInsertID:   17,
+		TerminalResourceVersion:        remoteTerminalResourceVersion,
+		StatementLastInsertID:          17,
+		StatementLastInsertIDGenerated: true,
 		Delta: resource.Delta{
 			Usage:   resource.Usage{ExclusiveActiveNS: 11, S3ReadBytes: 12},
 			Quality: resource.QualityPartial,
@@ -407,6 +408,19 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
 	require.Len(t, anal.remotePhyPlans, 1)
 	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
+
+	// A numeric terminal value without the explicit provenance bit is not
+	// sufficient to mark a generated row on a rolling-upgrade boundary.
+	legacyProc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+	}}
+	legacySender := &messageSenderOnClient{proc: legacyProc}
+	legacyData, err := json.Marshal(remoteTerminalEnvelope{StatementLastInsertID: 23})
+	require.NoError(t, err)
+	require.NoError(t, legacySender.dealRemoteTerminal(legacyData))
+	require.Zero(t, legacyProc.GetStatementLastInsertID())
+	require.False(t, legacyProc.HasStatementLastInsertIDGenerated())
 
 	// A pre-resource client decodes the same payload as a non-empty PhyPlan.
 	var legacyClientPlan models.PhyPlan
