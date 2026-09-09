@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -982,7 +983,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
 		buildSpec.UseMembershipFilter = true
-		buildSpec.MustApply = vecCtx.hasMembership
+		requiredDomain := vecCtx.hasMembership || candidateNodeID == tableFuncNodeID
+		buildSpec.MustApply = requiredDomain
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
@@ -998,12 +1000,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
 		probeSpec.UseMembershipFilter = true
-		probeSpec.MustApply = vecCtx.hasMembership
+		probeSpec.MustApply = requiredDomain
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		// Runtime-filter messages only travel within one CN message board. Keep
-		// this outer join tree on the current CN; the background entries query can
-		// still distribute the serialized membership payload across CNs.
+		// Required membership is sealed on this CN before any entry reader opens.
+		// Local DOP does not authorize distributing the domain to another CN.
 		tableFuncNode.Stats.ForceOneCN = true
+		if !asyncIndex && candidateNodeID == tableFuncNodeID && requiredDomain &&
+			bucketExpandStep == 0 && firstRoundLimitExpr == nil &&
+			types.T(ivfCtx.pkType.Id).IsInteger() && builder.optimizerHints != nil && builder.optimizerHints.vectorLocalDOP == 1 {
+			work, workErr := builder.estimateIvfScanWork(scanNode.ObjRef, scanNode.ScanSnapshot,
+				ivfCtx.entriesDef.IndexTableName, ivfCtx.totalLists, ivfCtx.nProbe)
+			if workErr != nil {
+				return nodeID, workErr
+			}
+			tableFuncNode.VectorIndexScan.ScanWork = work
+		}
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
 		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
