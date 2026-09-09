@@ -3514,6 +3514,7 @@ prepareable_stmt:
     }
 |   perform_stmt
 |   analyze_stmt
+|   branch_stmt
 |   select_stmt
     {
         $$ = $1
