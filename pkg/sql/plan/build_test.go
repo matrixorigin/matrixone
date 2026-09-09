@@ -133,6 +133,82 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
+func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		paramCount int
+	}{
+		{
+			name: "create table",
+			sql:  "prepare stmt from 'data branch create table branch from base'",
+		},
+		{
+			name: "create database",
+			sql:  "prepare stmt from 'data branch create database branch_db from base_db'",
+		},
+		{
+			name: "diff",
+			sql:  "prepare stmt from 'data branch diff branch against base output count'",
+		},
+		{
+			name: "merge",
+			sql:  "prepare stmt from 'data branch merge branch into base when conflict accept'",
+		},
+		{
+			name:       "pick values parameter",
+			sql:        "prepare stmt from 'data branch pick branch into base keys(?) when conflict accept'",
+			paramCount: 1,
+		},
+		{
+			name:       "pick composite values parameters",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((?, ?)) when conflict accept'",
+			paramCount: 2,
+		},
+		{
+			name:       "pick composite values mixed literal parameter",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((1, ?)) when conflict accept'",
+			paramCount: 1,
+		},
+		{
+			name:       "pick multiple composite values parameters",
+			sql:        "prepare stmt from 'data branch pick branch into base keys((?, ?), (?, ?)) when conflict accept'",
+			paramCount: 4,
+		},
+		{
+			name: "pick subquery question mark string literal",
+			sql:  "prepare stmt from 'data branch pick branch into base keys(select ''?'' from branch) when conflict accept'",
+		},
+		{
+			name: "delete table",
+			sql:  "prepare stmt from 'data branch delete table branch'",
+		},
+		{
+			name: "delete database",
+			sql:  "prepare stmt from 'data branch delete database branch_db'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false), t, tt.sql)
+			require.NoError(t, err)
+			prepare := p.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.NotNil(t, prepare.GetPlan())
+			require.Nil(t, prepare.GetPlan().GetQuery())
+			require.Nil(t, prepare.GetPlan().GetDdl())
+			require.Equal(t, tt.paramCount, len(prepare.GetParamTypes()))
+		})
+	}
+}
+
+func TestPrepareDataBranchRejectsSubqueryParameters(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt from 'data branch pick branch into base keys(select id from branch where id = ?) when conflict accept'")
+	require.ErrorContains(t, err, "prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+}
+
 func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t,
