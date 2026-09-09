@@ -24,12 +24,12 @@ from control_values order by id;
 1  ¦  7  𝄀
 2  ¦  7  𝄀
 3  ¦  7
-select id, python_bvt_add_pair(value, id) as pair_sum
+select id, python_bvt_add_pair(value, case when id = 3 then null else id end) as pair_sum
 from control_values order by id;
 ➤ id[4,32,0]  ¦  pair_sum[4,32,0]  𝄀
 1  ¦  2  𝄀
 2  ¦  4  𝄀
-3  ¦  6
+3  ¦  null
 select id,
 case when value < 0 then python_bvt_must_not_run(value)
 else 99 end as guarded
