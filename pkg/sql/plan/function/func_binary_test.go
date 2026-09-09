@@ -3994,6 +3994,65 @@ func TestFormat2Or3(t *testing.T) {
 	}
 }
 
+func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decType := types.New(types.T_decimal64, 6, 2)
+	decimalCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decType,
+				[]types.Decimal64{125, ^types.Decimal64(124), 135},
+				[]bool{false, false, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1.3", "-1.3", "1.4"}, []bool{false, false, false}),
+		FormatWith2NumericArgs,
+	)
+	ok, detail := decimalCase.Run()
+	require.True(t, ok, detail)
+
+	floatCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1.25, -1.25, 2.5}, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "1", "0"}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1.2", "-1.2", "2"}, []bool{false, false, false}),
+		FormatWith2NumericArgs,
+	)
+	ok, detail = floatCase.Run()
+	require.True(t, ok, detail)
+
+	float32Case := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{1.15}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1.1"}, []bool{false}),
+		FormatWith2NumericArgs,
+	)
+	ok, detail = float32Case.Run()
+	require.True(t, ok, detail)
+
+	uintCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{math.MaxUint64}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"18,446,744,073,709,551,615"}, []bool{false}),
+		FormatWith2NumericArgs,
+	)
+	ok, detail = uintCase.Run()
+	require.True(t, ok, detail)
+}
+
 func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
 	d2, _ := types.ParseDatetime("2016-01-01 00:00:00", 6)

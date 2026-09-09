@@ -33,7 +33,7 @@ func TestFormatNormalizesNumericPrefixesAndRoundsSafely(t *testing.T) {
 		{name: "leading zeroes", number: "000123.4500", scale: "2", want: "123.45"},
 		{name: "round zero decimals", number: "1.5", scale: "0", want: "2"},
 		{name: "round negative zero decimals", number: "-1.5", scale: "0", want: "-2"},
-		{name: "round negative fraction", number: "-1.25", scale: "1", want: "-1.3"},
+		{name: "round negative fraction approximate", number: "-1.25", scale: "1", want: "-1.2"},
 		{name: "scale whitespace", number: "1.2", scale: " 2", want: "1.20"},
 		{name: "scale plus", number: "1.2", scale: "+2", want: "1.20"},
 		{name: "empty scale", number: "1.2", scale: "", want: "1"},
@@ -49,12 +49,42 @@ func TestFormatNormalizesNumericPrefixesAndRoundsSafely(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+
+	got, err := formatENUSWithMode("-1.25", "1", formatRoundHalfUp)
+	require.NoError(t, err)
+	require.Equal(t, "-1.3", got)
+	for _, tc := range []struct {
+		number string
+		scale  string
+		want   string
+	}{
+		{number: "1.25", scale: "1", want: "1.2"},
+		{number: "1.35", scale: "1", want: "1.4"},
+		{number: "2.5", scale: "0", want: "2"},
+	} {
+		got, err := formatENUS(tc.number, tc.scale)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
+	for _, tc := range []struct {
+		number string
+		want   string
+	}{
+		{number: "0.545", want: "0.55"},
+		{number: "1.015", want: "1.01"},
+		{number: "-0.545", want: "-0.55"},
+		{number: "-1.015", want: "-1.01"},
+	} {
+		got, err := GetNumberFormat(tc.number, "2", "en_US")
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
 }
 
 func TestFormatCapsScaleAndHandlesScientificOverflow(t *testing.T) {
 	got, err := formatENUS("1.5", "100")
 	require.NoError(t, err)
-	require.Equal(t, "1.5"+strings.Repeat("0", maxFormatDecimals-1), got)
+	require.Equal(t, "1.500000000000000200000000000000", got)
 
 	got, err = formatENUS("1e309", "2")
 	require.NoError(t, err)
@@ -73,6 +103,36 @@ func TestFormatLocaleLookupIsCaseInsensitiveAndUsesIndianGrouping(t *testing.T) 
 		require.NoError(t, err)
 		require.Equal(t, "12,34,56,789.12", got)
 	}
+}
+
+func TestApproximateFormatConvertsThroughFloat64(t *testing.T) {
+	tests := []struct {
+		name   string
+		number string
+		scale  string
+		want   string
+	}{
+		{name: "binary tie from long decimal", number: "1.25000000000000001", scale: "1", want: "1.2"},
+		{name: "integer beyond float precision", number: "9007199254740993", scale: "0", want: "9,007,199,254,740,992"},
+		{name: "double rounding", number: "2.675", scale: "2", want: "2.68"},
+		{name: "binary scale up", number: "0.545", scale: "2", want: "0.55"},
+		{name: "binary scale down", number: "1.015", scale: "2", want: "1.01"},
+		{name: "subnormal scale up", number: "0.00000000000000009", scale: "16", want: "0.0000000000000001"},
+		{name: "negative subnormal scale up", number: "-0.00000000000000009", scale: "16", want: "-0.0000000000000001"},
+		{name: "post-division double at high scale", number: "1.5", scale: "30", want: "1.500000000000000200000000000000"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := GetNumberFormat(tc.number, tc.scale, "en_US")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	plain, err := GetNumberFormat(strings.Repeat("9", 400), "2", "en_US")
+	require.NoError(t, err)
+	scientific, err := GetNumberFormat("1e309", "2", "en_US")
+	require.NoError(t, err)
+	require.Equal(t, scientific, plain)
 }
 
 func TestForamtENUS(t *testing.T) {
