@@ -466,6 +466,9 @@ func TestCoverage_SystemSchemas_Init(t *testing.T) {
 	assert.NotNil(t, SystemTableSchema)
 	assert.NotNil(t, SystemColumnSchema)
 	assert.NotNil(t, SystemIndexTableSchema)
+	primaryColIdx := SystemIndexTableSchema.GetColIdx(pkgcatalog.IndexTablePrimaryColName)
+	require.NotEqual(t, -1, primaryColIdx)
+	assert.Equal(t, pkgcatalog.MoTablesTypes[pkgcatalog.MO_TABLES_CPKEY_IDX], SystemIndexTableSchema.ColDefs[primaryColIdx].Type)
 }
 
 func TestCoverage_Constants(t *testing.T) {
