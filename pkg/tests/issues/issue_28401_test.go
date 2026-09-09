@@ -74,7 +74,7 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"a,b", "c,d"}, got)
 
-		require.NoError(t, execIssue28401(ctx, db, `prepare stmt from "select substring_index('a,b,c,d', ',', ?)"`))
+		require.NoError(t, execIssue28401(ctx, db, `prepare stmt from "select substring_index('a,b,c,d', ',', cast(? as decimal(4,1)))"`))
 		defer execIssue28401(ctx, db, "deallocate prepare stmt")
 		require.NoError(t, execIssue28401(ctx, db, "set @v = cast(1.5 as decimal(4,1))"))
 		var prepared string
