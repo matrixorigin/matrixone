@@ -1268,6 +1268,23 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
 }
 
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	snapshot := time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC)
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	opts.setNoFullStartTS(snapshot)
+	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
+
+	// An explicit StartTs remains the caller's activation boundary.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	opts.setNoFullStartTS(snapshot.Add(time.Hour))
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	noSnapshot.setNoFullStartTS(time.Time{})
+	require.Empty(t, noSnapshot.StartTs)
+}
+
 func TestRegisterCdcExecutor(t *testing.T) {
 	type args struct {
 		logger       *zap.Logger

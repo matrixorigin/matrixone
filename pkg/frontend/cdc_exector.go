@@ -3013,7 +3013,9 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark := exec.startTs
-	if exec.noFull {
+	// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the
+	// fallback for legacy task rows that have no durable start watermark.
+	if exec.noFull && watermark.IsEmpty() {
 		watermark = types.TimestampToTS(txnOp.SnapshotTS())
 	}
 	watermarkKey := cdc.WatermarkKey{
