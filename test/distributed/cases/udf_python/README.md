@@ -26,3 +26,22 @@ cd /path/to/mo-tester
 The ordinary launch manifest starts one worker for the single CN. Compose BVT
 starts one isolated worker service per CN from the same pinned image, so adding
 a SQL case here does not require another CI workflow.
+
+The cases keep the data sets small and target contract boundaries:
+
+- `control_flow.sql` checks NULL delivery, handler-produced NULL, multiple
+  arguments, zero-argument scalar calls, CASE selection, and empty input.
+- `numeric_boundaries.sql` checks signed and unsigned integer limits, floating
+  point values, booleans, decimal scale, and NULL.
+- `value_types.sql` checks empty and Unicode text, binary values, canonical JSON,
+  UUID round trips, and NULL.
+- `temporal_boundaries.sql` checks leap days, microseconds, TIME limits, SQL
+  zero-date values, and NULL.
+
+The shape follows established correctness coverage from
+[DuckDB's scalar UDF tests](https://github.com/duckdb/duckdb-go/blob/main/scalar_udf_test.go)
+(NULLs, multiple rows, multiple arguments, and errors) and
+[Apache Arrow's extension type tests](https://github.com/apache/arrow/blob/main/python/pyarrow/tests/test_extension_type.py)
+(null-aware arrays, fixed-size binary values, and type validation). The SQL
+cases adapt those ideas to MatrixOne's Python Arrow boundary rather than
+copying another project's implementation.
