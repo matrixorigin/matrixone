@@ -1198,30 +1198,6 @@ var supportedStringBuiltIns = []FuncNew{
 					return FormatWith3Args
 				},
 			},
-			{
-				overloadId: 2,
-				// formatCheck selects this overload only when the first
-				// argument is an integer/DECIMAL/bit/float vector. The
-				// dynamic first argument is intentional: its source type is
-				// part of FORMAT's rounding contract.
-				args: []types.T{types.T_any, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return FormatWith2NumericArgs
-				},
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_any, types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return FormatWith3NumericArgs
-				},
-			},
 		},
 	},
 

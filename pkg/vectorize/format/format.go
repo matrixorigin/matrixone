@@ -51,14 +51,6 @@ func GetNumberFormatExact(number, scale, locale string) (string, error) {
 
 type formatModeFunc func(string, string, formatRoundingMode) (string, error)
 
-// GetFormatFunctionWithLocate get the format function for sepcific locale.
-func getFormatFunctionWithLocale(locale string) FormatFunc {
-	formatFunc := getFormatFunctionWithLocaleMode(locale)
-	return func(number, scale string) (string, error) {
-		return formatFunc(number, scale, formatRoundHalfEven)
-	}
-}
-
 func getFormatFunctionWithLocaleMode(locale string) formatModeFunc {
 	formatFunc, exist := localeToFormatFunction[locale]
 	if exist {
@@ -253,26 +245,12 @@ func formatDECHWithMode(number, scale string, mode formatRoundingMode) (string, 
 	return format(number, scale, []byte{'\''}, []byte{'.'}, mode)
 }
 
-// format number like 20000000,0000
-func formatCAES(number string, scale string) (string, error) {
-	return formatCAESWithMode(number, scale, formatRoundHalfEven)
-}
-
 func formatCAESWithMode(number, scale string, mode formatRoundingMode) (string, error) {
 	return format(number, scale, []byte{}, []byte{','}, mode)
 }
 
-// format number like 20'000'000.0000
-func formatITCH(number string, scale string) (string, error) {
-	return formatITCHWithMode(number, scale, formatRoundHalfEven)
-}
-
 func formatITCHWithMode(number, scale string, mode formatRoundingMode) (string, error) {
 	return format(number, scale, []byte{'\''}, []byte{','}, mode)
-}
-
-func formatIndian(number string, scale string) (string, error) {
-	return formatIndianWithMode(number, scale, formatRoundHalfEven)
 }
 
 func formatIndianWithMode(number, scale string, mode formatRoundingMode) (string, error) {

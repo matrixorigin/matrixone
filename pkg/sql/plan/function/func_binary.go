@@ -6303,8 +6303,8 @@ func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	// existing approximate (ties-to-even) path. Do not infer this from the
 	// rendered text: scientific notation is syntax, not a type contract.
 	if inputs[0].IsNumeric() {
-		overloadID := len(inputs)
-		if overloadID >= len(overloads) {
+		overloadID := len(inputs) - 2
+		if overloadID < 0 || overloadID >= len(overloads) {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		targets := append([]types.Type(nil), inputs...)
@@ -6331,6 +6331,10 @@ func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, false)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6355,13 +6359,6 @@ func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 	}
 	return nil
-}
-
-// FormatWith2NumericArgs preserves the source domain of FORMAT's first
-// argument. The planner selects this overload for integer/DECIMAL/bit/float
-// inputs and casts only the control argument (scale) to VARCHAR when needed.
-func FormatWith2NumericArgs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	return formatWithNumericFirst(ivecs, result, length, false)
 }
 
 // GetFormat returns a format string based on the type and locale.
@@ -6461,6 +6458,10 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 }
 
 func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, true)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6492,12 +6493,6 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 	}
 	return nil
-}
-
-// FormatWith3NumericArgs is the locale-aware counterpart of
-// FormatWith2NumericArgs.
-func FormatWith3NumericArgs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	return formatWithNumericFirst(ivecs, result, length, true)
 }
 
 func formatWithNumericFirst(

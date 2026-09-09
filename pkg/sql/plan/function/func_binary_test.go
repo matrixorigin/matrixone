@@ -4007,7 +4007,7 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"1.3", "-1.3", "1.4"}, []bool{false, false, false}),
-		FormatWith2NumericArgs,
+		FormatWith2Args,
 	)
 	ok, detail := decimalCase.Run()
 	require.True(t, ok, detail)
@@ -4021,7 +4021,7 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"1.2", "-1.2", "2"}, []bool{false, false, false}),
-		FormatWith2NumericArgs,
+		FormatWith2Args,
 	)
 	ok, detail = floatCase.Run()
 	require.True(t, ok, detail)
@@ -4033,7 +4033,7 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1"}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1.1"}, []bool{false}),
-		FormatWith2NumericArgs,
+		FormatWith2Args,
 	)
 	ok, detail = float32Case.Run()
 	require.True(t, ok, detail)
@@ -4047,10 +4047,117 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"18,446,744,073,709,551,615"}, []bool{false}),
-		FormatWith2NumericArgs,
+		FormatWith2Args,
 	)
 	ok, detail = uintCase.Run()
 	require.True(t, ok, detail)
+
+	decimal128, err := types.ParseDecimal128("123.00", 20, 2)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("456.00", 40, 2)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values any
+		want   []string
+		nulls  []bool
+	}{
+		{name: "bit", typ: types.T_bit.ToType(), values: []uint64{7}, want: []string{"7"}, nulls: []bool{false}},
+		{name: "int8", typ: types.T_int8.ToType(), values: []int8{-8}, want: []string{"-8"}, nulls: []bool{false}},
+		{name: "int16", typ: types.T_int16.ToType(), values: []int16{16}, want: []string{"16"}, nulls: []bool{false}},
+		{name: "int32", typ: types.T_int32.ToType(), values: []int32{32000}, want: []string{"32,000"}, nulls: []bool{false}},
+		{name: "uint8", typ: types.T_uint8.ToType(), values: []uint8{255}, want: []string{"255"}, nulls: []bool{false}},
+		{name: "uint16", typ: types.T_uint16.ToType(), values: []uint16{65535}, want: []string{"65,535"}, nulls: []bool{false}},
+		{name: "uint32", typ: types.T_uint32.ToType(), values: []uint32{4000000000}, want: []string{"4,000,000,000"}, nulls: []bool{false}},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 20, 2), values: []types.Decimal128{decimal128}, want: []string{"123"}, nulls: []bool{false}},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 40, 2), values: []types.Decimal256{decimal256}, want: []string{"456"}, nulls: []bool{false}},
+		{name: "null", typ: types.T_int64.ToType(), values: []int64{0}, want: []string{""}, nulls: []bool{true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.typ, tc.values, tc.nulls),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.nulls),
+				FormatWith2Args,
+			)
+			ok, detail := caseTest.Run()
+			require.True(t, ok, detail)
+		})
+	}
+}
+
+func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
+	fn := allSupportedFunctions[FORMAT]
+	require.NotNil(t, fn.checkFn)
+
+	result := fn.checkFn(fn.Overloads, []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, 0, result.idx)
+
+	result = fn.checkFn(fn.Overloads, []types.Type{
+		types.T_decimal64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 0, result.idx)
+	require.Equal(t, types.T_decimal64, result.finalType[0].Oid)
+	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
+
+	result = fn.checkFn(fn.Overloads, []types.Type{
+		types.T_float64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, 1, result.idx)
+
+	result = fn.checkFn(fn.Overloads, []types.Type{
+		types.T_float64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx)
+	require.Len(t, result.finalType, 3)
+	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
+	require.Equal(t, types.T_varchar, result.finalType[2].Oid)
+
+	result = fn.checkFn(fn.Overloads, []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, 0, result.idx)
+
+	resolved, ok := GetFunctionByNameWithoutError("format", []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.True(t, ok)
+	require.Equal(t, int32(0), resolved.overloadId)
+	resolved, ok = GetFunctionByNameWithoutError("format", []types.Type{
+		types.T_float64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.True(t, ok)
+	require.Equal(t, int32(1), resolved.overloadId)
+
+	for _, inputs := range [][]types.Type{
+		{types.T_date.ToType(), types.T_varchar.ToType()},
+		{types.T_int64.ToType()},
+		{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+	} {
+		result = fn.checkFn(fn.Overloads, inputs)
+		require.Equal(t, failedFunctionParametersWrong, result.status, inputs)
+	}
 }
 
 func initFromUnixTimeTestCase(t *testing.T) []tcTemp {

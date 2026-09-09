@@ -103,6 +103,53 @@ func TestFormatLocaleLookupIsCaseInsensitiveAndUsesIndianGrouping(t *testing.T) 
 		require.NoError(t, err)
 		require.Equal(t, "12,34,56,789.12", got)
 	}
+	for _, tc := range []struct {
+		locale string
+		want   string
+	}{
+		{locale: "fr_FR", want: "1234,56"},
+		{locale: "IT_ch", want: "1'234,56"},
+	} {
+		got, err := GetNumberFormat("1234.56", "2", tc.locale)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
+}
+
+func TestExactFormatHandlesScientificAndRoundingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		number string
+		scale  string
+		want   string
+	}{
+		{number: "not-a-number", scale: "2", want: "0.00"},
+		{number: "1.25e1", scale: "1", want: "12.5"},
+		{number: "1e-400", scale: "2", want: "0.00"},
+	} {
+		got, err := GetNumberFormatExact(tc.number, tc.scale, "en_US")
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
+
+	positiveOverflow, err := GetNumberFormatExact("1e309", "0", "en_US")
+	require.NoError(t, err)
+	require.Contains(t, positiveOverflow, "179,769,313")
+	negativeOverflow, err := GetNumberFormatExact("-1e309", "0", "en_US")
+	require.NoError(t, err)
+	require.Contains(t, negativeOverflow, "-179,769,313")
+
+	for _, tc := range []struct {
+		number string
+		want   string
+	}{
+		{number: "1.25", want: "1.2"},
+		{number: "1.35", want: "1.4"},
+		{number: "1.251", want: "1.3"},
+	} {
+		got, err := formatENUSWithMode(tc.number, "1", formatRoundHalfEven)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
 }
 
 func TestApproximateFormatConvertsThroughFloat64(t *testing.T) {
