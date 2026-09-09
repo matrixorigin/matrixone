@@ -248,18 +248,18 @@ func (tx *SidecarTxn) Put(key []byte, locator RowLocator) error {
 	if err := ValidateEncoded(key); err != nil {
 		return err
 	}
+	if locator.RelationID != tx.store.relationID {
+		return ErrSidecarRelation
+	}
+	if _, err := EncodeLocator(nil, locator); err != nil {
+		return err
+	}
 	if hasNull, err := HasNullPart(key); err != nil {
 		return err
 	} else if hasNull {
 		// The base row still carries the original NULL value, but no sidecar
 		// mapping is needed (or allowed) for a NULL-bearing UNIQUE identity.
 		return nil
-	}
-	if locator.RelationID != tx.store.relationID {
-		return ErrSidecarRelation
-	}
-	if _, err := EncodeLocator(nil, locator); err != nil {
-		return err
 	}
 	name := string(key)
 	tx.touch(name)
