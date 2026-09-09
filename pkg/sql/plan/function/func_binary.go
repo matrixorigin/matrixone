@@ -5805,22 +5805,33 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
-func makeSetDecimalToBits(s string) uint64 {
-	s = strings.TrimSpace(s)
-	scale := strings.IndexByte(s, '.')
-	fracDigits := 0
-	if scale >= 0 {
-		fracDigits = len(s) - scale - 1
-		s = s[:scale] + s[scale+1:]
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+// DECIMAL64/128 scales are nonnegative and bounded by their precision.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
 	}
-	v, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		return 0
+	// Retain the first fractional digit without rounding. Rounding each chunk
+	// of a scale greater than 19 would incorrectly round values below a half.
+	if scale > 1 {
+		value, _ = value.ScaleTruncate(1 - scale)
 	}
-	if fracDigits > 0 {
-		v.Quo(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(fracDigits)), nil))
+	if scale > 0 {
+		value, _ = value.Div128(types.Decimal128{B0_63: 10})
 	}
-	return uint64(v.Int64())
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if value.B64_127 != 0 || value.B0_63 > limit {
+		return limit
+	}
+	if negative {
+		return -value.B0_63
+	}
+	return value.B0_63
 }
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
@@ -5931,7 +5942,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(val.Format(scale)), false
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
 		}
 	case types.T_decimal128:
 		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
@@ -5941,7 +5952,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(val.Format(scale)), false
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
