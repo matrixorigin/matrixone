@@ -1089,3 +1089,22 @@ heartbeats do not advertise a new capability, and no planner, TN commit,
 catalog, migration, or management entry point consumes the field yet. The
 v2 admission fences remain enabled; a missing activation still means that
 production v2 is disabled rather than legacy data being reinterpreted.
+
+### 10.13 Replicated activation proposal boundary
+
+The HAKeeper RSM now reserves `SetUniqueKeyCodecActivationUpdate` as an
+internal replicated command whose payload is the typed activation record. A
+PREPARING record may be installed from the disabled state (or from an older
+ABORTED generation); an ENABLED record is accepted only when it matches the
+current PREPARING identity and every targeted CN/TN heartbeat has a matching
+non-zero incarnation plus both read and write capability. Enabled and aborted
+generations cannot be cleared by a stale disable command. The RSM returns
+deterministic pending/applied values and leaves state unchanged on a rejected
+transition.
+
+The capability wire record carries the node incarnation used for this exact
+target match. Current CN/TN services still publish no v2 capability, and no
+management client proposes this command, so the admission fences continue to
+prevent production enablement. This command closes only the durable proposal
+and capability-check boundary; it does not implement sidecar writes, query
+consumers, TN commit validation, migration, or administrator authorization.

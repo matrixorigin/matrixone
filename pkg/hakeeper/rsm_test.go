@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -623,6 +624,53 @@ func TestStateQueryPreservesUniqueKeyCodecActivation(t *testing.T) {
 	state.UniqueKeyCodecActivation.CnTargets["cn-1"] = 99
 	require.Equal(t, byte(1), rsm.state.UniqueKeyCodecActivation.RegistryDigest[0])
 	require.Equal(t, uint64(4), rsm.state.UniqueKeyCodecActivation.CnTargets["cn-1"])
+}
+
+func TestUniqueKeyCodecActivationUpdateRequiresTargetCapabilities(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	activation := pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   collationkey.RegistryDigest(),
+		Generation:       7,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+	result, err := rsm.Update(sm.Entry{Index: 10, Cmd: GetSetUniqueKeyCodecActivationCmd(activation)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.Equal(t, pb.PREPARING, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	enable := activation
+	enable.Phase = pb.ENABLED
+	result, err = rsm.Update(sm.Entry{Index: 11, Cmd: GetSetUniqueKeyCodecActivationCmd(enable)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Equal(t, pb.PREPARING, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	capability := func(incarnation uint64) *pb.UniqueKeyCodecCapability {
+		return &pb.UniqueKeyCodecCapability{
+			ReadableVersions:   uint32(1) << collationkey.CollationAwareVersion,
+			WritableVersions:   uint32(1) << collationkey.CollationAwareVersion,
+			RegistryVersion:    uint32(collationkey.RegistryVersion),
+			RegistryDigest:     collationkey.RegistryDigest(),
+			MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+			Incarnation:        incarnation,
+		}
+	}
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{UniqueKeyCodecCapability: capability(4)}
+	rsm.state.TNState.Stores["tn-1"] = pb.TNStoreInfo{UniqueKeyCodecCapability: capability(5)}
+	result, err = rsm.Update(sm.Entry{Index: 12, Cmd: GetSetUniqueKeyCodecActivationCmd(enable)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.Equal(t, pb.ENABLED, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	// An enabled generation cannot be erased or replaced by a stale disable.
+	result, err = rsm.Update(sm.Entry{Index: 13, Cmd: GetSetUniqueKeyCodecActivationCmd(pb.UniqueKeyCodecActivation{})})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Equal(t, pb.ENABLED, rsm.state.UniqueKeyCodecActivation.Phase)
 }
 
 func TestSetState(t *testing.T) {

@@ -275,6 +275,21 @@ func (c *UniqueKeyCodecCapability) ToCollationKeyCapability() collationkey.Capab
 	}
 }
 
+// ToCollationKeyAcknowledgement converts one heartbeat capability into the
+// generation-scoped acknowledgement consumed by the activation fence. The
+// node id is supplied by the enclosing store record; an absent capability or
+// zero incarnation remains explicitly unsupported.
+func (c *UniqueKeyCodecCapability) ToCollationKeyAcknowledgement(nodeID string) collationkey.NodeAcknowledgement {
+	if c == nil {
+		return collationkey.NodeAcknowledgement{NodeID: nodeID}
+	}
+	return collationkey.NodeAcknowledgement{
+		NodeID:      nodeID,
+		Incarnation: c.Incarnation,
+		Capability:  c.ToCollationKeyCapability(),
+	}
+}
+
 // ToCollationKeyActivation converts the replicated activation record while
 // preserving its fail-closed phase and target validation. The nil message is
 // the explicitly disabled state; a non-nil malformed record is returned as an

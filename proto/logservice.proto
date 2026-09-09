@@ -448,6 +448,9 @@ enum HAKeeperUpdateType {
   CompleteLogServiceRecoveryUpdate = 19;
   EnableCommandDeliveryUpdate = 20;
   EnableViewMetadataAdmissionUpdate = 21;
+  // Internal replicated fence for the versioned unique-key codec. The
+  // payload is a UniqueKeyCodecActivation and is never exposed as SQL.
+  SetUniqueKeyCodecActivationUpdate = 22;
 }
 
 // HAKeeperState state transition diagram
@@ -1008,6 +1011,9 @@ message UniqueKeyCodecCapability {
   uint32 registry_version = 3;
   bytes registry_digest = 4;
   uint32 max_encoded_key_bytes = 5;
+  // Incarnation changes whenever a CN/TN process is replaced. It is matched
+  // against the activation target map and is not part of the key codec.
+  uint64 incarnation = 6;
 }
 
 // UniqueKeyCodecActivation is the replicated cluster fence for enabling a

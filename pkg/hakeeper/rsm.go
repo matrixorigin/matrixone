@@ -18,6 +18,7 @@ Package hakeeper implements MO's hakeeper component.
 package hakeeper
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ import (
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/mohae/deepcopy"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -208,6 +210,58 @@ func getEnableCommandDeliveryCmd(targets *pb.CommandDeliveryTargets) []byte {
 	binaryEnc.PutUint32(cmd, uint32(pb.EnableCommandDeliveryUpdate))
 	copy(cmd[headerSize:], payload)
 	return cmd
+}
+
+// GetSetUniqueKeyCodecActivationCmd creates the internal replicated activation
+// fence entry. The payload is deliberately the typed wire record itself; no
+// SQL or public DDL path can manufacture this command. Callers proposing an
+// enabled generation must first obtain the target incarnations and let the RSM
+// verify the corresponding CN/TN capabilities at the commit point.
+func GetSetUniqueKeyCodecActivationCmd(activation pb.UniqueKeyCodecActivation) []byte {
+	payload, err := activation.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	cmd := make([]byte, headerSize+len(payload))
+	binaryEnc.PutUint32(cmd, uint32(pb.SetUniqueKeyCodecActivationUpdate))
+	copy(cmd[headerSize:], payload)
+	return cmd
+}
+
+func parseSetUniqueKeyCodecActivationCmd(cmd []byte) pb.UniqueKeyCodecActivation {
+	if parseCmdTag(cmd) != pb.SetUniqueKeyCodecActivationUpdate {
+		panic("not a unique-key codec activation update")
+	}
+	var activation pb.UniqueKeyCodecActivation
+	if len(cmd) > headerSize {
+		if err := activation.Unmarshal(cmd[headerSize:]); err != nil {
+			panic(err)
+		}
+	}
+	return activation
+}
+
+func sameUniqueKeyCodecActivationIdentity(left, right collationkey.Activation) bool {
+	if left.RequestedVersion != right.RequestedVersion ||
+		left.RegistryVersion != right.RegistryVersion ||
+		!bytes.Equal(left.RegistryDigest, right.RegistryDigest) ||
+		left.Generation != right.Generation {
+		return false
+	}
+	if len(left.CnTargets) != len(right.CnTargets) || len(left.TnTargets) != len(right.TnTargets) {
+		return false
+	}
+	for nodeID, incarnation := range left.CnTargets {
+		if right.CnTargets[nodeID] != incarnation {
+			return false
+		}
+	}
+	for nodeID, incarnation := range left.TnTargets {
+		if right.TnTargets[nodeID] != incarnation {
+			return false
+		}
+	}
+	return true
 }
 
 func parseEnableCommandDeliveryCmd(cmd []byte) (pb.CommandDeliveryTargets, bool) {
@@ -1208,6 +1262,96 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 	return sm.Result{Value: 1}
 }
 
+// uniqueKeyCodecAcknowledgements snapshots the node-scoped capability records
+// already replicated in HAKeeper. A missing capability or incarnation is
+// intentionally passed through as an unready acknowledgement; the activation
+// command must never infer readiness from store presence alone.
+func (s *stateMachine) uniqueKeyCodecAcknowledgements() ([]collationkey.NodeAcknowledgement, []collationkey.NodeAcknowledgement) {
+	cn := make([]collationkey.NodeAcknowledgement, 0, len(s.state.CNState.Stores))
+	for nodeID, store := range s.state.CNState.Stores {
+		cn = append(cn, store.UniqueKeyCodecCapability.ToCollationKeyAcknowledgement(nodeID))
+	}
+	tn := make([]collationkey.NodeAcknowledgement, 0, len(s.state.TNState.Stores))
+	for nodeID, store := range s.state.TNState.Stores {
+		tn = append(tn, store.UniqueKeyCodecCapability.ToCollationKeyAcknowledgement(nodeID))
+	}
+	return cn, tn
+}
+
+// handleSetUniqueKeyCodecActivation persists a generation-scoped activation
+// fence. It is deliberately stricter than a generic state setter: ENABLED is
+// accepted only for the exact PREPARING identity after every targeted CN/TN
+// has acknowledged matching read/write capability and incarnation. All
+// rejected transitions leave the previous durable state unchanged.
+func (s *stateMachine) handleSetUniqueKeyCodecActivation(cmd []byte) sm.Result {
+	wire := parseSetUniqueKeyCodecActivationCmd(cmd)
+	next, err := wire.ToCollationKeyActivation()
+	if err != nil {
+		panic(err)
+	}
+
+	current := collationkey.Activation{Phase: collationkey.ActivationDisabled}
+	if s.state.UniqueKeyCodecActivation != nil {
+		current, err = s.state.UniqueKeyCodecActivation.ToCollationKeyActivation()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	clone := func() *pb.UniqueKeyCodecActivation {
+		return proto.Clone(&wire).(*pb.UniqueKeyCodecActivation)
+	}
+	sameIdentity := func() bool {
+		return sameUniqueKeyCodecActivationIdentity(current, next)
+	}
+
+	switch next.Phase {
+	case collationkey.ActivationDisabled:
+		// Disabled is represented by an absent field. It is idempotent only
+		// before a generation has started; enabled/aborted generations cannot
+		// be erased by a retry or a stale management client.
+		if current.Phase != collationkey.ActivationDisabled {
+			return sm.Result{}
+		}
+		s.state.UniqueKeyCodecActivation = nil
+		return sm.Result{Value: 1}
+
+	case collationkey.ActivationPreparing:
+		if current.Phase == collationkey.ActivationDisabled ||
+			(current.Phase == collationkey.ActivationAborted && next.Generation > current.Generation) {
+			s.state.UniqueKeyCodecActivation = clone()
+			return sm.Result{Value: 2}
+		}
+		if current.Phase != collationkey.ActivationPreparing || !sameIdentity() {
+			return sm.Result{}
+		}
+		return sm.Result{Value: 2}
+
+	case collationkey.ActivationAborted:
+		if current.Phase != collationkey.ActivationPreparing || !sameIdentity() {
+			return sm.Result{}
+		}
+		s.state.UniqueKeyCodecActivation = clone()
+		return sm.Result{Value: 3}
+
+	case collationkey.ActivationEnabled:
+		if current.Phase != collationkey.ActivationPreparing || !sameIdentity() {
+			return sm.Result{}
+		}
+		cn, tn := s.uniqueKeyCodecAcknowledgements()
+		if _, err := current.Enable(cn, tn); err != nil {
+			return sm.Result{}
+		}
+		s.state.UniqueKeyCodecActivation = clone()
+		return sm.Result{Value: 1}
+
+	default:
+		// ToCollationKeyActivation validates the phase, so this is unreachable
+		// unless the common contract is changed without updating this switch.
+		panic("unknown unique-key codec activation phase")
+	}
+}
+
 // resetCommandDeliveryBarrier removes capability observations that may have
 // been recovered differently by replicas upgraded from old snapshots. New
 // heartbeats after the replicated barrier repopulate them deterministically.
@@ -1638,6 +1782,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleEnableCommandDelivery(cmd), nil
 	case pb.EnableViewMetadataAdmissionUpdate:
 		return s.handleEnableViewMetadataAdmission(cmd), nil
+	case pb.SetUniqueKeyCodecActivationUpdate:
+		return s.handleSetUniqueKeyCodecActivation(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
