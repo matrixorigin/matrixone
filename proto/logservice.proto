@@ -170,6 +170,7 @@ message CNStoreHeartbeat {
   // ViewMetadataIngressReady is published only after every public CN ingress
   // listener has started successfully. Admission alone is not routability.
   bool            ViewMetadataIngressReady = 24;
+  UniqueKeyCodecCapability unique_key_codec_capability = 25;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -250,6 +251,7 @@ message TNStoreHeartbeat {
   bool AutoIncrEpochFenceSupported = 12;
   uint64 AckedCommandBatchID = 13;
   bool CommandDeliveryAckSupported = 14;
+  UniqueKeyCodecCapability unique_key_codec_capability = 15;
 };
 
 message RSMState {
@@ -697,6 +699,7 @@ message CNStoreInfo {
   uint64 ViewMetadataRevalidatedEpoch = 24;
   bool ViewMetadataAdmissionReady = 25;
   bool ViewMetadataIngressReady = 26;
+  UniqueKeyCodecCapability unique_key_codec_capability = 27;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -729,6 +732,7 @@ message TNStoreInfo {
   // non-destructive acknowledged schedule-command protocol. It is copied
   // from TNStoreHeartbeat so HAKeeper can gate activation and admission.
   bool CommandDeliveryAckSupported = 13;
+  UniqueKeyCodecCapability unique_key_codec_capability = 14;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -843,6 +847,7 @@ message CheckerState {
   uint64 IDWatermarkRestoreGeneration = 16;
   bool LogServiceRecoveryPrepared = 17;
   bool LogServiceRecoveryCompleted = 18;
+  UniqueKeyCodecActivation unique_key_codec_activation = 19;
 }
 
 message DeletedStore {
@@ -988,4 +993,34 @@ message CheckHealth {
 message ScheduleCommandID {
   uint64 OriginBatchID = 1;
   uint64 CommandIndex  = 2;
+}
+
+// UniqueKeyCodecCapability is a node-level capability, distinct from the
+// relation-local UniqueKeyCodecVersion. Bit n in readable/writable_versions
+// means that codec version n is supported by this node.
+message UniqueKeyCodecCapability {
+  uint32 readable_versions = 1;
+  uint32 writable_versions = 2;
+  uint32 registry_version = 3;
+  bytes registry_digest = 4;
+  uint32 max_encoded_key_bytes = 5;
+}
+
+// UniqueKeyCodecActivation is the replicated cluster fence for enabling a
+// codec. It is persisted by the HAKeeper and acknowledged by CN/TN heartbeats.
+message UniqueKeyCodecActivation {
+  enum Phase {
+    DISABLED = 0;
+    PREPARING = 1;
+    ENABLED = 2;
+    ABORTED = 3;
+  }
+
+  uint32 requested_version = 1;
+  uint32 registry_version = 2;
+  bytes registry_digest = 3;
+  uint64 generation = 4;
+  Phase phase = 5;
+  map<string, uint64> cn_targets = 6;
+  map<string, uint64> tn_targets = 7;
 }

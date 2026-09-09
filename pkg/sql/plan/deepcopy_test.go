@@ -32,6 +32,20 @@ func TestDeepCopyTypePreservesPadSpace(t *testing.T) {
 	require.NotSame(t, source, cloned)
 }
 
+func TestDeepCopyTableDefCopiesUniqueKeyCodecMetadata(t *testing.T) {
+	version := &planpb.UniqueKeyCodecVersion{
+		Value:              2,
+		RegistryVersion:    1,
+		RegistryDigest:     []byte{9, 8, 7},
+		MaxEncodedKeyBytes: 1024,
+	}
+	cloned := DeepCopyTableDef(&planpb.TableDef{UniqueKeyCodecVersion: version}, true)
+	require.Equal(t, version, cloned.UniqueKeyCodecVersion)
+	require.NotSame(t, version, cloned.UniqueKeyCodecVersion)
+	cloned.UniqueKeyCodecVersion.RegistryDigest[0] = 1
+	require.Equal(t, byte(9), version.RegistryDigest[0])
+}
+
 func TestCloneTableDefForPlan(t *testing.T) {
 	require.Nil(t, CloneTableDefForPlan(nil, true))
 

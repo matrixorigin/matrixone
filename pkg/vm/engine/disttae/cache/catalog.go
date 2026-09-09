@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gogo/protobuf/proto"
 	"go.uber.org/zap"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1046,7 +1047,13 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
 		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
 		DefaultCharset: tblItem.ExtraInfo.GetDefaultCharset(),
-		Checks:         tblItem.ExtraInfo.GetChecks(),
-		LogicalId:      tblItem.LogicalId,
+		UniqueKeyCodecVersion: func() *plan.UniqueKeyCodecVersion {
+			if tblItem.ExtraInfo.GetUniqueKeyCodecVersion() == nil {
+				return nil
+			}
+			return proto.Clone(tblItem.ExtraInfo.GetUniqueKeyCodecVersion()).(*plan.UniqueKeyCodecVersion)
+		}(),
+		Checks:    tblItem.ExtraInfo.GetChecks(),
+		LogicalId: tblItem.LogicalId,
 	}, tableDef
 }
