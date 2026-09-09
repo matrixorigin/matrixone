@@ -17,6 +17,7 @@ create function python_bvt_double (x double) returns double language python as '
 create function python_bvt_bool (x bool) returns bool language python as 'def python_bvt_bool(ctx, x): return x' handler 'python_bvt_bool';
 create function python_bvt_decimal64 (x decimal(18,6)) returns decimal(18,6) language python as 'def python_bvt_decimal64(ctx, x): return x' handler 'python_bvt_decimal64';
 create function python_bvt_decimal128 (x decimal(38,10)) returns decimal(38,10) language python as 'def python_bvt_decimal128(ctx, x): return x' handler 'python_bvt_decimal128';
+create function python_bvt_decimal_rescale (x decimal(18,6)) returns decimal(18,6) language python as 'def python_bvt_decimal_rescale(ctx, x): return x' handler 'python_bvt_decimal_rescale';
 
 create table numeric_values (
     tiny_v tinyint,
@@ -55,6 +56,10 @@ select python_bvt_tinyint(tiny_v) as tiny_v,
        python_bvt_decimal128(decimal128_v) as decimal128_v
 from numeric_values order by big_v is null, big_v;
 
+-- The planner must normalize DECIMAL(18,2) to the declared scale before the
+-- Arrow encoder sees the coefficient; 1.23 must remain 1.230000.
+select python_bvt_decimal_rescale(cast('1.23' as decimal(18,2))) as decimal_rescaled;
+
 drop function python_bvt_tinyint(tinyint);
 drop function python_bvt_smallint(smallint);
 drop function python_bvt_int(int);
@@ -68,5 +73,6 @@ drop function python_bvt_double(double);
 drop function python_bvt_bool(bool);
 drop function python_bvt_decimal64(decimal(18,6));
 drop function python_bvt_decimal128(decimal(38,10));
+drop function python_bvt_decimal_rescale(decimal(18,6));
 drop table numeric_values;
 drop database udf_python_numeric_bvt;

@@ -22,7 +22,14 @@ PROXY=${3:-}
 
 function launch_mo() {
     cd $MO_WORKSPACE
-    ./mo-service -debug-http=:12345 -launch ./etc/$LAUNCH/launch.toml $PROXY &>mo-service.log &
+    # Ordinary launch BVT remains the single CI entry point, but its Python
+    # cases opt into the worker-enabled manifest explicitly.  The generic
+    # etc/launch manifest stays safe for users who start mo-service directly.
+    local launch_config=$LAUNCH
+    if [[ "$LAUNCH" == "launch" ]]; then
+        launch_config=launch-with-python-udf-worker
+    fi
+    ./mo-service -debug-http=:12345 -launch ./etc/$launch_config/launch.toml $PROXY &>mo-service.log &
 }
 
 # this will wait mo all system init completed
