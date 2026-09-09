@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 type state int
@@ -54,6 +55,12 @@ const (
 	clusterInfrastructurePortBaseCount = uint64(3)
 	tnPortBaseCount                    = uint64(1)
 	cnPortBaseCount                    = uint64(2)
+
+	// ArrowLoadRolloutShutdown is a test-only boundary at the beginning of
+	// Cluster.Close. It is inactive unless a test installs the matching fault
+	// point, and lets a lifecycle test observe that shutdown has actually
+	// entered before it releases an admitted statement.
+	ArrowLoadRolloutShutdown = "fj/embed/arrow_load_rollout_shutdown"
 )
 
 type clusterPortLease struct {
@@ -231,6 +238,13 @@ func (c *cluster) startServiceLocked(op *operator) error {
 }
 
 func (c *cluster) Close() error {
+	// Keep this before the cluster lock and service teardown. A WAIT fault here
+	// observes the real Close invocation, rather than merely the launch of a
+	// goroutine that may not have entered shutdown yet.
+	if c.options.testing {
+		fault.TriggerFault(ArrowLoadRolloutShutdown)
+	}
+
 	c.Lock()
 	defer c.Unlock()
 
