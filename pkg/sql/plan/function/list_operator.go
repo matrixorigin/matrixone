@@ -2233,7 +2233,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorUnaryPlus[int8]
@@ -2338,27 +2338,27 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinus[int8]
+					return operatorUnaryMinusInt8
 				},
 			},
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinus[int16]
+					return operatorUnaryMinusInt16
 				},
 			},
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinus[int32]
+					return operatorUnaryMinusInt32
 				},
 			},
 			{

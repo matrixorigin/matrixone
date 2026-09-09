@@ -883,7 +883,49 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetValue(i)
+		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			continue
+		}
+		if !null {
+			if _, ok := any(v).(int64); ok && v == T(math.MinInt64) {
+				return moerr.NewOutOfRangeNoCtxf("BIGINT", "unary minus value '%d'", v)
+			}
+		}
 		if err := rs.Append(-v, null); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+	p := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
+	r := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, n := p.GetValue(i)
+		if err := r.Append(-int64(v), n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+	p := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
+	r := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, n := p.GetValue(i)
+		if err := r.Append(-int64(v), n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+	p := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
+	r := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, n := p.GetValue(i)
+		if err := r.Append(-int64(v), n); err != nil {
 			return err
 		}
 	}
