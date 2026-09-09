@@ -1384,7 +1384,11 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
-	bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*Expr{bound, guard})
+	// Use the checked value as the primary operand, not only in the neutral
+	// guard.  This makes the strict helper part of the value-producing data
+	// path, so an enclosing expression cannot cancel or otherwise elide the
+	// intermediate range check (notably for ABS-wrapped operands on x86).
+	bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*Expr{checked, guard})
 	if err != nil {
 		return nil, err
 	}
