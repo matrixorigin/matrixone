@@ -4295,7 +4295,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return derivedStringReturnType(parameters, 0, types.T_binary)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith2Args
+					return SubStringWith2Args
 				},
 			},
 			{
@@ -4305,7 +4305,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return derivedStringReturnType(parameters, 0, types.T_varbinary)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith2Args
+					return SubStringWith2Args
 				},
 			},
 			{
@@ -4315,7 +4315,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return derivedStringReturnType(parameters, 0, types.T_binary)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith3Args
+					return SubStringWith3Args
 				},
 			},
 			{
@@ -4325,7 +4325,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return derivedStringReturnType(parameters, 0, types.T_varbinary)
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringBinaryWith3Args
+					return SubStringWith3Args
 				},
 			},
 		},

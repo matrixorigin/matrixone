@@ -181,4 +181,9 @@ select hex(binary_left), hex(binary_lower), hex(text_replace),
        char_length(binary_left), char_length(binary_lower), char_length(text_replace)
 from binary_function_ctas;
 
+-- Exact binary SUBSTRING overloads must retain a selected text row's domain.
+select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
+       hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
+       hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
+
 drop database binary_string_function_semantics;

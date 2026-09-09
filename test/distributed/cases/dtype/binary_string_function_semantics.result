@@ -233,4 +233,9 @@ char_length(binary_left), char_length(binary_lower), char_length(text_replace)
 from binary_function_ctas;
 ➤ hex(binary_left)[12,32,0]  ¦  hex(binary_lower)[12,32,0]  ¦  hex(text_replace)[12,128,0]  ¦  char_length(binary_left)[-5,64,0]  ¦  char_length(binary_lower)[-5,64,0]  ¦  char_length(text_replace)[-5,64,0]  𝄀
 E4  ¦  E4BDA061  ¦  E478A061  ¦  1  ¦  4  ¦  2
+select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
+hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
+hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
+➤ selected_text[12,2,0]  ¦  selected_text_tail[12,14,0]  ¦  selected_binary[12,2,0]  𝄀
+E5A5BD  ¦  E5A5BD  ¦  BD
 drop database binary_string_function_semantics;
