@@ -386,6 +386,12 @@ func quoteReturnType(parameters []types.Type) types.Type {
 		bound = declaredStringByteBound(parameters[0])
 	}
 	bound = addStringResultBounds(multiplyStringResultBound(bound, 2), stringResultBound{bytes: 2})
+	// QUOTE(NULL) returns the four-byte string "NULL", even when the input
+	// declaration has a zero-width VARCHAR/VARBINARY bound. Keep the declared
+	// result type able to describe that branch while preserving unknown bounds.
+	if !bound.unknown && bound.bytes < 4 {
+		bound.bytes = 4
+	}
 	if binary {
 		return binaryStringResultType(bound)
 	}
@@ -7911,7 +7917,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: BIN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    binTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8012,6 +8018,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BinFloat[float64]
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BinString
 				},
 			},
 		},
