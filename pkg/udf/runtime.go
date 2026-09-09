@@ -20,6 +20,9 @@ package udf
 
 import (
 	"context"
+	"errors"
+	"sort"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -64,6 +67,14 @@ type Runtime interface {
 	Execute(context.Context, *Invocation, vector.FunctionResultWrapper, *mpool.MPool) error
 }
 
+// RuntimeCloser is an optional lifecycle contract for runtimes that own a
+// transport connection or a worker process.  Execution callers only need
+// Runtime; service shutdown uses this interface to close such resources.
+type RuntimeCloser interface {
+	Runtime
+	Close() error
+}
+
 // Registry dispatches to the one runtime selected by a routine's language.
 // A registry is immutable after construction, so plan execution cannot race
 // service registration or observe a partially initialized adapter.
@@ -83,6 +94,8 @@ func NewRuntime(runtimes ...Runtime) (Runtime, error) {
 
 type runtimeRegistry struct {
 	byLanguage map[string]Runtime
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (r *runtimeRegistry) Language() string { return "multiple" }
@@ -101,4 +114,20 @@ func (r *runtimeRegistry) Execute(
 		return moerr.NewInternalError(ctx, "missing "+invocation.Language+" udf runtime")
 	}
 	return runtime.Execute(ctx, invocation, result, mp)
+}
+
+func (r *runtimeRegistry) Close() error {
+	r.closeOnce.Do(func() {
+		languages := make([]string, 0, len(r.byLanguage))
+		for language := range r.byLanguage {
+			languages = append(languages, language)
+		}
+		sort.Strings(languages)
+		for _, language := range languages {
+			if closer, ok := r.byLanguage[language].(RuntimeCloser); ok {
+				r.closeErr = errors.Join(r.closeErr, closer.Close())
+			}
+		}
+	})
+	return r.closeErr
 }
