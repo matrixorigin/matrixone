@@ -81,6 +81,16 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.UserInfo = nil
 }
 
+// setNoFullStartTS persists the creation snapshot as the incremental start
+// point.  A NoFull task starts asynchronously, so deriving its watermark when
+// the daemon later starts leaves a window in which committed changes can be
+// skipped.  Do not replace an explicit StartTs supplied by the user.
+func (opts *CDCCreateTaskOptions) setNoFullStartTS(snapshot time.Time) {
+	if opts.NoFull && opts.StartTs == "" && !snapshot.IsZero() {
+		opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+	}
+}
+
 func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	ctx context.Context,
 	ses *Session,
@@ -237,6 +247,13 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if !startTs.IsZero() && !endTs.IsZero() && !endTs.After(startTs) {
 		err = moerr.NewInternalErrorf(ctx, "startTs: %s should be less than endTs: %s", startTs.Format(time.RFC3339), endTs.Format(time.RFC3339))
 		return
+	}
+
+	// The task is persisted and acknowledged before its asynchronous executor
+	// starts. Keep the creation transaction snapshot so the executor does not
+	// install a later watermark and miss changes committed after CREATE CDC.
+	if txnOp := ses.GetTxnHandler().GetTxn(); txnOp != nil {
+		opts.setNoFullStartTS(txnOp.SnapshotTS().ToStdTime())
 	}
 
 	// fill default value for additional opts

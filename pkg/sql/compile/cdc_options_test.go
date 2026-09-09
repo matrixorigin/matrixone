@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -92,6 +93,16 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+}
+
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	snapshot := time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC)
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	if opts.NoFull && opts.StartTs == "" {
+		opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+	}
+	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
 }
 
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {

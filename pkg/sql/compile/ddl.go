@@ -6773,6 +6773,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		return
 	}
 
+	// A NoFull task starts asynchronously. Persist the CREATE transaction's
+	// snapshot as its incremental start point so a later executor startup cannot
+	// move the watermark past commits made after CREATE CDC returns.
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil && opts.NoFull && opts.StartTs == "" {
+		snapshot := txnOp.SnapshotTS().ToStdTime()
+		if !snapshot.IsZero() {
+			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+		}
+	}
+
 	// fill default value for additional opts
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn
