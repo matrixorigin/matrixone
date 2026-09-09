@@ -1,7 +1,7 @@
 # #23371：AUTO_INCREMENT 增强设计
 
 - 修订：**r4 + rollout-A/r1，2026-09-09，均经用户 go ahead 批准；实现、验证与最终自审 PASS；交付分支 `issue-23371-main`，目标 `main`**。
-- 交付基线：`mo/main@3d22c694a8a3224c03a88f94327439304de23607`。完整验证基线为 `cd04bb4c1af5bc595e2147dc645dfa754f4c395b`；交付前再同步无重叠的 FIND_IN_SET/SET 修复，重新通过 plan/compile owning 与公开 lifecycle，其余未改变调用路径的证据复用。CACHE 字段编号/V58 空间未变化。
+- 交付基线：`mo/main@3d22c694a8a3224c03a88f94327439304de23607`。完整验证基线为 `cd04bb4c1af5bc595e2147dc645dfa754f4c395b`；交付前再同步无重叠的 FIND_IN_SET/SET 修复，重新通过 plan/compile owning 与公开 lifecycle，其余未改变调用路径的证据复用。后续合并 `d3e8aced87`，上游 V58 已用于 binary-string/runtime-domain；本 PR 的 CACHE 门槛顺延为 V59，字段/opcode 编号和 rollout 契约不变。
 - r4 已替代原 P1/P2 重实现计划；CACHE 语法、typed 元数据、分配策略与[已批准方案 A 发布边界](CLAUDE_AUTO_ID_CACHE_ROLLOUT_23371.md)已实现。公开双 CN、dump/load、BVT、关闭节点与全集群重启均有通过证据。
 - 范围始终为 [#23371](https://github.com/matrixorigin/matrixone/issues/23371)，不合并 #28237/#28238/#28239 的独立修复。
 - 归属实现 PR：`ck89119:issue-23371-main` → `matrixorigin/matrixone:main`，关联 #23371；Draft PR 正文链接本设计与 rollout-A/r1 的确切提交修订。TODO 不提交。
@@ -119,8 +119,8 @@
 ## 7. 兼容、失败与资源
 
 - 会话沿用 V56 gate；CACHE 使用已批准方案 A：缺省关闭，非零策略只允许在受控全量升级后显式开启。0 的旧表和缺失字段继续默认行为。
-- CACHE 使用新 V58；V56/V57 保留原含义。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
-- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V58/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
+- CACHE 使用新 V59；V56/V57/V58 保留上游原含义。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
+- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V59/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
 - 保留 ALTER exact-TN epoch-fence，不拿一般最低协议版本取代它。
 - 重启丢弃未用段，从持久高水位重建配置；降级旧二进制不承诺保留新策略，需停写后兼容逻辑导出或恢复升级前备份，不降低高水位。
 - account context/CREATE 权限/GLOBAL SET 权限走现有链路，冷 metadata 查询仍按租户隔离。CACHE 上限在 parser/plan 校验。
@@ -166,4 +166,4 @@
 - r3：恢复 #23371-only，用户授权；本任务尚未改生产代码。
 - r4：#28349 等已在 main 实现多个原计划闭环，复用上游并聚焦 CACHE；恢复 legacy step 支持、保留新 DML 仲裁 owner、更新 DDL 事务边界。后经用户 go ahead 进入 CACHE 第一阶段实施；不执行额外 issue 修复。
 - 2026-09-09 第二轮：再次 go ahead 后同步新 main，纠正 CACHE=0 无自增列的实现与设计不一致；双 CN SQL、67 条 BVT 两次比较、完整服务重启、schema/catalog UT 通过。
-- 2026-09-09 第三轮：用户批准 rollout A 后实施默认关闭/V58/远端 opcode 门禁；增加公开 dump/load 与永久独占集群重启/禁用测试，补冷 metadata 错误回收、取消、terminal TS、AST owner 回收证据。默认 benchmark 对照、owning UT、各关键 race 用例100次及 owning race 通过，变更行覆盖率250/271=92.25%，最终自审 PASS。配置关闭不额外禁止既有的无号段分配 ALTER 起点维护。
+- 2026-09-09 第三轮：用户批准 rollout A 后实施默认关闭/远端 opcode 门禁（初版 V58，合并后顺延 V59）；增加公开 dump/load 与永久独占集群重启/禁用测试，补冷 metadata 错误回收、取消、terminal TS、AST owner 回收证据。默认 benchmark 对照、owning UT、各关键 race 用例100次及 owning race 通过，变更行覆盖率250/271=92.25%，最终自审 PASS。配置关闭不额外禁止既有的无号段分配 ALTER 起点维护。
