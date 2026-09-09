@@ -201,11 +201,11 @@ class WorkerContractTest(unittest.TestCase):
             )
 
     def test_terminal_admission_does_not_evict_live_tombstones(self):
-        old_records = worker.MAX_TERMINAL_RECORDS
-        old_bytes = worker.MAX_TERMINAL_BYTES
+        old_records = worker.MAX_LEDGER_ENTRIES
+        old_bytes = worker.MAX_LEDGER_BYTES
         try:
-            worker.MAX_TERMINAL_RECORDS = 1
-            worker.MAX_TERMINAL_BYTES = 1 << 20
+            worker.MAX_LEDGER_ENTRIES = 1
+            worker.MAX_LEDGER_BYTES = 1 << 20
             server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
             first = (1, "statement", "group", 1, "invocation", 1)
             state = server._admit(first)
@@ -222,8 +222,8 @@ class WorkerContractTest(unittest.TestCase):
             second = server._admit((1, "statement", "group", 1, "second", 1))
             self.assertIsNotNone(second)
         finally:
-            worker.MAX_TERMINAL_RECORDS = old_records
-            worker.MAX_TERMINAL_BYTES = old_bytes
+            worker.MAX_LEDGER_ENTRIES = old_records
+            worker.MAX_LEDGER_BYTES = old_bytes
 
     def test_active_fence_cannot_be_admitted_twice(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
