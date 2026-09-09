@@ -62,4 +62,5 @@ request-timeout = "1m"
 cleanup-timeout = "30s"
 
 [cn.python-udf-client]
+enabled = false
 server-address = "127.0.0.1:50051"

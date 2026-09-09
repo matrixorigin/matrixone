@@ -42,8 +42,15 @@ func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 	requiredArgs := inputs[size+1 : 2*size+1]
 	needCast := false
 	for i := 0; i < size; i++ {
-		if receivedArgs[i].Oid != requiredArgs[i].Oid {
+		if !pythonTypesEqual(receivedArgs[i], requiredArgs[i]) {
 			canCast, _ := fixedImplicitTypeCast(receivedArgs[i], requiredArgs[i].Oid)
+			if receivedArgs[i].Oid == requiredArgs[i].Oid {
+				// SQL's cast executor is also the type normalizer for Python's
+				// frozen descriptor.  In particular, DECIMAL scale and precision
+				// must be normalized before Arrow encoding; comparing only OID
+				// would reinterpret the same coefficient at the wrong scale.
+				canCast = true
+			}
 			if !canCast {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -60,6 +67,13 @@ func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, castType)
 	}
 	return newCheckResultWithSuccess(0)
+}
+
+func pythonTypesEqual(left, right types.Type) bool {
+	return left.Oid == right.Oid &&
+		left.Width == right.Width &&
+		left.Scale == right.Scale &&
+		left.Charset == right.Charset
 }
 
 // param parameters is same with param inputs in function checkPythonUdf
