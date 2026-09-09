@@ -1,10 +1,10 @@
 # #28164 Collation-Aware Unique-Key Identity
 
-- Status: Design revision 3; ready for maintainer review; implementation not started
+- Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
 - Frozen baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7`
-- Scope: the complete string PK/UNIQUE identity contract; first delivery is design and baseline evidence only
+- Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
 
@@ -1164,3 +1164,26 @@ locator envelopes before exposing a recovered map. This package is a
 dependency-light reference for TN/catalog integration; it is not a process
 global index and is not itself connected to the production hidden-table write
 path yet.
+
+### 10.16 Implementation series status (PR8 planner and index-probe increment)
+
+PR8 carries the first production-planner integration of the v2 identity bytes.
+Primary-key and UNIQUE projections, ODKU/REPLACE/UPDATE/DELETE conflict probes,
+foreign-key parent locks, and unique-index maintenance now materialize the
+relation-local framed identity rather than falling back to the legacy `serial`
+or raw text bytes. Composite and prefix parts are framed in declared order;
+missing or invalid source positions fail closed. Range rewrites, index-only
+projections that cannot reconstruct the original value, raw residual pushdown,
+and runtime-filter rewrites are disabled for opaque v2 unique keys unless an
+exact point-equality proof is available.
+
+The change is deliberately still gated. The normal service capabilities do not
+advertise the v2 codec, no SQL DDL or DML path can enable it, and there is no
+TN/catalog sidecar persistence or commit-time validation yet. Global SQL
+collation/hash/group consumers, bulk-ingestion paths, migration management,
+and production heartbeat/activation wiring remain required before a v2 table
+can be exposed. The existing `pkg/common/collationkey.SidecarStore` and
+`MigrationGate` are reference contracts, not storage implementations. PR8
+therefore supplies planner and fallback safety for the eventual format but is
+not the complete #28164 fix; `production_fix` and `qa_acceptance` remain
+incomplete and the issue stays open.
