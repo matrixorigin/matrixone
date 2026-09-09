@@ -355,7 +355,7 @@ def _physical_fingerprint(descriptor: Dict[str, Any]) -> str:
     if type_id in (CHAR, VARCHAR, TEXT, JSON):
         return "@d" if int(descriptor.get("offset_width", 32)) == 64 else "@N"
     if type_id == UUID:
-        return "@P"
+        return "@P[16]"
     if type_id in (DECIMAL64, DECIMAL128):
         precision = int(descriptor.get("width") or (18 if type_id == DECIMAL64 else 38))
         return f"@X[128,{precision},{int(descriptor.get('scale') or 0)}]"
