@@ -160,6 +160,47 @@ func TestSidecarTxnRejectsStaleGenerationAndWrongRelation(t *testing.T) {
 	tx.Rollback()
 }
 
+func TestSidecarTxnSkipsNullBearingUniqueKeys(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(7)
+	store, err := NewSidecarStore(31, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := EncodeComposite(nil, []Part{
+		{Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters}, Null: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.Begin(sidecarTestAdmission(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Put(key, RowLocator{RelationID: 31, PrimaryKey: []byte("one")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Put(key, RowLocator{RelationID: 31, PrimaryKey: []byte("two")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot(); len(got.Entries) != 0 {
+		t.Fatalf("NULL-bearing key produced sidecar entries: %+v", got.Entries)
+	}
+	readTx, err := store.Begin(sidecarTestAdmission(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := readTx.Lookup(key); err != nil || ok {
+		t.Fatalf("NULL-bearing lookup = %v, %v", ok, err)
+	}
+	readTx.Rollback()
+	if _, err := EncodeSidecarEntry(nil, SidecarEntry{Key: key, Locator: RowLocator{RelationID: 31}}); !errors.Is(err, ErrUnsupportedDomain) {
+		t.Fatalf("NULL-bearing sidecar entry error = %v", err)
+	}
+}
+
 func TestSidecarSnapshotRestoresAndRejectsMixedEntries(t *testing.T) {
 	metadata := NewCollationAwareMetadataAtGeneration(6)
 	store, err := NewSidecarStore(21, metadata)

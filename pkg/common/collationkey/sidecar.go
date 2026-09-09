@@ -41,6 +41,11 @@ func EncodeSidecarEntry(dst []byte, entry SidecarEntry) ([]byte, error) {
 	if err := ValidateEncoded(entry.Key); err != nil {
 		return dst, err
 	}
+	if hasNull, err := HasNullPart(entry.Key); err != nil {
+		return dst, err
+	} else if hasNull {
+		return dst, wrapCodecError(ErrUnsupportedDomain, "NULL-bearing unique key has no sidecar identity")
+	}
 	locator, err := EncodeLocator(nil, entry.Locator)
 	if err != nil {
 		return dst, err

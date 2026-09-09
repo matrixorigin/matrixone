@@ -889,7 +889,8 @@ revision-3 contract:
   (unsigned integer), and `0x0103` (decimal);
 - canonical parameter bytes use big-endian prefix/width fields and the schema
   bytes defined in Section 4.3; the immutable registry digest is
-  `0c84115b0e4999cd90fd03c1fb4bedb3ed560a4e97e64f73840952c4e469feca`;
+  `c69a5959e49d4fb193d8c8252e76eb5ea92e53be9594354d4e8befd4575db41a`, and
+  includes the executable general-ci weight table plus its fallback policy;
 - all text input is validated as complete UTF-8 before prefixing, general-ci
   emits one four-byte big-endian weight per code point, and NULL/empty values
   retain distinct framed states;

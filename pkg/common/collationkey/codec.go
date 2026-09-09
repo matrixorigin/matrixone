@@ -177,6 +177,32 @@ func buildRegistryDigest() [sha256.Size]byte {
 		b.Write(n[:])
 		b.Write(entry)
 	}
+	// The general-ci table is executable registry data, not merely a
+	// documentation detail. Include a canonical serialization of every
+	// explicitly populated plane (and the fallback policy) so two binaries
+	// cannot advertise the same registry digest while normalizing different
+	// Unicode code points. The plane index and length delimit each table and
+	// nil planes are represented explicitly.
+	b.WriteString("general-ci-weight-table-v1")
+	for plane, weights := range planeTable {
+		var index [2]byte
+		binary.BigEndian.PutUint16(index[:], uint16(plane))
+		b.Write(index[:])
+		if weights == nil {
+			b.WriteByte(0)
+			continue
+		}
+		b.WriteByte(1)
+		b.Write(appendU32(nil, uint32(len(weights))))
+		for _, weight := range weights {
+			b.Write(appendU16(nil, weight))
+		}
+	}
+	// Values outside the table deliberately use their code point, while
+	// supplementary planes use the frozen replacement weight. Keep both
+	// policies in the digest even though they are not table entries.
+	b.WriteString("fallback-rune-v1")
+	b.WriteString("supplementary-fffd-v1")
 	return sha256.Sum256(b.Bytes())
 }
 
@@ -423,6 +449,29 @@ func ValidateEncoded(encoded []byte) error {
 	return nil
 }
 
+// HasNullPart reports whether a validated composite identity contains a NULL
+// part. A NULL-bearing UNIQUE key is intentionally not a comparable sidecar
+// identity under MatrixOne's existing SQL semantics: each row may carry its
+// own NULL value without conflicting with another row. Callers that enforce
+// uniqueness should therefore skip sidecar lookup/insert for such keys.
+func HasNullPart(encoded []byte) (bool, error) {
+	if err := ValidateEncoded(encoded); err != nil {
+		return false, err
+	}
+	parts := int(binary.BigEndian.Uint16(encoded[5:7]))
+	off := 7
+	for i := 0; i < parts; i++ {
+		if encoded[off] == 1 {
+			return true, nil
+		}
+		paramLen := int(binary.BigEndian.Uint16(encoded[off+4 : off+6]))
+		off += 6 + paramLen
+		payloadLen := int(binary.BigEndian.Uint32(encoded[off : off+4]))
+		off += 4 + payloadLen
+	}
+	return false, nil
+}
+
 func lookupFamily(id uint16) (familySpec, bool) {
 	for _, spec := range familySpecs {
 		if spec.id == id {
@@ -445,11 +494,12 @@ func validateParams(spec familySpec, params []byte) bool {
 		}
 		return len(params) == 3 && params[0] == spec.params[0] && width > 0 && width <= 32
 	case Decimal:
-		width := uint16(0)
-		if len(params) == 5 {
-			width = binary.BigEndian.Uint16(params[1:3])
+		if len(params) != 5 || params[0] != spec.params[0] {
+			return false
 		}
-		return len(params) == 5 && params[0] == spec.params[0] && width > 0 && width <= 32
+		width := binary.BigEndian.Uint16(params[1:3])
+		scale := int16(binary.BigEndian.Uint16(params[3:5]))
+		return width > 0 && width <= 32 && scale >= 0
 	default:
 		return false
 	}
@@ -494,8 +544,9 @@ func validDecimalPayload(params, payload []byte) bool {
 		return false
 	}
 	width := int(binary.BigEndian.Uint16(params[1:3]))
+	targetScale := int16(binary.BigEndian.Uint16(params[3:5]))
 	scale := int64(int32(binary.BigEndian.Uint32(payload[1:5])))
-	if scale < math.MinInt16 || scale > math.MaxInt16 {
+	if targetScale < 0 || scale < 0 || scale > int64(targetScale) {
 		return false
 	}
 	coeffLen64 := uint64(binary.BigEndian.Uint32(payload[5:9]))
@@ -596,6 +647,9 @@ func normalizeBinary(domain Domain, value []byte) []byte {
 }
 
 func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, error) {
+	if targetScale < 0 {
+		return nil, wrapCodecError(ErrUnsupportedDomain, "negative decimal scale %d", targetScale)
+	}
 	s := strings.TrimSpace(string(value))
 	if s == "" {
 		return nil, wrapCodecError(ErrInvalidValue, "empty decimal")
@@ -619,7 +673,10 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	if !allDigits(whole) || !allDigits(frac) {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
 	}
-	inputScale := int16(len(frac))
+	if len(frac) > math.MaxInt16 {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal scale exceeds int16")
+	}
+	inputScale := len(frac)
 	coeffText := strings.TrimLeft(whole+frac, "0")
 	if coeffText == "" {
 		coeffText = "0"
@@ -629,8 +686,8 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	if _, ok := coeff.SetString(coeffText, 10); !ok {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient")
 	}
-	if int(inputScale) > int(targetScale) {
-		shift := int(inputScale) - int(targetScale)
+	if inputScale > int(targetScale) {
+		shift := inputScale - int(targetScale)
 		div := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(shift)), nil)
 		q, r := new(big.Int), new(big.Int)
 		q.QuoRem(coeff, div, r)
@@ -638,8 +695,8 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 			return nil, wrapCodecError(ErrInvalidValue, "decimal precision exceeds declared scale")
 		}
 		coeff = q
-	} else if int(inputScale) < int(targetScale) {
-		mul := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(int(targetScale)-int(inputScale))), nil)
+	} else if inputScale < int(targetScale) {
+		mul := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(int(targetScale)-inputScale)), nil)
 		coeff.Mul(coeff, mul)
 	}
 	scale := targetScale

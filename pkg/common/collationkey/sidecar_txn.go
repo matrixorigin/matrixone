@@ -160,6 +160,11 @@ func RestoreSidecarStore(snapshot SidecarSnapshot) (*SidecarStore, error) {
 		if err := ValidateEncoded(entry.Key); err != nil {
 			return nil, err
 		}
+		if hasNull, err := HasNullPart(entry.Key); err != nil {
+			return nil, err
+		} else if hasNull {
+			return nil, wrapCodecError(ErrUnsupportedDomain, "NULL-bearing unique key has no sidecar identity")
+		}
 		if _, err := EncodeLocator(nil, entry.Locator); err != nil {
 			return nil, err
 		}
@@ -207,6 +212,14 @@ func (tx *SidecarTxn) Lookup(key []byte) (SidecarEntry, bool, error) {
 	if err := ValidateEncoded(key); err != nil {
 		return SidecarEntry{}, false, err
 	}
+	if hasNull, err := HasNullPart(key); err != nil {
+		return SidecarEntry{}, false, err
+	} else if hasNull {
+		// Nullable UNIQUE parts intentionally do not participate in ordinary
+		// uniqueness. Do not touch this key, otherwise concurrent NULL rows
+		// would be fenced as if they shared one comparable identity.
+		return SidecarEntry{}, false, nil
+	}
 	name := string(key)
 	tx.touch(name)
 	if staged, ok := tx.writes[name]; ok {
@@ -234,6 +247,13 @@ func (tx *SidecarTxn) Put(key []byte, locator RowLocator) error {
 	}
 	if err := ValidateEncoded(key); err != nil {
 		return err
+	}
+	if hasNull, err := HasNullPart(key); err != nil {
+		return err
+	} else if hasNull {
+		// The base row still carries the original NULL value, but no sidecar
+		// mapping is needed (or allowed) for a NULL-bearing UNIQUE identity.
+		return nil
 	}
 	if locator.RelationID != tx.store.relationID {
 		return ErrSidecarRelation
@@ -268,6 +288,11 @@ func (tx *SidecarTxn) Delete(key []byte, expected *RowLocator) error {
 	}
 	if err := ValidateEncoded(key); err != nil {
 		return err
+	}
+	if hasNull, err := HasNullPart(key); err != nil {
+		return err
+	} else if hasNull {
+		return nil
 	}
 	name := string(key)
 	tx.touch(name)

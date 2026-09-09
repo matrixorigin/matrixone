@@ -17,6 +17,7 @@ package collationkey
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"testing"
 )
@@ -239,6 +240,31 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	}
 }
 
+func TestHasNullPartDistinguishesNullableAndEmptyKeys(t *testing.T) {
+	withNull, err := EncodeComposite(nil, []Part{
+		{Domain: generalDomain(0), Null: true},
+		{Domain: generalDomain(0), Value: []byte("a")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasNull, err := HasNullPart(withNull)
+	if err != nil || !hasNull {
+		t.Fatalf("HasNullPart(nullable) = %v, %v", hasNull, err)
+	}
+	empty, err := EncodePart(nil, Part{Domain: generalDomain(0), Value: []byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasNull, err = HasNullPart(empty)
+	if err != nil || hasNull {
+		t.Fatalf("HasNullPart(empty) = %v, %v", hasNull, err)
+	}
+	if _, err := HasNullPart([]byte("not-a-key")); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("malformed HasNullPart error = %v", err)
+	}
+}
+
 func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	valid, err := EncodePart(nil, Part{Domain: generalDomain(0), Value: []byte("Alpha")})
 	if err != nil {
@@ -328,7 +354,7 @@ func TestRegistryDigestIsStableAndCopied(t *testing.T) {
 	if !bytes.Equal(second, RegistryDigest()) {
 		t.Fatal("registry digest is not stable")
 	}
-	if got, want := hex.EncodeToString(second), "0c84115b0e4999cd90fd03c1fb4bedb3ed560a4e97e64f73840952c4e469feca"; got != want {
+	if got, want := hex.EncodeToString(second), "c69a5959e49d4fb193d8c8252e76eb5ea92e53be9594354d4e8befd4575db41a"; got != want {
 		t.Fatalf("registry digest=%s want=%s", got, want)
 	}
 }

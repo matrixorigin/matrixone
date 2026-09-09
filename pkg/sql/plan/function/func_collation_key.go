@@ -147,8 +147,10 @@ func BuiltInCollationKeyV2(
 // BuiltInCollationCompositeKeyV2 materializes one complete MOKY envelope for
 // a multi-part text key. Every argument triplet is (value, prefix, charset),
 // and all rows use the same immutable codec registry as the single-part
-// primitive. A NULL part is retained in the envelope; UNIQUE NULL conflict
-// policy remains owned by the planner's existing skip/nullable handling.
+// primitive. A row with any NULL part receives a NULL result rather than a
+// concrete envelope; UNIQUE NULL conflict policy remains owned by the
+// planner's existing skip/nullable handling. Concrete envelopes are therefore
+// safe for the sidecar's one-key-to-one-locator mapping.
 func BuiltInCollationCompositeKeyV2(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
