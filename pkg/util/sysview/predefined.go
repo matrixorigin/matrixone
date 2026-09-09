@@ -193,7 +193,7 @@ func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
-		"tbl.owner FROM mo_catalog.mo_tables tbl " +
+		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
