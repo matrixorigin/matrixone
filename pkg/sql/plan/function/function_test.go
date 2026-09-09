@@ -151,14 +151,14 @@ func TestMakeSetDecimalBoundary(t *testing.T) {
 		{types.New(types.T_decimal64, 18, 16), "1.9999999999999999"},
 		{types.New(types.T_decimal128, 38, 16), "1.9999999999999999"},
 	} {
-		var bits any
+		var bv *vector.Vector
 		if tc.typ.Oid == types.T_decimal64 {
-			bits, _ = types.ParseDecimal64(tc.value, tc.typ.Width, tc.typ.Scale)
+			bits, _ := types.ParseDecimal64(tc.value, tc.typ.Width, tc.typ.Scale)
+			bv, _ = vector.NewConstFixed(tc.typ, bits, 1, proc.Mp())
 		} else {
-			bits, _ = types.ParseDecimal128(tc.value, tc.typ.Width, tc.typ.Scale)
+			bits, _ := types.ParseDecimal128(tc.value, tc.typ.Width, tc.typ.Scale)
+			bv, _ = vector.NewConstFixed(tc.typ, bits, 1, proc.Mp())
 		}
-		bv, err := vector.NewConstFixed(tc.typ, bits, 1, proc.Mp())
-		require.NoError(t, err)
 		members, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("a"), 1, proc.Mp())
 		require.NoError(t, err)
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
