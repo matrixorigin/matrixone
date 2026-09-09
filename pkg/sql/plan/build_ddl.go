@@ -1734,12 +1734,32 @@ func validateMaterializedViewSourceTable(ctx CompilerContext, dbName, tableName 
 	return nil
 }
 
-// IsMaterializedViewTableDef also identifies unreleased legacy descriptors for
-// explicit rejection or cleanup. Comments and user CREATE text have no authority.
+// IsMaterializedViewTableDef identifies the catalog relation kind, the
+// authenticated definition envelope, or an exact persisted MATERIALIZED VIEW
+// definition. Arbitrary user properties, comments, and CREATE SQL substrings
+// have no ownership meaning.
 func IsMaterializedViewTableDef(def *plan.TableDef) bool {
-	return def != nil && (def.TableType == catalog.SystemMaterializedRel ||
-		mvdefinition.PropertyValue(def, mvdefinition.Property) != "" ||
-		mvdefinition.PropertyValue(def, "mv_materialized") == "true")
+	if def == nil {
+		return false
+	}
+	if def.TableType == catalog.SystemMaterializedRel || mvdefinition.PropertyValue(def, mvdefinition.Property) != "" {
+		return true
+	}
+	return isExactMaterializedViewCreateSQL(def.Createsql) ||
+		isExactMaterializedViewCreateSQL(mvdefinition.PropertyValue(def, catalog.SystemRelAttr_CreateSQL))
+}
+
+func isExactMaterializedViewCreateSQL(sql string) bool {
+	if strings.TrimSpace(sql) == "" {
+		return false
+	}
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	view, ok := stmt.(*tree.CreateView)
+	return ok && view.Materialized
 }
 
 func IsMaterializedViewStateTableDef(def *plan.TableDef) bool {
