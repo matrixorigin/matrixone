@@ -4637,11 +4637,49 @@ func TestGetDecimalCountRounding(t *testing.T) {
 		require.Equal(t, tt.want, getDecimalCount(typ, tt.value))
 	}
 	maxTyp := types.T_decimal64.ToType()
-	require.Equal(t, int64(^uint64(0)>>1), getDecimalCount(maxTyp, types.Decimal64(^uint64(0))))
+	require.Equal(t, int64(-1), getDecimalCount(maxTyp, types.Decimal64(^uint64(0))))
 	require.Equal(t, int64(-1), getDecimalCount(maxTyp, types.Decimal64(1).Minus()))
 	typ128 := types.T_decimal128.ToType()
 	typ128.Scale = 1
 	require.Equal(t, int64(2), getDecimalCount(typ128, types.Decimal128{B0_63: 15}))
+	for _, tc := range []struct {
+		value string
+		want  int64
+	}{
+		{"100000000000000000000", math.MaxInt64},
+		{"-100000000000000000000", math.MinInt64},
+	} {
+		value, err := types.ParseDecimal128(tc.value, 38, 0)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, getDecimalCount(types.New(types.T_decimal128, 38, 0), value))
+	}
+}
+
+func TestSubStrIndexDecimalOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, counts := range []FunctionTestInput{
+		NewFunctionTestInput(types.New(types.T_decimal64, 4, 1),
+			[]types.Decimal64{15, types.Decimal64(15).Minus(), 0, 15, 15}, []bool{false, false, true, false, false}),
+		NewFunctionTestInput(types.New(types.T_decimal128, 30, 1),
+			[]types.Decimal128{{B0_63: 15}, types.Decimal128FromInt64(-15), {}, {B0_63: 15}, {B0_63: 15}}, []bool{false, false, true, false, false}),
+	} {
+		// Resolve the SQL overload as well as executing its vector kernel.
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c,d", "a,b,c,d", "a,b,c,d", "", "a,b,c,d"}, []bool{false, false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{",", ",", ",", ",", ""}, []bool{false, false, false, false, true}),
+			counts,
+		}
+		resolved, err := GetFunctionByName(proc.Ctx, "substring_index", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), counts.typ})
+		require.NoError(t, err)
+		require.False(t, resolved.needCast)
+		ov, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+		require.NoError(t, err)
+		exec, _, _, _ := ov.GetExecuteMethod()
+		tc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"a,b", "c,d", "", "", ""}, []bool{false, false, true, true, true}), fEvalFn(exec))
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
 }
 
 func TestSubStrIndex(t *testing.T) {
