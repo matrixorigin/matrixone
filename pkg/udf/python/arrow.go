@@ -24,6 +24,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"unicode/utf8"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -198,13 +200,25 @@ func (d TypeDescriptor) ValidateField(field arrow.Field) error {
 	if err != nil {
 		return err
 	}
-	if field.Type == nil || field.Type.Fingerprint() != want.Type.Fingerprint() || field.Nullable != want.Nullable {
+	if field.Type == nil || !sameArrowType(field.Type, want.Type) || field.Nullable != want.Nullable {
 		return fmt.Errorf("TYPE_CONTRACT: Arrow type %s does not match %s", field.Type, want.Type)
 	}
 	if !field.Metadata.Equal(want.Metadata) {
 		return fmt.Errorf("TYPE_CONTRACT: Arrow logical metadata does not match the frozen descriptor")
 	}
 	return nil
+}
+
+// sameArrowType intentionally compares the complete concrete Arrow type.
+// Arrow-Go's Fingerprint is a physical layout fingerprint and, for some
+// FixedSizeBinary versions, omits ByteWidth.  A UUID contract must reject
+// fixed_size_binary(1) even when that fingerprint collides with the expected
+// fixed_size_binary(16).
+func sameArrowType(left, right arrow.DataType) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return reflect.DeepEqual(left, right)
 }
 
 type ArrowFrame struct {
@@ -700,6 +714,9 @@ func appendFloat32ArrayResult(input *array.FixedSizeList, row int, null bool, re
 	values := input.ListValues().(*array.Float32)
 	items := make([]float32, end-start)
 	for i := start; i < end; i++ {
+		if values.IsNull(int(i)) {
+			return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+		}
 		items[i-start] = values.Value(int(i))
 	}
 	return vector.AppendArray(result.GetResultVector(), items, false, mp)
@@ -713,6 +730,9 @@ func appendFloat64ArrayResult(input *array.FixedSizeList, row int, null bool, re
 	values := input.ListValues().(*array.Float64)
 	items := make([]float64, end-start)
 	for i := start; i < end; i++ {
+		if values.IsNull(int(i)) {
+			return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+		}
 		items[i-start] = values.Value(int(i))
 	}
 	return vector.AppendArray(result.GetResultVector(), items, false, mp)
@@ -722,7 +742,7 @@ func validateArrayType(descriptor TypeDescriptor, input arrow.Array) error {
 	if err != nil {
 		return err
 	}
-	if input.DataType().Fingerprint() != want.Fingerprint() {
+	if !sameArrowType(input.DataType(), want) {
 		return fmt.Errorf("TYPE_CONTRACT: output Arrow type %s does not match %s", input.DataType(), want)
 	}
 	return nil
@@ -738,7 +758,7 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 		}
 		switch types.T(descriptor.TypeID) {
 		case types.T_char, types.T_varchar, types.T_text:
-			if descriptor.Width > 0 && int32(len([]byte(input.(*array.String).Value(row)))) > descriptor.Width {
+			if descriptor.Width > 0 && int32(utf8.RuneCountInString(input.(*array.String).Value(row))) > descriptor.Width {
 				return fmt.Errorf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
 			}
 		case types.T_binary, types.T_varbinary, types.T_blob:
@@ -749,6 +769,35 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 			value := types.Time(input.(*array.Duration).Value(row))
 			if !types.IsMySQLTime(value) || !hasExactMicrosecondScale(int64(value), descriptor.Scale) {
 				return fmt.Errorf("TYPE_CONTRACT: TIME row %d is outside the declared SQL domain", row)
+			}
+		case types.T_decimal64, types.T_decimal128:
+			precision := descriptor.Width
+			if precision == 0 {
+				precision = 18
+				if types.T(descriptor.TypeID) == types.T_decimal128 {
+					precision = 38
+				}
+			}
+			if !input.(*array.Decimal128).Value(row).FitsInPrecision(precision) {
+				return fmt.Errorf("TYPE_CONTRACT: decimal row %d exceeds precision %d", row, precision)
+			}
+		case types.T_array_float32:
+			list := input.(*array.FixedSizeList)
+			values := list.ListValues().(*array.Float32)
+			start, end := list.ValueOffsets(row)
+			for child := start; child < end; child++ {
+				if values.IsNull(int(child)) {
+					return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+				}
+			}
+		case types.T_array_float64:
+			list := input.(*array.FixedSizeList)
+			values := list.ListValues().(*array.Float64)
+			start, end := list.ValueOffsets(row)
+			for child := start; child < end; child++ {
+				if values.IsNull(int(child)) {
+					return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+				}
 			}
 		case types.T_date, types.T_datetime, types.T_timestamp:
 			structValue := input.(*array.Struct)
