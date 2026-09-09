@@ -620,8 +620,13 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		}
 	}
 
-	bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
-	bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	if root.rightJoinUsingStar {
+		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	} else {
+		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	}
 
 	for _, col := range handledUsingCols {
 		delete(visitedUsingCols, col)
