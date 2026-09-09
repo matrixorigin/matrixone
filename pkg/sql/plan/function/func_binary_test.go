@@ -4192,6 +4192,36 @@ func TestFromUnixTimeDomainPrecisionAndFormatting(t *testing.T) {
 	}
 }
 
+func TestFromUnixTimeDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := newTmpProcess(t)
+	formatType := types.T_varchar.ToType()
+	format := NewFunctionTestConstInput(formatType, []string{"%Y-%m-%d %H:%i:%s.%f"}, []bool{false})
+	inputType := types.New(types.T_decimal256, 38, 26)
+	input := NewFunctionTestInput(inputType, []types.Decimal256{
+		mustDecimal256ForUnixTime(t, "0.12345649999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "0.12345650000000000000000000", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999949999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999950000000000000000000", 26),
+	}, []bool{false, false, false, false})
+	expected := NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+		[]types.Datetime{
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123456"),
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123457"),
+			mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.999999"),
+			0,
+		}, []bool{false, false, false, true})
+	plain := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, FromUnixTimeDecimal256)
+	ok, info := plain.Run()
+	require.True(t, ok, info)
+
+	formattedExpected := NewFunctionTestResult(formatType, false,
+		[]string{"1970-01-01 00:00:00.123456", "1970-01-01 00:00:00.123457", "3001-01-18 23:59:59.999999", ""},
+		[]bool{false, false, false, true})
+	formatted := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, formattedExpected, FromUnixTimeDecimal256Format)
+	ok, info = formatted.Run()
+	require.True(t, ok, info)
+}
+
 func TestFromUnixTimeReturnType(t *testing.T) {
 	for _, test := range []struct {
 		name  string

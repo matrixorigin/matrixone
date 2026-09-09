@@ -6548,6 +6548,29 @@ func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
 	return int64(v.B0_63), nil
 }
 
+func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
+	if n < 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
+	}
+	result := types.Decimal256{1, 0, 0, 0}
+	for n >= 19 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{types.Pow10[19], 0, 0, 0})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+		n -= 19
+	}
+	if n > 0 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{types.Pow10[n], 0, 0, 0})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+	}
+	return result, nil
+}
+
 func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec int64, ok bool, err error) {
 	if v.Sign() {
 		return 0, 0, false, nil
@@ -6582,7 +6605,31 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	}
 
 	if scale > 6 {
-		frac, err = frac.Scale(-(scale - 6))
+		// Divide once at microsecond precision. Decimal256.Scale rounds each
+		// 19-digit chunk, which can double-round when scale-6 exceeds 19.
+		divisor, powerErr := decimal256Pow10ForUnix(scale - 6)
+		if powerErr != nil {
+			return 0, 0, false, powerErr
+		}
+		quotient, divErr := frac.Div256Trunc(divisor)
+		if divErr != nil {
+			return 0, 0, false, divErr
+		}
+		remainder, modErr := frac.Mod256(divisor)
+		if modErr != nil {
+			return 0, 0, false, modErr
+		}
+		doubled, mulErr := remainder.Mul256(types.Decimal256{2, 0, 0, 0})
+		if mulErr != nil {
+			return 0, 0, false, mulErr
+		}
+		if doubled.Compare(divisor) >= 0 {
+			quotient, err = quotient.Add256(types.Decimal256{1, 0, 0, 0})
+			if err != nil {
+				return 0, 0, false, err
+			}
+		}
+		frac = quotient
 	} else if scale < 6 {
 		frac, err = frac.Scale(6 - scale)
 	}
