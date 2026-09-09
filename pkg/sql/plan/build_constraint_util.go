@@ -710,6 +710,20 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
+	// Generated-column DEFAULT values are removed from the executable source by
+	// the same local rewrite used by the modern INSERT builder. Never mutate the
+	// statement AST: an unsupported modern ODKU route retries this exact AST in
+	// the legacy fallback, and its source columns and value rows must remain
+	// aligned for that retry.
+	effectiveRows := stmt.Rows
+	effectiveColumns := stmt.Columns
+	if stmt.Columns != nil {
+		effectiveRows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
+		if effectiveColumns, err = builder.stripGeneratedDefaultCols(stmt.Columns, effectiveRows, tableDef); err != nil {
+			return false, nil, nil, err
+		}
+	}
+
 	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
 	// if dbName == "" {
 	// 	dbName = builder.compCtx.DefaultDatabase()
@@ -719,22 +733,37 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 	var ifInsertFromUniqueColMap map[string]bool
+	var aliasInsertColumns []string
 	if stmt.RowAlias != nil {
 		// The row-alias namespace is defined by the legal INSERT source columns.
 		// The legacy helper predates this contract and includes non-user-visible
 		// hidden columns for an implicit column list, so use the same filtered
 		// identity resolver as the modern path before building the fallback scan.
-		if insertColumns, err = builder.getInsertColsForRowAlias(stmt.Columns, tableDef); err != nil {
+		if aliasInsertColumns, err = builder.getInsertColsForRowAlias(stmt.Columns, tableDef); err != nil {
 			return false, nil, nil, err
 		}
-	} else if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
-		return false, nil, nil, err
+		insertColumns = aliasInsertColumns
+		if effectiveColumns != nil {
+			effectiveStmt := *stmt
+			effectiveStmt.Columns = effectiveColumns
+			effectiveStmt.Rows = effectiveRows
+			if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), &effectiveStmt, tableDef); err != nil {
+				return false, nil, nil, err
+			}
+		}
+	} else {
+		effectiveStmt := *stmt
+		effectiveStmt.Columns = effectiveColumns
+		effectiveStmt.Rows = effectiveRows
+		if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), &effectiveStmt, tableDef); err != nil {
+			return false, nil, nil, err
+		}
 	}
 	if stmt.RowAlias != nil {
-		if stmt.Rows == nil {
+		if effectiveRows == nil {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "INSERT row alias has no input rows")
 		}
-		values, ok := stmt.Rows.Select.(*tree.ValuesClause)
+		values, ok := effectiveRows.Select.(*tree.ValuesClause)
 		if !ok {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
 				"INSERT row aliases are supported only for VALUES or SET")
@@ -752,7 +781,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			targetTableName = tableDef.Name
 		}
 		if _, err = validateInsertRowAlias(
-			builder.GetContext(), stmt.RowAlias, insertColumns, tableDef,
+			builder.GetContext(), stmt.RowAlias, aliasInsertColumns, tableDef,
 			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
 		); err != nil {
 			return false, nil, nil, err
@@ -769,7 +798,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	var astSlt *tree.Select
-	switch slt := stmt.Rows.Select.(type) {
+	switch slt := effectiveRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
 		isAllDefault := false
@@ -960,6 +989,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
+	colIdxToProjPos := make(map[int32]int32, len(tableDef.Cols))
+	generatedColIdxs := make([]int, 0)
 	pkCols := make(map[string]struct{})
 	// External tables have no primary key (not even a fake hidden one).
 	if tableDef.Pkey != nil {
@@ -967,8 +998,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			pkCols[name] = struct{}{}
 		}
 	}
-	for _, col := range tableDef.Cols {
+	for tableIdx, col := range tableDef.Cols {
+		colIdx := int32(len(projectList))
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(tableIdx)] = colIdx
 			projectList = append(projectList, oldExpr)
 			// if col.Typ.AutoIncr {
 			// if _, ok := pkCols[col.Name]; ok {
@@ -981,6 +1014,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// 	}
 			// }
 			// }
+		} else if col.GeneratedCol != nil {
+			// Generated columns are omitted from the source value scan, including
+			// the no-key ODKU fallback. Materialize them here from the complete
+			// target projection so the legacy writer receives the same final row
+			// image as the modern INSERT path.
+			generatedColIdxs = append(generatedColIdxs, tableIdx)
+			projectList = append(projectList, nil)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -993,8 +1033,20 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				}
 			}
 
+			colIdxToProjPos[int32(tableIdx)] = colIdx
 			projectList = append(projectList, defExpr)
 		}
+	}
+	for _, projectPos := range generatedColIdxs {
+		col := tableDef.Cols[projectPos]
+		genExpr := builder.applyGeneratedColumnAssignmentCast(
+			DeepCopyExpr(col.GeneratedCol.Expr), builder.isInsertIgnore)
+		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projectList)
+		projectList[projectPos] = genExpr
+		// Publish the generated column only after its expression is materialized.
+		// This preserves the order for chained generated columns and avoids
+		// inlining a placeholder nil expression into a later generated column.
+		colIdxToProjPos[int32(projectPos)] = int32(projectPos)
 	}
 
 	// append ProjectNode

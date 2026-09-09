@@ -40,7 +40,11 @@ func lookupInsertTableColumn(tableDef *plan.TableDef, name string, lowerCaseTabl
 	if tableDef == nil {
 		return 0, false
 	}
-	key := tree.NewCStr(name, lowerCaseTableNames).Compare()
+	// Column identifiers use the parser's column-name normalization regardless
+	// of lower_case_table_names. The latter controls table/row-alias matching;
+	// using it for columns makes an alias declared as `X` invisible to the
+	// parser's normalized lookup key `x` when the setting is 0.
+	key := normalizeInsertColumnName(name)
 	if tableDef.Name2ColIndex != nil {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {
 			if idx >= 0 && int(idx) < len(tableDef.Cols) && tableDef.Cols[idx] != nil {
@@ -48,18 +52,22 @@ func lookupInsertTableColumn(tableDef *plan.TableDef, name string, lowerCaseTabl
 			}
 		}
 		for candidate, idx := range tableDef.Name2ColIndex {
-			if tree.NewCStr(candidate, lowerCaseTableNames).Compare() == key &&
+			if normalizeInsertColumnName(candidate) == key &&
 				idx >= 0 && int(idx) < len(tableDef.Cols) && tableDef.Cols[idx] != nil {
 				return idx, true
 			}
 		}
 	}
 	for i, col := range tableDef.Cols {
-		if col != nil && tree.NewCStr(col.Name, lowerCaseTableNames).Compare() == key {
+		if col != nil && normalizeInsertColumnName(col.Name) == key {
 			return int32(i), true
 		}
 	}
 	return 0, false
+}
+
+func normalizeInsertColumnName(name string) string {
+	return tree.NewCStr(name, 1).Compare()
 }
 
 // validateInsertRowAlias checks the row alias after the target table and the
@@ -103,10 +111,10 @@ func validateInsertRowAlias(
 		if targetColumn == "" {
 			return nil, moerr.NewInvalidInput(ctx, "INSERT row alias contains an empty target column")
 		}
-		targetKey := tree.NewCStr(targetColumn, lowerCaseTableNames).Compare()
+		targetKey := normalizeInsertColumnName(targetColumn)
 		key := targetKey
 		if len(rowAlias.Cols) > 0 {
-			key = tree.NewCStr(string(rowAlias.Cols[i]), lowerCaseTableNames).Compare()
+			key = normalizeInsertColumnName(string(rowAlias.Cols[i]))
 		}
 		if key == "" {
 			return nil, moerr.NewInvalidInput(ctx, "INSERT row alias column cannot be empty")
@@ -212,6 +220,10 @@ func NewOndupUpdateBinder(
 	return b
 }
 
+func (b *OndupUpdateBinder) SetTargetCorrelationTag(tag int32) {
+	b.targetCorrelationTag = tag
+}
+
 func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if funcExpr, ok := astExpr.(*tree.FuncExpr); ok {
 		funcRef, ok := funcExpr.Func.FunctionReference.(*tree.UnresolvedName)
@@ -288,13 +300,14 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 	dbName := astExpr.DbName()
 	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
 	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
+	normalizedTableName := tree.NewCStr(tableName, b.lowerCaseTableNames).Compare()
 
-	if b.rowAlias != nil && tableName == b.rowAlias.name {
+	if b.rowAlias != nil && normalizedTableName == b.rowAlias.name {
 		if dbName != "" {
 			return nil, moerr.NewInvalidInputf(b.GetContext(),
 				"row alias '%s' cannot be database-qualified", astExpr.TblNameOrigin())
 		}
-		column, ok := b.rowAlias.cols[colName]
+		column, ok := b.rowAlias.cols[normalizeInsertColumnName(colName)]
 		if !ok {
 			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
 				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
@@ -318,24 +331,33 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
 				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 		}
-		return b.makeColRef(int(idx), int(idx), depth, colName, b.scanTag), nil
+		relPos := b.scanTag
+		if depth > 0 && b.targetCorrelationTag != 0 {
+			relPos = b.targetCorrelationTag
+		}
+		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
 	}
 
 	if b.rowAlias != nil {
-		_, incoming := b.rowAlias.cols[colName]
+		aliasKey := normalizeInsertColumnName(colName)
+		_, incoming := b.rowAlias.cols[aliasKey]
 		_, target := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
 		if incoming && target {
 			return nil, moerr.NewInvalidInputf(b.GetContext(),
 				"ambiguous column reference '%s'", astExpr.ColNameOrigin())
 		}
 		if incoming {
-			column := b.rowAlias.cols[colName]
+			column := b.rowAlias.cols[aliasKey]
 			return b.makeColRef(column.targetIdx, column.incomingPos, depth, colName, b.selectTag), nil
 		}
 	}
 
 	if idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames); ok {
-		return b.makeColRef(int(idx), int(idx), depth, colName, b.scanTag), nil
+		relPos := b.scanTag
+		if depth > 0 && b.targetCorrelationTag != 0 {
+			relPos = b.targetCorrelationTag
+		}
+		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
 	}
 	if depth > 0 {
 		return b.baseBindColRef(astExpr, depth, isRoot)

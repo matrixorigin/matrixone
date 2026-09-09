@@ -1,6 +1,6 @@
 # INSERT ODKU row aliases
 
-- Status: implementation in progress; Draft PR for issue #28160
+- Status: implementation complete; PR #28439 is Ready for CI/QA, issue #28160 remains open
 - Tracking issue: https://github.com/matrixorigin/matrixone/issues/28160
 - Baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7` (verified `main` before implementation)
 - Scope: MySQL-compatible `INSERT ... VALUES/SET ... AS row_alias[(column_alias, ...)]`
@@ -10,8 +10,8 @@
 
 This document records the design and implementation boundary for #28160. The
 task owner supplied and approved the fixed semantic plan before implementation;
-the implementation remains Draft until the repository review, CI, and QA gates
-provide independent evidence. No Ready promotion or issue closure is implied.
+the implementation is Ready for repository review, CI, and QA. Issue closure is
+outside this change.
 
 **Design decision (2026-09-09): PASS for implementation scope.** The selected
 design keeps row aliases in the INSERT AST, builds a statement-local mapping
@@ -42,6 +42,16 @@ The decision log accepts these constraints from the approved plan:
    discards the unreachable update action. Complete expression traversal
    retains every nested prepared-parameter offset without evaluating a fake
    projection.
+7. A correlated ODKU subquery is flattened only after a statement-local,
+   snapshot target lookup has been joined into the candidate subtree. Its
+   private binding tag supplies the old target row to `CorrColRef`; the later
+   DEDUP target scan remains the conflict arbiter. This reuses the existing
+   LEFT/JOIN and scalar-subquery operators and preserves the target lookup when
+   the DEDUP inputs are remapped.
+8. Generated-column `DEFAULT` trimming is applied to private statement/source
+   copies. The original INSERT columns remain available for row-alias identity
+   validation, while the effective legacy fallback receives matching columns
+   and value rows, including the no-key plain-insert route.
 
 ## Problem and invariant
 
@@ -76,9 +86,10 @@ wrong qualifier, leak an alias into another statement, or drop a parameter.
    includes defaults and generated columns where the existing planner requires
    them.
 4. `OndupUpdateBinder` is installed only while ODKU RHS expressions are bound.
-   Its local alias map points to `selectTag`; target references point to
-   `scanTag`; nested bind contexts retain the existing parent chain. The
-   previous binder is restored on both success and error paths.
+   Its local alias map points to `selectTag`; direct target references point to
+   `scanTag`, while depth-one references from a subquery use the private target
+   lookup tag described above. Nested bind contexts retain the existing parent
+   chain. The previous binder is restored on both success and error paths.
 5. Existing dedup, ordered assignment, final row materialization, index
    maintenance, and transaction handling consume the resulting ordinary plan
    expressions. No executor or wire change is needed.
@@ -103,10 +114,12 @@ wrong qualifier, leak an alias into another statement, or drop a parameter.
 The parser tests prove AST retention, formatting round trips, rejection of
 unsupported forms, SQL PREPARE parsing, and nested expression syntax. Planner
 unit tests prove identity remapping, generated-column positions, incoming vs
-target/correlated references, ambiguity/error checks, and complete nested
-parameter-offset collection. The distributed ODKU case proves shuffled
+target/correlated references, target lookup reachability in a real BuildPlan,
+the generated-DEFAULT no-key fallback, ambiguity/error checks, and complete
+nested parameter-offset collection. The distributed ODKU case proves shuffled
 columns, ordered assignments, repeated keys, SET aliases, shadowing,
-correlation, CASE/NULL, and repeated SQL PREPARE execution.
+correlation, CASE/NULL, repeated SQL PREPARE execution, and the generated
+column fallback's final row image.
 
 The final implementation report must keep the following separate:
 
@@ -115,20 +128,24 @@ The final implementation report must keep the following separate:
 - real service and binary-protocol BVT/QA evidence;
 - CI/review status on the exact pushed head.
 
-As of this revision, parser validation is available locally. Planner package
-execution is blocked by the worktree's native CGo dependency setup (the
-serialization declarations are absent from the cached/primary native header,
-and a clean local artifact set is unavailable); real CN/TN BVT and binary
-protocol evidence remain QA/CI gates.
+As of this revision, parser and planner package validation pass with the
+worktree's provenance-checked native CGo artifacts. A test-owned LOG/TN/CN
+instance also passes the correlated SQL, generated-column fallback, SQL
+PREPARE, and binary COM_STMT_PREPARE/EXECUTE checks. The repository's Java
+mo-tester wrapper was unavailable on this host, so the distributed runner
+remains a CI/QA gate.
 
 ## Compact review record
 
 ```text
 Change scope: complete #28160 VALUES/SET row-alias feature
 Trigger: SQL-visible feature crossing parser, AST, planner, prepared, and BVT boundaries
-Design: this document, reviewed revision is the implementation commit; Draft pending independent PR review
+Design: this document, reviewed revision is the implementation commit; Ready pending independent CI/QA review
 Blocking findings: no design-level blocker; planner CGo/native artifacts and real-service QA remain open evidence gaps
 Decision log: statement-local identity mapping; scoped binder; no new executor/wire/catalog state; explicit ROW/SELECT/REPLACE/OVERWRITE exclusions
-Decision: PASS for implementation scope; not a Ready/QA/merge decision
-Implementation deviations: none from the approved semantic plan
+Decision: PASS for implementation scope; Ready for independent CI/QA review; no merge or issue-closure decision
+Implementation deviations: the approved scope is unchanged; correlated target
+references are made reachable with an existing LEFT JOIN lookup below the
+candidate pipeline before flattening, and generated-default rewrites stay on
+private statement copies so legacy fallback columns and values remain aligned
 ```

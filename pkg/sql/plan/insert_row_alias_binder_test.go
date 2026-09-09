@@ -45,6 +45,10 @@ func testInsertAliasName(parts ...string) *tree.UnresolvedName {
 	return tree.NewUnresolvedName(cstrs...)
 }
 
+func testInsertAliasNameWithTableCase(table, column string, lowerCaseTableNames int64) *tree.UnresolvedName {
+	return tree.NewUnresolvedName(tree.NewCStr(table, lowerCaseTableNames), tree.NewCStr(column, 1))
+}
+
 func TestInsertRowAliasBindingMapsTargetIdentity(t *testing.T) {
 	tableDef := testInsertAliasTable()
 	binding, err := validateInsertRowAlias(
@@ -112,6 +116,51 @@ func TestInsertRowAliasBinderResolvesIncomingAndTargetRows(t *testing.T) {
 	require.Equal(t, int32(2), expr.GetCorr().ColPos)
 }
 
+func TestInsertRowAliasBinderUsesVisibleTargetForCorrelation(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"id", "x", "y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+	binder.SetTargetCorrelationTag(13)
+
+	expr, err := binder.BindColRef(testInsertAliasName("t", "a"), 1, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), expr.GetCorr().Depth)
+	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(1), expr.GetCorr().ColPos)
+}
+
+func TestInsertRowAliasCorrelatedFromBuildPlanKeepsTargetLookupReachable(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.NoError(t, err)
+
+	targetScans := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
+			targetScans++
+		}
+	}
+	// The target arbitration and DEDUP scans are siblings.  A third target
+	// scan proves the correlated lookup was attached below the candidate side
+	// before flattening the scalar subquery.
+	require.GreaterOrEqual(t, targetScans, 3)
+}
+
+func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a, g) values (1, default) as n(x, y) "+
+			"on duplicate key update a = n.x")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
 func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
 	tableDef := testInsertAliasTable()
 	binding, err := validateInsertRowAlias(
@@ -134,12 +183,39 @@ func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
 	}
 }
 
+func TestInsertRowAliasColumnNamesIgnoreTableCaseSetting(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "N", Cols: tree.IdentifierList{"K", "X", "Y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "N", binding.name)
+	require.Contains(t, binding.cols, "x")
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 0, binding)
+	// The parser stores column identifier parts with the column normalization
+	// (lower=1), even when lower_case_table_names=0.
+	expr, err := binder.BindColRef(testInsertAliasNameWithTableCase("N", "X", 0), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), expr.GetCol().RelPos)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+
+	_, err = validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"X", "x", "Y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 0,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "column name")
+}
+
 func TestInsertRowAliasFallbackCollectsNestedParameters(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
-		"insert into t values (1) as n on duplicate key update a = case when ? then n.a + ? else (select ?)", 1,
+		"insert into t values (1) as n on duplicate key update a = case when ? then n.a + ? else (select ?) end", 1,
 	)
 	require.NoError(t, err)
 	insert := stmt.(*tree.Insert)
-	require.Equal(t, []int{0, 1, 2}, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
+	require.Equal(t, []int{1, 2, 3}, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
 }

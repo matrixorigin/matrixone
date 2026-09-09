@@ -332,6 +332,12 @@ select * from t_odku_row_alias order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  10  ¦  80
 delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+select * from t_odku_row_alias order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  70
+delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 6, 0) as n on duplicate key update b = case when n.a > 5 then n.a else NULL end;
 select * from t_odku_row_alias order by id;
@@ -372,6 +378,16 @@ select * from t_odku_row_alias order by id;
 2  ¦  7  ¦  6
 deallocate prepare s_row_alias;
 drop table t_odku_row_alias;
+drop table if exists t_odku_no_key_generated;
+create table t_odku_no_key_generated (
+a int,
+g int generated always as (a + 1) stored
+);
+insert into t_odku_no_key_generated(a, g) values (1, default) as n(x, y) on duplicate key update a = n.x;
+select * from t_odku_no_key_generated;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  2
+drop table t_odku_no_key_generated;
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);

@@ -2644,6 +2644,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
+	// Correlated ODKU subqueries need the target row on the same input subtree
+	// that owns the candidate row. Bind depth-one target references to this
+	// private tag first; when such a reference is present, a target lookup join
+	// is added immediately before subquery flattening below.
+	targetCorrelationTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
 	// Keep the executable assignment stream separate from updateExprs. SQL
 	// assignments are ordered and a target may occur more than once; the map is
@@ -2678,6 +2683,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
 				rowAlias,
 			)
+			binder.SetTargetCorrelationTag(targetCorrelationTag)
 			previousBinder := bindCtx.binder
 			bindCtx.binder = binder
 			defer func() { bindCtx.binder = previousBinder }()
@@ -2718,6 +2724,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
 			rowAlias,
 		)
+		binder.SetTargetCorrelationTag(targetCorrelationTag)
 		var previousBinder Binder
 		if rowAlias != nil {
 			previousBinder = bindCtx.binder
@@ -2800,15 +2807,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				updateColExprList = append(updateColExprList, newDefExpr)
 				autoUpdateCols[col.Name] = true
 			}
-		}
-
-		for i, updateExpr := range updateColExprList {
-			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
-			if err != nil {
-				return 0, err
-			}
-			updateColExprList[i] = updateExpr
-			updateExprs[tableDef.Cols[updateColIdxList[i]].Name] = updateExpr
 		}
 
 		// Keep the dependency set separate from updateExprs: updateExprs is the
@@ -3372,6 +3370,100 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			pkRoleIdxPos = firstUniqueIdxPos
 		}
 
+		// A correlated ODKU subquery is evaluated by an expression executor whose
+		// input is the DEDUP join pair. The target scan below is the DEDUP build
+		// sibling, so it cannot satisfy a depth-one correlation while the
+		// candidate-side subquery is flattened. Make a snapshot lookup of the
+		// resolved target row part of the candidate subtree first. The lookup is
+		// only needed for statements that actually contain a subquery; ordinary
+		// ODKU expressions keep their existing two-input plan and cost.
+		if updateExprListHasSubquery(updateColExprList) {
+			lookupKeyPos := targetPkPos
+			if lookupKeyPos < 0 {
+				var ok bool
+				lookupKeyPos, ok = colName2Idx[tableDef.Name+"."+pkName]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(),
+						"correlated ODKU subquery cannot locate target key projection %s", pkName)
+				}
+			}
+			lookupPkPos, ok := tableDef.Name2ColIndex[pkName]
+			if !ok || lookupPkPos < 0 || int(lookupPkPos) >= len(tableDef.Cols) {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(),
+					"correlated ODKU subquery cannot locate target key column %s", pkName)
+			}
+			lookupTag := targetCorrelationTag
+			builder.addNameByColRef(lookupTag, tableDef)
+			lookupScanID := builder.appendNode(&plan.Node{
+				NodeType:     plan.Node_TABLE_SCAN,
+				TableDef:     tableDef,
+				ObjRef:       objRef,
+				BindingTags:  []int32{lookupTag},
+				ScanSnapshot: bindCtx.snapshot,
+			}, bindCtx)
+			pkTyp := tableDef.Cols[lookupPkPos].Typ
+			incomingPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectTag, ColPos: lookupKeyPos,
+			}}}
+			lookupPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: lookupTag, ColPos: lookupPkPos,
+			}}}
+			incomingPK, err = bindPrimaryKeyIdentityExpr(builder, incomingPK, pkTyp)
+			if err != nil {
+				return 0, err
+			}
+			lookupPK, err = bindPrimaryKeyIdentityExpr(builder, lookupPK, pkTyp)
+			if err != nil {
+				return 0, err
+			}
+			lookupCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				lookupPK, incomingPK,
+			})
+			if err != nil {
+				return 0, err
+			}
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{lastNodeID, lookupScanID},
+				JoinType: plan.Node_LEFT,
+				OnList:   []*plan.Expr{lookupCond},
+			}, bindCtx)
+		}
+
+		for i, updateExpr := range updateColExprList {
+			previousNodeID := lastNodeID
+			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
+			if err != nil {
+				return 0, err
+			}
+			updateColExprList[i] = updateExpr
+			updateExprs[tableDef.Cols[updateColIdxList[i]].Name] = updateExpr
+			if lastNodeID != previousNodeID {
+				oldSelectTag := selectTag
+				lastNodeID, selectTag, selectNode, err = builder.canonicalizeInsertSubqueryInput(
+					bindCtx,
+					lastNodeID,
+					selectNode,
+					selectTag,
+					scanTag,
+					targetCorrelationTag,
+					tableDef,
+					updateColExprList,
+				)
+				if err != nil {
+					return 0, err
+				}
+				// Unique-index projections are prepared before subqueries are
+				// flattened and therefore still refer to the previous candidate
+				// binding tag. Retarget them to the protected row-image projection
+				// together with the update expressions; otherwise the later unique
+				// dedup condition can retain a dangling pre-projection reference.
+				for _, expr := range appendedUniqueProjs {
+					replaceColRefTag(expr, oldSelectTag, selectTag)
+				}
+			}
+		}
+
 		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0 || useTargetPk) {
 			builder.addNameByColRef(scanTag, tableDef)
 
@@ -3443,7 +3535,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 			}
-
 			var dedupColName string
 			if len(dedupKeyNames) == 1 {
 				dedupColName = dedupKeyNames[0]
@@ -4440,6 +4531,246 @@ func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
 }
 
+func updateExprListHasSubquery(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprHasSubquery(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+// insertScopeRef is a global binding reference that must be made visible by
+// the projection which normalizes a flattened ODKU subquery input. Keeping the
+// encounter order makes the generated plan deterministic and avoids relying
+// on map iteration order when several scalar subqueries are present.
+type insertScopeRef struct {
+	tag int32
+	pos int32
+	typ plan.Type
+}
+
+func collectInsertScopeRefs(expr *plan.Expr, refs *[]insertScopeRef, seen map[[2]int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	add := func(tag, pos int32, typ plan.Type) {
+		if tag <= 0 {
+			return
+		}
+		key := [2]int32{tag, pos}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		*refs = append(*refs, insertScopeRef{tag: tag, pos: pos, typ: typ})
+	}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col != nil {
+			add(impl.Col.RelPos, impl.Col.ColPos, expr.Typ)
+		}
+	case *plan.Expr_Corr:
+		if impl.Corr != nil {
+			add(impl.Corr.RelPos, impl.Corr.ColPos, expr.Typ)
+		}
+	case *plan.Expr_F:
+		if impl.F != nil {
+			for _, arg := range impl.F.Args {
+				collectInsertScopeRefs(arg, refs, seen)
+			}
+		}
+	case *plan.Expr_List:
+		if impl.List != nil {
+			for _, item := range impl.List.List {
+				collectInsertScopeRefs(item, refs, seen)
+			}
+		}
+	case *plan.Expr_W:
+		if impl.W == nil {
+			return
+		}
+		collectInsertScopeRefs(impl.W.WindowFunc, refs, seen)
+		for _, item := range impl.W.PartitionBy {
+			collectInsertScopeRefs(item, refs, seen)
+		}
+		for _, order := range impl.W.OrderBy {
+			if order != nil {
+				collectInsertScopeRefs(order.Expr, refs, seen)
+			}
+		}
+		if impl.W.Frame != nil {
+			if impl.W.Frame.Start != nil {
+				collectInsertScopeRefs(impl.W.Frame.Start.Val, refs, seen)
+			}
+			if impl.W.Frame.End != nil {
+				collectInsertScopeRefs(impl.W.Frame.End.Val, refs, seen)
+			}
+		}
+	// References inside an unflattened subquery belong to that subquery's
+	// scope. They are collected after the subquery is flattened, when its
+	// result is an outer-scope reference and can safely be projected here.
+	case *plan.Expr_Sub:
+		return
+	}
+}
+
+func rewriteInsertScopeRefs(
+	expr *plan.Expr,
+	oldTag, newTag, targetTag, targetBase int32,
+	foreign map[[2]int32]int32,
+) {
+	if expr == nil {
+		return
+	}
+	mapRef := func(tag, pos int32) (int32, int32, bool) {
+		if tag == oldTag {
+			return newTag, pos, true
+		}
+		if tag == targetTag {
+			return newTag, targetBase + pos, true
+		}
+		mapped, ok := foreign[[2]int32{tag, pos}]
+		if ok {
+			return newTag, mapped, true
+		}
+		return tag, pos, false
+	}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col != nil {
+			if tag, pos, ok := mapRef(impl.Col.RelPos, impl.Col.ColPos); ok {
+				impl.Col.RelPos, impl.Col.ColPos = tag, pos
+			}
+		}
+	case *plan.Expr_Corr:
+		if impl.Corr != nil {
+			if tag, pos, ok := mapRef(impl.Corr.RelPos, impl.Corr.ColPos); ok {
+				if impl.Corr.Depth <= 1 {
+					expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}}
+				} else {
+					impl.Corr.RelPos, impl.Corr.ColPos = tag, pos
+				}
+			}
+		}
+	case *plan.Expr_F:
+		if impl.F != nil {
+			for _, arg := range impl.F.Args {
+				rewriteInsertScopeRefs(arg, oldTag, newTag, targetTag, targetBase, foreign)
+			}
+		}
+	case *plan.Expr_List:
+		if impl.List != nil {
+			for _, item := range impl.List.List {
+				rewriteInsertScopeRefs(item, oldTag, newTag, targetTag, targetBase, foreign)
+			}
+		}
+	case *plan.Expr_W:
+		if impl.W == nil {
+			return
+		}
+		rewriteInsertScopeRefs(impl.W.WindowFunc, oldTag, newTag, targetTag, targetBase, foreign)
+		for _, item := range impl.W.PartitionBy {
+			rewriteInsertScopeRefs(item, oldTag, newTag, targetTag, targetBase, foreign)
+		}
+		for _, order := range impl.W.OrderBy {
+			if order != nil {
+				rewriteInsertScopeRefs(order.Expr, oldTag, newTag, targetTag, targetBase, foreign)
+			}
+		}
+		if impl.W.Frame != nil {
+			if impl.W.Frame.Start != nil {
+				rewriteInsertScopeRefs(impl.W.Frame.Start.Val, oldTag, newTag, targetTag, targetBase, foreign)
+			}
+			if impl.W.Frame.End != nil {
+				rewriteInsertScopeRefs(impl.W.Frame.End.Val, oldTag, newTag, targetTag, targetBase, foreign)
+			}
+		}
+	case *plan.Expr_Sub:
+		return
+	}
+}
+
+// canonicalizeInsertSubqueryInput restores the DEDUP input contract after a
+// subquery is flattened. A scalar/mark join is free to put its own result on
+// the left and can therefore shift the candidate row image. DEDUP deliberately
+// treats the first input columns as the candidate/target-aligned image; this
+// projection makes that prefix explicit while retaining target and subquery
+// values in a suffix for later update expressions.
+func (builder *QueryBuilder) canonicalizeInsertSubqueryInput(
+	bindCtx *BindContext,
+	nodeID int32,
+	selectNode *plan.Node,
+	selectTag, scanTag, targetTag int32,
+	tableDef *plan.TableDef,
+	updateExprs []*plan.Expr,
+) (int32, int32, *plan.Node, error) {
+	if selectNode == nil {
+		return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+			"ODKU subquery input has no candidate projection")
+	}
+	candidateWidth := len(selectNode.ProjectList)
+	if candidateWidth == 0 {
+		return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+			"ODKU subquery input has an empty candidate projection")
+	}
+
+	refs := make([]insertScopeRef, 0)
+	seen := make(map[[2]int32]struct{})
+	for _, expr := range updateExprs {
+		collectInsertScopeRefs(expr, &refs, seen)
+	}
+
+	// The target lookup is part of the candidate subtree. Keep the full target
+	// row available so a later assignment's newly flattened correlated
+	// reference can be rewritten without rebuilding that lookup.
+	targetBase := int32(candidateWidth)
+	targetWidth := int32(0)
+	if targetTag > 0 && tableDef != nil {
+		targetWidth = int32(len(tableDef.Cols))
+	}
+
+	projects := make([]*plan.Expr, 0, candidateWidth+int(targetWidth)+len(refs))
+	for i, expr := range selectNode.ProjectList {
+		projects = append(projects, GetColExpr(expr.Typ, selectTag, int32(i)))
+	}
+	for i := int32(0); i < targetWidth; i++ {
+		projects = append(projects, GetColExpr(tableDef.Cols[i].Typ, targetTag, i))
+	}
+
+	foreign := make(map[[2]int32]int32)
+	for _, ref := range refs {
+		if ref.tag == selectTag || ref.tag == scanTag || ref.tag == targetTag {
+			continue
+		}
+		key := [2]int32{ref.tag, ref.pos}
+		if _, ok := foreign[key]; ok {
+			continue
+		}
+		foreign[key] = int32(len(projects))
+		projects = append(projects, GetColExpr(ref.typ, ref.tag, ref.pos))
+	}
+
+	newTag := builder.genNewBindTag()
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{nodeID},
+		ProjectList: projects,
+		BindingTags: []int32{newTag},
+	}
+	newNodeID := builder.appendNode(projectNode, bindCtx)
+	if builder.preserveInsertSubqueryProjection == nil {
+		builder.preserveInsertSubqueryProjection = make(map[int32]struct{})
+	}
+	builder.preserveInsertSubqueryProjection[newNodeID] = struct{}{}
+	for _, expr := range updateExprs {
+		rewriteInsertScopeRefs(expr, selectTag, newTag, targetTag, targetBase, foreign)
+	}
+	return newNodeID, newTag, projectNode, nil
+}
+
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
 // If the INSERT statement does not specify the columns, all columns except the fake primary key column
@@ -4455,7 +4786,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	var insertColNames []string
 	colToIdx := make(map[string]int)
 	for i, col := range tableDef.Cols {
-		colToIdx[strings.ToLower(col.Name)] = i
+		colToIdx[normalizeInsertColumnName(col.Name)] = i
 	}
 	if astCols == nil {
 		for _, col := range tableDef.Cols {
@@ -4465,7 +4796,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 		}
 	} else {
 		for _, column := range astCols {
-			colName := strings.ToLower(string(column))
+			colName := normalizeInsertColumnName(string(column))
 			idx, ok := colToIdx[colName]
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
@@ -4502,7 +4833,7 @@ func (builder *QueryBuilder) getInsertColsForRowAlias(astCols tree.IdentifierLis
 	for _, column := range astCols {
 		idx, ok := lookupInsertTableColumn(tableDef, string(column), builder.compCtx.GetLowerCaseTableNames())
 		if !ok {
-			return nil, moerr.NewBadField(builder.GetContext(), string(column), tableDef.Name)
+			return nil, moerr.NewBadFieldError(builder.GetContext(), string(column), tableDef.Name)
 		}
 		columns = append(columns, tableDef.Cols[idx].Name)
 	}
@@ -4513,7 +4844,7 @@ func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.Identifie
 	seen := make(map[string]struct{}, len(astCols))
 	for _, column := range astCols {
 		columnName := string(column)
-		key := strings.ToLower(columnName)
+		key := normalizeInsertColumnName(columnName)
 		if _, ok := seen[key]; ok {
 			return moerr.NewFieldSpecifiedTwice(builder.GetContext(), columnName)
 		}
@@ -4620,8 +4951,14 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	// Strip generated columns with DEFAULT values from INSERT column list.
 	// MySQL allows INSERT INTO t(gen_col) VALUES(DEFAULT) — silently ignore those columns.
 	cleanedCols := astCols
+	effectiveRows := astRows
 	if astCols != nil {
-		cleanedCols, err = builder.stripGeneratedDefaultCols(astCols, astRows, tableDef)
+		// stripGeneratedDefaultCols rewrites the ValuesClause in place. Keep that
+		// rewrite local to the modern source so an unsupported modern route can
+		// retry the original statement through the legacy fallback without a
+		// column/value width mismatch.
+		effectiveRows = cloneInsertRowsForGeneratedRewrite(astRows)
+		cleanedCols, err = builder.stripGeneratedDefaultCols(astCols, effectiveRows, tableDef)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
@@ -4633,7 +4970,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	}
 
 	var astSelect *tree.Select
-	switch selectImpl := astRows.Select.(type) {
+	switch selectImpl := effectiveRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
 		isAllDefault := false
@@ -4703,6 +5040,24 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	}
 
 	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
+}
+
+func cloneInsertRowsForGeneratedRewrite(rows *tree.Select) *tree.Select {
+	if rows == nil {
+		return nil
+	}
+	clone := *rows
+	if values, ok := rows.Select.(*tree.ValuesClause); ok {
+		valuesClone := *values
+		valuesClone.Rows = make([]tree.Exprs, len(values.Rows))
+		for i, row := range values.Rows {
+			if row != nil {
+				valuesClone.Rows[i] = append(tree.Exprs(nil), row...)
+			}
+		}
+		clone.Select = &valuesClone
+	}
+	return &clone
 }
 
 // castInsertSourceColumn casts one bound source column to its target column
