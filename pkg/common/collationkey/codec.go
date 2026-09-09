@@ -187,7 +187,7 @@ func registryEntry(spec familySpec) []byte {
 }
 
 func domainSpec(domain Domain) (familySpec, []byte, error) {
-	if domain.Prefix > math.MaxUint32 || domain.Width == 0 &&
+	if domain.Width == 0 &&
 		(domain.Type == SignedInteger || domain.Type == UnsignedInteger || domain.Type == Decimal) {
 		return familySpec{}, nil, ErrUnsupportedDomain
 	}
