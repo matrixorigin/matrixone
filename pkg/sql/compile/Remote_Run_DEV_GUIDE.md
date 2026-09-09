@@ -166,7 +166,7 @@ func CnServerMessageHandler(
     lockService lockservice.LockService,
     queryClient qclient.QueryClient,
     HaKeeper logservice.CNHAKeeperClient,
-    udfService udf.Service,
+    udfService udf.Runtime,
     txnClient client.TxnClient,
     autoIncreaseCM *defines.AutoIncrCacheManager,
     messageAcquirer func() morpc.Message) (err error) {

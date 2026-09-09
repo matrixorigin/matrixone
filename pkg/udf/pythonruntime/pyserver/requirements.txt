@@ -1,0 +1,3 @@
+# The worker is a separate sandbox process.  The runtime image must pin the
+# complete environment lock used when the routine revision was published.
+pyarrow==24.0.0
