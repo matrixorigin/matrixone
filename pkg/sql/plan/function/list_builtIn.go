@@ -13174,6 +13174,25 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	// Internal v2 text-key materializer. It is intentionally not registered by
+	// name; relation capability/activation checks must precede any use.
+	{
+		functionId: INTERNAL_COLLATION_KEY_V2,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    collationKeyV2TypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
+				retType:    collationKeyV2ReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInCollationKeyV2
+				},
+			},
+		},
+	},
+
 	// Internal helper used by the interval binder for dynamic string values.
 	{
 		functionId: TO_INTERVAL,
