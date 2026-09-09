@@ -5130,7 +5130,7 @@ func replaceValueExprContainsSubquery(expr tree.Expr) bool {
 	}
 
 	found := false
-	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+	walkASTExpressions(expr, func(candidate tree.Expr) bool {
 		if _, ok := candidate.(*tree.Subquery); ok {
 			found = true
 			return false
