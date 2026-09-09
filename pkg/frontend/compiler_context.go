@@ -974,6 +974,9 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				return nil, getErr
 			}
 			udf.SQLMode = &mode
+			if err = udf.LoadPythonTypeContract(); err != nil {
+				return nil, err
+			}
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)

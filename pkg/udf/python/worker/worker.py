@@ -457,19 +457,28 @@ def _scalar_input(array: pa.Array, row: int, descriptor: Dict[str, Any]):
         if type_id == DATETIME:
             return SqlDatetime(zero, None if zero else child)
         return SqlTimestamp(zero, None if zero else child)
+    if type_id == JSON:
+        return _canonical_json_text(value)
     if type_id == UUID:
         return _uuid.UUID(bytes=bytes(value))
     return value
 
 
-def _check_json(value: str) -> str:
+def _canonical_json_text(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("TYPE_CONTRACT: JSON result must be canonical text")
+        raise ValueError("TYPE_CONTRACT: JSON value must be text")
     try:
         parsed = json.loads(value)
     except Exception as exc:
-        raise ValueError("TYPE_CONTRACT: invalid JSON result") from exc
-    canonical = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        raise ValueError("TYPE_CONTRACT: invalid JSON input") from exc
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+
+def _check_json(value: str) -> str:
+    try:
+        canonical = _canonical_json_text(value)
+    except ValueError as exc:
+        raise ValueError("TYPE_CONTRACT: JSON result must be canonical text") from exc
     if canonical != value:
         raise ValueError("TYPE_CONTRACT: JSON result is not canonical text")
     return value
@@ -508,7 +517,7 @@ def _check_scalar(value: Any, descriptor: Dict[str, Any]):
         return value
     if type_id == UUID:
         if not isinstance(value, _uuid.UUID): raise ValueError("TYPE_CONTRACT: expected uuid.UUID")
-        return value.bytes
+        return value
     if type_id == TIME:
         if not isinstance(value, _datetime.timedelta): raise ValueError("TYPE_CONTRACT: expected datetime.timedelta")
         micros = _timedelta_micros(value)
