@@ -56,6 +56,7 @@ type groupConcatExec struct {
 	maxLen           uint64
 	truncationCount  uint64
 	truncationRows   []uint64
+	warningRowCount  uint64
 }
 
 // GroupConcatWarning identifies one retained truncation diagnostic. The
@@ -89,9 +90,13 @@ func ConsumeGroupConcatWarnings(agg AggFuncExec) (uint64, []GroupConcatWarning) 
 	for i, row := range exec.truncationRows {
 		rows[i].Row = row
 	}
+	exec.clearTruncationWarnings()
+	return total, rows
+}
+
+func (exec *groupConcatExec) clearTruncationWarnings() {
 	exec.truncationCount = 0
 	exec.truncationRows = exec.truncationRows[:0]
-	return total, rows
 }
 
 // ReportGroupConcatWarnings publishes the bounded diagnostics and exact total
@@ -100,6 +105,11 @@ func ConsumeGroupConcatWarnings(agg AggFuncExec) (uint64, []GroupConcatWarning) 
 // collectors receive the same batch and forward it to the initiator.
 func ReportGroupConcatWarnings(agg AggFuncExec, session any) {
 	if session == nil {
+		return
+	}
+	batch, hasBatchSink := session.(groupConcatWarningBatchAppender)
+	appender, hasDiagnosticSink := session.(groupConcatWarningDiagnosticAppender)
+	if !hasBatchSink && !hasDiagnosticSink {
 		return
 	}
 	total, warnings := ConsumeGroupConcatWarnings(agg)
@@ -113,11 +123,11 @@ func ReportGroupConcatWarnings(agg AggFuncExec, session any) {
 		messages = append(messages, fmt.Sprintf(
 			"Row %d was cut by GROUP_CONCAT()", warning.Row))
 	}
-	if batch, ok := session.(groupConcatWarningBatchAppender); ok {
+	if hasBatchSink {
 		batch.AppendWarningBatch(total, codes, messages)
 		return
 	}
-	if appender, ok := session.(groupConcatWarningDiagnosticAppender); ok {
+	if hasDiagnosticSink {
 		for i := range codes {
 			appender.AppendWarningDiagnostic(codes[i], messages[i])
 		}
@@ -783,8 +793,16 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 	// A GROUP_CONCAT executor is finalized once per result generation. Reset
 	// diagnostics before doing any fallible work so a failed generation cannot
 	// leak warnings into a later reuse.
-	exec.truncationCount = 0
-	exec.truncationRows = exec.truncationRows[:0]
+	exec.clearTruncationWarnings()
+	exec.warningRowCount = 0
+	defer func() {
+		// A failed finalization must not leave diagnostics consumable by a later
+		// execution boundary. This also covers a later group failing after an
+		// earlier group already recorded a truncation.
+		if retErr != nil {
+			exec.clearTruncationWarnings()
+		}
+	}()
 	if exec.hasOrderedSpillRuns() {
 		if err := exec.spillOrderedState(ctx); err != nil {
 			return nil, err
@@ -862,6 +880,11 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *groupConcatExec) nextWarningRow() uint64 {
+	exec.warningRowCount++
+	return exec.warningRowCount
 }
 
 func (exec *groupConcatExec) recordTruncation(row uint64) {
@@ -981,7 +1004,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 				}
 				seen[key] = struct{}{}
 			}
-			row++
+			row = exec.nextWarningRow()
 			if !first {
 				var truncated bool
 				buf, truncated = appendGroupConcatBytes(
@@ -1074,7 +1097,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			}
 			seen[key] = struct{}{}
 		}
-		row++
+		row = exec.nextWarningRow()
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
@@ -1579,7 +1602,7 @@ func (exec *groupConcatExec) flushOrderedEntries(
 			}
 			seen[key] = struct{}{}
 		}
-		row++
+		row = exec.nextWarningRow()
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
@@ -1716,7 +1739,7 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 			return nil
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
-		row++
+		row = exec.nextWarningRow()
 		if !first {
 			buf, truncated = appendGroupConcatBytes(
 				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
@@ -1811,7 +1834,7 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 			return nil
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
-		row++
+		row = exec.nextWarningRow()
 		if !first {
 			if _, err := writer.Write(exec.separator); err != nil {
 				return err
@@ -1952,7 +1975,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 				return err
 			}
 		}
-		row++
+		row = exec.nextWarningRow()
 		if !first {
 			if _, err := writer.Write(exec.separator); err != nil {
 				return err
@@ -2198,6 +2221,7 @@ func (exec *groupConcatExec) Free() {
 	exec.orderedDistinct = nil
 	exec.truncationRows = nil
 	exec.truncationCount = 0
+	exec.warningRowCount = 0
 	exec.distinctHash.free()
 	exec.aggExec.Free()
 }

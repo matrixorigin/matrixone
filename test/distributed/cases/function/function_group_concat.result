@@ -380,6 +380,13 @@ set session group_concat_max_len = 1024;
 execute group_concat_max_len_low_stmt;
 group_concat(s, ,order by s)
 aabbcc
+set session group_concat_max_len = 5;
+execute group_concat_max_len_low_stmt;
+group_concat(s, ,order by s)
+aabbc
+show warnings;
+Level    Code    Message
+Warning  1260    Row 3 was cut by GROUP_CONCAT()
 deallocate prepare group_concat_max_len_low_stmt;
 drop table group_concat_max_len_01;
 drop table if exists group_concat_warning_01;
@@ -391,6 +398,15 @@ hex(group_concat(s order by id separator '|'))
 from group_concat_warning_01;
 group_concat(s, |,order by id)    hex(group_concat(s, |,order by id))
 éé|中    C3A9C3A97CE4B8AD
+show warnings;
+Level    Code    Message
+Warning  1260    Row 2 was cut by GROUP_CONCAT()
+Warning  1260    Row 2 was cut by GROUP_CONCAT()
+select group_concat(s order by id separator '|'),
+group_concat(s order by id separator '')
+from group_concat_warning_01;
+group_concat(s, |,order by id)    group_concat(s, ,order by id)
+éé|中    éé中
 show warnings;
 Level    Code    Message
 Warning  1260    Row 2 was cut by GROUP_CONCAT()

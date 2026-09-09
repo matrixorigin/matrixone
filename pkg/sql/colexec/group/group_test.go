@@ -218,6 +218,12 @@ func TestGroupConcatFinalResultReportsWarning(t *testing.T) {
 			[]*plan.Expr{colExpr(0, types.T_varchar)},
 			aggexec.EncodeGroupConcatConfig("", 5),
 		),
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			[]*plan.Expr{colExpr(0, types.T_varchar)},
+			aggexec.EncodeGroupConcatConfig("|", 5),
+		),
 	})
 	g.AppendChild(child)
 	t.Cleanup(func() {
@@ -230,9 +236,58 @@ func TestGroupConcatFinalResultReportsWarning(t *testing.T) {
 	outputs := collectBatches(t, g, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, "aabbc", outputs[0].Vecs[0].GetStringAt(0))
-	require.Equal(t, uint64(1), session.total)
-	require.Equal(t, []uint16{moerr.ER_CUT_VALUE_GROUP_CONCAT}, session.codes)
-	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, session.messages)
+	require.Equal(t, "aa|bb", outputs[0].Vecs[1].GetStringAt(0))
+	require.Equal(t, uint64(2), session.total)
+	require.Equal(t, []uint16{
+		moerr.ER_CUT_VALUE_GROUP_CONCAT,
+		moerr.ER_CUT_VALUE_GROUP_CONCAT,
+	}, session.codes)
+	require.Equal(t, []string{
+		"Row 3 was cut by GROUP_CONCAT()",
+		"Row 3 was cut by GROUP_CONCAT()",
+	}, session.messages)
+}
+
+func TestGroupedGroupConcatWarningsAccumulateRowsWithinFinalization(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &groupConcatWarningSession{}
+	proc.Session = session
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeVarcharVector(
+		[]string{"aa", "bb", "cc", "aa", "bb", "cc"}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector(
+		[]int32{1, 1, 1, 2, 2, 2}, nil, proc.Mp())
+	input.SetRowCount(6)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(1, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfGroupConcat,
+				false,
+				[]*plan.Expr{colExpr(0, types.T_varchar)},
+				aggexec.EncodeGroupConcatConfig("", 5),
+			),
+		},
+	)
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount())
+	require.Equal(t, uint64(2), session.total)
+	require.ElementsMatch(t, []string{
+		"Row 3 was cut by GROUP_CONCAT()",
+		"Row 6 was cut by GROUP_CONCAT()",
+	}, session.messages)
 }
 
 func TestGroupKeyMergesDuplicateStringSourcesDeterministically(t *testing.T) {
