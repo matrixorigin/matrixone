@@ -7834,6 +7834,44 @@ func extractUnitPrefersTime(unit string) bool {
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if len(ivecs) == 3 {
+		var (
+			cachedDefinition string
+			memberPositions  map[string]uint64
+		)
+		findSetMember := func(target string, bitmap uint64, definition string) uint64 {
+			// The definition is a hidden constant for planner-generated SET
+			// calls. Keep the fallback for direct executor tests and defensive
+			// callers that provide a row-wise metadata vector.
+			if memberPositions == nil || cachedDefinition != definition {
+				cachedDefinition = definition
+				memberPositions = make(map[string]uint64)
+				for i, member := range strings.Split(definition, ",") {
+					// Match types.ParseSet: SET definitions are normalized by
+					// trimming trailing ASCII spaces and folding case.
+					key := strings.ToLower(strings.TrimRight(member, " "))
+					memberPositions[key] = uint64(i + 1)
+				}
+			}
+			// Most SET labels are already normalized at the SQL boundary. Try
+			// the allocation-free exact key first and fold only on a miss for
+			// mixed-case or padded needles.
+			targetKey := strings.TrimRight(target, " ")
+			position, ok := memberPositions[targetKey]
+			if !ok {
+				position, ok = memberPositions[strings.ToLower(targetKey)]
+			}
+			if !ok || position == 0 || position > types.MaxSetMembers {
+				return 0
+			}
+			if bitmap&(uint64(1)<<uint(position-1)) == 0 {
+				return 0
+			}
+			return position
+		}
+		return opTernaryStrFixedStrToFixed[uint64, uint64](ivecs, result, proc, length, findSetMember, selectList)
+	}
+
 	findInStrList := func(str, strlist string) uint64 {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
