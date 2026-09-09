@@ -1210,3 +1210,23 @@ or legacy sidecar image. The snapshot codec is an in-process persistence
 boundary and is not yet wired to TN/catalog pages, backup/restore commands, or
 the migration management API; v2 remains disabled until those owners consume
 the same format and activation epoch.
+
+### 10.18 Implementation series status (migration gate persistence envelope)
+
+The migration contract now has a deterministic `MOKG` checkpoint envelope in
+`pkg/common/collationkey/migration_snapshot.go`. It persists the relation and
+monotonic migration epoch, fenced owner identity, phase/deadline, post-drain
+snapshot and temporary relation IDs, publication/replay identities, and all
+permit/replay maps. Integer fields use fixed big-endian encoding; map entries
+are sorted by their complete byte identity and all variable-length identities
+are bounded. A SHA-256 trailer covers the complete body.
+
+Decoding verifies the checksum before allocation, enforces the snapshot and
+entry ceilings, rejects unsorted or duplicate identities, and runs the
+`MigrationGate.Validate` state-machine check before returning any state. A
+recovered gate therefore cannot silently lose an outstanding writer, replay
+target, owner fence, or irreversible publication marker. This is a typed
+checkpoint contract for a future HAKeeper/catalog adapter; it is not yet
+connected to RSM fields, TN commit admission, `mo_ctl`, catalog relation
+publication, or the migration runbook. The v2 writer/read gates remain
+fail-closed and production v2 remains disabled.
