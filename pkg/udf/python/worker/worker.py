@@ -50,6 +50,7 @@ ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
+_HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
 _MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
@@ -653,10 +654,18 @@ def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
                 elif type_id == DATETIME: _check_scalar(SqlDatetime(False, value), descriptor)
                 else: _check_scalar(SqlTimestamp(False, value), descriptor)
     elif type_id in (VECF32, VECF64):
-        values = array.values
-        for index in range(len(values)):
-            if not values[index].is_valid:
-                raise ValueError("TYPE_CONTRACT: vector child validity must be non-null")
+        # A FixedSizeListArray may have both null parents and a non-zero row
+        # offset.  Its backing child array can therefore contain nulls that
+        # are either hidden behind a null parent or outside the visible slice.
+        # Only the children belonging to visible, non-null rows are part of
+        # the SQL value domain.
+        for row in range(len(array)):
+            value = array[row]
+            if not value.is_valid:
+                continue
+            for child in value.values:
+                if not child.is_valid:
+                    raise ValueError("TYPE_CONTRACT: vector child validity must be non-null")
     elif type_id in (CHAR, VARCHAR, TEXT, JSON, BINARY, VARBINARY, BLOB, UUID, TIME, DECIMAL64, DECIMAL128):
         for index in range(len(array)):
             if not array[index].is_valid: continue
@@ -757,6 +766,14 @@ def _write_execution_frame(stream, payload: bytes) -> None:
 
 
 def _execute_handler_subprocess() -> None:
+    response_fd_text = os.environ.pop(_HANDLER_RESPONSE_FD_ENV, None)
+    if response_fd_text is None:
+        raise ValueError("PROTOCOL: handler response channel is missing")
+    try:
+        response_fd = int(response_fd_text)
+        response_stream = os.fdopen(response_fd, "wb", buffering=0, closefd=True)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("PROTOCOL: handler response channel is invalid") from exc
     try:
         size = struct.unpack(">Q", _read_exact(sys.stdin.buffer, 8))[0]
         if size > MAX_EXECUTION_FRAME_BYTES:
@@ -765,7 +782,12 @@ def _execute_handler_subprocess() -> None:
         response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(request)
     except Exception as exc:
         response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
-    _write_execution_frame(sys.stdout.buffer, response)
+    try:
+        # This descriptor is created by the adapter and is distinct from the
+        # process stdout/stderr descriptors available to handler code.
+        _write_execution_frame(response_stream, response)
+    finally:
+        response_stream.close()
 
 
 def _context_is_cancelled(context) -> bool:
@@ -778,14 +800,16 @@ def _context_is_cancelled(context) -> bool:
 
 
 def _kill_execution_process(process: subprocess.Popen) -> None:
-    if process.poll() is None:
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            process.kill()
+    # The leader can already have exited while one of its descendants keeps
+    # the execution alive.  Always address the process group first; checking
+    # poll() before killpg() leaves that descendant outside the cleanup path.
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.kill()
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
@@ -793,27 +817,63 @@ def _kill_execution_process(process: subprocess.Popen) -> None:
         process.wait()
 
 
+def _execution_group_alive(process: subprocess.Popen) -> bool:
+    if os.name != "posix":
+        return process.poll() is None
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: float) -> bytes:
+    deadline = time.monotonic() + timeout_seconds
     request_wire = pickle.dumps(request, protocol=5)
     if len(request_wire) > MAX_EXECUTION_FRAME_BYTES:
         raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+    request_frame = struct.pack(">Q", len(request_wire)) + request_wire
+    response_read_fd, response_write_fd = os.pipe()
+    process = None
+    selector = None
     popen_kwargs = {
         "stdin": subprocess.PIPE,
-        "stdout": subprocess.PIPE,
+        # Handler output is diagnostic-only.  It must never share the
+        # adapter response channel, even when user code writes directly to
+        # file descriptor 1.
+        "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
-    process = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--execute-handler"], **popen_kwargs)
-    selector = selectors.DefaultSelector()
+        popen_kwargs["pass_fds"] = (response_write_fd,)
+    child_env = os.environ.copy()
+    child_env[_HANDLER_RESPONSE_FD_ENV] = str(response_write_fd)
+    # The extra descriptor is a protocol-channel separation mechanism, not a
+    # sandbox boundary.  An unisolated handler with arbitrary OS access can
+    # still inspect inherited descriptors; production isolation must enforce
+    # the stronger policy that handler code cannot write this channel.
+    popen_kwargs["env"] = child_env
     response = bytearray()
     expected = None
+    response_eof = False
+    request_offset = 0
     try:
-        _write_execution_frame(process.stdin, request_wire)
-        process.stdin.close()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        deadline = time.monotonic() + timeout_seconds
+        process = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--execute-handler"],
+            **popen_kwargs,
+        )
+        os.close(response_write_fd)
+        response_write_fd = -1
+        selector = selectors.DefaultSelector()
+        stdin_fd = process.stdin.fileno()
+        os.set_blocking(stdin_fd, False)
+        os.set_blocking(response_read_fd, False)
+        selector.register(stdin_fd, selectors.EVENT_WRITE, "request")
+        selector.register(response_read_fd, selectors.EVENT_READ, "response")
         while True:
             if _context_is_cancelled(context):
                 raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
@@ -821,20 +881,47 @@ def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: floa
             if remaining <= 0:
                 raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
             events = selector.select(min(remaining, 0.1))
-            if not events:
-                continue
-            chunk = os.read(process.stdout.fileno(), 65536)
-            if not chunk:
-                if expected is None or len(response) < expected:
-                    raise ValueError("USER_CODE: handler process exited without a response")
-                break
-            response.extend(chunk)
-            if expected is None and len(response) >= 8:
-                expected = struct.unpack(">Q", response[:8])[0]
-                if expected > MAX_EXECUTION_FRAME_BYTES:
-                    raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
-            if expected is not None and len(response) >= expected + 8:
-                break
+            for event, _ in events:
+                if event.data == "request":
+                    try:
+                        written = os.write(stdin_fd, request_frame[request_offset:])
+                    except BlockingIOError:
+                        continue
+                    except BrokenPipeError as exc:
+                        raise ValueError("USER_CODE: handler process closed its request channel") from exc
+                    request_offset += written
+                    if request_offset == len(request_frame):
+                        selector.unregister(stdin_fd)
+                        process.stdin.close()
+                else:
+                    try:
+                        chunk = os.read(response_read_fd, 65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        response_eof = True
+                        selector.unregister(response_read_fd)
+                        if expected is None or len(response) < expected + 8:
+                            raise ValueError("USER_CODE: handler process exited without a response")
+                    else:
+                        response.extend(chunk)
+                        if expected is None and len(response) >= 8:
+                            expected = struct.unpack(">Q", response[:8])[0]
+                            if expected > MAX_EXECUTION_FRAME_BYTES:
+                                raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
+                        if expected is not None and len(response) > expected + 8:
+                            raise ValueError("PROTOCOL: handler process returned trailing response data")
+
+            # A complete frame is not enough.  The adapter wrapper must have
+            # returned normally, and all of its process-group descendants
+            # must be gone before the adapter accepts the result.
+            if process.poll() is not None:
+                if process.returncode != 0:
+                    raise ValueError("USER_CODE: handler process exited abnormally")
+                if _execution_group_alive(process):
+                    raise ValueError("USER_CODE: handler process left descendant processes")
+                if response_eof and expected is not None and len(response) == expected + 8:
+                    break
         payload = bytes(response[8 : expected + 8])
         if not payload:
             raise ValueError("PROTOCOL: handler process returned an empty response")
@@ -848,12 +935,15 @@ def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: floa
             raise ValueError("PROTOCOL: handler process returned an unknown status")
         return payload[1:]
     finally:
-        selector.close()
-        if process.poll() is None:
+        if selector is not None:
+            selector.close()
+        if process is not None:
             _kill_execution_process(process)
-        else:
-            process.wait()
-        process.stdout.close()
+            if process.stdin is not None:
+                process.stdin.close()
+        if response_write_fd >= 0:
+            os.close(response_write_fd)
+        os.close(response_read_fd)
 
 
 
@@ -1037,6 +1127,8 @@ class RoutineFlightServer(flight.FlightServerBase):
                 except StopIteration:
                     break
                 if chunk.data is not None:
+                    if ended:
+                        raise ValueError("PROTOCOL: input arrived after EndInput")
                     if schema is None:
                         schema = reader.schema
                         _validate_schema(schema, args)
@@ -1081,7 +1173,13 @@ class RoutineFlightServer(flight.FlightServerBase):
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] == "EndInput":
-                        if ended or _required_uint64(control, "last_sequence", allow_zero=True) != state.last_input: raise ValueError("PROTOCOL: invalid EndInput")
+                        last_sequence = _required_uint64(control, "last_sequence", allow_zero=True)
+                        if ended:
+                            if last_sequence != state.last_input:
+                                raise ValueError("PROTOCOL: EndInput changed after input was closed")
+                            continue
+                        if last_sequence != state.last_input:
+                            raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True
                     elif control["kind"] != "OpenInvocation":
                         raise ValueError("PROTOCOL: unexpected control without Arrow data")
