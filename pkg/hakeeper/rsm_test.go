@@ -87,6 +87,25 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
 
+func TestHAKeeperSnapshotWithoutCodecActivationClearsReusedState(t *testing.T) {
+	legacy := NewStateMachine(0, 1).(*stateMachine)
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, legacy.SaveSnapshot(buf, nil, nil))
+
+	reused := NewStateMachine(0, 2).(*stateMachine)
+	reused.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{1, 2, 3},
+		Generation:       11,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+	require.NoError(t, reused.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
+	require.Nil(t, reused.state.UniqueKeyCodecActivation)
+}
+
 func TestHAKeeperCanBeClosed(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	assert.Nil(t, tsm1.Close())

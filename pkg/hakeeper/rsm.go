@@ -2097,5 +2097,9 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.ViewMetadataAdmissionCNTargetTicks = nil
 	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
+	// A snapshot written before the codec activation field was introduced does
+	// not carry this pointer. Clear it before unmarshalling so recovery on a
+	// reused state machine cannot retain an activation from a newer snapshot.
+	s.state.UniqueKeyCodecActivation = nil
 	return s.state.Unmarshal(data)
 }
