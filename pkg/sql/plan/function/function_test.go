@@ -141,6 +141,38 @@ func TestMakeSetDecimalToBits(t *testing.T) {
 	}
 }
 
+func TestMakeSetDecimalBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		typ   types.Type
+		value string
+	}{
+		{types.New(types.T_decimal64, 18, 16), "1.9999999999999999"},
+		{types.New(types.T_decimal128, 38, 16), "1.9999999999999999"},
+	} {
+		var bits any
+		if tc.typ.Oid == types.T_decimal64 {
+			bits, _ = types.ParseDecimal64(tc.value, tc.typ.Width, tc.typ.Scale)
+		} else {
+			bits, _ = types.ParseDecimal128(tc.value, tc.typ.Width, tc.typ.Scale)
+		}
+		bv, err := vector.NewConstFixed(tc.typ, bits, 1, proc.Mp())
+		require.NoError(t, err)
+		members, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("a"), 1, proc.Mp())
+		require.NoError(t, err)
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, MakeSet([]*vector.Vector{bv, members}, result, proc, 1, nil))
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		require.Equal(t, "a", string(got))
+		bv.Free(proc.Mp())
+		members.Free(proc.Mp())
+		result.Free()
+	}
+}
+
 func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
 	for _, test := range []struct {
 		name     string
