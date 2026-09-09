@@ -44,24 +44,27 @@ func EncodeMigrationGate(dst []byte, gate MigrationGate) ([]byte, error) {
 	if err := validateMigrationGateWireShape(gate); err != nil {
 		return dst, err
 	}
-	start := len(dst)
-	if start > MaxMigrationSnapshotBytes {
+	if len(dst) > MaxMigrationSnapshotBytes {
 		return dst, wrapMigrationError("migration snapshot destination exceeds maximum size")
 	}
-	result := append(dst, migrationSnapshotMagic...)
-	result = append(result, migrationSnapshotVersion)
-	result = appendMigrationU64(result, gate.RelationID)
-	result = appendMigrationU64(result, gate.MigrationEpoch)
-	result = append(result, byte(gate.Phase))
-	result = appendMigrationU64(result, uint64(gate.PhaseDeadlineNanos))
-	result = appendMigrationU64(result, gate.SourceSchemaEpoch)
-	result = appendMigrationU64(result, gate.SourceSnapshotID)
-	result = appendMigrationU64(result, gate.TempRelationID)
-	result = appendMigrationU64(result, gate.PublicationTxnID)
-	result = appendMigrationU64(result, gate.ReplayGeneration)
-	result = appendMigrationString(result, gate.Owner.OwnerID)
-	result = appendMigrationU64(result, gate.Owner.Incarnation)
-	result = appendMigrationBytes(result, gate.Owner.ClaimToken)
+	// Build the body separately and append it to dst only after every field has
+	// passed validation. This keeps the caller's destination untouched on an
+	// error, even when it has spare capacity in its backing array.
+	body := make([]byte, 0, migrationSnapshotMinimum-migrationSnapshotDigest)
+	body = append(body, migrationSnapshotMagic...)
+	body = append(body, migrationSnapshotVersion)
+	body = appendMigrationU64(body, gate.RelationID)
+	body = appendMigrationU64(body, gate.MigrationEpoch)
+	body = append(body, byte(gate.Phase))
+	body = appendMigrationU64(body, uint64(gate.PhaseDeadlineNanos))
+	body = appendMigrationU64(body, gate.SourceSchemaEpoch)
+	body = appendMigrationU64(body, gate.SourceSnapshotID)
+	body = appendMigrationU64(body, gate.TempRelationID)
+	body = appendMigrationU64(body, gate.PublicationTxnID)
+	body = appendMigrationU64(body, gate.ReplayGeneration)
+	body = appendMigrationString(body, gate.Owner.OwnerID)
+	body = appendMigrationU64(body, gate.Owner.Incarnation)
+	body = appendMigrationBytes(body, gate.Owner.ClaimToken)
 	var err error
 	for _, entries := range []map[string]uint64{
 		gate.WritePermits,
@@ -69,17 +72,17 @@ func EncodeMigrationGate(dst []byte, gate MigrationGate) ([]byte, error) {
 		gate.ReplayAcknowledged,
 		gate.RetiredReplayTarget,
 	} {
-		result, err = appendMigrationMap(result, entries)
+		body, err = appendMigrationMap(body, entries)
 		if err != nil {
 			return dst, err
 		}
 	}
-	if len(result)-start+migrationSnapshotDigest > MaxMigrationSnapshotBytes {
+	if len(body)+migrationSnapshotDigest > MaxMigrationSnapshotBytes {
 		return dst, wrapMigrationError("migration snapshot exceeds maximum size")
 	}
-	digest := sha256.Sum256(result[start:])
-	result = append(result, digest[:]...)
-	return result, nil
+	digest := sha256.Sum256(body)
+	body = append(body, digest[:]...)
+	return append(dst, body...), nil
 }
 
 // DecodeMigrationGate verifies the checksum and every length-delimited field
