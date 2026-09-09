@@ -18,8 +18,6 @@ package aggexec
 // Eliminates interface boxing, type switches, and per-add overflow checks.
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -112,7 +110,7 @@ func (exec *sumDecimal64FastExec) Fill(groupIndex int, row int, vectors []*vecto
 
 func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
@@ -455,7 +453,7 @@ func (exec *sumDecimal128FastExec) Fill(groupIndex int, row int, vectors []*vect
 
 func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }

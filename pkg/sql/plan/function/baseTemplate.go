@@ -3236,6 +3236,15 @@ func opUnaryFixedToStrWithErrorCheck[
 func opUnaryStrToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) ([]byte, error), selectList *FunctionSelectList) error {
+	return opUnaryStrToBytesWithRowErrorCheck(parameters, result, length,
+		func(v string, _ int) ([]byte, error) {
+			return resultFn(v)
+		}, selectList)
+}
+
+func opUnaryStrToBytesWithRowErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v string, row int) ([]byte, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -3264,7 +3273,7 @@ func opUnaryStrToBytesWithErrorCheck(
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), 0)
 			if err != nil {
 				return err
 			}
@@ -3288,7 +3297,7 @@ func opUnaryStrToBytesWithErrorCheck(
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), int(i))
 			if err != nil {
 				return err
 			}
@@ -3302,7 +3311,7 @@ func opUnaryStrToBytesWithErrorCheck(
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+		r, err := resultFn(functionUtil.QuickBytesToStr(v1), int(i))
 		if err != nil {
 			return err
 		}
@@ -3482,6 +3491,15 @@ func opUnaryBytesToBytesWithNullOnError(
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error), selectList *FunctionSelectList) error {
+	return opUnaryBytesToStrWithRowErrorCheck(parameters, result, length,
+		func(v []byte, _ int) (string, error) {
+			return resultFn(v)
+		}, selectList)
+}
+
+func opUnaryBytesToStrWithRowErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v []byte, row int) (string, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -3510,7 +3528,7 @@ func opUnaryBytesToStrWithErrorCheck(
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			rb, err := resultFn(v1)
+			rb, err := resultFn(v1, 0)
 			if err != nil {
 				return err
 			}
@@ -3534,7 +3552,7 @@ func opUnaryBytesToStrWithErrorCheck(
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			rb, err := resultFn(v1)
+			rb, err := resultFn(v1, int(i))
 			if err != nil {
 				return err
 			}
@@ -3549,7 +3567,7 @@ func opUnaryBytesToStrWithErrorCheck(
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		rb, err := resultFn(v1)
+		rb, err := resultFn(v1, int(i))
 		if err != nil {
 			return err
 		}

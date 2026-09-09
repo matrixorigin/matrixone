@@ -122,7 +122,8 @@ var PathExists = func(path string) (bool, bool, error) {
 
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
 	sv := &mo_config.FrontendParameters{
-		MongoDB: *mo_config.NewMongoDBParameters(),
+		MongoDB:   *mo_config.NewMongoDBParameters(),
+		ArrowLoad: *mo_config.NewArrowLoadParameters(),
 	}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
@@ -1363,7 +1364,7 @@ func RewriteError(err error, username string) (uint16, string, string) {
 	var msg string
 
 	errMsg := strings.ToLower(err.Error())
-	if needConvertedToAccessDeniedError(errMsg) {
+	if isAuthenticationRejected(err) || needConvertedToAccessDeniedError(errMsg) {
 		failed := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		if len(username) > 0 {
 			tipsFormat := "Access denied for user %s. %s"

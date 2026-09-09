@@ -2299,6 +2299,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if builder.fullTableUpdateLockTargets == nil {
 			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
 		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
 		for _, target := range lockTargets {
 			if target.Mode == lockpb.LockMode_Exclusive {
 				builder.fullTableUpdateLockTargets[target] = struct{}{}
@@ -2384,6 +2386,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			indexes,
 			nil,
 			-1,
+			nil,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2393,15 +2396,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:           builder.irregularMaintSourceStep,
-				deleteStep:           builder.irregularMaintDeleteStep,
-				deletePkPos:          builder.irregularMaintDeletePkPos,
-				deletePkTyp:          builder.irregularMaintDeletePkTyp,
-				indexes:              builder.irregularMaintIndexes,
-				insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
-				insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
-				tableDef:             builder.irregularMaintTableDef,
-				objRef:               builder.irregularMaintObjRef,
+				sourceStep:              builder.irregularMaintSourceStep,
+				deleteStep:              builder.irregularMaintDeleteStep,
+				deletePkPos:             builder.irregularMaintDeletePkPos,
+				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				indexes:                 builder.irregularMaintIndexes,
+				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+				tableDef:                builder.irregularMaintTableDef,
+				objRef:                  builder.irregularMaintObjRef,
 			},
 		)
 	}

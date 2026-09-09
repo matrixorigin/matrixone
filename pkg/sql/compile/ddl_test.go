@@ -449,38 +449,135 @@ func TestIsMissingCCPRMetadataTable(t *testing.T) {
 	))
 }
 
-func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
-	lockMoDB := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
-		return nil
-	})
-	defer lockMoDB.Reset()
+func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
+	lookupFailure := errors.New("catalog lookup failed")
+	lockErr := errors.New("catalog lock failed")
+	createErr := errors.New("catalog create failed")
 
-	createErr := errors.New("create failed")
+	type lookupResult struct {
+		existing bool
+		err      error
+	}
 	for _, tc := range []struct {
 		name         string
-		existing     bool
 		ifNotExists  bool
+		lookups      []lookupResult
+		lockErr      error
 		createErr    error
-		wantErr      bool
+		wantCreate   bool
+		wantErr      error
+		wantErrCode  uint16
 		wantAffected uint64
+		wantEvents   []string
 	}{
-		{name: "physical creation", wantAffected: 1},
-		{name: "if not exists no-op", existing: true, ifNotExists: true},
-		{name: "strict duplicate", existing: true, wantErr: true},
-		{name: "create failure", createErr: createErr, wantErr: true},
+		{
+			name: "physical creation",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			wantCreate:   true,
+			wantAffected: 1,
+			wantEvents:   []string{"lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:        "if not exists fast no-op",
+			ifNotExists: true,
+			lookups:     []lookupResult{{existing: true}},
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:        "strict duplicate fast failure",
+			lookups:     []lookupResult{{existing: true}},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup"},
+		},
+		{
+			name:       "initial lookup failure is not absence",
+			lookups:    []lookupResult{{err: lookupFailure}},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup"},
+		},
+		{
+			name:       "lock failure stops before locked recheck",
+			lookups:    []lookupResult{{err: moerr.GetOkExpectedEOB()}},
+			lockErr:    lockErr,
+			wantErr:    lockErr,
+			wantEvents: []string{"lookup", "lock"},
+		},
+		{
+			name: "locked recheck failure is not absence",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: lookupFailure},
+			},
+			wantErr:    lookupFailure,
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name:        "concurrent create becomes if not exists no-op",
+			ifNotExists: true,
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantEvents: []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "concurrent create becomes strict duplicate",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{existing: true},
+			},
+			wantErrCode: moerr.ErrDBAlreadyExists,
+			wantEvents:  []string{"lookup", "lock", "lookup"},
+		},
+		{
+			name: "create failure has no affected row",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			createErr:  createErr,
+			wantCreate: true,
+			wantErr:    createErr,
+			wantEvents: []string{"lookup", "lock", "lookup", "create"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			eng := mock_frontend.NewMockEngine(ctrl)
-			if tc.existing {
-				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
-					mock_frontend.NewMockDatabase(ctrl), nil,
+			events := make([]string, 0, 4)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "db1", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				return tc.lockErr
+			})
+			defer lockStub.Reset()
+
+			if len(tc.lookups) != 0 {
+				db := mock_frontend.NewMockDatabase(ctrl)
+				lookup := 0
+				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+						events = append(events, "lookup")
+						result := tc.lookups[lookup]
+						lookup++
+						if result.existing {
+							return db, result.err
+						}
+						return nil, result.err
+					},
+				).Times(len(tc.lookups))
+			}
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return tc.createErr
+					},
 				)
-			} else {
-				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
-					nil, moerr.NewBadDB(context.Background(), "db1"),
-				)
-				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).Return(tc.createErr)
 			}
 
 			proc := testutil.NewProcess(t)
@@ -499,19 +596,154 @@ func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
 			}
 
 			err := c.run(s)
-			if tc.wantErr {
-				require.Error(t, err)
-				if tc.createErr != nil {
-					require.ErrorIs(t, err, tc.createErr)
-				} else {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDBAlreadyExists))
-				}
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else if tc.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.wantErrCode), "unexpected error: %v", err)
 			} else {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantAffected, c.getAffectedRows())
+			require.Equal(t, tc.wantEvents, events)
 		})
 	}
+}
+
+func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ifNotExists   bool
+		existsOnRetry bool
+		wantCreate    bool
+		wantAffected  uint64
+		wantLockCalls int
+		wantEvents    []string
+	}{
+		{
+			name:          "retry then physical create",
+			wantCreate:    true,
+			wantAffected:  1,
+			wantLockCalls: 2,
+			wantEvents:    []string{"lookup", "lock", "lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:          "retry observes concurrent create as valid no-op",
+			ifNotExists:   true,
+			existsOnRetry: true,
+			wantLockCalls: 1,
+			wantEvents:    []string{"lookup", "lock", "lookup"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			lockCalls := 0
+			lookupCalls := 0
+			events := make([]string, 0, 6)
+			lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "retry_db", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				events = append(events, "lock")
+				lockCalls++
+				if lockCalls == 1 {
+					return moerr.NewTxnNeedRetryNoCtx()
+				}
+				return nil
+			})
+			defer lockStub.Reset()
+
+			db := mock_frontend.NewMockDatabase(ctrl)
+			wantLookupCalls := 3
+			if tc.existsOnRetry {
+				wantLookupCalls = 2
+			}
+			eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+				func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+					events = append(events, "lookup")
+					lookupCalls++
+					if tc.existsOnRetry && lookupCalls == 2 {
+						return db, nil
+					}
+					return nil, moerr.GetOkExpectedEOB()
+				},
+			).Times(wantLookupCalls)
+			if tc.wantCreate {
+				eng.EXPECT().Create(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+					func(context.Context, string, client.TxnOperator) error {
+						events = append(events, "create")
+						return nil
+					},
+				).Times(1)
+			}
+
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().Buf = buffer.New()
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnClient
+			proc.Base.TxnOperator = txnOp
+			pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_CREATE_DATABASE,
+				Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+					Database: "retry_db", IfNotExists: tc.ifNotExists,
+				}},
+			}}}
+			c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+			require.NoError(t, c.Compile(ctx, pn, nil))
+
+			result, err := c.Run(0)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLockCalls, lockCalls)
+			require.Equal(t, 1, c.retryTimes)
+			require.Equal(t, tc.wantAffected, result.AffectRows)
+			require.Equal(t, tc.wantEvents, events)
+			c.Release()
+			proc.GetSessionInfo().Buf.Free()
+		})
+	}
+
+	t.Run("non-retry lock failure has no catalog side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		lockErr := errors.New("catalog lock unavailable")
+		lookupCalled := false
+		eng.EXPECT().Database(gomock.Any(), "retry_db", gomock.Any()).DoAndReturn(
+			func(context.Context, string, client.TxnOperator) (engine.Database, error) {
+				lookupCalled = true
+				return nil, moerr.GetOkExpectedEOB()
+			},
+		).Times(1)
+		lockStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			require.True(t, lookupCalled)
+			return lockErr
+		})
+		defer lockStub.Reset()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().Buf = buffer.New()
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+		proc.Base.TxnClient = txnClient
+		proc.Base.TxnOperator = txnOp
+		pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			DdlType: plan2.DataDefinition_CREATE_DATABASE,
+			Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+				Database: "retry_db",
+			}},
+		}}}
+		c := NewCompile("test", "", "create database retry_db", "", "", eng, proc, nil, false, nil, time.Now())
+		require.NoError(t, c.Compile(ctx, pn, nil))
+
+		_, err := c.Run(0)
+		require.ErrorIs(t, err, lockErr)
+		require.Zero(t, c.retryTimes)
+		c.Release()
+		proc.GetSessionInfo().Buf.Free()
+	})
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
@@ -2685,4 +2917,223 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		FkChildTblsReferToMe: []uint64{43},
 	})
 	require.NoError(t, err)
+}
+
+func TestAlterTemporaryTableRejectsMissingAlias(t *testing.T) {
+	for _, copyTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy=%v", copyTable), func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels["t"] = newStubRelation("t")
+			eng.dbs["test"] = db
+			proc := testutil.NewProcess(t)
+			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			c.proc.Session = &trackingTempTableSession{tables: make(map[string]string)}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+					Database: "test", TableDef: &plan2.TableDef{Name: "t", IsTemporary: true},
+				}},
+			}}}}
+			var err error
+			if copyTable {
+				err = s.AlterTableCopy(c)
+			} else {
+				err = s.AlterTableInplace(c)
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+			require.Contains(t, db.rels, "t")
+		})
+	}
+}
+
+func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
+	for _, copyTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy=%v", copyTable), func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels["physical_t"] = &stubRelation{name: "physical_t", tableID: 2}
+			eng.dbs["test"] = db
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+					Database: "test", TableDef: &plan2.TableDef{Name: "t", TblId: 1, IsTemporary: true},
+				}},
+			}}}}
+			var err error
+			if copyTable {
+				err = s.AlterTableCopy(c)
+			} else {
+				err = s.AlterTableInplace(c)
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			require.Equal(t, "t", s.Plan.GetDdl().GetAlterTable().TableDef.Name)
+			name, exists := c.proc.GetSession().GetTempTable("test", "t")
+			require.True(t, exists)
+			require.Equal(t, "physical_t", name)
+		})
+	}
+}
+
+func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
+	tests := []struct {
+		name         string
+		plannedID    uint64
+		relationName string
+		relationID   uint64
+		tempTables   map[string]string
+	}{
+		{
+			name:         "missing alias cannot fall through to permanent table",
+			plannedID:    2,
+			relationName: "t",
+			relationID:   1,
+			tempTables:   map[string]string{},
+		},
+		{
+			name:         "recreated temporary relation retries",
+			plannedID:    1,
+			relationName: "physical_t",
+			relationID:   2,
+			tempTables:   map[string]string{"test.t": "physical_t"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels[tt.relationName] = &stubRelation{name: tt.relationName, tableID: tt.relationID}
+			eng.dbs["test"] = db
+
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			proc.Session = &trackingTempTableSession{tables: tt.tempTables}
+			c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+					Database: "test",
+					Table:    "t",
+					TableId:  tt.plannedID,
+				}},
+			}}}}
+			err := s.TruncateTable(c)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			require.Contains(t, db.rels, tt.relationName)
+		})
+	}
+}
+
+type recordingInternalSQLExecutor struct {
+	mocker   func(string) (executor.Result, error)
+	contexts []context.Context
+	sqls     []string
+}
+
+func (e *recordingInternalSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	e.contexts = append(e.contexts, ctx)
+	e.sqls = append(e.sqls, sql)
+	return e.mocker(sql)
+}
+
+func (e *recordingInternalSQLExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return nil
+}
+
+func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("test")
+	db.rels["physical_t"] = &stubRelation{
+		name:     "physical_t",
+		tableID:  1,
+		tableDef: &plan2.TableDef{IsTemporary: true, Name: "physical_t"},
+	}
+	eng.dbs["test"] = db
+
+	proc := testutil.NewProcess(t)
+	originalCtx := defines.AttachAccountId(context.Background(), 0)
+	proc.Ctx = originalCtx
+	proc.ReplaceTopCtx(originalCtx)
+	session := &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+	proc.Session = session
+
+	internalExecutor := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		switch sql {
+		case "SHOW CREATE TABLE `test`.`t`":
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+				proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"t"}))
+			require.NoError(t, executor.AppendStringRows(result, 1, []string{
+				"create temporary table `test`.`t` (`a` int)",
+			}))
+			return result.GetResult(), nil
+		case "drop temporary table `test`.`t`":
+			delete(db.rels, "physical_t")
+			session.RemoveTempTable("test", "t")
+			return executor.Result{}, nil
+		case "create temporary table `test`.`t` (`a` int)":
+			session.AddTempTable("test", "t", "physical_t_replacement")
+			db.rels["physical_t_replacement"] = &stubRelation{
+				name:     "physical_t_replacement",
+				tableID:  2,
+				tableDef: &plan2.TableDef{IsTemporary: true, Name: "physical_t_replacement"},
+			}
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected internal SQL: %s", sql)
+		}
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previousExecutor, hadPreviousExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, internalExecutor)
+	t.Cleanup(func() {
+		if hadPreviousExecutor {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previousExecutor)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, internalExecutor)
+		}
+	})
+
+	c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+			Database: "test",
+			Table:    "t",
+			TableId:  1,
+		}},
+	}}}}
+
+	require.NoError(t, s.TruncateTable(c))
+	require.Equal(t, originalCtx, c.proc.Ctx)
+	require.Equal(t, []string{
+		"SHOW CREATE TABLE `test`.`t`",
+		"drop temporary table `test`.`t`",
+		"create temporary table `test`.`t` (`a` int)",
+	}, internalExecutor.sqls)
+	for _, ctx := range internalExecutor.contexts {
+		require.Same(t, session, getInternalExecutorSession(ctx))
+	}
+	require.NotContains(t, db.rels, "physical_t")
+	require.Contains(t, db.rels, "physical_t_replacement")
+	physical, ok := session.GetTempTable("test", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical_t_replacement", physical)
 }

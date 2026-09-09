@@ -2339,11 +2339,6 @@ func buildCreateTable(
 		return nil, err
 	}
 
-	v, ok := getAutoIncrementOffsetFromVariables(ctx)
-	if ok {
-		createTable.TableDef.AutoIncrOffset = v
-	}
-
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -2533,10 +2528,14 @@ func buildCreateTable(
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey, CSVCommentKey:
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+		if strings.EqualFold(getRawOption(stmt.Param.Option, "format"), tree.ARROW) ||
+			strings.EqualFold(stmt.Param.Format, tree.ARROW) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by LOAD DATA")
 		}
 
 		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {
@@ -2819,6 +2818,23 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 		}
 	}
 	return clone
+}
+
+func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
+	return &plan.Default{
+		Expr: &Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
+					Value: &plan.Literal_U32Val{U32Val: catalog.System_Account},
+				},
+			},
+			Typ: plan.Type{
+				Id:          colType.Id,
+				NotNullable: true,
+			},
+		},
+		NullAbility: false,
+	}
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
@@ -3244,6 +3260,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
+		remapGeneratedColExprsToTableOrder(createTable.TableDef.Cols, allColDefs)
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
@@ -3258,6 +3275,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		cols := createTable.TableDef.Cols
 		firstCol := true
 		for i := range cols {
+			// Generated columns are computed by the target table. They are not
+			// implicit INSERT targets, so do not add a placeholder before the
+			// source projection. Otherwise a destination-only generated column
+			// shifts the source columns and makes CTAS fail with a column-count
+			// error.
+			if cols[i].GeneratedCol != nil {
+				continue
+			}
 			// insert default values if col[i] only in create clause
 			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
 				if !firstCol {
@@ -3327,9 +3352,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// add cluster table attribute
 	if stmt.IsClusterTable {
 		internal := defines.IsInternalExecutor(ctx.GetContext())
-		_, has := colMap[util.GetClusterTableAttributeName()]
+		colDef, has := colMap[util.GetClusterTableAttributeName()]
 		if has && !internal {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		if has && colDef.Default.GetExpr() == nil {
+			// SHOW CREATE renders the physical account_id column but deliberately
+			// omits its storage-only default. TRUNCATE and unconditional DELETE
+			// replay that DDL through the internal executor, so restore the
+			// system-managed default before publishing the replacement table.
+			colDef.Default = makeClusterTableAttributeDefault(colDef.Typ)
 		}
 		if !has {
 			colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
@@ -3341,21 +3373,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
 				NotNull: true,
-				Default: &plan.Default{
-					Expr: &Expr{
-						Expr: &plan.Expr_Lit{
-							Lit: &Const{
-								Isnull: false,
-								Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
-							},
-						},
-						Typ: plan.Type{
-							Id:          colType.Id,
-							NotNullable: true,
-						},
-					},
-					NullAbility: false,
-				},
+				Default: makeClusterTableAttributeDefault(colType),
 				Comment: "the account_id added by the mo",
 			}
 			colMap[util.GetClusterTableAttributeName()] = colDef
@@ -4764,13 +4782,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
-		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
-		// not supported for temporary tables. Reject the visible temporary table
-		// here so execution can never fall through to the hidden permanent table.
-		if tableDef.GetIsTemporary() {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-		}
-
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
@@ -5741,6 +5752,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 
+	if tableDef.IsTemporary {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		tableDef.Name = tableName
+	}
+
 	alterTable := &plan.AlterTable{
 		Actions:        make([]*plan.AlterTable_Action, len(stmt.Options)),
 		AlgorithmType:  plan.AlterTable_INPLACE,
@@ -6241,11 +6257,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// TODO ONLY Check
-			_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
+			_, destination, err := ctx.Resolve(databaseName, newName, nil)
 			if err != nil {
 				return nil, err
 			}
-			if tableDef != nil {
+			if destination != nil && (!tableDef.IsTemporary || destination.IsTemporary) {
 				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 			}
 
@@ -6258,10 +6274,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
-			updateSqls = append(
-				updateSqls,
-				getSqlForRenameTable(databaseName, oldName, newName)...,
-			)
+			if !tableDef.IsTemporary {
+				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
 				return nil, moerr.NewInvalidInputf(
@@ -6884,16 +6899,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 		return nil, err
 	}
 	return &fkData, nil
-}
-
-func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
-	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
-	if err == nil {
-		if offset, ok := v.(int64); ok && offset > 1 {
-			return uint64(offset - 1), true
-		}
-	}
-	return 0, false
 }
 
 var unitDurations = map[string]time.Duration{

@@ -643,6 +643,9 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	if _, protected := builder.existentialGateProjects[nodeId]; protected {
+		builder.existentialGateProjects[newNodeId] = struct{}{}
+	}
 	return newNodeId
 }
 
@@ -3444,6 +3447,20 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
+		if node.PreInsertCtx.TrackAutoIncrementGenerated {
+			markerRef := [2]int32{
+				node.BindingTags[0],
+				node.PreInsertCtx.AutoIncrementGeneratedColumn,
+			}
+			remapping.addColRef(markerRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: node.PreInsertCtx.AutoIncrementGeneratedColumn,
+				}},
+			})
+		}
 
 	case plan.Node_PRE_INSERT_UK:
 		if node.PreInsertUkCtx == nil {
@@ -3474,6 +3491,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for i, pos := range auxColumns {
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
+		}
+		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
+			autoIncrementGeneratedRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementGeneratedColumn}
+			colRefCnt[autoIncrementRef]++
+			colRefCnt[autoIncrementGeneratedRef]++
 		}
 		var pkRef [2]int32
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
@@ -3527,11 +3551,32 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 			node.PreInsertUkCtx.PkColumn = pos[1]
 		}
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			colRefCnt[autoIncrementRef]--
+			pos, ok := childRemapping.globalToLocal[autoIncrementRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment column")
+			}
+			node.PreInsertUkCtx.AutoIncrementColumn = pos[1]
+			colRefCnt[autoIncrementGeneratedRef]--
+			pos, ok = childRemapping.globalToLocal[autoIncrementGeneratedRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment provenance column")
+			}
+			node.PreInsertUkCtx.AutoIncrementGeneratedColumn = pos[1]
+		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
 		remapInfo.tip = "PreInsertUkCtx"
+		autoOutput := node.PreInsertUkCtx.AutoIncrementOutputColumn
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			node.PreInsertUkCtx.AutoIncrementOutputColumn = -1
+		}
 		for i, output := range neededOutputs {
+			if node.PreInsertUkCtx.AutoIncrementReorder && output == autoOutput {
+				node.PreInsertUkCtx.AutoIncrementOutputColumn = int32(i)
+			}
 			expr := node.ProjectList[output]
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
@@ -3543,6 +3588,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			newProjectList = append(newProjectList, expr)
 		}
 		node.ProjectList = newProjectList
+		if node.PreInsertUkCtx.AutoIncrementReorder && node.PreInsertUkCtx.AutoIncrementOutputColumn < 0 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "INSERT IGNORE auto-increment output was pruned")
+		}
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
 			if len(neededOutputs) == 0 || neededOutputs[len(neededOutputs)-1] != targetOutputPos {
@@ -3697,6 +3745,11 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if builder.hadPendingExistentials {
+		if err := builder.checkPendingExistentials(); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -11201,6 +11254,7 @@ func (builder *QueryBuilder) bindView(
 	snapshot *Snapshot,
 	obj *ObjectRef,
 	schema, table string,
+	metadataSubscription *SubscriptionMetadata,
 ) (nodeID int32, err error) {
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
@@ -11247,6 +11301,21 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+
+	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
+	if isSubscriptionStatistics {
+		meta := metadataSubscription.Meta
+		if !rewriteSubscriptionStatisticsAccount(
+			viewStmt.AsSource, uint32(meta.AccountId),
+		) {
+			return 0, moerr.NewInternalError(
+				builder.GetContext(), "unsupported STATISTICS metadata visibility CTE",
+			)
+		}
+		previousMetadata := builder.queryingSubscriptionMetadata
+		builder.queryingSubscriptionMetadata = metadataSubscription
+		defer func() { builder.queryingSubscriptionMetadata = previousMetadata }()
 	}
 
 	defaultDatabase := viewData.DefaultDatabase
@@ -11305,6 +11374,11 @@ func (builder *QueryBuilder) bindView(
 		capture.enterNestedView()
 		defer capture.leaveNestedView()
 	}
+	if isSubscriptionStatistics {
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -11313,6 +11387,9 @@ func (builder *QueryBuilder) bindView(
 		nodeID, viewCtx, viewCtx.outputColumnProvenanceForBoundary())
 	if err != nil {
 		return
+	}
+	if isSubscriptionStatistics {
+		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.Meta.SubName)
 	}
 	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
@@ -12088,7 +12165,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 			}
 
-			nodeID, err = builder.bindView(ctx, tableDef, snapshot, obj, schema, table)
+			if strings.EqualFold(schema, INFORMATION_SCHEMA) &&
+				strings.EqualFold(table, informationSchemaStatistics) {
+				nodeID, err = builder.bindSubscriptionStatisticsView(
+					ctx, tableDef, snapshot, obj, schema, table,
+				)
+			} else {
+				nodeID, err = builder.bindView(
+					ctx, tableDef, snapshot, obj, schema, table, nil,
+				)
+			}
 			if err != nil {
 				return 0, err
 			}
@@ -12206,10 +12292,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
+				if dbName == catalog.MO_CATALOG && midNode.ObjRef != nil {
+					objRef := *midNode.ObjRef
+					midNode.ObjRef = &objRef
+					midNode.ObjRef.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+					midNode.ObjRef.SubscriptionName = sub.SubName
+				}
 			}
-			if accountFilter := util.BuildTableScanAccountFilter(
+			accountFilter := util.BuildTableScanAccountFilter(
 				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
-			); accountFilter != nil {
+			)
+			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				subFilter, filterErr := builder.currentSubscriptionMoTablesFilter()
+				if filterErr != nil {
+					return 0, filterErr
+				}
+				if subFilter != nil {
+					if accountFilter == nil {
+						accountFilter = subFilter
+					} else {
+						accountFilter = tree.NewAndExpr(accountFilter, subFilter)
+					}
+				}
+			}
+			if accountFilter != nil {
 				ctx.binder = NewWhereBinder(builder, ctx)
 				accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
 				if err != nil {

@@ -86,14 +86,31 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
 	dbName := createDatabase.GetDatabase()
+
+	// A positive catalog lookup is already authoritative for this transaction's
+	// snapshot and must not wait behind unrelated DDL that holds a shared
+	// database lock. Only the absence-to-create transition needs serialization.
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return err
 	}
 
+	// Serialize competing creators, then recheck under the lock. Another
+	// transaction may have created the database after the optimistic lookup.
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewDBAlreadyExists(ctx, dbName)
+	} else if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return err
 	}
 
@@ -658,6 +675,27 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	tblName := qry.GetTableDef().GetName()
 	isTemp := qry.GetTableDef().GetIsTemporary()
+	aliasName := tblName
+	if isTemp {
+		var err error
+		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
+		if err != nil {
+			return err
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+		defer func() { c.proc.Ctx = originalCtx }()
+
+		executionPlan := *qry
+		qry = &executionPlan
+		qry.TableDef = plan2.DeepCopyTableDef(qry.TableDef, true)
+		qry.CopyTableDef = plan2.DeepCopyTableDef(qry.CopyTableDef, true)
+		qry.TableDef.Name = tblName
+		if qry.CopyTableDef != nil {
+			qry.CopyTableDef.Name = tblName
+		}
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
@@ -668,6 +706,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	if err != nil {
 		return err
 	}
+	if isTemp && rel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+
 	tblId := rel.GetTableID(c.proc.Ctx)
 	extra := rel.GetExtraInfo()
 
@@ -1254,10 +1296,19 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				return err
 			}
 		case *plan.AlterTable_Action_AlterName:
+			oldName, newName := act.AlterName.OldName, act.AlterName.NewName
+			if isTemp {
+				if _, exists := c.proc.GetSession().GetTempTable(dbName, newName); exists {
+					return moerr.NewTableAlreadyExists(c.proc.Ctx, newName)
+				}
+				oldName = tblName
+				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			}
+
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
-				act.AlterName.OldName,
-				act.AlterName.NewName,
+				oldName,
+				newName,
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
@@ -1340,6 +1391,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	if isTemp {
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil {
+				c.proc.GetSession().RemoveTempTable(dbName, aliasName)
+				c.proc.GetSession().AddTempTable(dbName, rename.NewName,
+					physicalTemporaryTableName(c.proc, dbName, rename.NewName))
+			}
+		}
 	}
 
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
@@ -1445,6 +1506,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			return s.createSessionTemporaryTable(c, owner, tableCreated)
+		}
+	}
 	if isTemp {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
@@ -2144,6 +2210,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
+		return err
+	}
+
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
@@ -2223,20 +2307,13 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		res.Close()
 	}
 
-	if isTemp && session != nil {
-		// The temporary table and all follow-up metadata/index/CTAS work have
-		// completed. Keep the alias registered in the session.
-		rollbackTempAlias = false
-	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
-		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
+	if names, ok := proc.GetSession().(interface{ TemporaryTableName(string, string) string }); ok {
+		return names.TemporaryTableName(dbName, alias)
+	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
@@ -3461,6 +3538,29 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	truncate := s.Plan.GetDdl().GetTruncateTable()
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
+	relationName := table
+	var session process.Session
+	isTemp := false
+	if session = c.proc.GetSession(); session != nil {
+		if real, ok := session.GetTempTable(db, table); ok {
+			relationName = real
+			isTemp = true
+
+			// Internal SHOW/DROP/CREATE statements must carry the original
+			// frontend session so they resolve the temporary alias instead of
+			// the same-named permanent table.
+			originalCtx := c.proc.Ctx
+			ctx := originalCtx
+			if ctx == nil {
+				ctx = c.proc.GetTopContext()
+				if ctx == nil {
+					ctx = context.Background()
+				}
+			}
+			c.proc.Ctx = attachInternalExecutorSession(ctx, session)
+			defer func() { c.proc.Ctx = originalCtx }()
+		}
+	}
 
 	c.db = db
 
@@ -3474,11 +3574,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return convertDBEOB(c.proc.Ctx, err, db)
 	}
 
-	rel, err := dbSource.Relation(c.proc.Ctx, table, nil)
+	rel, err := dbSource.Relation(c.proc.Ctx, relationName, nil)
 	if err != nil {
 		return err
 	}
 	oldID := rel.GetTableID(c.proc.Ctx)
+	if plannedID := truncate.GetTableId(); plannedID != 0 && plannedID != oldID {
+		// The visible name can switch between a session temporary table and a
+		// same-named permanent table while a prepared plan is cached. Never
+		// apply a stale plan to whichever relation happens to be returned by
+		// the current name lookup.
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 
 	// Check if target table is a CCPR shared table (from publication)
 	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
@@ -3489,7 +3596,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return nil
 	}
 
-	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -3526,46 +3633,48 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
 		}
 	}()
-	if shouldAdvanceAlterDataBranchLineageSnapshot(
-		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
-	) {
-		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-		lineageRestoreSnapshot = true
-		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+	if !isTemp {
+		if shouldAdvanceAlterDataBranchLineageSnapshot(
+			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+		) {
+			lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
+			lineageRestoreSnapshot = true
+			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+				return err
+			}
+			lineageSnapshotAdvanced = true
+		}
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}
-		lineageSnapshotAdvanced = true
-	}
-	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
-		return err
-	}
-	if lineagePlan, err = c.prepareAlterDataBranchLineage(oldID, db, table, "TRUNCATE"); err != nil {
-		return err
-	}
-	if !lineagePlan.enabled {
-		var hasLatestHistory bool
-		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(oldID, db, table); err != nil {
+		if lineagePlan, err = c.prepareAlterDataBranchLineage(oldID, db, table, "TRUNCATE"); err != nil {
 			return err
 		}
-		if hasLatestHistory {
-			lineagePlan.enabled = true
-			lineagePlan.preserveHistoricalSource = true
+		if !lineagePlan.enabled {
+			var hasLatestHistory bool
+			if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(oldID, db, table); err != nil {
+				return err
+			}
+			if hasLatestHistory {
+				lineagePlan.enabled = true
+				lineagePlan.preserveHistoricalSource = true
+			}
 		}
-	}
-	if lineagePlan.enabled {
+		if lineagePlan.enabled {
+			if lineageSnapshotAdvanced {
+				lineagePlan.cloneTS = lineageCloneTS
+			} else {
+				lineagePlan.cloneTS = lineageTxnOp.SnapshotTS().PhysicalTime
+			}
+		}
 		if lineageSnapshotAdvanced {
-			lineagePlan.cloneTS = lineageCloneTS
-		} else {
-			lineagePlan.cloneTS = lineageTxnOp.SnapshotTS().PhysicalTime
-		}
-	}
-	if lineageSnapshotAdvanced {
-		rel, err = dbSource.Relation(c.proc.Ctx, table, nil)
-		if err != nil {
-			return err
-		}
-		if rel.GetTableID(c.proc.Ctx) != oldID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			rel, err = dbSource.Relation(c.proc.Ctx, relationName, nil)
+			if err != nil {
+				return err
+			}
+			if rel.GetTableID(c.proc.Ctx) != oldID {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
 		}
 	}
 
@@ -3613,8 +3722,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	)
 
 	// drop table
+	dropSQL := fmt.Sprintf("drop table `%s`.`%s`", db, table)
+	if isTemp {
+		dropSQL = fmt.Sprintf("drop temporary table `%s`.`%s`", db, table)
+	}
 	if err = c.runSqlWithAccountIdAndOptions(
-		fmt.Sprintf("drop table `%s`.`%s`", db, table),
+		dropSQL,
 		int32(accountID),
 		dropOpts,
 	); err != nil {
@@ -3630,7 +3743,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
-	rel, err = dbSource.Relation(c.proc.Ctx, table, nil)
+	newRelationName := relationName
+	if isTemp {
+		var ok bool
+		newRelationName, ok = session.GetTempTable(db, table)
+		if !ok {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+	}
+	rel, err = dbSource.Relation(c.proc.Ctx, newRelationName, nil)
 	if err != nil {
 		return err
 	}
@@ -3929,6 +4050,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 		return err
+	}
+	if isTemp {
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
+			return nil
+		}
 	}
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)

@@ -300,6 +300,26 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// SubscriptionMetadata carries both publication membership and the
+// subscriber-local RBAC scope that was established before the planner crosses
+// into the publisher catalog. AllTablesVisible and VisibleTableIDs are
+// mutually exclusive representations of that subscriber-side scope.
+type SubscriptionMetadata struct {
+	Meta             *SubscriptionMeta
+	AllTablesVisible bool
+	VisibleTableIDs  []uint64
+}
+
+// SubscriptionMetadataProvider enumerates the active subscriptions whose
+// metadata is visible to the current account and active role closure.
+// maxCandidates is the remaining statement admission budget. Implementations
+// must fail instead of returning a partial result when more active catalog
+// candidates exist, and must bound catalog materialization to at most
+// maxCandidates+1 rows before performing visibility expansion.
+type SubscriptionMetadataProvider interface {
+	GetSubscriptionMetadata(snapshot *Snapshot, maxCandidates int) ([]*SubscriptionMetadata, error)
+}
+
 // TableDefStatsCompilerContext is an optional extension for compiler contexts
 // that can bind a statistics read to the table definition used by the plan.
 // Implementations should reject schema-bound statistics from another table
@@ -350,8 +370,35 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// Deep existential regions are owned by a SQL block, never by a partially
+	// constructed node. The registry stays nil on the ordinary flattening path.
+	nextExistentialBlock    uint64
+	pendingExistentials     map[uint64]*pendingExistential
+	hadPendingExistentials  bool
+	existentialGateProjects map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
+	// queryingSubscriptionMetadata is scoped to binding one account-wide
+	// subscription metadata branch. It complements CompilerContext's publisher
+	// routing state with subscriber-local table visibility.
+	queryingSubscriptionMetadata *SubscriptionMetadata
+	// subscriptionStatisticsPublisherBranches is the statement-wide admission
+	// count for publisher STATISTICS view expansions. It is reserved before an
+	// occurrence binds either its local view or any publisher view, so an
+	// over-budget statement cannot produce a partial metadata plan.
+	subscriptionStatisticsPublisherBranches int
+	// subscriptionStatisticsPublicationTableEntries and
+	// subscriptionStatisticsPublicationTableLiteralBytes account for the
+	// per-publication IN-list literals that are expanded inside each publisher
+	// branch. Branch count alone does not bound a publication containing a large
+	// explicit table list.
+	subscriptionStatisticsPublicationTableEntries      int
+	subscriptionStatisticsPublicationTableLiteralBytes int
+	// subscriptionStatisticsMetadata caches the complete, bounded visible set
+	// per requested snapshot for this QueryBuilder. Sibling STATISTICS
+	// occurrences reuse it instead of repeating catalog and RBAC enumeration.
+	subscriptionStatisticsMetadata map[string][]*SubscriptionMetadata
 	// persistedViewTarget is set structurally by CREATE/ALTER/regeneration
 	// while one persisted view definition is bound. It is statement-local so
 	// detached CTE contexts cannot lose the private system-function owner.
@@ -385,6 +432,12 @@ type QueryBuilder struct {
 	// checks. Planner-local metadata lets the final cardinality pass choose table
 	// locks without weakening bounded UPDATE predicates into table-wide locks.
 	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
+	// fullTableUpdateSourceTableID identifies the single logical target whose
+	// complete scan cardinality can safely repair an underestimated LOCK_OP
+	// cardinality. The accompanying flag keeps table ID zero representable in
+	// planner tests and fail-closed mock catalogs.
+	fullTableUpdateSourceTableID    uint64
+	hasFullTableUpdateSourceTableID bool
 	// userWindowNodes contains only WINDOW nodes produced from user
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
@@ -501,10 +554,15 @@ type QueryBuilder struct {
 	// maintenance is intentionally absent.
 	irregularMaintInsertOnlySourceStep int32
 	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
-	irregularMaintTableDef             *plan.TableDef
-	irregularMaintObjRef               *plan.ObjectRef
-	irregularMaintSkipInsert           bool
-	irregularUpdateMaints              []irregularUpdateMaintenance
+	// irregularMaintValueChangedSourceSteps maps an affected logical index to a
+	// derivative source containing only new rows or conflict rows whose stored
+	// index inputs actually changed. Groups absent from the map retain the
+	// conservative unfiltered maintenance source.
+	irregularMaintValueChangedSourceSteps map[string]int32
+	irregularMaintTableDef                *plan.TableDef
+	irregularMaintObjRef                  *plan.ObjectRef
+	irregularMaintSkipInsert              bool
+	irregularUpdateMaints                 []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -549,15 +607,16 @@ type QueryBuilder struct {
 }
 
 type irregularUpdateMaintenance struct {
-	sourceStep           int32
-	deleteStep           int32
-	deletePkPos          int32
-	deletePkTyp          plan.Type
-	indexes              []*plan.IndexDef
-	insertOnlySourceStep int32
-	insertOnlyIndexes    []*plan.IndexDef
-	tableDef             *plan.TableDef
-	objRef               *plan.ObjectRef
+	sourceStep              int32
+	deleteStep              int32
+	deletePkPos             int32
+	deletePkTyp             plan.Type
+	indexes                 []*plan.IndexDef
+	insertOnlySourceStep    int32
+	insertOnlyIndexes       []*plan.IndexDef
+	valueChangedSourceSteps map[string]int32
+	tableDef                *plan.TableDef
+	objRef                  *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -736,6 +795,9 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
+
 	binder Binder
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity
@@ -1015,8 +1077,9 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ  Type
-	cols []string
+	typ           Type
+	cols          []string
+	allowSubquery bool
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`

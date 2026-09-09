@@ -369,6 +369,349 @@ func TestInsertIgnoreMultiDedupCarriesAcceptedKeysAcrossBatchesAndReset(t *testi
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestInsertIgnoreReordersGeneratedAutoIncrementCandidates(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 3, 4}, []int32{20, 10, 30},
+		[]bool{false, false, false}, []bool{false, true, false},
+		[]bool{true, true, true})
+	arg := newInsertIgnoreAutoIncrementArgument(input)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2, 3},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"the ignored row's candidate must be reused by the next accepted row")
+	require.Equal(t, []int32{20, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderCarriesCandidatesAcrossBatchesAndHonorsExplicitKeys(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 3}, []int32{10, 20},
+		[]bool{false, false}, []bool{true, true},
+		[]bool{true, true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 4}, []int32{25, 30},
+		[]bool{false, false}, []bool{false, false},
+		[]bool{false, true})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.IsEmpty(), "the first batch only contributes reusable candidates")
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2, 3},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"a pending candidate colliding with an accepted explicit key must be skipped")
+	require.Equal(t, []int32{25, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderPreservesEarlierGeneratedOwnership(t *testing.T) {
+	proc := testutil.NewProc(t)
+	// The first batch contributes only reusable candidates. The generated row
+	// in the next batch must consume candidate 2 before the later explicit row
+	// with id=2 is considered; otherwise the explicit row would steal the
+	// recycled key and the generated row would incorrectly become id=3.
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 3}, []int32{10, 10},
+		[]bool{false, false}, []bool{true, true},
+		[]bool{true, true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{4, 2}, []int32{20, 30},
+		[]bool{false, false}, []bool{false, false},
+		[]bool{true, false})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.IsEmpty())
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+	require.Equal(t, []int32{20},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderAdvancesPastExplicitKeyInSameBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 100, 101}, []int32{10, 20, 30},
+		[]bool{false, false, false}, []bool{true, false, false},
+		[]bool{true, false, true})
+	arg := newInsertIgnoreAutoIncrementArgument(input)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{100, 101},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"an accepted explicit high key must invalidate older recycled candidates")
+	require.Equal(t, []int32{20, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+	require.Equal(t, uint64(101), proc.GetStatementLastInsertID())
+
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderAdvancesPastExplicitKeyAcrossBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2}, []int32{10},
+		[]bool{false}, []bool{true}, []bool{true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{100, 101}, []int32{20, 30},
+		[]bool{false, false}, []bool{false, false}, []bool{false, true})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.IsEmpty())
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{100, 101},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"the explicit bound must apply to candidates retained by a prior batch")
+	require.Equal(t, []int32{20, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+	require.Equal(t, uint64(101), proc.GetStatementLastInsertID())
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderDoesNotAdvancePastNegativeExplicitKey(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, -1, 3}, []int32{10, 20, 30},
+		[]bool{false, false, false}, []bool{true, false, false},
+		[]bool{true, false, true})
+	arg := newInsertIgnoreAutoIncrementArgument(input)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{-1, 2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"a negative explicit key must not discard a retained positive candidate")
+	require.Equal(t, []int32{20, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderDoesNotAdvancePastNegativeExplicitKeyAcrossBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2}, []int32{10},
+		[]bool{false}, []bool{true}, []bool{true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{-1, 3}, []int32{20, 30},
+		[]bool{false, false}, []bool{false, false}, []bool{false, true})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.IsEmpty())
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{-1, 2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"negative explicit keys must preserve candidates retained by an earlier batch")
+	require.Equal(t, []int32{20, 30},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAutoIncrementCandidateStreamDiscardThroughKeepsHigherCandidates(t *testing.T) {
+	proc := testutil.NewProc(t)
+	stream := autoIncrementCandidateStream{}
+	require.NoError(t, stream.append(types.T_int32.ToType(), 2, proc.Mp()))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 5, proc.Mp()))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 8, proc.Mp()))
+	require.NoError(t, stream.discardThrough(5))
+
+	arg := newInsertIgnoreAutoIncrementArgument()
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+	arg.ctr.autoIncrementCandidates = stream
+	candidate, ok, err := arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint64(8), candidate.value)
+	require.NoError(t, arg.ctr.autoIncrementCandidates.append(types.T_int32.ToType(), 4, proc.Mp()))
+	candidate, ok, err = arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.False(t, ok, "a later batch must not reintroduce a candidate below the bound")
+}
+
+func TestInsertIgnoreReorderTracksFinalGeneratedPrimaryKeysAcrossBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	// Candidate 2 is rejected by the secondary unique key, so the accepted
+	// candidate 3 is published as final primary key 2. A later explicit 2 must
+	// therefore be rejected even though the input-candidate hash state only saw
+	// the original value 3.
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 3}, []int32{10, 20},
+		[]bool{false, false}, []bool{true, false},
+		[]bool{true, true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2}, []int32{30},
+		[]bool{false}, []bool{false},
+		[]bool{false})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.IsEmpty(), "explicit key must conflict with the final generated key")
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderAllowsInputCandidateAfterFinalRemap(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{2, 3}, []int32{10, 20},
+		[]bool{false, false}, []bool{true, false},
+		[]bool{true, true})
+	second := makeInsertIgnoreAutoIncrementBatch(t, proc,
+		[]int32{3}, []int32{30},
+		[]bool{false}, []bool{false},
+		[]bool{false})
+	arg := newInsertIgnoreAutoIncrementArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{3},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()],
+		"the old generated candidate 3 was remapped to final key 2 and must not block explicit 3")
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreReorderPublishesLastInsertIDOnlyForAcceptedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ukConflict bool
+		want       uint64
+	}{
+		{name: "accepted generated row", want: 2},
+		{name: "all generated rows ignored", ukConflict: true, want: 700},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			proc.SetStatementLastInsertID(700)
+			input := makeInsertIgnoreAutoIncrementBatch(t, proc,
+				[]int32{2}, []int32{20},
+				[]bool{false}, []bool{tc.ukConflict},
+				[]bool{true})
+			arg := newInsertIgnoreAutoIncrementArgument(input)
+			require.NoError(t, arg.Prepare(proc))
+
+			_, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, proc.GetStatementLastInsertID())
+
+			arg.Free(proc, false, nil)
+			input.Clean(proc.Mp())
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestAutoIncrementCandidateStreamCompressesArithmeticRuns(t *testing.T) {
+	proc := testutil.NewProc(t)
+	source := vector.NewVec(types.T_int32.ToType())
+	arg := &PreInsertUnique{}
+	const count = 10000
+	for i := int32(0); i < count; i++ {
+		require.NoError(t, vector.AppendFixed(source, i+2, false, proc.Mp()))
+		require.NoError(t, arg.appendAutoIncrementCandidate(proc, source, int(i)))
+	}
+	require.Len(t, arg.ctr.autoIncrementCandidates.runs, 1)
+	require.Equal(t, uint64(count), arg.ctr.autoIncrementCandidates.runs[0].count)
+
+	arg.Free(proc, false, nil)
+	source.Free(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAutoIncrementCandidateCompactionRetainsStatementState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := newInsertIgnoreAutoIncrementArgument()
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+	stream := &arg.ctr.autoIncrementCandidates
+	require.NoError(t, stream.discardThrough(10))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 11, proc.Mp()))
+	_, ok, err := arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, arg.compactAutoIncrementCandidates(proc))
+	require.NoError(t, stream.append(types.T_int32.ToType(), 9, proc.Mp()))
+	_, ok, err = arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.False(t, ok, "compaction must not reintroduce a fenced candidate")
+	require.Error(t, stream.append(types.T_int64.ToType(), 12, proc.Mp()))
+	stream.reset(proc.Mp())
+	require.NoError(t, stream.append(types.T_int64.ToType(), 9, proc.Mp()))
+	_, ok, err = arg.popAutoIncrementCandidate()
+	require.NoError(t, err)
+	require.True(t, ok, "only statement reset clears the fence and type")
+}
+
 func TestODKUTargetArbitrationUsesOrderedStatementLocalState(t *testing.T) {
 	testCases := []struct {
 		name              string
@@ -699,6 +1042,47 @@ func makeInsertIgnoreMultiDedupBatch(
 	}
 	input.SetRowCount(len(ids))
 	return input
+}
+
+func makeInsertIgnoreAutoIncrementBatch(
+	t *testing.T,
+	proc *process.Process,
+	ids, uniqueKeys []int32,
+	pkConflicts, ukConflicts, generated []bool,
+) *batch.Batch {
+	t.Helper()
+	input := batch.NewWithSize(5)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	for row := range ids {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], ids[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], uniqueKeys[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], pkConflicts[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[3], ukConflicts[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[4], generated[row], false, proc.Mp()))
+	}
+	input.SetRowCount(len(ids))
+	return input
+}
+
+func newInsertIgnoreAutoIncrementArgument(inputs ...*batch.Batch) *PreInsertUnique {
+	arg := &PreInsertUnique{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			InsertIgnoreMultiDedup:       true,
+			KeyColumns:                   []int32{0, 1},
+			ConflictColumns:              []int32{2, 3},
+			OutputColumns:                2,
+			AutoIncrementReorder:         true,
+			AutoIncrementColumn:          0,
+			AutoIncrementGeneratedColumn: 4,
+			AutoIncrementKeyIndex:        0,
+		},
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	return arg
 }
 
 func newInsertIgnoreMultiDedupArgument(inputs ...*batch.Batch) *PreInsertUnique {

@@ -2606,6 +2606,105 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	}
 }
 
+func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	values := [][]byte{
+		[]byte("ordinary inline"),
+		[]byte("ordinary long value that exceeds inline storage"),
+		[]byte("second ordinary long value that exceeds inline storage"),
+	}
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+
+	plan, err := vec.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, plan.canonicalVarlen,
+		"an ordinary owned append-built vector should retain bulk serialization")
+	require.Equal(t, uint32(vec.Length()*vec.GetType().TypeSize()+len(vec.GetArea())),
+		plan.dataLength+plan.areaLength)
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, values[0], decoded.GetBytesAt(0))
+	require.Equal(t, values[1], decoded.GetBytesAt(1))
+	require.Equal(t, values[2], decoded.GetBytesAt(2))
+
+	nullable := NewVec(types.T_varchar.ToType())
+	defer nullable.Free(mp)
+	require.NoError(t, AppendBytes(nullable, values[0], false, mp))
+	require.NoError(t, AppendBytes(nullable, values[1], true, mp))
+	nullablePlan, err := nullable.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, nullablePlan.canonicalVarlen,
+		"an ordinary owned vector with a safe NULL descriptor should retain bulk serialization")
+	require.Nil(t, nullablePlan.normalizedVarlenData)
+	nullableEncoded, err := nullable.MarshalBinary()
+	require.NoError(t, err)
+	nullableDecoded := NewVecFromReuse()
+	defer nullableDecoded.Free(nil)
+	require.NoError(t, nullableDecoded.UnmarshalBinary(nullableEncoded))
+	require.True(t, nullableDecoded.IsNull(1))
+
+	stale := NewVec(types.T_varchar.ToType())
+	defer stale.Free(mp)
+	require.NoError(t, AppendBytes(stale, values[1], false, mp))
+	stale.SetNull(0)
+	stalePlan, err := stale.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, stalePlan.canonicalVarlen,
+		"an owned stale NULL descriptor should use bulk serialization with normalization")
+	require.NotNil(t, stalePlan.normalizedVarlenData)
+
+	staleEncoded, err := stale.MarshalBinary()
+	require.NoError(t, err)
+	staleDecoded := NewVecFromReuse()
+	defer staleDecoded.Free(nil)
+	require.NoError(t, staleDecoded.UnmarshalBinary(staleEncoded))
+	require.True(t, staleDecoded.IsNull(0))
+
+	window, err := vec.Window(2, 3)
+	require.NoError(t, err)
+	defer window.Free(nil)
+	windowPlan, err := window.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.True(t, windowPlan.canonicalVarlen,
+		"a window retaining a larger source area must use canonical serialization")
+	windowEncoded, err := window.MarshalBinary()
+	require.NoError(t, err)
+	windowDecoded := NewVecFromReuse()
+	defer windowDecoded.Free(nil)
+	require.NoError(t, windowDecoded.UnmarshalBinary(windowEncoded))
+	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
+}
+
+func TestNullableFixedWidthMarshalDoesNotCastAsVarlena(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{11, 22, 33}, []bool{false, true, false}, mp))
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	size, err := vec.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), size)
+	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, []int64{11, 0, 33}, MustFixedColNoTypeCheck[int64](decoded))
+	require.True(t, decoded.IsNull(1))
+}
+
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())
@@ -5504,14 +5603,17 @@ func TestPrepareParamKindForType(t *testing.T) {
 		kind PrepareParamKind
 		ok   bool
 	}{
-		{types.T_bool, PrepareParamNone, false},
+		{types.T_bool, PrepareParamBoolean, true},
 		{types.T_int64, PrepareParamInteger, true},
 		{types.T_uint32, PrepareParamInteger, true},
 		{types.T_float32, PrepareParamFloat, true},
-		{types.T_float64, PrepareParamNone, false},
-		{types.T_decimal128, PrepareParamNone, false},
-		{types.T_text, PrepareParamNone, false},
-		{types.T_timestamp, PrepareParamNone, false},
+		{types.T_float64, PrepareParamFloat, true},
+		{types.T_decimal128, PrepareParamDecimal, true},
+		{types.T_geometry32, PrepareParamNone, true},
+		{types.T_uuid, PrepareParamNone, true},
+		{types.T_array_float32, PrepareParamNone, true},
+		{types.T_text, PrepareParamNone, true},
+		{types.T_timestamp, PrepareParamNone, true},
 	} {
 		kind, ok := PrepareParamKindForType(test.typ)
 		require.Equal(t, test.kind, kind)

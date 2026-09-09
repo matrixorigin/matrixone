@@ -1,0 +1,61 @@
+drop database if exists issue_28246;
+create database issue_28246;
+use issue_28246;
+create sequence s increment 1 start with 1 no cycle;
+begin;
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+1
+rollback;
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+1
+begin;
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+2
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+3
+commit;
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+4
+select setval('s', 10) as n;
+➤ n[12,65535,0]  𝄀
+10
+select currval('s') as n;
+➤ n[12,65535,0]  𝄀
+10
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+11
+create table input_rows (id int);
+insert into input_rows values (1), (2);
+select nextval('s') as n from input_rows order by n;
+➤ n[12,65535,0]  𝄀
+12  𝄀
+13
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+13  ¦  1
+create table union_left (id int);
+create table union_right (id int);
+insert into union_left values (1);
+insert into union_right values (1);
+select nextval('s') as n from union_left
+union all select nextval('s') as n from union_right order by n;
+➤ n[12,65535,0]  𝄀
+14  𝄀
+15
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+15  ¦  1
+create table ordinary (last_seq_num bigint);
+insert into ordinary values (7);
+select setval('ordinary', 8) as n;
+internal error: Table input is not a sequence
+select * from ordinary;
+➤ last_seq_num[-5,64,0]  𝄀
+7
+drop database issue_28246;

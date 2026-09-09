@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -120,7 +121,13 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -217,6 +224,12 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
 		return nil, err
 	}
@@ -257,7 +270,16 @@ func encodeProcessInfo(
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
+	orderedTop, isTop := s.RootOp.(*top.Top)
 	rs := c.newMergeScope([]*Scope{s})
+	if isTop && orderedTop.OrderedOutput {
+		// The wire promises one ordered stream, not interleaved DOP batches.
+		// Preserve that promise on the new local edge so runtime expansion
+		// inserts the ordered worker gather before this write-back merge.
+		reg := rs.Proc.Reg.MergeReceivers[0]
+		reg.ResetForReuse(1, 1)
+		reg.OrderedStream = true
+	}
 	op := output.NewArgument().
 		WithFunc(c.fill)
 	op.SetIdx(-1)
@@ -337,7 +359,16 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		for i := range s.Proc.Reg.MergeReceivers {
 			p.ChannelBufferSize = append(p.ChannelBufferSize, int32(cap(s.Proc.Reg.MergeReceivers[i].Ch2)))
 			p.NilBatchCnt = append(p.NilBatchCnt, int32(s.Proc.Reg.MergeReceivers[i].NilBatchCnt))
+			if s.Proc.Reg.MergeReceivers[i].OrderedStream {
+				if p.OrderedStream == nil {
+					p.OrderedStream = make([]bool, len(s.Proc.Reg.MergeReceivers))
+				}
+				p.OrderedStream[i] = true
+			}
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
+		}
+		for len(p.OrderedStream) > 0 && !p.OrderedStream[len(p.OrderedStream)-1] {
+			p.OrderedStream = p.OrderedStream[:len(p.OrderedStream)-1]
 		}
 	}
 	// DataSource
@@ -506,6 +537,11 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	for i := range s.Proc.Reg.MergeReceivers {
+		if i < len(p.OrderedStream) {
+			s.Proc.Reg.MergeReceivers[i].OrderedStream = p.OrderedStream[i]
+		}
+	}
 	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -611,34 +647,41 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
-		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+		if err := validateRemoteStatementLastInsertIDProtocol(
+			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:         t.SchemaName,
-			TableDef:           t.TableDef,
-			HasAutoCol:         t.HasAutoCol,
-			IsOldUpdate:        t.IsOldUpdate,
-			IsNewUpdate:        t.IsNewUpdate,
-			Attrs:              t.Attrs,
-			EstimatedRowCount:  int64(t.EstimatedRowCount),
-			CompPkeyExpr:       t.CompPkeyExpr,
-			ClusterByExpr:      t.ClusterByExpr,
-			ColOffset:          t.ColOffset,
-			RejectZeroTemporal: t.RejectZeroTemporal,
-			HasTargetSelector:  t.HasTargetSelector,
-			TargetRowNumberCol: t.TargetRowNumberCol,
-			TargetActiveCol:    t.TargetActiveCol,
-			TargetRowIdCol:     t.TargetRowIDCol,
+			SchemaName:                   t.SchemaName,
+			TableDef:                     t.TableDef,
+			HasAutoCol:                   t.HasAutoCol,
+			IsOldUpdate:                  t.IsOldUpdate,
+			IsNewUpdate:                  t.IsNewUpdate,
+			Attrs:                        t.Attrs,
+			EstimatedRowCount:            int64(t.EstimatedRowCount),
+			CompPkeyExpr:                 t.CompPkeyExpr,
+			ClusterByExpr:                t.ClusterByExpr,
+			ColOffset:                    t.ColOffset,
+			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
+			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			RejectZeroTemporal:           t.RejectZeroTemporal,
+			HasTargetSelector:            t.HasTargetSelector,
+			TargetRowNumberCol:           t.TargetRowNumberCol,
+			TargetActiveCol:              t.TargetActiveCol,
+			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := validateRemoteAutoIncrementSessionOptionsProtocol(
+			proc, t.PreInsertCtx.GetAutoIncrementReorder()); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteODKUActionRowsProtocol(
 			proc, t.PreInsertCtx.GetOdkuTargetArbitration()); err != nil {
 			return ctxId, nil, err
@@ -800,6 +843,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
@@ -832,6 +876,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergetop.MergeTop:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.MergeTopOrderedStreams = t.OrderedStreams
 	case *mergeorder.MergeOrder:
 		in.OrderBy = t.OrderBySpecs
 		in.SpillMem = t.SpillThreshold
@@ -858,6 +903,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
+			ArrowExecutionScope:         t.Es.ArrowExecutionScope,
+			ArrowForceMaterialize:       t.Es.ArrowForceMaterialize,
+			ArrowDistributedExecution:   t.Es.ArrowDistributedExecution,
+			ArrowObjectIdentities:       t.Es.ArrowObjectIdentities,
+			ArrowRecordBatchShards:      t.Es.ArrowRecordBatchShards,
+			ArrowSchemaFingerprint:      t.Es.ArrowSchemaFingerprint,
+			ArrowConversionPlanVersion:  t.Es.ArrowConversionPlanVersion,
 			Attrs:                       t.Es.Attrs,
 			ColumnListLen:               t.Es.ColumnListLen,
 			Cols:                        t.Es.Cols,
@@ -1203,6 +1255,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
+		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
+		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1418,9 +1472,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
-		op = top.NewArgument().
+		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.TopOrderedOutput {
+			topArg.WithOrderedOutput()
+		}
+		op = topArg
 	// should change next day?
 	case vm.Intersect:
 		arg := intersect.NewArgument()
@@ -1470,9 +1528,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
 	case vm.MergeTop:
-		op = mergetop.NewArgument().
+		arg := mergetop.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		if opr.MergeTopOrderedStreams {
+			arg.WithOrderedStreams()
+		}
+		op = arg
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
@@ -1497,6 +1559,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
+					ArrowExecutionScope:         t.ArrowExecutionScope,
+					ArrowForceMaterialize:       t.ArrowForceMaterialize,
+					ArrowDistributedExecution:   t.ArrowDistributedExecution,
+					ArrowObjectIdentities:       t.ArrowObjectIdentities,
+					ArrowRecordBatchShards:      t.ArrowRecordBatchShards,
+					ArrowSchemaFingerprint:      t.ArrowSchemaFingerprint,
+					ArrowConversionPlanVersion:  t.ArrowConversionPlanVersion,
 					Attrs:                       t.Attrs,
 					ColumnListLen:               t.ColumnListLen,
 					FileSize:                    t.FileSize,
@@ -1887,13 +1956,40 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
-func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
-	if !hasAutoCol {
-		return nil
-	}
-	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+func validateRemoteStatementLastInsertIDProtocol(
+	proc *process.Process,
+	hasAutoCol bool,
+	trackAutoIncrementGenerated bool,
+) error {
+	if hasAutoCol && (proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService())) {
 		return moerr.NewNotSupportedNoCtx(
 			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
+		)
+	}
+	if !hasAutoCol && !trackAutoIncrementGenerated {
+		return nil
+	}
+	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
+}
+
+func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	options := incrservice.NormalizeAutoIncrementOptions(
+		proc.GetSessionInfo().AutoIncrementIncrement,
+		proc.GetSessionInfo().AutoIncrementOffset,
+	)
+	return !options.IsDefault()
+}
+
+func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAutoIncrementSessionOptions(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment session/provenance metadata requires MORPC protocol version 56",
 		)
 	}
 	return nil
@@ -1985,6 +2081,40 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 	return nil
 }
 
+func validateRemoteDistributedOrderedTopPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	usesOrderedTop := false
+	for _, ordered := range p.OrderedStream {
+		if ordered {
+			usesOrderedTop = true
+			break
+		}
+	}
+	if !usesOrderedTop {
+		for _, instruction := range p.InstructionList {
+			if instruction.TopOrderedOutput || instruction.MergeTopOrderedStreams {
+				usesOrderedTop = true
+				break
+			}
+		}
+	}
+	if usesOrderedTop && (proc == nil || !supportsDistributedOrderedTop(proc.GetService())) {
+		return moerr.NewNotSupportedNoCtx(
+			"distributed ordered Top-N requires MORPC protocol version 53")
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteDistributedOrderedTopPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2018,7 +2148,14 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
-			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(
+				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
+				return err
+			}
+		}
+		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
+			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
+				proc, preInsertUnique.PreInsertUkCtx.GetAutoIncrementReorder()); err != nil {
 				return err
 			}
 		}
@@ -2255,6 +2392,31 @@ func validateRemoteGroupingSetPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteArrowLoadPipelineProtocol prevents receivers from silently
+// ignoring Arrow-specific ExternalScan fields during a mixed-version rollout.
+func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetExternalScan()
+		if scan == nil || scan.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData {
+			continue
+		}
+		if proc == nil || !supportsRemoteArrowLoadPipeline(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"Arrow LOAD remote execution requires MORPC protocol version 57",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}
