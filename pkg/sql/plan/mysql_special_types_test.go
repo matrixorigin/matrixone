@@ -266,7 +266,6 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 		{name: "union null then empty member", sql: "select find_in_set('', s) from (select null as s union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
 		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
 			require.NoError(t, err)
