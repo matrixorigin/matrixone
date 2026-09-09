@@ -363,9 +363,10 @@ func (g *Gateway) receiveResultBatch(
 			if err != nil {
 				return 0, fmt.Errorf("python udf: decode result: %w", err)
 			}
-			if decoded.NumCols() != 1 || decoded.NumRows() <= 0 || decoded.NumRows() != expectedRows {
+			decodedRows := decoded.NumRows()
+			if decoded.NumCols() != 1 || decodedRows <= 0 || decodedRows != expectedRows {
 				decoded.Release()
-				return 0, fmt.Errorf("python udf: result batch row count %d, expected %d", decoded.NumRows(), expectedRows)
+				return 0, fmt.Errorf("python udf: result batch row count %d, expected %d", decodedRows, expectedRows)
 			}
 			if decoded.Schema().Field(0).Name != "result" {
 				decoded.Release()
