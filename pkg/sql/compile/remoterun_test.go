@@ -2375,8 +2375,13 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:                 &plan.ObjectRef{ObjName: "t1"},
-					TableDef:               &plan.TableDef{Name: "t1"},
+					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
+					TableDef: &plan.TableDef{Name: "t1"},
+					PartitionIndexCtx: &plan.PartitionIndexCtx{
+						ParentRef:    &plan.ObjectRef{Obj: 77, ObjName: "parent"},
+						ParentTable:  &plan.TableDef{TblId: 77, Name: "parent"},
+						PartitionCol: plan.ColRef{RelPos: 4, ColPos: 13},
+					},
 					InsertCols:             []int{0, 1, 2},
 					DeleteCols:             []int{3, 4, 8},
 					PartitionCols:          []int{5, 6},
@@ -2409,6 +2414,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
 		require.Equal(t, 11, *restoredOp.MultiUpdateCtx[0].AffectedRowsWeightCol)
 		require.Equal(t, 12, *restoredOp.MultiUpdateCtx[0].PhysicalChangedRowsCol)
+		require.NotNil(t, restoredOp.MultiUpdateCtx[0].PartitionIndexCtx)
+		require.Equal(t, int32(13), restoredOp.MultiUpdateCtx[0].PartitionIndexCtx.PartitionCol.ColPos)
+		require.Equal(t, int64(77), restoredOp.MultiUpdateCtx[0].PartitionIndexCtx.ParentRef.Obj)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")

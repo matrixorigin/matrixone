@@ -16,10 +16,16 @@ package multi_update
 
 import (
 	"bytes"
+	"math"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -42,6 +48,7 @@ type PartitionMultiUpdate struct {
 type partitionUpdateTarget struct {
 	contexts         []*MultiUpdateCtx
 	tableID          uint64
+	indexOnly        bool
 	meta             partition.PartitionMetadata
 	mainIndexes      []uint64
 	partitionIndexes map[uint64][]engine.Relation
@@ -99,8 +106,11 @@ func (op *PartitionMultiUpdate) Prepare(
 	op.rawContexts = op.raw.MultiUpdateCtx
 	op.targets = buildPartitionUpdateTargets(op.rawContexts)
 	for _, target := range op.targets {
-		if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
+		if !target.indexOnly && !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
 			continue
+		}
+		if target.indexOnly && target.contexts[0].PartitionIndexCtx == nil {
+			return moerr.NewInternalError(proc.Ctx, "partition index target is missing parent context")
 		}
 
 		var err error
@@ -120,9 +130,46 @@ func (op *PartitionMultiUpdate) Prepare(
 		if err != nil {
 			return err
 		}
-		if len(r.GetExtraInfo().IndexTables) > 0 {
-			target.mainIndexes = r.GetExtraInfo().IndexTables
-			target.partitionIndexes = make(map[uint64][]engine.Relation, len(target.meta.Partitions))
+		runtimeParent := r.GetTableDef(proc.Ctx)
+		target.mainIndexes = append([]uint64(nil), r.GetExtraInfo().IndexTables...)
+		target.partitionIndexes = make(map[uint64][]engine.Relation, len(target.meta.Partitions))
+		if target.indexOnly {
+			parent := target.contexts[0].PartitionIndexCtx.ParentTable
+			parentRef := target.contexts[0].PartitionIndexCtx.ParentRef
+			if parent == nil || parent.TblId != target.tableID || !features.IsPartitioned(parent.FeatureFlag) ||
+				parent.Partition == nil || len(parent.Partition.PartitionDefs) != len(target.meta.Partitions) {
+				return moerr.NewInvalidInput(proc.Ctx, "partition fulltext metadata is stale")
+			}
+			if target.meta.TableID != 0 && target.meta.TableID != target.tableID {
+				return moerr.NewInvalidInput(proc.Ctx, "partition fulltext metadata belongs to another table")
+			}
+			route := target.contexts[0].PartitionIndexCtx.PartitionCol
+			for i, p := range target.meta.Partitions {
+				if int(p.Position) != i || p.Expr == nil || parent.Partition.PartitionDefs[i] == nil ||
+					parent.Partition.PartitionDefs[i].Def == nil ||
+					!proto.Equal(parent.Partition.PartitionDefs[i].Def, p.Expr) {
+					return moerr.NewInvalidInput(proc.Ctx, "partition fulltext partition definitions are stale")
+				}
+			}
+			if parentRef == nil || parentRef.Obj <= 0 || uint64(parentRef.Obj) != target.tableID {
+				return moerr.NewInvalidInput(proc.Ctx, "partition fulltext parent reference is stale")
+			}
+			if runtimeParent == nil || (parent.Version != 0 && runtimeParent.Version != 0 && parent.Version != runtimeParent.Version) {
+				return moerr.NewInvalidInput(proc.Ctx, "partition fulltext table definition is stale")
+			}
+			for _, ctx := range target.contexts {
+				if ctx.PartitionIndexCtx == nil || ctx.PartitionIndexCtx.ParentTable == nil ||
+					ctx.PartitionIndexCtx.ParentTable.TblId != target.tableID ||
+					ctx.PartitionIndexCtx.ParentRef == nil || ctx.PartitionIndexCtx.ParentRef.Obj <= 0 ||
+					uint64(ctx.PartitionIndexCtx.ParentRef.Obj) != target.tableID ||
+					!proto.Equal(&ctx.PartitionIndexCtx.PartitionCol, &route) ||
+					ctx.ObjRef == nil || ctx.TableDef == nil ||
+					(ctx.ObjRef.Obj > 0 && uint64(ctx.ObjRef.Obj) != ctx.TableDef.TblId) ||
+					!features.IsIndexTable(ctx.TableDef.FeatureFlag) ||
+					!containsPartitionIndex(target.mainIndexes, ctx.TableDef.TblId) {
+					return moerr.NewInvalidInputf(proc.Ctx, "partition fulltext index %d is not owned by parent %d", ctx.TableDef.GetTblId(), target.tableID)
+				}
+			}
 		}
 	}
 
@@ -150,8 +197,32 @@ func (op *PartitionMultiUpdate) Prepare(
 
 func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateTarget {
 	targetsByMain := make(map[int]*partitionUpdateTarget)
+	targetsByParent := make(map[uint64]*partitionUpdateTarget)
 	targets := make([]*partitionUpdateTarget, 0, len(contexts))
 	for i, ctx := range contexts {
+		if ctx.PartitionIndexCtx != nil {
+			parentID := uint64(0)
+			if ctx.PartitionIndexCtx.ParentTable != nil {
+				parentID = ctx.PartitionIndexCtx.ParentTable.TblId
+			}
+			if parentID == 0 && ctx.PartitionIndexCtx.ParentRef != nil {
+				if ctx.PartitionIndexCtx.ParentRef.Obj > 0 {
+					parentID = uint64(ctx.PartitionIndexCtx.ParentRef.Obj)
+				}
+			}
+			target := targetsByParent[parentID]
+			if target == nil {
+				target = &partitionUpdateTarget{
+					indexOnly: true,
+					tableID:   parentID,
+					writerIDs: make(map[uint64]uint64),
+				}
+				targetsByParent[parentID] = target
+				targets = append(targets, target)
+			}
+			target.contexts = append(target.contexts, cloneTargetContext(ctx))
+			continue
+		}
 		if features.IsIndexTable(ctx.TableDef.FeatureFlag) {
 			continue
 		}
@@ -164,7 +235,7 @@ func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateT
 		targets = append(targets, target)
 	}
 	for _, ctx := range contexts {
-		if !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+		if ctx.PartitionIndexCtx != nil || !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
 			continue
 		}
 		if target := targetsByMain[ctx.TargetUpdateCtxIdx]; target != nil {
@@ -172,6 +243,15 @@ func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateT
 		}
 	}
 	return targets
+}
+
+func containsPartitionIndex(indexes []uint64, target uint64) bool {
+	for _, id := range indexes {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneTargetContext(ctx *MultiUpdateCtx) *MultiUpdateCtx {
@@ -255,6 +335,9 @@ func (op *PartitionMultiUpdate) writeTarget(
 	target *partitionUpdateTarget,
 	input *batch.Batch,
 ) error {
+	if target.indexOnly {
+		return op.writePartitionIndexTarget(proc, target, input)
+	}
 	if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
 		return op.callRawTarget(proc, target, target.contexts, target.tableID, input)
 	}
@@ -296,6 +379,120 @@ func (op *PartitionMultiUpdate) writeTarget(
 		return err == nil
 	})
 	return err
+}
+
+// writePartitionIndexTarget routes an index-only maintenance batch using the
+// ordinal computed from the parent row. It deliberately does not call
+// partitionprune.Prune: the route column is already evaluated against the
+// final row image (or the captured old row for deletes), and evaluating the
+// parent expression again would make the physical-index target depend on a
+// post-projection column layout.
+func (op *PartitionMultiUpdate) writePartitionIndexTarget(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) error {
+	if len(target.contexts) == 0 || target.contexts[0].PartitionIndexCtx == nil {
+		return moerr.NewInternalError(proc.Ctx, "partition index target has no routing context")
+	}
+	route := target.contexts[0].PartitionIndexCtx.PartitionCol
+	if route.ColPos < 0 || int(route.ColPos) >= len(input.Vecs) {
+		return moerr.NewInvalidInputf(proc.Ctx, "partition fulltext route column %d is not present", route.ColPos)
+	}
+	routeVec := input.Vecs[route.ColPos]
+	if routeVec == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "partition fulltext route column is nil")
+	}
+	if len(input.Vecs) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "partition fulltext input has no columns")
+	}
+
+	groups := make([]*batch.Batch, len(target.meta.Partitions))
+	defer func() {
+		for _, grouped := range groups {
+			if grouped != nil {
+				grouped.Clean(proc.Mp())
+			}
+		}
+	}()
+
+	for row := 0; row < input.RowCount(); row++ {
+		if routeVec.IsNull(uint64(row)) {
+			return moerr.NewInvalidInput(proc.Ctx, "partition fulltext route is NULL")
+		}
+		ordinal, ok := partitionRouteOrdinal(routeVec, row)
+		if !ok || ordinal < 0 || ordinal >= len(groups) {
+			return moerr.NewInvalidInputf(proc.Ctx, "invalid partition fulltext route ordinal %d", ordinal)
+		}
+		if groups[ordinal] == nil {
+			grouped := batch.NewWithSize(len(input.Vecs))
+			grouped.Attrs = append([]string(nil), input.Attrs...)
+			for col, vec := range input.Vecs {
+				if vec == nil {
+					return moerr.NewInvalidInputf(proc.Ctx, "partition fulltext input column %d is nil", col)
+				}
+				grouped.Vecs[col] = vector.NewVec(*vec.GetType())
+			}
+			groups[ordinal] = grouped
+		}
+		grouped := groups[ordinal]
+		for col, vec := range input.Vecs {
+			if err := grouped.Vecs[col].UnionOne(vec, int64(row), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		grouped.SetRowCount(grouped.Vecs[0].Length())
+	}
+
+	for ordinal, grouped := range groups {
+		if grouped == nil || grouped.RowCount() == 0 {
+			continue
+		}
+		p := target.meta.Partitions[ordinal]
+		partitionContexts, err := op.resolvePartitionContexts(proc, target, target.contexts, p)
+		if err != nil {
+			return err
+		}
+		if err = op.callRawTarget(proc, target, partitionContexts, p.PartitionID, grouped); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func partitionRouteOrdinal(vec *vector.Vector, row int) (int, bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return int(vector.GetFixedAtNoTypeCheck[int8](vec, row)), true
+	case types.T_int16:
+		return int(vector.GetFixedAtNoTypeCheck[int16](vec, row)), true
+	case types.T_int32:
+		return int(vector.GetFixedAtNoTypeCheck[int32](vec, row)), true
+	case types.T_int64:
+		value := vector.GetFixedAtNoTypeCheck[int64](vec, row)
+		if value > int64(math.MaxInt) || value < int64(math.MinInt) {
+			return 0, false
+		}
+		return int(value), true
+	case types.T_uint8:
+		return int(vector.GetFixedAtNoTypeCheck[uint8](vec, row)), true
+	case types.T_uint16:
+		return int(vector.GetFixedAtNoTypeCheck[uint16](vec, row)), true
+	case types.T_uint32:
+		value := vector.GetFixedAtNoTypeCheck[uint32](vec, row)
+		if uint64(value) > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(value), true
+	case types.T_uint64:
+		value := vector.GetFixedAtNoTypeCheck[uint64](vec, row)
+		if value > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 func (op *PartitionMultiUpdate) selectPartitionTargetRows(
@@ -516,6 +713,7 @@ func (op *PartitionMultiUpdate) Free(
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
 	op.freePartitionWriters(proc)
+	op.clearPartitionTargets()
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -532,10 +730,16 @@ func (op *PartitionMultiUpdate) Reset(
 	op.raw.resetMultiUpdateCtxs()
 	op.freePartitionWriters(proc)
 	op.s3AffectedRows = 0
+	op.clearPartitionTargets()
+	op.nextWriterID = 0
+}
+
+func (op *PartitionMultiUpdate) clearPartitionTargets() {
 	for _, target := range op.targets {
 		clear(target.writerIDs)
+		target.partitionIndexes = nil
+		target.meta = partition.PartitionMetadata{}
 	}
-	op.nextWriterID = 0
 }
 
 func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
@@ -574,6 +778,9 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 		if id == tableID {
 			indexes, ok := target.partitionIndexes[partitionID]
 			if ok {
+				if i >= len(indexes) || indexes[i] == nil {
+					return nil, moerr.NewInternalErrorf(proc.Ctx, "partition index %d is missing for partition %d", tableID, partitionID)
+				}
 				return indexes[i], nil
 			}
 
@@ -589,13 +796,16 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 				}
 				relations = append(relations, rel)
 			}
+			if i >= len(relations) {
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "partition index %d is missing for partition %d", tableID, partitionID)
+			}
 			target.partitionIndexes[partitionID] = relations
 
 			return relations[i], nil
 		}
 	}
 
-	panic("BUG")
+	return nil, moerr.NewInternalErrorf(proc.Ctx, "partition index %d is not owned by parent table %d", tableID, target.tableID)
 }
 
 func (op *PartitionMultiUpdate) getS3Writer(
@@ -630,14 +840,29 @@ func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
 }
 
 func (op *PartitionMultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	// Index-only partition maintenance carries the same IgnoreAffectedRows
+	// contract as the raw MultiUpdate.  The raw writer classifies a classic
+	// FULLTEXT table as a main table by name, so checking only tableType would
+	// otherwise expose physical token rows as the statement's affected rows.
+	if op.currentTargetIgnoresAffectedRows() {
+		return
+	}
 	op.affectedRows += affectedRows
 }
 
 func (op *PartitionMultiUpdate) doAddS3AffectedRows(affectedRows uint64) {
-	if len(op.rawContexts) > 0 && op.rawContexts[0].IgnoreAffectedRows {
+	if op.currentTargetIgnoresAffectedRows() {
 		return
 	}
 	op.s3AffectedRows += affectedRows
+}
+
+func (op *PartitionMultiUpdate) currentTargetIgnoresAffectedRows() bool {
+	contexts := op.raw.MultiUpdateCtx
+	if len(contexts) == 0 {
+		contexts = op.rawContexts
+	}
+	return len(contexts) > 0 && contexts[0].IgnoreAffectedRows
 }
 
 func (op *PartitionMultiUpdate) takeS3AffectedRows() uint64 {
@@ -671,9 +896,21 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		SuppressPhysicalAffectedRows: ctx.SuppressPhysicalAffectedRows,
 		TargetTableID:                ctx.TargetTableID,
 	}
-	objRef := *ctx.ObjRef
-	def := *ctx.TableDef
-	v.ObjRef = &objRef
-	v.TableDef = &def
+	if ctx.ObjRef != nil {
+		objRef := *ctx.ObjRef
+		v.ObjRef = &objRef
+	}
+	if ctx.TableDef != nil {
+		def := *ctx.TableDef
+		v.TableDef = &def
+	}
+	if ctx.PartitionIndexCtx != nil {
+		partitionIndexCtx := *ctx.PartitionIndexCtx
+		v.PartitionIndexCtx = &plan.PartitionIndexCtx{
+			ParentRef:    partitionIndexCtx.ParentRef,
+			ParentTable:  partitionIndexCtx.ParentTable,
+			PartitionCol: partitionIndexCtx.PartitionCol,
+		}
+	}
 	return v
 }

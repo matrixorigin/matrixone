@@ -28,6 +28,7 @@ import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/stretchr/testify/require"
 )
 
@@ -200,6 +201,154 @@ func inspectFulltextODKUPlan(t *testing.T, mock *MockOptimizer, sql string) full
 func fulltextODKUPlanShape(t *testing.T, sql string) fulltextODKUShape {
 	t.Helper()
 	return inspectFulltextODKUPlan(t, NewMockOptimizer(true), sql)
+}
+
+func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
+	oldPostDML := postdml_flag
+	postdml_flag = true
+	t.Cleanup(func() { postdml_flag = oldPostDML })
+
+	mock := NewMockOptimizer(true)
+	base := mock.ctxt.tables["docs_ft"]
+	base.FeatureFlag |= features.Partitioned
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: makePlan2BoolConstExprWithType(true)},
+		{Def: makePlan2BoolConstExprWithType(false)},
+	}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'partitioned body', 1, '[1,2,3]')")
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var maintenance int
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.PartitionIndexCtx == nil {
+				continue
+			}
+			maintenance++
+			require.True(t, updateCtx.IgnoreAffectedRows)
+			require.Equal(t, base.TblId, updateCtx.PartitionIndexCtx.ParentTable.TblId)
+			require.Equal(t, base.TblId, uint64(updateCtx.PartitionIndexCtx.ParentRef.Obj))
+			require.GreaterOrEqual(t, updateCtx.PartitionIndexCtx.PartitionCol.ColPos, int32(0))
+			require.Equal(t, int32(len(updateCtx.InsertCols)-1), updateCtx.PartitionIndexCtx.PartitionCol.ColPos)
+			require.NotEqual(t, base.TblId, updateCtx.TableDef.TblId)
+		}
+	}
+	require.Equal(t, 1, maintenance, "one logical FULLTEXT index must produce one routed maintenance branch")
+}
+
+func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	base := mock.ctxt.tables["docs_ft"]
+	base.FeatureFlag |= features.Partitioned
+	partitionExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: ">="},
+			Args: []*planpb.Expr{
+				{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "payload", ColPos: 2}}},
+				makePlan2Int32ConstExprWithType(0),
+			},
+		}},
+	}
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: partitionExpr},
+		{Def: makePlan2BoolConstExprWithType(false)},
+	}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"update constraint_test.docs_ft set payload = payload + 1 where id = 1")
+	require.NoError(t, err)
+
+	var maintenance int
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.PartitionIndexCtx != nil {
+				maintenance++
+			}
+		}
+	}
+	require.GreaterOrEqual(t, maintenance, 2,
+		"partition-key updates need independent routed delete and insert maintenance branches")
+
+	t.Run("ODKU route changes are part of the value-change marker", func(t *testing.T) {
+		shape := inspectFulltextODKUPlan(t, mock,
+			"insert into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]') on duplicate key update payload = values(payload)")
+		require.Len(t, shape.valueChangeFilter, 1)
+		require.ElementsMatch(t, []string{"id", "body", "payload"},
+			nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+	})
+
+	t.Run("document primary key changes rebuild both branches", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		base := mock.ctxt.tables["docs_ft"]
+		base.FeatureFlag |= features.Partitioned
+		base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+			{Def: partitionExpr},
+			{Def: makePlan2BoolConstExprWithType(false)},
+		}}
+
+		logicPlan, err := runOneStmt(mock, t,
+			"update constraint_test.docs_ft set id = 9 where id = 1")
+		require.NoError(t, err)
+
+		maintenance = 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.PartitionIndexCtx != nil {
+					maintenance++
+				}
+			}
+		}
+		require.GreaterOrEqual(t, maintenance, 2,
+			"document-key updates need independent routed delete and insert maintenance branches")
+	})
+
+}
+
+func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	base := mock.ctxt.tables["docs_ft"]
+	base.FeatureFlag |= features.Partitioned
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: makePlan2BoolConstExprWithType(true)},
+		{Def: makePlan2BoolConstExprWithType(false)},
+	}}
+
+	for _, sql := range []string{
+		"insert into constraint_test.docs_ft(id, body, payload, embedding) select id + 10, body, payload, embedding from constraint_test.docs_ft",
+		"replace into constraint_test.docs_ft(id, body, payload, embedding) values (9, 'replacement', 1, '[1,2,3]')",
+		"delete from constraint_test.docs_ft where id = 1",
+		"delete from constraint_test.docs_ft",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			var routed int
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.PartitionIndexCtx != nil {
+						routed++
+					}
+				}
+			}
+			require.Positive(t, routed, "partitioned classic FULLTEXT DML must keep a routed maintenance branch")
+		})
+	}
 }
 
 func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
@@ -602,7 +751,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 			}, bindCtx)
 
 			_, err := builder.appendOnDupIrregularMaintSource(
-				bindCtx, finalProjID, finalProjTag, 0, planpb.Type{}, -1, -1,
+				bindCtx, finalProjID, finalProjTag, 0, -1, planpb.Type{}, -1, -1,
 				-1, nil, nil, tc.newRowMarkerPos, map[string]int32{"ft": tc.valueMarkerPos},
 				&planpb.TableDef{}, nil,
 			)

@@ -29,6 +29,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1890,6 +1891,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	physicalTargetActiveFinalPos := make([]int32, len(dmlCtx.aliases))
 	targetUpdateCtxIdx := make([]int32, len(dmlCtx.aliases))
 	targetOldPkFinalPos := make([]int32, len(dmlCtx.aliases))
+	oldPartitionColFinalPos := make([]map[string]int32, len(dmlCtx.aliases))
 	physicalTargetOwner := make([]int, len(dmlCtx.aliases))
 	for i := range physicalTargetOwner {
 		physicalTargetOwner[i] = -1
@@ -1978,6 +1980,47 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					},
 				},
 			})
+		}
+		if features.IsPartitioned(tableDef.FeatureFlag) && tableDef.Partition != nil &&
+			len(tableDef.Partition.PartitionDefs) > 0 {
+			hasFulltext := false
+			for _, indexdef := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					hasFulltext = true
+					break
+				}
+			}
+			if hasFulltext {
+				partitionCols := make(map[string]struct{})
+				for _, partitionDef := range tableDef.Partition.PartitionDefs {
+					if partitionDef != nil {
+						collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionCols)
+					}
+				}
+				positions := make(map[string]int32, len(partitionCols))
+				for _, col := range tableDef.Cols {
+					if _, ok := partitionCols[col.Name]; !ok {
+						continue
+					}
+					pos := finalColName2Idx[alias+"."+col.Name]
+					if _, updated := newColName2Idx[alias+"."+col.Name]; updated {
+						oldPos, ok := oldColName2Idx[alias+"."+col.Name]
+						if !ok || oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find old partition column %s", col.Name)
+						}
+						pos = int32(len(finalProjList))
+						finalProjList = append(finalProjList, &plan.Expr{
+							Typ: selectNode.ProjectList[oldPos].Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: oldPos,
+							}},
+						})
+					}
+					positions[col.Name] = pos
+				}
+				oldPartitionColFinalPos[i] = positions
+			}
 		}
 		targetOldPkFinalPos[i] = oldPkPos
 		if isMultiTargetUpdate {
@@ -2345,6 +2388,27 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		localProjTag := builder.genNewBindTag()
 		localProjList, deletePkPos := buildIrregularUpdateTargetProjection(
 			alias, tableDef, finalProjTag, finalProjList, finalColName2Idx, targetOldPkFinalPos[i])
+		deleteRoutePos := int32(-1)
+		if features.IsPartitioned(tableDef.FeatureFlag) && tableDef.Partition != nil &&
+			len(tableDef.Partition.PartitionDefs) > 0 {
+			for _, indexdef := range indexes {
+				if !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					continue
+				}
+				oldRouteColumns := make(map[string][2]int32, len(oldPartitionColFinalPos[i]))
+				for name, pos := range oldPartitionColFinalPos[i] {
+					oldRouteColumns[name] = [2]int32{finalProjTag, pos}
+				}
+				routeExpr, routeErr := buildPartitionRouteExprFromColumns(
+					builder.GetContext(), tableDef, oldRouteColumns)
+				if routeErr != nil {
+					return 0, routeErr
+				}
+				deleteRoutePos = int32(len(localProjList))
+				localProjList = append(localProjList, routeExpr)
+				break
+			}
+		}
 		rowNumberPos := int32(-1)
 		activePos := int32(-1)
 		if isMultiTargetUpdate {
@@ -2379,6 +2443,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjID,
 			localProjTag,
 			deletePkPos,
+			deleteRoutePos,
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
@@ -2400,6 +2465,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				deleteStep:              builder.irregularMaintDeleteStep,
 				deletePkPos:             builder.irregularMaintDeletePkPos,
 				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				deleteRoutePos:          builder.irregularMaintDeleteRoutePos,
 				indexes:                 builder.irregularMaintIndexes,
 				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
 				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
@@ -4489,6 +4555,75 @@ func irregularIndexAffectedByUpdate(
 	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
 }
 
+// partitionColumnsUpdated reports whether the final row can route to a
+// different physical partition. The partition expression is the authoritative
+// dependency set; using only the first column or assuming a fixed column
+// position misses composite and expression-based partitioning.
+func partitionColumnsUpdated(tableDef *plan.TableDef, updated map[string]struct{}) bool {
+	if tableDef == nil || tableDef.Partition == nil || len(tableDef.Partition.PartitionDefs) == 0 {
+		return false
+	}
+	// Partition expressions may reference a generated column rather than the
+	// base column assigned by UPDATE/ODKU.  The final row image recomputes that
+	// generated value, so expand the changed set through generated-column
+	// dependencies before checking the partition expression.  Without this
+	// closure a write to the source column can move a row while the FULLTEXT
+	// maintenance planner incorrectly takes the insert-only path.
+	possiblyChanged := make(map[string]struct{}, len(updated))
+	for colName := range updated {
+		resolved := catalog.ResolveAlias(colName)
+		if colPos, ok := tableDef.Name2ColIndex[resolved]; ok &&
+			colPos >= 0 && int(colPos) < len(tableDef.Cols) {
+			possiblyChanged[tableDef.Cols[colPos].Name] = struct{}{}
+			continue
+		}
+		possiblyChanged[resolved] = struct{}{}
+	}
+	for {
+		expanded := false
+		for _, col := range tableDef.Cols {
+			if col == nil || col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
+				continue
+			}
+			if _, alreadyChanged := possiblyChanged[col.Name]; alreadyChanged {
+				continue
+			}
+			for _, refPos := range collectRefColPos(col.GeneratedCol.Expr) {
+				if refPos < 0 || int(refPos) >= len(tableDef.Cols) {
+					continue
+				}
+				if _, sourceChanged := possiblyChanged[tableDef.Cols[refPos].Name]; sourceChanged {
+					possiblyChanged[col.Name] = struct{}{}
+					expanded = true
+					break
+				}
+			}
+		}
+		if !expanded {
+			break
+		}
+	}
+	partitionCols := make(map[string]struct{})
+	for _, partitionDef := range tableDef.Partition.PartitionDefs {
+		if partitionDef != nil {
+			collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionCols)
+		}
+	}
+	for colName := range partitionCols {
+		if _, ok := possiblyChanged[colName]; ok {
+			return true
+		}
+		resolved := catalog.ResolveAlias(colName)
+		if _, ok := possiblyChanged[resolved]; ok {
+			return true
+		}
+		if colPos, ok := tableDef.Name2ColIndex[colName]; ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) && tableDef.Cols[colPos].OnUpdate != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
 // UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
 // plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
@@ -4559,9 +4694,9 @@ func irregularIndexAffectedByUpdatedColumnNames(
 // The bool return reports an affected irregular algorithm that has not migrated
 // to either mechanism. MASTER indexes delete
 // by the old source PK and rebuild from the final row image, so changing the
-// base-table PK is handled by the same maintenance pipeline. Plugin-backed
-// synchronous full-text/vector indexes retain their existing PK-update
-// restriction until their complete hidden-table groups support that contract.
+// base-table PK is handled by the same maintenance pipeline. Classic FULLTEXT
+// uses that same old/new-row path for partition and document-key changes;
+// other plugin-backed synchronous indexes retain their existing PK restriction.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -4572,6 +4707,11 @@ func classifyIrregularIndexesForUpdate(
 	}
 
 	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	partitionUpdated := partitionColumnsUpdated(tableDef, updatedCols)
 	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
@@ -4580,6 +4720,9 @@ func classifyIrregularIndexesForUpdate(
 		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
 		if err != nil {
 			return nil, false, err
+		}
+		if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) && (partitionUpdated || pkUpdated) {
+			affected = true
 		}
 
 		p, ok := indexplugin.Get(idxDef.IndexAlgo)
@@ -4606,7 +4749,7 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated {
+		if pkUpdated && !catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
 			return nil, false, newUpdatePlannerRouteError(
 				updatePlannerRejected,
 				updateRouteReasonIrregularIndex,

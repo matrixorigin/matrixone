@@ -1003,6 +1003,7 @@ func constructMultiUpdate(
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
 			TableDef:           updateCtx.TableDef,
+			PartitionIndexCtx:  updateCtx.PartitionIndexCtx,
 			InsertCols:         insertCols,
 			DeleteCols:         deleteCols,
 			PartitionCols:      partitionCols,
@@ -1031,6 +1032,9 @@ func constructMultiUpdate(
 
 	ps := proc.GetPartitionService()
 	if !ps.Enabled() {
+		if hasPartitionIndexTarget(node.UpdateCtxList) {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "partition fulltext maintenance requires partition service")
+		}
 		return arg, nil
 	}
 	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
@@ -1042,8 +1046,20 @@ func constructMultiUpdate(
 
 func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
 	for _, updateCtx := range contexts {
+		if updateCtx.PartitionIndexCtx != nil {
+			return true
+		}
 		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
 			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPartitionIndexTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if updateCtx != nil && updateCtx.PartitionIndexCtx != nil {
 			return true
 		}
 	}
