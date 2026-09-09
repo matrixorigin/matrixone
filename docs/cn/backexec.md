@@ -23,12 +23,10 @@ Session (parent)
                   └─ shareTxn = true
 ```
 
-
-| Mode                    | shareTxn | Transaction Management     | Close() Behavior                 |
-| ----------------------- | -------- | -------------------------- | -------------------------------- |
-| Shared Transaction      | true     | Managed by parent session  | No rollback, only Reset          |
-| Independent Transaction | false    | Managed by backExec itself | Execute rollback, complete Close |
-
+| Mode | shareTxn | Transaction Management | Close() Behavior |
+|------|----------|------------------------|------------------|
+| Shared Transaction | true | Managed by parent session | No rollback, only Reset |
+| Independent Transaction | false | Managed by backExec itself | Execute rollback, complete Close |
 
 ## Key Insights
 
@@ -48,7 +46,6 @@ func (th *TxnHandler) rollbackUnsafe(...) error {
 ### 2. Transaction References Can Be Safely Updated
 
 Since shared transactions don't manage transaction lifecycle, we can:
-
 - Directly update `txnOp` references without Close + rebuild
 - In autocommit mode, only need `UpdateTxn(newTxnOp)` when switching transactions
 
@@ -109,18 +106,15 @@ cachedBackExec exists?
 
 ## Summary
 
-
-| Feature               | Description                                                              |
-| --------------------- | ------------------------------------------------------------------------ |
+| Feature | Description |
+|---------|-------------|
 | Transaction Ownership | Shared transactions are managed by parent session, backExec only borrows |
-| Lifecycle             | Can be elevated to session level, reused across transactions             |
-| Transaction Switch    | Only need to update txnOp reference, no rebuild required                 |
-| Snapshot Update       | Automatically visible, no handling needed                                |
-
+| Lifecycle | Can be elevated to session level, reused across transactions |
+| Transaction Switch | Only need to update txnOp reference, no rebuild required |
+| Snapshot Update | Automatically visible, no handling needed |
 
 ## Related Files
 
 - `pkg/frontend/back_exec.go` - backExec and backSession definitions
 - `pkg/frontend/txn.go` - TxnHandler definition, shareTxn logic
 - `pkg/frontend/compiler_context.go` - TxnCompilerContext.getOrCreateBackExec() implementation
-
