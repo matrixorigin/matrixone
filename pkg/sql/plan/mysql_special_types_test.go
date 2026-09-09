@@ -262,6 +262,8 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 		{name: "derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
 		{name: "cte empty member", sql: "with c as (select s from set_empty_member_t) select find_in_set('', s) from c", def: ",a", wantType: types.T_uint64},
 		{name: "union empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "union empty member then null", sql: "select find_in_set('', s) from (select s from set_empty_member_t union all select null as s) d", def: ",a", wantType: types.T_uint64},
+		{name: "union null then empty member", sql: "select find_in_set('', s) from (select null as s union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
 		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
 		tc := tc
@@ -274,6 +276,10 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 			require.Equal(t, int32(tc.wantType), findInSet.GetF().GetArgs()[1].Typ.Id)
 			require.Empty(t, findInSet.GetF().GetArgs()[1].Typ.Enumvalues)
 			require.Equal(t, tc.def, findInSet.GetF().GetArgs()[2].GetLit().GetSval())
+			if strings.Contains(tc.name, "union") && strings.Contains(tc.name, "null") {
+				require.NotNil(t, findInSet.GetF().GetArgs()[1].GetCol(), logicPlan.String())
+				require.False(t, findInSet.GetF().GetArgs()[1].Typ.NotNullable)
+			}
 			if tc.name == "derived empty member" {
 				raw := findInSet.GetF().GetArgs()[1].GetCol()
 				require.NotNil(t, raw)

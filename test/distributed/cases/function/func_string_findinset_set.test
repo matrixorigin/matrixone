@@ -56,4 +56,25 @@ FROM find_in_set_set_empty_28221 ORDER BY id;
 SELECT id, FIND_IN_SET('', v) AS derived_empty_pos
 FROM (SELECT id, v FROM find_in_set_set_empty_28221) AS d ORDER BY id;
 
+# A bare NULL branch is neutral for SET provenance.  The empty member (bitmap
+# 1) must remain distinguishable from the empty bitmap (0), while NULL stays
+# NULL, in either UNION ALL order.
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+    SELECT id, 1 AS src, v
+    FROM find_in_set_set_empty_28221
+    WHERE id IN (1, 2)
+    UNION ALL
+    SELECT 0 AS id, 2 AS src, NULL AS v
+) AS u ORDER BY src, id;
+
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+    SELECT 0 AS id, 1 AS src, NULL AS v
+    UNION ALL
+    SELECT id, 2 AS src, v
+    FROM find_in_set_set_empty_28221
+    WHERE id IN (1, 2)
+) AS u ORDER BY src, id;
+
 DROP TABLE find_in_set_set_empty_28221;
