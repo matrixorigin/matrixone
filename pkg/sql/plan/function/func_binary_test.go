@@ -402,6 +402,135 @@ func TestFloor(t *testing.T) {
 	}
 }
 
+func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name       string
+		input      FunctionTestInput
+		expect     FunctionTestResult
+		selectList *FunctionSelectList
+	}{
+		{
+			name:  "typed null constant",
+			input: NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		},
+		{
+			name:  "non-null constant expands to every row",
+			input: NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1.9", "1.9"}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1}, []bool{false, false}),
+		},
+		{
+			name: "nulls at first middle and last rows",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "1.9", "", "-1.1", ""},
+				[]bool{true, false, true, false, true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1, 0, -2, 0},
+				[]bool{true, false, true, false, true}),
+		},
+		{
+			name: "all null vector",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", ""}, []bool{true, true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0}, []bool{true, true}),
+		},
+		{
+			name: "unmasked malformed value remains error",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"not-a-number"}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "non-null empty string remains error",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{""}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "masked malformed row",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"1.9", "not-a-number", "-1.1"}, []bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 0, -2}, []bool{false, true, false}),
+			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+		},
+		{
+			name: "all masked malformed rows skip parsing",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"not-a-number", ""}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0}, []bool{true, true}),
+			selectList: &FunctionSelectList{AllNull: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			floorCase := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, FloorStr).
+				WithSelectList(tc.selectList)
+			succeeded, info := floorCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+
+	invalidSecondArg := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), FloorStr)
+	require.NoError(t, invalidSecondArg.result.PreExtendAndReset(invalidSecondArg.fnLength))
+	err := FloorStr(invalidSecondArg.parameters, invalidSecondArg.result, proc, invalidSecondArg.fnLength, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the second argument of the floor")
+	require.NotContains(t, err.Error(), "ceil")
+}
+
+func TestFloorStrDecimalPlacesMustBeConstant(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "constant decimal places",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1.9}, []bool{false}),
+		},
+		{
+			name: "nonconstant decimal places rejected",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "wrong decimal places type rejected",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int32.ToType(), []int32{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			floorCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorStr)
+			succeeded, info := floorCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initRoundTestCase() []tcTemp {
 	rfs := []float64{0, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
 		0, 2, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}

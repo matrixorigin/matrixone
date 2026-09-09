@@ -499,63 +499,18 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "floor"), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
