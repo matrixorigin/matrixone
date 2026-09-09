@@ -362,16 +362,11 @@ type PrepareStmt struct {
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
+	paramBinaryStrings         []bool
 	paramMetadata              []bool
-	// paramBinaryStrings is statement-owned backing storage for the optional
-	// per-execution BLOB domain sidecar. It remains available across executions
-	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
-	paramBinaryStrings []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation for generic JSON comparison adapters and EXECUTE USING
-	// metadata. jsonMemberOfParamPositions is the narrower set that may use
-	// exact binary-protocol SQL domains; paramConcreteTypes is a reusable
-	// execution buffer.
+	// generation. Only these parameters need an exact SQL type in Process
+	// metadata; paramConcreteTypes is a reusable execution buffer.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
@@ -392,8 +387,8 @@ type PrepareStmt struct {
 	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
-	// ParamRefs rather than the preceding execution's literals. Only TP plans
-	// retain a compile; AP plans rebuild statement-owned scan state and topology.
+	// ParamRefs, so equivalent values reuse the compile without embedding the
+	// preceding execution's literal.
 	runtimeSpecializationKey string
 	runtimePlan              *plan.Plan
 	runtimeCompile           *compile.Compile
@@ -820,10 +815,8 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	// Match compileQuery's prepare-time eligibility: AP scopes contain
-	// execution-specific placement and scan state that Reset cannot rebuild.
-	// Keep the specialized logical plan, but leave the AP compile with its
-	// ordinary statement owner for execution and release.
+	// AP scopes contain execution-specific placement and scan state. Cache only
+	// the specialized logical plan and leave the AP compile statement-owned.
 	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
 		runtimeCompile = nil
 	}
@@ -880,7 +873,6 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
-	prepareStmt.paramBinaryStrings = nil
 	prepareStmt.remapDb = nil
 }
 

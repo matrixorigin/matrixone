@@ -1143,7 +1143,12 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 		return plan2.Type{}, nil
 	}
 	if tcc.execCtx != nil {
-		if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+			tcc.execCtx.reqCtx, varName,
+		); ok {
+			if hasDeclaredType {
+				return declaredType, nil
+			}
 			return inferUserDefinedVarType(value), nil
 		}
 	}
@@ -1160,8 +1165,10 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
-	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
-		return false, nil
+	if tcc.execCtx != nil {
+		if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+			return false, nil
+		}
 	}
 	if isSystemVar {
 		return false, nil
@@ -1169,35 +1176,47 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
 		// See ResolveVariable: an unassigned user variable is NULL and has
-		// no binary-string attribute.
+		// no binary-literal attribute.
 		return false, nil
 	}
 	return udVar.IsBin, nil
 }
 
-// ResolveVariableBinaryString reports the SQL string domain independently of
-// the legacy IsBin literal/conversion flag. User variables retain the type
-// fixed when they were assigned, so BINARY/VARBINARY/BLOB values keep byte
-// semantics when rebound through EXECUTE ... USING.
-func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
-	varName string, isSystemVar, _ bool,
-) (bool, error) {
-	if _, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
-		tcc.execCtx.reqCtx, varName,
-	); ok {
-		if !hasDeclaredType {
-			return false, nil
+// ResolveVariableStringDomain returns only an explicit row-level override.
+// Static BINARY/VARBINARY/BLOB identity remains in the variable's Type, while
+// Literal.IsBin independently controls numeric interpretation of hex/bit forms.
+func (tcc *TxnCompilerContext) ResolveVariableStringDomain(
+	varName string,
+	isSystemVar, _ bool,
+) (types.RuntimeStringDomain, error) {
+	if tcc.execCtx != nil {
+		if _, _, _, ok := resolveStoredProcedureVariableWithType(
+			tcc.execCtx.reqCtx, varName,
+		); ok {
+			return types.RuntimeStringInherit, nil
 		}
-		return types.StaticStringDomain(plan2.MakeTypeByPlan2Type(declaredType)) == types.StringDomainBinary, nil
 	}
 	if isSystemVar {
-		return false, nil
+		return types.RuntimeStringInherit, nil
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return false, nil
+		// An unassigned user variable is NULL and has no runtime string domain.
+		return types.RuntimeStringInherit, nil
 	}
-	return types.StaticStringDomain(plan2.MakeTypeByPlan2Type(udVar.Type)) == types.StringDomainBinary, nil
+	if !udVar.RuntimeStringDomain.Valid() {
+		return types.RuntimeStringInherit, moerr.NewInvalidInputNoCtxf(
+			"invalid runtime string domain %d for user variable %s",
+			udVar.RuntimeStringDomain, varName)
+	}
+	return udVar.RuntimeStringDomain, nil
+}
+
+func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
+	varName string, isSystemVar, isGlobalVar bool,
+) (bool, error) {
+	domain, err := tcc.ResolveVariableStringDomain(varName, isSystemVar, isGlobalVar)
+	return domain == types.RuntimeStringBinary, err
 }
 
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(

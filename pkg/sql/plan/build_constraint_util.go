@@ -1520,15 +1520,64 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 		if len(node.Children) == 0 {
 			return false
 		}
+		hasDisplayValue := false
 		for _, childID := range node.Children {
-			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
-				return false
+			if builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
+				hasDisplayValue = true
+				continue
 			}
+			// A NULL branch is neutral only for a SET proof that has at least
+			// one real SET display branch. Do not let an all-NULL expression or
+			// an unrelated integer assignment enter the SET materializer.
+			if requireAllSetInputs && builder.isProjectedNullValueAtNode(childID, colPos, nil) {
+				continue
+			}
+			return false
 		}
-		return true
+		return hasDisplayValue
 	}
 
 	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
+}
+
+// isProjectedNullValueAtNode follows a projection boundary to prove that an
+// output column is a NULL literal. It is used only to admit a neutral NULL
+// branch alongside a separately proven SET display branch; an all-NULL set
+// operation must not acquire SET provenance by itself.
+func (builder *QueryBuilder) isProjectedNullValueAtNode(
+	nodeID, colPos int32,
+	visited map[[2]int32]struct{},
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	key := [2]int32{nodeID, colPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	node := builder.qry.Nodes[nodeID]
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return false
+	}
+	expr := node.ProjectList[colPos]
+	if isNullLiteralExpr(expr) {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	childNodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok {
+		return false
+	}
+	return builder.isProjectedNullValueAtNode(childNodeID, col.ColPos, visited)
 }
 
 // materializeProjectedSetBitmap carries a proven SET bitmap through projection
@@ -1604,7 +1653,22 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 		return GetColExpr(bitmapType, outputTag, pos), true
 	}
 
-	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[colPos], visited)
+	displayExpr := node.ProjectList[colPos]
+	// A pure NULL UNION branch has no stored SET bitmap, but it must still
+	// contribute a nullable hidden bitmap column so that the set operation keeps
+	// NULL rows NULL while non-NULL branches retain their original bitmaps.
+	if isNullLiteralExpr(displayExpr) {
+		bitmap := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
+		pos := int32(len(node.ProjectList))
+		node.ProjectList = append(node.ProjectList, bitmap)
+		builder.setBitmapByDisplayNode[key] = pos
+		return GetColExpr(bitmap.Typ, outputTag, pos), true
+	}
+
+	bitmap, found := builder.materializeProjectedSetBitmap(displayExpr, visited)
 	if !found {
 		return nil, false
 	}

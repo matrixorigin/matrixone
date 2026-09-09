@@ -62,5 +62,25 @@ where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
 
+-- Scalar PRE must finish the non-covered note domain before candidate Top-K.
+-- Reused prepared executions have independent domains, including exact empty.
+set optimizer_hints = 'vectorLocalDOP=1';
+prepare pre_domain from 'select id from vector_ivfflat_include_phase6 where note=? order by l2_distance(embedding,"[1,2,3]") limit 1 by rank with option ''mode=pre''';
+set @pre_note='n2';
+execute pre_domain using @pre_note;
+set @pre_note='n4';
+execute pre_domain using @pre_note;
+set @pre_note='missing';
+execute pre_domain using @pre_note;
+deallocate prepare pre_domain;
+set optimizer_hints = '';
+
+-- Noninteger required domains use exact expressions, never a Bloom-only heap.
+create table string_pre(id varchar(8) primary key, embedding vecf32(3), selected int);
+insert into string_pre values ('near','[0,0,0]',0),('member','[2,0,0]',1),('far','[4,0,0]',1);
+create index string_pre_idx using ivfflat on string_pre(embedding) lists=1 op_type 'vector_l2_ops';
+select id from string_pre where selected=1 order by l2_distance(embedding,'[0,0,0]') limit 1 by rank with option 'mode=pre';
+drop table string_pre;
+
 drop table vector_ivfflat_include_phase6;
 drop database vector_ivfflat_include_phase6;

@@ -621,6 +621,7 @@ type irregularUpdateMaintenance struct {
 }
 
 type OptimizerHints struct {
+	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
