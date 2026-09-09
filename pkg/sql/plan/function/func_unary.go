@@ -8170,10 +8170,27 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
+const randomBytesMaxLength = 1024
+
 // RandomBytes: RANDOM_BYTES(len) - Returns a binary string of len random bytes
 // Uses crypto/rand for cryptographically secure random bytes
-// Handles both int64 and uint64 parameter types
+// Handles both int64 and uint64 parameter types.
 func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return randomBytesWithReader(parameters, result, proc, length, selectList, rand.Read)
+}
+
+// randomBytesWithReader contains the execution logic behind RandomBytes and
+// accepts the reader as a dependency so the entropy-source failure contract is
+// testable without changing the production source.  The production operator
+// always passes crypto/rand.Read.
+func randomBytesWithReader(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	read func([]byte) (int, error),
+) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	paramType := parameters[0].GetType().Oid
 
@@ -8199,11 +8216,10 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		case types.T_uint64:
 			lenParam := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
 			val, nullVal := lenParam.GetValue(i)
-			if val > uint64(9223372036854775807) { // Max int64
-				lenVal = 1025 // Force > 1024 to return NULL
-			} else {
-				lenVal = int64(val)
+			if !nullVal && val > randomBytesMaxLength {
+				return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
 			}
+			lenVal = int64(val)
 			null = nullVal
 		default:
 			// Fallback to int64
@@ -8220,33 +8236,19 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		// Validate length (must be positive, MySQL allows 1 to 1024)
-		if lenVal < 1 {
-			// Return NULL for invalid length (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// MySQL limits RANDOM_BYTES to max 1024 bytes
-		if lenVal > 1024 {
-			// Return NULL for length > 1024 (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		// MySQL accepts only lengths in the inclusive range [1, 1024]. An
+		// invalid argument is an execution error, not a nullable function
+		// result; otherwise a query can silently return a wrong value or a
+		// partial result for a column containing an invalid length.
+		if lenVal < 1 || lenVal > randomBytesMaxLength {
+			return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
 		}
 
 		// Generate random bytes using crypto/rand
 		randomBytes := make([]byte, lenVal)
-		_, err := rand.Read(randomBytes)
+		_, err := read(randomBytes)
 		if err != nil {
-			// On error, return NULL
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+			return moerr.NewInternalErrorf(proc.Ctx, "random_bytes failed to generate %d bytes: %v", lenVal, err)
 		}
 
 		if err := rs.AppendBytes(randomBytes, false); err != nil {
