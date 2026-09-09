@@ -902,6 +902,10 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 }
 
 func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	// Keep old serialized plans (whose result type is INT8) executable during a rolling upgrade.
+	if result.GetResultVector().GetType().Oid == types.T_int8 {
+		return operatorUnaryMinus[int8](parameters, result, nil, length, selectList)
+	}
 	p := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -919,6 +923,9 @@ func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionR
 	return nil
 }
 func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if result.GetResultVector().GetType().Oid == types.T_int16 {
+		return operatorUnaryMinus[int16](parameters, result, nil, length, selectList)
+	}
 	p := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -936,6 +943,9 @@ func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if result.GetResultVector().GetType().Oid == types.T_int32 {
+		return operatorUnaryMinus[int32](parameters, result, nil, length, selectList)
+	}
 	p := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
