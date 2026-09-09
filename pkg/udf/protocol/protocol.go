@@ -18,7 +18,6 @@
 package protocol
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -111,8 +110,7 @@ func UnmarshalControl(data []byte) (Control, error) {
 		return Control{}, fmt.Errorf("%w: control size %d is outside the allowed range", ErrProtocol, len(data))
 	}
 	var control Control
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&control); err != nil {
+	if err := json.Unmarshal(data, &control); err != nil {
 		return Control{}, fmt.Errorf("%w: decode control: %v", ErrProtocol, err)
 	}
 	if control.Version != Version || control.Kind == "" {
