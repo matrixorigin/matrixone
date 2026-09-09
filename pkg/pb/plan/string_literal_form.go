@@ -187,6 +187,7 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
+<<<<<<< HEAD
 // RequiresMORPCVersion80StringNumericResultContracts reports whether an owner
 // contains one of the corrected fixed-width string numeric result contracts.
 func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error) {
@@ -200,6 +201,15 @@ func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error)
 func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.BoundedConditionalStringDomains, err
+=======
+// RequiresMORPCVersion58JSONValueContract reports whether an owner contains
+// the planner-only seven-argument JSON_VALUE overload. The overload carries
+// target and response semantics that older receivers cannot dispatch.
+func RequiresMORPCVersion58JSONValueContract(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONValueContract, err
+}
+>>>>>>> 3e7df18e14 (fix(json): gate JSON_VALUE plan compatibility)
 }
 
 const (
@@ -207,6 +217,8 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	jsonValueFunctionID              int32 = 462
+	jsonValueContractOverloadID      int32 = 2
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -237,6 +249,7 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
+<<<<<<< HEAD
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
@@ -254,12 +267,27 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
+=======
+// JSONValueContract requires MORPC v58.
+type RemoteExpressionFeatures struct {
+	NumericPrefix            bool
+	JSONComparisonParam      bool
+	MixedJSONBooleanEquality bool
+	JSONValueContract        bool
+	FormatNumericArguments   bool
+	TypedConversionFunctions bool
+	IntegerArithmeticDomains bool
+	RowDependentConvBases    bool
+	ASCIIInt32Result         bool
+	IPFunctionSemantics      bool
+>>>>>>> 3e7df18e14 (fix(json): gate JSON_VALUE plan compatibility)
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
+		features.JSONValueContract ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
 		features.ASCIIInt32Result ||
@@ -332,6 +360,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
+			}
+			if !features.JSONValueContract && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == jsonValueFunctionID &&
+				int32(fn.Func.Obj) == jsonValueContractOverloadID {
+				features.JSONValueContract = true
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
