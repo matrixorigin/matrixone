@@ -35,6 +35,12 @@ type SiriusReadPlan struct {
 	OutputTypes    []planpb.Type
 	Headings       []string
 	LeaseExpiresAt time.Time
+	StreamInputs   []SiriusStreamInput
+}
+
+type SiriusStreamInput struct {
+	NodeID    int32
+	StreamRef []byte
 }
 
 func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseManager) error {

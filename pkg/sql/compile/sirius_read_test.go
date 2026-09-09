@@ -74,6 +74,8 @@ func TestCompileSiriusReadRejectsMissingPlan(t *testing.T) {
 func TestSiriusOffloadContextIsExplicit(t *testing.T) {
 	require.False(t, siriusOffloadRequested(context.Background()))
 	require.True(t, siriusOffloadRequested(WithSiriusOffload(context.Background())))
+	require.Equal(t, siriusOffloadDirect, siriusOffloadModeFrom(WithSiriusOffload(context.Background())))
+	require.Equal(t, siriusOffloadStream, siriusOffloadModeFrom(WithSiriusStreamOffload(context.Background())))
 	require.True(t, siriusStatementEligible(&tree.Select{}))
 	require.False(t, siriusStatementEligible(&tree.Select{IsPerform: true}))
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))

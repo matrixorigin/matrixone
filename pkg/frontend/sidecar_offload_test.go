@@ -57,6 +57,10 @@ func TestIsSidecarQuery(t *testing.T) {
 	assert.True(t, isSidecar)
 	assert.True(t, useGPU)
 
+	isSidecar, useGPU = isSidecarQuery("/*+ SIDECAR STREAM */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.True(t, useGPU)
+
 	// Non-sidecar queries
 	isSidecar, _ = isSidecarQuery("SELECT * FROM t")
 	assert.False(t, isSidecar)
@@ -73,6 +77,7 @@ func TestStripSidecarHint(t *testing.T) {
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("  /*+ SIDECAR */ SELECT * FROM t"))
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("/*+ SIDECAR GPU */ SELECT * FROM t"))
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("  /*+ sidecar gpu */ SELECT * FROM t"))
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("/*+ SIDECAR STREAM */ SELECT * FROM t"))
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
 }
 
