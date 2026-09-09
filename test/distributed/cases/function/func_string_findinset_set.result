@@ -100,4 +100,28 @@ FROM (SELECT id, v FROM find_in_set_set_empty_28221) AS d ORDER BY id;
 2  ¦  1  𝄀
 3  ¦  0  𝄀
 4  ¦  0
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+SELECT id, 1 AS src, v
+FROM find_in_set_set_empty_28221
+WHERE id IN (1, 2)
+UNION ALL
+SELECT 0 AS id, 2 AS src, NULL AS v
+) AS u ORDER BY src, id;
+➤ id[-5,64,0]  ¦  src[-5,64,0]  ¦  v[12,65535,0]  ¦  union_empty_pos[-5,64,0]  𝄀
+1  ¦  1  ¦    ¦  0  𝄀
+2  ¦  1  ¦    ¦  1  𝄀
+0  ¦  2  ¦  null  ¦  null
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+SELECT 0 AS id, 1 AS src, NULL AS v
+UNION ALL
+SELECT id, 2 AS src, v
+FROM find_in_set_set_empty_28221
+WHERE id IN (1, 2)
+) AS u ORDER BY src, id;
+➤ id[-5,64,0]  ¦  src[-5,64,0]  ¦  v[12,65535,0]  ¦  union_empty_pos[-5,64,0]  𝄀
+0  ¦  1  ¦  null  ¦  null  𝄀
+1  ¦  2  ¦    ¦  0  𝄀
+2  ¦  2  ¦    ¦  1
 DROP TABLE find_in_set_set_empty_28221;
