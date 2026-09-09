@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -646,15 +645,34 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
-func TestToIntervalCharRegistered(t *testing.T) {
+func TestToIntervalStringTypesRegistered(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
-		types.T_char.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, int32(TO_INTERVAL), fn.fid)
-	require.Equal(t, types.T_int64, fn.retType.Oid)
+	for _, stringType := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(stringType.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+				stringType.ToType(),
+				types.T_int64.ToType(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(TO_INTERVAL), fn.fid)
+			require.Equal(t, types.T_int64, fn.retType.Oid)
+		})
+	}
+
+	// GetFunctionByName validates the resolver result. Instantiate the TEXT
+	// overload too, so the registration's runtime factory cannot silently
+	// diverge from the CHAR/VARCHAR factories.
+	var textOverload *overload
+	for i := range allSupportedFunctions[TO_INTERVAL].Overloads {
+		candidate := &allSupportedFunctions[TO_INTERVAL].Overloads[i]
+		if len(candidate.args) == 2 && candidate.args[0] == types.T_text &&
+			candidate.args[1] == types.T_int64 {
+			textOverload = candidate
+			break
+		}
+	}
+	require.NotNil(t, textOverload)
+	require.NotNil(t, textOverload.newOp())
 }
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
@@ -2539,37 +2557,49 @@ func Test_BuiltIn_Math(t *testing.T) {
 	}
 }
 
-func TestBuiltInExpAndCotOutOfRange(t *testing.T) {
+func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
-		name  string
-		input FunctionTestInput
-		fn    fEvalFn
-		want  string
+		name   string
+		input  FunctionTestInput
+		fn     fEvalFn
+		values []float64
+		nulls  []bool
 	}{
 		{
-			name:  "exp errors after finite values",
-			input: NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
-			fn:    builtInExp,
-			want:  "exp(710)",
+			name:   "exp continues after overflow and preserves underflow",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
+			fn:     builtInExp,
+			values: []float64{1, 8.218407461554972e307, 0, 0, math.E},
+			nulls:  []bool{false, false, true, false, false},
 		},
 		{
-			name:  "constant exp overflow errors",
-			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
-			fn:    builtInExp,
-			want:  "exp(710)",
+			name:   "constant exp overflow",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
+			fn:     builtInExp,
+			values: []float64{0, 0},
+			nulls:  []bool{true, true},
 		},
 		{
-			name:  "cot errors for negative zero",
-			input: NewFunctionTestInput(types.T_float64.ToType(), []float64{-1, math.Copysign(0, -1), 1}, nil),
-			fn:    builtInCot,
-			want:  "cot(0)",
+			name:   "cot negative and positive zero with valid neighbors",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{-math.Pi / 4, math.Copysign(0, -1), 0, math.Pi / 4}, nil),
+			fn:     builtInCot,
+			values: []float64{-1, 0, 0, 1},
+			nulls:  []bool{false, true, true, false},
 		},
 		{
-			name:  "constant cot zero errors",
-			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
-			fn:    builtInCot,
-			want:  "cot(0)",
+			name:   "constant cot zero",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+			fn:     builtInCot,
+			values: []float64{0, 0},
+			nulls:  []bool{true, true},
+		},
+		{
+			name:   "exp input null and overflow",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{710, 710, 0}, []bool{true, false, false}),
+			fn:     builtInExp,
+			values: []float64{0, 0, 1},
+			nulls:  []bool{true, true, false},
 		},
 	}
 
@@ -2578,14 +2608,24 @@ func TestBuiltInExpAndCotOutOfRange(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{tc.input},
-				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
+				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
 				tc.fn,
 			)
 			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
-			require.ErrorContains(t, err, tc.want)
+			require.NoError(t, err)
+			param := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
+			for i, want := range tc.values {
+				value, isNull := param.GetValue(uint64(i))
+				require.Equal(t, tc.nulls[i], isNull)
+				if !isNull {
+					if want == 0 {
+						require.Zero(t, value)
+					} else {
+						require.InEpsilon(t, want, value, 1e-14)
+					}
+				}
+			}
 		})
 	}
 }

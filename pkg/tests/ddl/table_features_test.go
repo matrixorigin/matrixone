@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package features
+package ddl
 
 import (
 	"encoding/json"
@@ -29,6 +29,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// This schema metadata check shares the single-CN fixture with the other DDL
+// tests in this package, avoiding a second embedded-cluster lifecycle.
 func TestTableFeatures(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(
 		t,

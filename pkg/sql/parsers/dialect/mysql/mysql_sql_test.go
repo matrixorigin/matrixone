@@ -1370,6 +1370,62 @@ func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) 
 	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
 }
 
+func TestPrepareDataBranchStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want any
+	}{
+		{
+			name: "create table",
+			sql:  "prepare stmt from data branch create table branch from base",
+			want: &tree.DataBranchCreateTable{},
+		},
+		{
+			name: "create database",
+			sql:  "prepare stmt from data branch create database branch_db from base_db",
+			want: &tree.DataBranchCreateDatabase{},
+		},
+		{
+			name: "diff",
+			sql:  "prepare stmt from data branch diff branch against base output count",
+			want: &tree.DataBranchDiff{},
+		},
+		{
+			name: "merge",
+			sql:  "prepare stmt from data branch merge branch into base when conflict accept",
+			want: &tree.DataBranchMerge{},
+		},
+		{
+			name: "pick values parameter",
+			sql:  "prepare stmt from data branch pick branch into base keys(?) when conflict accept",
+			want: &tree.DataBranchPick{},
+		},
+		{
+			name: "delete table",
+			sql:  "prepare stmt from data branch delete table branch",
+			want: &tree.DataBranchDeleteTable{},
+		},
+		{
+			name: "delete database",
+			sql:  "prepare stmt from data branch delete database branch_db",
+			want: &tree.DataBranchDeleteDatabase{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.TODO(), tt.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			prepare, ok := stmt.(*tree.PrepareStmt)
+			require.True(t, ok)
+			require.IsType(t, tt.want, prepare.Stmt)
+		})
+	}
+}
+
 func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
 	for _, test := range []struct {
 		name string

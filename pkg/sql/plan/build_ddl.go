@@ -3118,6 +3118,23 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 	return clone
 }
 
+func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
+	return &plan.Default{
+		Expr: &Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
+					Value: &plan.Literal_U32Val{U32Val: catalog.System_Account},
+				},
+			},
+			Typ: plan.Type{
+				Id:          colType.Id,
+				NotNullable: true,
+			},
+		},
+		NullAbility: false,
+	}
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -3541,6 +3558,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
+		remapGeneratedColExprsToTableOrder(createTable.TableDef.Cols, allColDefs)
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
@@ -3555,6 +3573,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		cols := createTable.TableDef.Cols
 		firstCol := true
 		for i := range cols {
+			// Generated columns are computed by the target table. They are not
+			// implicit INSERT targets, so do not add a placeholder before the
+			// source projection. Otherwise a destination-only generated column
+			// shifts the source columns and makes CTAS fail with a column-count
+			// error.
+			if cols[i].GeneratedCol != nil {
+				continue
+			}
 			// insert default values if col[i] only in create clause
 			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
 				if !firstCol {
@@ -3624,9 +3650,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// add cluster table attribute
 	if stmt.IsClusterTable {
 		internal := defines.IsInternalExecutor(ctx.GetContext())
-		_, has := colMap[util.GetClusterTableAttributeName()]
+		colDef, has := colMap[util.GetClusterTableAttributeName()]
 		if has && !internal {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+		}
+		if has && colDef.Default.GetExpr() == nil {
+			// SHOW CREATE renders the physical account_id column but deliberately
+			// omits its storage-only default. TRUNCATE and unconditional DELETE
+			// replay that DDL through the internal executor, so restore the
+			// system-managed default before publishing the replacement table.
+			colDef.Default = makeClusterTableAttributeDefault(colDef.Typ)
 		}
 		if !has {
 			colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
@@ -3638,21 +3671,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
 				NotNull: true,
-				Default: &plan.Default{
-					Expr: &Expr{
-						Expr: &plan.Expr_Lit{
-							Lit: &Const{
-								Isnull: false,
-								Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
-							},
-						},
-						Typ: plan.Type{
-							Id:          colType.Id,
-							NotNullable: true,
-						},
-					},
-					NullAbility: false,
-				},
+				Default: makeClusterTableAttributeDefault(colType),
 				Comment: "the account_id added by the mo",
 			}
 			colMap[util.GetClusterTableAttributeName()] = colDef
@@ -5061,13 +5080,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
-		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
-		// not supported for temporary tables. Reject the visible temporary table
-		// here so execution can never fall through to the hidden permanent table.
-		if tableDef.GetIsTemporary() {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-		}
-
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}

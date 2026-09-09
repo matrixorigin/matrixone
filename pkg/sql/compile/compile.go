@@ -1857,7 +1857,14 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		nodeCopy := plan2.DeepCopyNode(node)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileExternScanWithPlanNodeID(nodeCopy, curNodeIdx)
+		if nodeCopy.ExternScan != nil && nodeCopy.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
+			// Mongo query configuration removes the synthetic __mo_query
+			// selector from FilterList. Keep that mutation on the same
+			// compile-owned node that supplies the residual filter below.
+			ss, err = c.compileExternScanWithPlanNodeIDAndIsolation(nodeCopy, curNodeIdx, false)
+		} else {
+			ss, err = c.compileExternScanWithPlanNodeID(nodeCopy, curNodeIdx)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2724,6 +2731,17 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID int32) ([]*Scope, error) {
+	return c.compileExternScanWithPlanNodeIDAndIsolation(node, planNodeID, true)
+}
+
+// compileExternScanWithPlanNodeIDAndIsolation lets compilePlanScope reuse its
+// compile-owned copy while keeping direct callers protected from MongoDB plan
+// hydration mutating a cached logical plan.
+func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
+	node *plan.Node,
+	planNodeID int32,
+	isolateMongoPlan bool,
+) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -2741,7 +2759,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		// mapping to the physical projection. Keep that mutation isolated even
 		// when this helper is called outside compilePlanScope, because a prepared
 		// execution may otherwise hand us its cached logical plan directly.
-		executionNode := plan2.DeepCopyNode(node)
+		executionNode := node
+		if isolateMongoPlan {
+			executionNode = plan2.DeepCopyNode(node)
+		}
 		if err := c.configureMongoUserQuery(executionNode); err != nil {
 			return nil, err
 		}

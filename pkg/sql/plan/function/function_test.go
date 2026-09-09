@@ -410,7 +410,7 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: UUID_TO_BIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireRet: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
 		},
 		{
 			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
@@ -1151,6 +1151,12 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	for _, name := range []string{
+		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
+		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
+	} {
+		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
+	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
@@ -1187,13 +1193,24 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "power domain or overflow", fid: POW, argCount: 2},
+		{name: "exponential overflow", fid: EXP, argCount: 1},
+		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "invalid IPv4 address", fid: INET_ATON, argCount: 1},
+		{name: "invalid binary IP length", fid: INET6_NTOA, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid conversion base", fid: CONV, argCount: 3},
+		{name: "invalid SHA2 variant", fid: SHA2, argCount: 2},
+		{name: "AES encryption failure", fid: AES_ENCRYPT, argCount: 2},
+		{name: "AES decryption failure", fid: AES_DECRYPT, argCount: 2},
+		{name: "compression failure", fid: COMPRESS, argCount: 1},
+		{name: "decompression failure", fid: UNCOMPRESS, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
 		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
 		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},

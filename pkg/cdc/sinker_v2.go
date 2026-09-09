@@ -218,7 +218,7 @@ func createMysqlSinker2(
 	}
 
 	// CREATE DATABASE
-	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
+	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
 	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -226,7 +226,7 @@ func createMysqlSinker2(
 	}
 
 	// USE DATABASE
-	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
+	useDbSQL := fmt.Sprintf("USE %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
 	err = executor.ExecSQL(ctx, ar, addPadding(useDbSQL), false)
 	if err != nil {
 		executor.Close()
@@ -235,7 +235,7 @@ func createMysqlSinker2(
 
 	// DROP TABLE if table ID changed (truncate scenario)
 	if dbTblInfo.IdChanged {
-		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
+		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkTblName))
 		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
 		if err != nil {
 			executor.Close()

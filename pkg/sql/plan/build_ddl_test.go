@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -669,7 +670,7 @@ func TestBuildDropViewRejectsBaseTableWithoutIfExists(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadView), err)
 }
 
-func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
+func TestBuildTruncateTemporaryTable(t *testing.T) {
 	for _, prepare := range []bool{false, true} {
 		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table nation", 1)
@@ -679,9 +680,12 @@ func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
 			ctx := NewMockCompilerContext(false)
 			ctx.tables["nation"].IsTemporary = true
 
-			_, err = BuildPlan(ctx, stmt, prepare)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
-			require.Equal(t, "no such table tpch.nation", err.Error())
+			p, err := BuildPlan(ctx, stmt, prepare)
+			require.NoError(t, err)
+			truncate := p.GetDdl().GetTruncateTable()
+			require.Equal(t, "tpch", truncate.GetDatabase())
+			require.Equal(t, "nation", truncate.GetTable())
+			require.Equal(t, ctx.tables["nation"].TblId, truncate.GetTableId())
 		})
 	}
 }
@@ -5690,10 +5694,88 @@ func TestCreateSingleTable(t *testing.T) {
 	outPutPlan(logicPlan, true, t)
 }
 
+func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create cluster table cluster_replay (
+			id int not null,
+			payload varchar(20),
+			primary key (id, account_id)
+		)`)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	// The engine persists CREATE CLUSTER TABLE as a SystemClusterRel table.
+	createTable.TableDef.TableType = catalog.SystemClusterRel
+	createSQL, stmt, err := ConstructCreateTableSQL(
+		mock.CurrentContext(), createTable.GetTableDef(), nil, false, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	defer stmt.Free()
+
+	// SHOW CREATE exposes the physical account_id column, so only internal
+	// replay may accept the generated DDL.
+	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	require.ErrorContains(t, err,
+		"the attribute account_id in the cluster table can not be defined directly by the user")
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	replayedPlan, err := runOneStmt(internalMock, t, createSQL)
+	require.NoError(t, err)
+
+	accountID := FindColumn(
+		replayedPlan.GetDdl().GetCreateTable().GetTableDef().GetCols(),
+		util.GetClusterTableAttributeName(),
+	)
+	require.NotNil(t, accountID)
+	require.NotNil(t, accountID.GetDefault())
+	require.False(t, accountID.GetDefault().GetNullAbility())
+	require.NotNil(t, accountID.GetDefault().GetExpr())
+	require.Equal(t, uint32(catalog.System_Account),
+		accountID.GetDefault().GetExpr().GetLit().GetU32Val())
+}
+
 func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCTASDoesNotProjectDestinationGeneratedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t,
+		"create table ctas_generated (a int, b int, g int generated always as (a + b) stored, index ix_g(g)) "+
+			"as select n_nationkey as a, n_regionkey as b from nation")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	generatedCol := createTable.GetTableDef().Cols[0]
+	require.Equal(t, "g", generatedCol.Name)
+	require.Equal(t, []int32{1, 2}, collectRefColPos(generatedCol.GeneratedCol.Expr),
+		"generated-column references must use the final CTAS table-column order")
+	generated := createTable.GetCreateAsSelectSql()
+
+	// The internal INSERT has an implicit target column list. Generated
+	// columns are omitted from that list, so its source projection must contain
+	// exactly the two user-selected columns and no placeholder for g.
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, generated, 1)
+	require.NoError(t, err, generated)
+	t.Cleanup(stmt.Free)
+	insertStmt, ok := stmt.(*tree.Insert)
+	require.True(t, ok, "generated CTAS SQL must be an INSERT, got %T", stmt)
+	selectClause, ok := insertStmt.Rows.Select.(*tree.SelectClause)
+	require.True(t, ok, "generated CTAS source must be a SELECT clause, got %T", insertStmt.Rows.Select)
+	require.Len(t, selectClause.Exprs, 1)
+	_, ok = selectClause.Exprs[0].Expr.(tree.UnqualifiedStar)
+	require.True(t, ok, "generated CTAS source must project the source star")
 }
 
 func TestBuildCTASAggregateNullabilityAndDefaults(t *testing.T) {

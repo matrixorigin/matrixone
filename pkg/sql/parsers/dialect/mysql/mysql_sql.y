@@ -33,7 +33,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
-// the MySQL `REPLACE ... TABLE tbl` source form.
+// MySQL TABLE query terms and their REPLACE source form.
 func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
     return &tree.SelectClause{
         Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
@@ -724,7 +724,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens perform_select replace_table_source
+%type <select> select_stmt ctas_select_stmt select_no_parens perform_select table_stmt
 %type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
@@ -3521,6 +3521,7 @@ prepareable_stmt:
     }
 |   perform_stmt
 |   analyze_stmt
+|   branch_stmt
 |   select_stmt
     {
         $$ = $1
@@ -5951,20 +5952,6 @@ replace_data:
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   replace_table_source
-    {
-        $$ = &tree.Replace{
-            Rows: $1,
-        }
-    }
-|   '(' insert_column_list ')' replace_table_source
-    {
-        $$ = &tree.Replace{
-            Columns: $2.Identifiers,
-            ColumnNames: $2.Names,
-            Rows: $4,
-        }
-    }
 |   select_stmt
     {
         $$ = &tree.Replace{
@@ -6017,14 +6004,6 @@ replace_data:
 			IsSetFormat: true,
 		}
 	}
-
-replace_table_source:
-    TABLE table_name order_by_opt query_limit_opt
-    {
-        // MySQL treats TABLE as a query source, so ORDER BY and pagination
-        // belong to the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
-        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
-    }
 
 insert_stmt:
     insert_no_with_stmt
@@ -6727,8 +6706,30 @@ force_quote_list:
         $$ = append($1, $3.Compare())
     }
 
+// MySQL permits TABLE as a top-level query statement. Keep it separate from
+// simple_select so TABLE query terms can be composed with UNION without
+// introducing reduce/reduce conflicts.
+table_stmt:
+    table_query_expr order_by_opt query_limit_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: tree.SelectIntoExportOr($1, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+
 select_stmt:
     select_no_parens
+|   table_stmt
+    {
+        $$ = $1
+    }
 |   select_with_parens
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
@@ -6741,6 +6742,21 @@ select_stmt:
             yylex.Error(intoErr)
             return 1
         }
+    }
+
+// CTAS and CREATE VIEW accept VALUES as a query expression without requiring
+// an extra pair of parentheses. Keep this entry point scoped to statements
+// that accept a SELECT source; top-level VALUES continues to use
+// ValuesStatement, and parenthesized query expressions keep their existing
+// AST shape.
+ctas_select_stmt:
+    select_stmt
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list order_by_opt query_limit_opt
+    {
+        $$ = tree.NewSelect(&tree.ValuesClause{Rows: $2, RowWord: true}, $3, $4)
     }
 
 select_no_parens:
@@ -7327,8 +7343,9 @@ simple_select:
     {
         $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
     }
-// TABLE is a query term in MySQL. Keep it separate from replace_table_source,
-// and preserve top-level VALUES as the existing ValuesStatement AST.
+// TABLE is a query term in MySQL. Keep it separate from the ordinary
+// simple-select path, and preserve top-level VALUES as the existing
+// ValuesStatement AST.
 table_query_subquery:
     '(' table_query_expr order_by_opt query_limit_opt ')'
     {
@@ -8591,7 +8608,7 @@ create_view_stmt:
 		$$ = tree.NewCreateMaterializedViewWithRefresh($5, $6, $9, $4, tree.MaterializedViewRefreshMethod(refresh[0]), tree.MaterializedViewRefreshTiming(refresh[1]))
 	}
 |
-    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace bool
         var Name = $5
@@ -8610,7 +8627,7 @@ create_view_stmt:
             IfNotExists,
         )
     }
-|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace = $2
         var Name = $5
@@ -10505,7 +10522,7 @@ create_table_stmt:
         t.ClusterByOption = $11
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($6); intoErr != "" {
             yylex.Error(intoErr)
@@ -10519,7 +10536,7 @@ create_table_stmt:
         t.AsSource = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" {
             yylex.Error(intoErr)
@@ -10534,7 +10551,7 @@ create_table_stmt:
         t.AsSource = $9
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name AS ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
             yylex.Error(intoErr)
@@ -10548,7 +10565,7 @@ create_table_stmt:
         t.AsSource = $7
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
             yylex.Error(intoErr)

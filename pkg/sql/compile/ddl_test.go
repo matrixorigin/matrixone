@@ -3117,3 +3117,162 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
+	tests := []struct {
+		name         string
+		plannedID    uint64
+		relationName string
+		relationID   uint64
+		tempTables   map[string]string
+	}{
+		{
+			name:         "missing alias cannot fall through to permanent table",
+			plannedID:    2,
+			relationName: "t",
+			relationID:   1,
+			tempTables:   map[string]string{},
+		},
+		{
+			name:         "recreated temporary relation retries",
+			plannedID:    1,
+			relationName: "physical_t",
+			relationID:   2,
+			tempTables:   map[string]string{"test.t": "physical_t"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("test")
+			db.rels[tt.relationName] = &stubRelation{name: tt.relationName, tableID: tt.relationID}
+			eng.dbs["test"] = db
+
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			proc.Session = &trackingTempTableSession{tables: tt.tempTables}
+			c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+			defer c.Release()
+
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+					Database: "test",
+					Table:    "t",
+					TableId:  tt.plannedID,
+				}},
+			}}}}
+			err := s.TruncateTable(c)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			require.Contains(t, db.rels, tt.relationName)
+		})
+	}
+}
+
+type recordingInternalSQLExecutor struct {
+	mocker   func(string) (executor.Result, error)
+	contexts []context.Context
+	sqls     []string
+}
+
+func (e *recordingInternalSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	e.contexts = append(e.contexts, ctx)
+	e.sqls = append(e.sqls, sql)
+	return e.mocker(sql)
+}
+
+func (e *recordingInternalSQLExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return nil
+}
+
+func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("test")
+	db.rels["physical_t"] = &stubRelation{
+		name:     "physical_t",
+		tableID:  1,
+		tableDef: &plan2.TableDef{IsTemporary: true, Name: "physical_t"},
+	}
+	eng.dbs["test"] = db
+
+	proc := testutil.NewProcess(t)
+	originalCtx := defines.AttachAccountId(context.Background(), 0)
+	proc.Ctx = originalCtx
+	proc.ReplaceTopCtx(originalCtx)
+	session := &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+	proc.Session = session
+
+	internalExecutor := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		switch sql {
+		case "SHOW CREATE TABLE `test`.`t`":
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+				proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"t"}))
+			require.NoError(t, executor.AppendStringRows(result, 1, []string{
+				"create temporary table `test`.`t` (`a` int)",
+			}))
+			return result.GetResult(), nil
+		case "drop temporary table `test`.`t`":
+			delete(db.rels, "physical_t")
+			session.RemoveTempTable("test", "t")
+			return executor.Result{}, nil
+		case "create temporary table `test`.`t` (`a` int)":
+			session.AddTempTable("test", "t", "physical_t_replacement")
+			db.rels["physical_t_replacement"] = &stubRelation{
+				name:     "physical_t_replacement",
+				tableID:  2,
+				tableDef: &plan2.TableDef{IsTemporary: true, Name: "physical_t_replacement"},
+			}
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected internal SQL: %s", sql)
+		}
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previousExecutor, hadPreviousExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, internalExecutor)
+	t.Cleanup(func() {
+		if hadPreviousExecutor {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previousExecutor)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, internalExecutor)
+		}
+	})
+
+	c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+			Database: "test",
+			Table:    "t",
+			TableId:  1,
+		}},
+	}}}}
+
+	require.NoError(t, s.TruncateTable(c))
+	require.Equal(t, originalCtx, c.proc.Ctx)
+	require.Equal(t, []string{
+		"SHOW CREATE TABLE `test`.`t`",
+		"drop temporary table `test`.`t`",
+		"create temporary table `test`.`t` (`a` int)",
+	}, internalExecutor.sqls)
+	for _, ctx := range internalExecutor.contexts {
+		require.Same(t, session, getInternalExecutorSession(ctx))
+	}
+	require.NotContains(t, db.rels, "physical_t")
+	require.Contains(t, db.rels, "physical_t_replacement")
+	physical, ok := session.GetTempTable("test", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical_t_replacement", physical)
+}

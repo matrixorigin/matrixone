@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +149,35 @@ func (panicTestReporter) Helper() {}
 
 func (panicTestReporter) Fatalf(format string, args ...any) {
 	panic(fmt.Sprintf(format, args...))
+}
+
+type loggingTestReporter struct {
+	panicTestReporter
+	logs []string
+}
+
+func (r *loggingTestReporter) Logf(format string, args ...any) {
+	r.logs = append(r.logs, fmt.Sprintf(format, args...))
+}
+
+func TestSharedTestClusterLogsInitializationOnce(t *testing.T) {
+	state := SharedTestCluster{}
+	reporter := &loggingTestReporter{}
+	value := &cluster{}
+
+	state.Run(reporter, func() (Cluster, error) {
+		return value, nil
+	}, func(Cluster) {})
+	state.Run(reporter, func() (Cluster, error) {
+		t.Fatal("initializer must not run after sync.Once")
+		return nil, nil
+	}, func(Cluster) {})
+
+	require.Len(t, reporter.logs, 1)
+	require.True(t, strings.Contains(reporter.logs[0],
+		"MO_UT_SETUP fixture=shared-cluster phase=initialize"))
+	require.True(t, strings.Contains(reporter.logs[0], "status=ready"))
+	require.NoError(t, state.Close())
 }
 
 func TestSharedTestClusterReportsInitializationError(t *testing.T) {
