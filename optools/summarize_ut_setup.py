@@ -134,8 +134,10 @@ def summarize_embedded_diagnostics(
     phase_totals: Dict[str, List[float]] = defaultdict(list)
     holds: List[float] = []
     cluster_ids = set()
-    admission_ids = set()
-    released_ids = set()
+    # A cluster may be started more than once in one test process.  Keep the
+    # current lease state per cluster key and reset it at every successful
+    # admission acquire; a historical release must not hide a later lease.
+    admission_state: Dict[Tuple[str, str], bool] = {}
     for fields, seconds in embedded:
         phase_totals[fields["phase"]].append(seconds)
         cluster_id = fields.get("cluster_id")
@@ -143,15 +145,24 @@ def summarize_embedded_diagnostics(
         if cluster_id:
             cluster_key = (fields.get("pid", ""), cluster_id)
             cluster_ids.add(cluster_key)
+        if (
+            cluster_key is not None
+            and fields["phase"] == "admission-acquire"
+            and fields.get("status") != "error"
+        ):
+            admission_state[cluster_key] = False
         hold = fields.get("hold")
         if hold is not None:
             if cluster_key is not None:
-                admission_ids.add(cluster_key)
+                if cluster_key not in admission_state:
+                    # Keep truncated/legacy reports useful even when the
+                    # acquire record is missing from the captured output.
+                    admission_state[cluster_key] = False
             hold_seconds = duration_seconds(hold)
             if hold_seconds is not None:
                 holds.append(hold_seconds)
         if cluster_key is not None and fields.get("admission_released") == "true":
-            released_ids.add(cluster_key)
+            admission_state[cluster_key] = True
 
     def phase_stats(phase: str) -> Optional[str]:
         values = phase_totals.get(phase)
@@ -184,7 +195,8 @@ def summarize_embedded_diagnostics(
             "admission_hold_observed_max=" + format_duration(max(holds))
         )
         details.append(
-            f"admission_unreleased={len(admission_ids - released_ids)}"
+            "admission_unreleased="
+            f"{sum(not released for released in admission_state.values())}"
         )
     return "[ut_setup] embedded-cluster diagnosis: " + " ".join(details)
 
