@@ -649,7 +649,7 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 
 func TestQuotePreservesInvalidUTF8Bytes(t *testing.T) {
 	input := string([]byte{0xff, '\'', '\\', 0})
-	require.Equal(t, []byte{'\'', 0xff, '\'', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
+	require.Equal(t, []byte{'\'', 0xff, '\\', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
 }
 
 func TestExpandingReturnTypeBounds(t *testing.T) {
@@ -664,7 +664,11 @@ func TestExpandingReturnTypeBounds(t *testing.T) {
 
 	quoted := quoteReturnType([]types.Type{types.New(types.T_varchar, 0, 0)})
 	require.Equal(t, types.T_varchar, quoted.Oid)
-	require.Equal(t, int32(2), quoted.Width)
+	require.Equal(t, int32(4), quoted.Width)
+
+	quotedBinary := quoteReturnType([]types.Type{types.New(types.T_varbinary, 0, 0)})
+	require.Equal(t, types.T_varbinary, quotedBinary.Oid)
+	require.Equal(t, int32(4), quotedBinary.Width)
 }
 
 func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
