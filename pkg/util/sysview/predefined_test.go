@@ -511,7 +511,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	statements, err := mysql.Parse(context.Background(), InformationSchemaViewsDDL, 1)
 	assert.NoError(t, err)
 	for _, statement := range statements {
-		persisted := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithSingleQuoteString())
+		persisted := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
 		roundTripped, err := mysql.Parse(context.Background(), persisted, 1)
 		assert.NoError(t, err, persisted)
 		for _, roundTrippedStatement := range roundTripped {
