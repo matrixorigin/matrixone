@@ -391,13 +391,9 @@ func ValidateEncoded(encoded []byte) error {
 		if nullFlag == 1 && payloadLen != 0 {
 			return fmt.Errorf("%w: NULL part has payload", ErrMalformedKey)
 		}
-		if nullFlag == 0 && spec.typ == Text {
-			if spec.charset == CharsetUTF8MB4Bin {
-				if !utf8.Valid(payload) {
-					return fmt.Errorf("%w: malformed utf8-bin payload", ErrMalformedKey)
-				}
-			} else if !validGeneralPayload(payload) {
-				return fmt.Errorf("%w: malformed general-ci payload", ErrMalformedKey)
+		if nullFlag == 0 {
+			if err := validatePayload(spec, params, payload); err != nil {
+				return err
 			}
 		}
 	}
@@ -449,6 +445,57 @@ func validGeneralPayload(payload []byte) bool {
 		}
 	}
 	return true
+}
+
+func validatePayload(spec familySpec, params, payload []byte) error {
+	switch spec.typ {
+	case Text:
+		if spec.charset == CharsetUTF8MB4Bin {
+			if !utf8.Valid(payload) {
+				return fmt.Errorf("%w: malformed utf8-bin payload", ErrMalformedKey)
+			}
+		} else if !validGeneralPayload(payload) {
+			return fmt.Errorf("%w: malformed general-ci payload", ErrMalformedKey)
+		}
+	case SignedInteger, UnsignedInteger:
+		if len(params) != 3 || len(payload) != int(binary.BigEndian.Uint16(params[1:])) {
+			return fmt.Errorf("%w: integer payload width", ErrMalformedKey)
+		}
+	case Decimal:
+		if !validDecimalPayload(params, payload) {
+			return fmt.Errorf("%w: malformed decimal payload", ErrMalformedKey)
+		}
+	}
+	return nil
+}
+
+func validDecimalPayload(params, payload []byte) bool {
+	if len(params) != 5 || len(payload) < 9 || (payload[0] != 0 && payload[0] != 1) {
+		return false
+	}
+	width := int(binary.BigEndian.Uint16(params[1:3]))
+	scale := int64(int32(binary.BigEndian.Uint32(payload[1:5])))
+	if scale < math.MinInt16 || scale > math.MaxInt16 {
+		return false
+	}
+	coeffLen64 := uint64(binary.BigEndian.Uint32(payload[5:9]))
+	if coeffLen64 > uint64(width) || coeffLen64 != uint64(len(payload)-9) {
+		return false
+	}
+	coeffBytes := payload[9:]
+	if len(coeffBytes) > 0 && coeffBytes[0] == 0 {
+		return false
+	}
+	coeff := new(big.Int).SetBytes(coeffBytes)
+	if coeff.Sign() == 0 {
+		return payload[0] == 0 && scale == 0
+	}
+	if payload[0] == 1 && coeff.Sign() == 0 {
+		return false
+	}
+	// normalizeDecimal removes every trailing decimal zero and decreases the
+	// scale, so a non-zero coefficient divisible by ten is not canonical.
+	return new(big.Int).Mod(coeff, big.NewInt(10)).Sign() != 0
 }
 
 func normalize(domain Domain, spec familySpec, value []byte, isNull bool) ([]byte, error) {
