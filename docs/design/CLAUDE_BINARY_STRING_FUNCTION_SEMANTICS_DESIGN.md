@@ -111,8 +111,8 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 - frontend protocol继续从 expression/result `Type` 生成 ColumnDefinition；本次通过 resolver修正后，binary function output自然得到 collation 63 和 binary flag，text `_bin` 仍得到现有 utf8mb4_bin ID。COM_STMT direct parameter result按 direct-result position与 packet-derived runtime type specialization，即使值为 typed NULL也保留 BLOB metadata；NULL-first、复用上一包类型和缓存命中必须等价。
 - `internal_column_character_set` 改为读取序列化 `Type.Charset`（binary OID仍权威），并让 `information_schema.columns` 对现有四种 identity 映射到上表名称。它不再把 `Scale` 当 charset。
 - CTAS继续复制 planner result type；不按 observed row 或 runtime sidecar缩窄/改域。`DESC`、information_schema 与 direct `CHARSET/COLLATION` 必须对同一静态 expression一致。
-- SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。ProcessInfo 的 `PrepareParamInfo.runtime_string_domains` 同样显式传输三态 runtime domain；只有 v50 peer 可使用该字段，旧 peer 必须 fail-closed，不能将缺失字段解释为 explicit text。
-- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v50 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干v46已用于subscription-aware information-schema metadata，v47已用于window hash partition，本 PR连续发布v50完整capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。新租户初始化同样必须分层：v41使用local COLUMNS+兼容identity映射，v46/v47使用subscription COLUMNS+兼容identity映射，只有v50使用subscription COLUMNS+新identity映射；兼容DDL仍须把新CN可能返回的identity 3降级展示为旧`utf8`/`utf8_bin`，避免滚动升级期间落入NULL。
+- SQL `EXECUTE ... USING` 物化同时保留 assignment-time `SourceType` 与独立的 `RuntimeStringDomain`；typed non-NULL、typed NULL、重复执行和 prepared-plan cache复用均不得把三态 provenance压回静态域。ProcessInfo 的 `PrepareParamInfo.runtime_string_domains` 同样显式传输三态 runtime domain；只有 v58 及以上 peer 可使用该字段，旧 peer 必须 fail-closed，不能将缺失字段解释为 explicit text。
+- remote pipeline sender与receiver对所有已改变的 Function ID执行 MORPC v58 fail-closed barrier，包括 `POSITION`、`INTERNAL_CHAR_SIZE` 和 `INTERNAL_COLUMN_CHARACTER_SET`；主干 v57 已用于 Arrow LOAD，本 PR 在 v58 发布完整 capability；catalog upgrade barrier只控制view物化，不能代替executor barrier。新租户初始化同样必须分层：v41使用local COLUMNS+兼容identity映射，v46/v47使用subscription COLUMNS+兼容identity映射，只有 v58 及以上使用 subscription COLUMNS+新 identity 映射；兼容DDL仍须把新CN可能返回的identity 3降级展示为旧`utf8`/`utf8_bin`，避免滚动升级期间落入NULL。
 
 ## 7. 边界、失败与性能
 
@@ -143,7 +143,7 @@ MySQL 会在部分 text-subject + invalid binary auxiliary coercion 上执行 ch
 | result provenance | nested consumer UT：变换结果再进 `CHAR_LENGTH`；无 metadata fast path断言不分配 sidecar |
 | CHARSET/COLLATION | static type table UT；runtime mixed override不改变名称；legacy fallback控制 |
 | information_schema/CTAS | internal metadata UT + public BVT，核对 binary/general-ci/utf8mb4-bin |
-| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v49 reject与v50 accept |
+| protocol | frontend field metadata UT；binary source-derived output为 collation 63，text `_bin` 非63；每个变更 Function ID 的真实 sender encode / receiver decode v57 reject 与 v58 accept |
 | reachable sources | public SQL覆盖 raw/_binary、BINARY/VARBINARY/BLOB、CAST/CONVERT、column、bare variable、SQL PREPARE；COM_STMT用现有 planner/frontend typed parameter fixture |
 | stability | owning package tests、normal BVT同实例两轮、`git diff --check`、mo-self-review change map |
 

@@ -490,6 +490,13 @@ message IcebergPlanningStats {
   int64 planning_cache_miss = 11;
 }
 
+// ArrowExecutionScope is compile-produced positive authorization for Arrow
+// ingestion. Its zero value is deliberately fail-closed on every CN.
+enum ArrowExecutionScope {
+  UnknownArrowExecutionScope = 0;
+  ArrowLoadData = 1;
+}
+
 message ExternalScan {
   option (gogoproto.goproto_stringer) = false;
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
@@ -519,6 +526,18 @@ message ExternalScan {
   plan.ForeignScan foreign_scan = 25;
   plan.KafkaScan kafka_scan = 26;
   bool parquet_whole_file_fanout = 27;
+  ArrowExecutionScope arrow_execution_scope = 28;
+  repeated ArrowObjectIdentity arrow_object_identities = 29;
+  repeated ArrowRecordBatchShard arrow_record_batch_shards = 30;
+  bytes arrow_schema_fingerprint = 31;
+  uint32 arrow_conversion_plan_version = 32;
+  // Compile-time policy snapshot. Older CNs ignore this additive field and
+  // still reject Arrow format before execution, so mixed versions fail closed.
+  bool arrow_force_materialize = 33;
+  // This records actual fanout placement independently of the SQL PARALLEL
+  // request. Fanout scopes clear that request after splitting, but every
+  // receiving CN must still enforce its own distributed Arrow rollout gate.
+  bool arrow_distributed_execution = 34;
 }
 
 message TableScan {
@@ -701,7 +720,7 @@ message PrepareParamInfo {
   repeated bool is_bin = 5;
   repeated bool is_binary_string = 6;
   repeated uint32 string_sources = 7;
-  // Explicit per-parameter runtime string domains; gated by MORPC v57.
+  // Explicit per-parameter runtime string domains; gated by MORPC v58.
   repeated uint32 runtime_string_domains = 8;
 }
 
@@ -834,4 +853,21 @@ message Apply {
 message ODKUForeignKeyCheck {
   repeated int32 col_idx_list = 1;
   int32 eligibility_result_pos = 2;
+}
+
+message ArrowObjectIdentity {
+  int32 file_index = 1;
+  string version_id = 2;
+  string etag = 3;
+  int64 size = 4;
+  int64 last_modified_unix_nano = 5;
+}
+
+message ArrowRecordBatchShard {
+  int32 file_index = 1;
+  int32 record_batch_start = 2;
+  int32 record_batch_end = 3;
+  repeated int32 required_dictionary_block_indices = 4;
+  int64 estimated_rows = 5;
+  int64 estimated_wire_bytes = 6;
 }

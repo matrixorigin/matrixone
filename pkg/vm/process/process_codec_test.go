@@ -869,11 +869,11 @@ func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T
 	}()
 
 	metadata := []uint32{uint32(types.RuntimeStringText)}
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion56)
-	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
-	require.ErrorContains(t, err, "protocol version 57")
-
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion57)
+	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
+	require.ErrorContains(t, err, "protocol version 58")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion58)
 	decoded, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
 	require.NoError(t, err)
 	require.Equal(t, metadata, decoded)

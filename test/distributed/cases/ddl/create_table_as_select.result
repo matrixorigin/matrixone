@@ -675,7 +675,7 @@ create table string08 as select hex(col2) from string01;
 show create table string08;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string08  ¦  CREATE TABLE `string08` (
-  `hex(col2)` varchar(65535) DEFAULT NULL
+  `hex(col2)` varchar(8) DEFAULT NULL
 )
 select * from string08;
 ➤ hex(col2)[12,-1,0]  𝄀
@@ -705,7 +705,7 @@ create table string11 as select bin(col1) from string10;
 show create table string11;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string11  ¦  CREATE TABLE `string11` (
-  `bin(col1)` varchar(65535) DEFAULT NULL
+  `bin(col1)` varchar(65) DEFAULT NULL
 )
 select * from string11;
 ➤ bin(col1)[12,-1,0]  𝄀
@@ -755,7 +755,7 @@ time02  ¦  CREATE TABLE `time02` (
 )
 desc time02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦
+date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time02;
 ➤ date_format(col2, '%w %m %y')[12,-1,0]  𝄀
 Saturday November 2023  𝄀
@@ -771,7 +771,7 @@ desc time_format_bounds;
 zero_weeks  ¦  VARCHAR(29)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_hour  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_time  ¦  VARCHAR(17)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦
+signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time_format_bounds;
 ➤ zero_weeks[12,29,0]  ¦  full_hour[12,11,0]  ¦  full_time[12,17,0]  ¦  signed_minute[12,3,0]  𝄀
 613566757|613566757|613566757  ¦  -2562047787  ¦  -2562047787:59:59  ¦  -59

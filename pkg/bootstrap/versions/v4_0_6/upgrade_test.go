@@ -39,6 +39,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
+	for _, entry := range []versions.UpgradeEntry{
+		upgradeInformationSchemaColumns(),
+		upgradeInformationSchemaColumnsBinaryStrings(),
+		refreshInformationSchemaCharacterSetsUTF8Maxlen(),
+	} {
+		for _, peer := range []int64{defines.MORPCVersion46, defines.MORPCVersion57, defines.MORPCVersion58} {
+			t.Run(fmt.Sprintf("%s-gate-%d-peer-%d", entry.TableName, entry.RequiredProtocolVersion, peer), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				var executed []string
+				txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+						result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+						result.NewBatchWithRowCount(1)
+						require.NoError(t, executor.AppendStringRows(result, 0, []string{
+							fmt.Sprintf(`{"method":"GETPROTOCOLVERSION","result":"cn-a:%d"}`, peer),
+						}))
+						return result.GetResult(), nil
+					}
+					executed = append(executed, sql)
+					return executor.Result{}, nil
+				}, nil)
+				entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) { return false, nil }
+				err := entry.Upgrade(txn, 0)
+				if peer < entry.RequiredProtocolVersion {
+					require.ErrorContains(t, err, "requires all CNs to support protocol version 58")
+					require.Empty(t, executed, "an old peer must block before DROP/DELETE or DDL")
+				} else {
+					require.NoError(t, err)
+					require.Contains(t, executed, entry.UpgSql)
+				}
+			})
+		}
+	}
+}
+
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 36)
 	require.Len(t, clusterUpgEntries, 11)
@@ -108,8 +145,8 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationDBConst, columns.Schema)
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion57), columns.RequiredProtocolVersion)
+	require.Equal(t, sysview.InformationSchemaColumnsV46UpgradeDDL, columns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion46), columns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 	checkConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
@@ -129,8 +166,8 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion57), hideInternalColumns.RequiredProtocolVersion)
+	require.Equal(t, sysview.InformationSchemaColumnsV46UpgradeDDL, hideInternalColumns.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion46), hideInternalColumns.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 	userDefinedFunctions := tenantUpgEntries[14]
 	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
@@ -201,7 +238,7 @@ func TestUpgradeEntries(t *testing.T) {
 		ddl  string
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
-		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV46UpgradeDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
@@ -218,10 +255,8 @@ func TestUpgradeEntries(t *testing.T) {
 		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 		require.Equal(t, view.ddl, entry.UpgSql)
 		expectedProtocol := int64(defines.MORPCVersion41)
-		if view.name == "TABLES" {
+		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
-		} else if view.name == "COLUMNS" {
-			expectedProtocol = defines.MORPCVersion57
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
@@ -243,12 +278,12 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion57), columnsBinaryStrings.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion58), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSetsUTF8Maxlen.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSetsUTF8Maxlen.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion57), characterSetsUTF8Maxlen.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion58), characterSetsUTF8Maxlen.RequiredProtocolVersion)
 }
 
 func TestAddCdcWatermarkSourceTableIDWaitsForCompatibleWriters(t *testing.T) {
@@ -442,7 +477,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		ddl  string
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
-		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV46UpgradeDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
@@ -645,9 +680,9 @@ func TestUpgradeInformationSchemaColumnsCheck(t *testing.T) {
 		checkErr   error
 		want       bool
 	}{
-		{name: "current definition", exists: true, definition: sysview.InformationSchemaColumnsDDL, want: true},
+		{name: "current definition", exists: true, definition: sysview.InformationSchemaColumnsV46UpgradeDDL, want: true},
 		{name: "old definition", exists: true, definition: "old view definition"},
-		{name: "missing view", definition: sysview.InformationSchemaColumnsDDL},
+		{name: "missing view", definition: sysview.InformationSchemaColumnsV46UpgradeDDL},
 		{name: "check error", checkErr: checkErr},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1053,7 +1088,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 			case "TABLE_CONSTRAINTS":
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
-				return true, sysview.InformationSchemaColumnsDDL, nil
+				return true, sysview.InformationSchemaColumnsV46UpgradeDDL, nil
 			case "TABLES":
 				return true, sysview.InformationSchemaTablesDDL, nil
 			case "STATISTICS":

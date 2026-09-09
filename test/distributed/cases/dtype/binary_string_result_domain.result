@@ -17,10 +17,10 @@ select lpad(X'61', 2, X'62') as bounded_lpad;
 ➤ bounded_lpad[-3,2,0]  𝄀
 ba
 select hex(lpad(cast('😀' as varbinary(4)), 2, '😀')) as multibyte_lpad_hex;
-➤ multibyte_lpad_hex[12,65535,0]  𝄀
+➤ multibyte_lpad_hex[12,16,0]  𝄀
 F09F
 select hex(rpad(cast('😀' as varbinary(4)), 2, '😀')) as multibyte_rpad_hex;
-➤ multibyte_rpad_hex[12,65535,0]  𝄀
+➤ multibyte_rpad_hex[12,16,0]  𝄀
 F09F
 select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
 ➤ dynamic_repeat[-4,2147483647,0]  𝄀
@@ -32,7 +32,7 @@ select export_set(7, 'a', 'b', ',', 3) as bounded_export_set;
 ➤ bounded_export_set[12,127,0]  𝄀
 a,a,a
 select quote('') as bounded_quote;
-➤ bounded_quote[12,2,0]  𝄀
+➤ bounded_quote[12,4,0]  𝄀
 ''
 create table binary_sources(payload blob, needle varbinary(1), replacement varbinary(2));
 insert into binary_sources values(repeat(X'61', 70000), X'61', X'6262');

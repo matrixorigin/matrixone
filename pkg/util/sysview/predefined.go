@@ -279,7 +279,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
 }
 
-func informationSchemaColumnsV53DDL() string {
+func informationSchemaColumnsV58DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
@@ -404,7 +404,12 @@ var (
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaColumnsV46DDL = informationSchemaSubscriptionColumnsDDL()
-	InformationSchemaColumnsDDL    = informationSchemaColumnsV53DDL()
+	// Historical upgrade entries retain their original definition, independently
+	// of the compatibility view used when initializing a new CN in a mixed cluster.
+	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
+		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
+	).Replace(InformationSchemaColumnsV46DDL)
+	InformationSchemaColumnsDDL = informationSchemaColumnsV58DDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +

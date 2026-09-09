@@ -668,19 +668,19 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			project.ProjectList = semanticPipeline(functionID).InstructionList[0].ProjectList
 			scope := &Scope{Proc: proc, RootOp: project}
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
 			data, err := encodeRemoteScope(scope, proc)
 			require.NoError(t, err)
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion49)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
 			_, err = encodeRemoteScope(scope, proc)
-			require.ErrorContains(t, err, "require MORPC protocol version 57",
+			require.ErrorContains(t, err, "require MORPC protocol version 58",
 				"sender must reject every changed function ID")
 			_, err = decodeScope(data, proc, true, nil)
-			require.ErrorContains(t, err, "require MORPC protocol version 57",
+			require.ErrorContains(t, err, "require MORPC protocol version 58",
 				"receiver must reject every changed function ID")
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
 			decoded, err := decodeScope(data, proc, true, nil)
 			require.NoError(t, err)
 			require.NotNil(t, decoded)
@@ -690,11 +690,11 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
 }
 
-func TestBinaryStringRemoteProtocolV50FastPathDoesNotScanPipeline(t *testing.T) {
+func TestBinaryStringRemoteProtocolV58FastPathDoesNotScanPipeline(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
 
 	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
@@ -715,10 +715,10 @@ func TestBinaryStringRemoteProtocolV50FastPathDoesNotScanPipeline(t *testing.T) 
 	require.Zero(t, allocations)
 }
 
-func BenchmarkBinaryStringRemoteProtocolV50FastPath(b *testing.B) {
+func BenchmarkBinaryStringRemoteProtocolV58FastPath(b *testing.B) {
 	proc := testutil.NewProcess(b)
 	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		runtime.MOProtocolVersion, defines.MORPCVersion57)
+		runtime.MOProtocolVersion, defines.MORPCVersion58)
 	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
 	}}}

@@ -268,7 +268,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	for _, protocol := range []int64{defines.MORPCVersion46, defines.MORPCVersion47, defines.MORPCVersion48, defines.MORPCVersion49} {
+	for _, protocol := range []int64{defines.MORPCVersion46, defines.MORPCVersion47, defines.MORPCVersion48, defines.MORPCVersion49, defines.MORPCVersion57} {
 		t.Run(fmt.Sprintf("subscription-legacy-identity-v%d", protocol), func(t *testing.T) {
 			subscriptionLegacyIdentity := InitInformationSchemaSysTablesForProtocol(protocol)
 			assert.Len(t, subscriptionLegacyIdentity, len(InitInformationSchemaSysTables))
@@ -286,7 +286,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion57)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
@@ -311,6 +311,19 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 	assert.Contains(t, InformationSchemaColumnsDDL, "lower(case when length(mc.attr_enum) > 0 then")
 	assert.Contains(t, InformationSchemaColumnsDDL, "case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE")
+}
+
+func TestHistoricalColumnsUpgradeDefinition(t *testing.T) {
+	assert.Contains(t, InformationSchemaColumnsV46UpgradeDDL, "from mo_subscription_columns() mc")
+	assert.Contains(t, InformationSchemaColumnsV46UpgradeDDL,
+		"WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' else NULL end) AS CHARACTER_SET_NAME")
+	assert.Contains(t, InformationSchemaColumnsV46UpgradeDDL,
+		"WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME")
+	assert.NotContains(t, InformationSchemaColumnsV46UpgradeDDL, "WHEN 3 then")
+	assert.NotEqual(t, InformationSchemaColumnsDDL, InformationSchemaColumnsV46UpgradeDDL)
+	// Mixed-cluster initialization remains distinct from replaying historical DDL.
+	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8'")
+	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8_bin'")
 }
 
 func TestInformationSchemaSubscriptionMetadataDDL(t *testing.T) {

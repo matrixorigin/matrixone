@@ -73,7 +73,7 @@ func (b *ReplaceValueBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr
 }
 
 func (b *ReplaceValueBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in replace set value")
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *ReplaceValueBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
