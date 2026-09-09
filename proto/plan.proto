@@ -904,6 +904,8 @@ message VectorIndexScan {
   // The execution binder expands candidate_limit after prepared parameters are
   // available; readers receive both k and the bound candidate budget.
   bool post_filter_over_fetch = 17;
+  // Advisory local scan work. Absent when local DOP is not opted in.
+  VectorIndexScanWork scan_work = 18;
 }
 
 message Node {
@@ -2327,4 +2329,13 @@ message ODKUForeignKeyCheck {
   // Boolean output column set by DEDUP JOIN for each logical action. It is
   // true for a new INSERT action or when this action changed the FK tuple.
   ColRef eligibility_col = 2;
+}
+
+// Physical input work is separate from the scan's narrow output cardinality.
+// These estimates affect scheduling only, never filtering or authorization.
+message VectorIndexScanWork {
+  double rows = 1;
+  int32 blocks = 2;
+  double vector_bytes_per_row = 3;
+  int32 objects = 4;
 }

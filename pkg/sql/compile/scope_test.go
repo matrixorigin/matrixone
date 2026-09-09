@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -2906,18 +2907,24 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	board := message.NewMessageBoard()
 	defer board.Reset()
 	proc.SetMessageBoard(board)
-	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true}
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true,
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
 			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
 		},
 	}
-	payload := []byte{1, 3, 5, 7}
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Data: payload,
+		Card: 1,
 	}, board)
 
 	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
@@ -2950,6 +2957,55 @@ func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
 	require.ErrorContains(t, err, "required runtime filter 110 is unavailable")
 	require.Nil(t, filters)
 	require.False(t, empty)
+}
+
+func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		null    bool
+		card    int32
+		corrupt bool
+	}{
+		{"valid", types.T_int64, false, 1, false},
+		{"wrong_type", types.T_int32, false, 1, false},
+		{"null", types.T_int64, true, 1, false},
+		{"overclaimed", types.T_int64, false, 2, false},
+		{"zero_card", types.T_int64, false, 0, false},
+		{"corrupt", types.T_int64, false, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.oid.ToType())
+			defer v.Free(proc.Mp())
+			if tc.oid == types.T_int64 {
+				require.NoError(t, vector.AppendFixed(v, int64(9), tc.null, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixed(v, int32(9), tc.null, proc.Mp()))
+			}
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			if tc.corrupt {
+				data = data[:3]
+			}
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
+				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
+			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			require.False(t, empty)
+			if tc.name == "valid" {
+				require.NoError(t, err)
+				require.Len(t, filters, 1)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, filters)
+			}
+		})
+	}
 }
 
 func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
