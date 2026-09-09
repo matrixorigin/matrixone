@@ -1054,3 +1054,14 @@ write admission, TN commit, snapshot creation, or a management command. It
 therefore does not stop real writes or migrate a relation; the planner's v2
 read/write fences remain in force. This increment only freezes and tests the
 failure/recovery contract that those production consumers must implement.
+
+### 10.11 Capability propagation correction
+
+The sidecar/migration increment also closes a metadata ownership gap in the
+existing HAKeeper state adapter: CN and TN heartbeat capability messages are
+now copied into their corresponding `CNStoreInfo`/`TNStoreInfo` records, with
+the nested registry digest cloned rather than retained by alias. A subsequent
+heartbeat that omits the capability clears stale state. This is necessary for
+an eventual activation coordinator to make decisions from replicated state;
+protobuf wire round-tripping alone was insufficient. It does not advertise v2
+support from current nodes or connect activation to HAKeeper decisions.

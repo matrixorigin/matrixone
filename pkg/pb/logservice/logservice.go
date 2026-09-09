@@ -163,6 +163,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
+	storeInfo.UniqueKeyCodecCapability = cloneUniqueKeyCodecCapability(hb.UniqueKeyCodecCapability)
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -239,7 +240,21 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	storeInfo.AutoIncrEpochFenceSupported = hb.AutoIncrEpochFenceSupported
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	storeInfo.UniqueKeyCodecCapability = cloneUniqueKeyCodecCapability(hb.UniqueKeyCodecCapability)
 	s.Stores[hb.UUID] = storeInfo
+}
+
+// cloneUniqueKeyCodecCapability keeps the replicated capability state
+// ownership-safe. Heartbeat messages are decoded from reusable RPC buffers;
+// retaining their nested digest slice would otherwise let the next heartbeat
+// mutate HAKeeper's state in place.
+func cloneUniqueKeyCodecCapability(capability *UniqueKeyCodecCapability) *UniqueKeyCodecCapability {
+	if capability == nil {
+		return nil
+	}
+	clone := *capability
+	clone.RegistryDigest = append([]byte(nil), capability.RegistryDigest...)
+	return &clone
 }
 
 // NewLogState creates a new LogState.
