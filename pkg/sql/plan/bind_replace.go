@@ -1374,6 +1374,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	var (
 		compPkeyExpr  *plan.Expr
 		clusterByExpr *plan.Expr
+		err           error
 	)
 
 	columnIsNull := make(map[string]bool, colCount)
@@ -1410,7 +1411,10 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
+			compPkeyExpr, err = makeCompPkeyExprForTable(builder.GetContext(), tableDef, tableDef.Name2ColIndex)
+			if err != nil {
+				return 0, nil, nil, err
+			}
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
 				Expr: &plan.Expr_Col{

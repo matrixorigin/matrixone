@@ -207,7 +207,10 @@ func buildInsertPlans(
 	}
 
 	// add plan: -> preinsert -> sink
-	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
+	lastNodeId, err = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
+	if err != nil {
+		return err
+	}
 
 	checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
@@ -356,7 +359,10 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	//append preinsert node
-	lastNodeId = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
+	lastNodeId, err = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
+	if err != nil {
+		return err
+	}
 	if updatePlanCtx.preserveUpdateSourceProjection {
 		if builder.preservePreInsertProjection == nil {
 			builder.preservePreInsertProjection = make(map[int32]struct{})
@@ -3586,7 +3592,14 @@ func getHiddenColumnForPreInsert(tableDef *TableDef) ([]Type, []string) {
 	var typs []Type
 	var names []string
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		typs = append(typs, makeHiddenColTyp())
+		typ := makeHiddenColTyp()
+		// v2 stores the framed identity as a binary blob.  Use the actual
+		// composite-key column type so the PRE_INSERT projection and the
+		// expression evaluated by the executor have one physical domain.
+		if tableDef.UniqueKeyCodecVersion != nil && tableDef.Pkey.CompPkeyCol != nil {
+			typ = tableDef.Pkey.CompPkeyCol.Typ
+		}
+		typs = append(typs, typ)
 		names = append(names, catalog.CPrimaryKeyColName)
 	} else if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 		typs = append(typs, makeHiddenColTyp())
@@ -3785,6 +3798,60 @@ func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *
 	}
 }
 
+// makeCompPkeyExprForTable builds the physical identity used for a composite
+// primary key.  Legacy tables keep the serial() representation; v2 tables use
+// the same framed collation-key encoder as their unique indexes.  Keeping this
+// decision here is important: PRE_INSERT is the common entry point for INSERT,
+// UPDATE, REPLACE and LOAD, so a v2 table must never silently fall back to the
+// legacy byte representation in one of those paths.
+func makeCompPkeyExprForTable(ctx context.Context, tableDef *plan.TableDef, name2ColIndex map[string]int32) (*plan.Expr, error) {
+	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil {
+		return nil, nil
+	}
+
+	useV2, err := tableUsesCollationKeyV2(ctx, tableDef)
+	if err != nil {
+		return nil, err
+	}
+	if !useV2 {
+		return makeCompPkeyExpr(tableDef, name2ColIndex), nil
+	}
+	if len(tableDef.Pkey.Names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "v2 composite primary key has no source columns")
+	}
+
+	values := make([]*plan.Expr, 0, len(tableDef.Pkey.Names))
+	for _, rawName := range tableDef.Pkey.Names {
+		name := catalog.ResolveAlias(rawName)
+		colPos, ok := name2ColIndex[name]
+		if !ok {
+			// A few plan builders pass a qualified map while others pass the
+			// physical table map.  Accept either form, but never guess a
+			// position when the name is absent.
+			colPos, ok = name2ColIndex[tableDef.Name+"."+name]
+		}
+		if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+			return nil, moerr.NewInternalErrorf(ctx, "cannot locate v2 primary-key source %s", name)
+		}
+		col := tableDef.Cols[colPos]
+		if col == nil {
+			return nil, moerr.NewInternalErrorf(ctx, "nil v2 primary-key source %s", name)
+		}
+		values = append(values, &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{Col: &ColRef{
+				ColPos: colPos,
+				Name:   name,
+			}},
+		})
+	}
+
+	if len(values) == 1 {
+		return makeCollationKeyV2Expr(values[0], 0)
+	}
+	return makeCollationCompositeKeyV2Expr(values, make([]int, len(values)))
+}
+
 func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *plan.Expr {
 	if tableDef.ClusterBy == nil {
 		return nil
@@ -3825,7 +3892,7 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 // appendPreInsertNode  append preinsert node
 func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef,
-	lastNodeId int32, isUpdate bool) int32 {
+	lastNodeId int32, isUpdate bool) (int32, error) {
 
 	preInsertProjection := getProjectionByLastNode(builder, lastNodeId)
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
@@ -3872,6 +3939,10 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	for i, col := range tableDef.Cols {
 		name2ColIndex[col.Name] = int32(i)
 	}
+	compPkeyExpr, err := makeCompPkeyExprForTable(builder.GetContext(), tableDef, name2ColIndex)
+	if err != nil {
+		return -1, err
+	}
 	preInsertNode := &Node{
 		NodeType:    plan.Node_PRE_INSERT,
 		Children:    []int32{lastNodeId},
@@ -3881,7 +3952,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 			TableDef:      CloneTableDefForPlan(tableDef, true),
 			HasAutoCol:    hashAutoCol,
 			IsOldUpdate:   isUpdate,
-			CompPkeyExpr:  makeCompPkeyExpr(tableDef, name2ColIndex),
+			CompPkeyExpr:  compPkeyExpr,
 			ClusterByExpr: makeClusterByExpr(tableDef, name2ColIndex),
 		},
 	}
@@ -3909,7 +3980,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 
-	return lastNodeId
+	return lastNodeId, nil
 }
 
 // appendPreInsertSkMasterPlan  append preinsert node

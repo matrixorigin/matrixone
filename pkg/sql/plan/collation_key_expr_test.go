@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -90,4 +91,76 @@ func TestTableUsesCollationKeyV2ValidatesMetadata(t *testing.T) {
 	bad.RegistryDigest[0]++
 	_, err = tableUsesCollationKeyV2(ctx, &planpb.TableDef{UniqueKeyCodecVersion: bad})
 	require.Error(t, err)
+}
+
+func TestV2CompositePrimaryKeyUsesFramedIdentityInPreInsert(t *testing.T) {
+	hidden := &planpb.ColDef{
+		Name:   catalog.CPrimaryKeyColName,
+		Typ:    collationKeyV2StorageType(),
+		Hidden: true,
+	}
+	table := &planpb.TableDef{
+		Name: "t_v2_pk",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: v2PlannerTextType(uint32(types.CharsetUTF8))},
+			hidden,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: hidden,
+		},
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+
+	expr, err := makeCompPkeyExprForTable(context.Background(), table, map[string]int32{"id": 0})
+	require.NoError(t, err)
+	require.NotNil(t, expr)
+	require.Equal(t, int32(types.T_blob), expr.Typ.Id)
+	require.Equal(t, function.CollationKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
+	hiddenTypes, _ := getHiddenColumnForPreInsert(table)
+	require.Len(t, hiddenTypes, 1)
+	require.Equal(t, collationKeyV2StorageType(), hiddenTypes[0])
+}
+
+func TestV2CompositePrimaryKeyRejectsMissingSource(t *testing.T) {
+	hidden := &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: collationKeyV2StorageType(), Hidden: true}
+	table := &planpb.TableDef{
+		Name: "t_v2_pk_missing",
+		Cols: []*planpb.ColDef{hidden},
+		Pkey: &planpb.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: hidden,
+		},
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+	_, err := makeCompPkeyExprForTable(context.Background(), table, map[string]int32{})
+	require.Error(t, err)
+}
+
+func TestV2CompositePrimaryKeyFramesEverySourcePart(t *testing.T) {
+	hidden := &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: collationKeyV2StorageType(), Hidden: true}
+	table := &planpb.TableDef{
+		Name: "t_v2_composite_pk",
+		Cols: []*planpb.ColDef{
+			{Name: "tenant", Typ: v2PlannerTextType(uint32(types.CharsetUTF8))},
+			{Name: "name", Typ: v2PlannerTextType(uint32(types.CharsetUTF8MB4Bin))},
+			hidden,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			Names:       []string{"tenant", "name"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: hidden,
+		},
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+
+	expr, err := makeCompPkeyExprForTable(context.Background(), table, map[string]int32{"tenant": 0, "name": 1})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), expr.Typ.Id)
+	require.Equal(t, function.CollationCompositeKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
+	require.Len(t, expr.GetF().GetArgs(), 6)
+	require.Equal(t, int64(types.CharsetUTF8), expr.GetF().GetArgs()[2].GetLit().GetI64Val())
+	require.Equal(t, int64(types.CharsetUTF8MB4Bin), expr.GetF().GetArgs()[5].GetLit().GetI64Val())
 }

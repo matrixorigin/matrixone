@@ -5035,6 +5035,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	var (
 		compPkeyExpr  *plan.Expr
 		clusterByExpr *plan.Expr
+		err           error
 	)
 
 	columnIsNull := make(map[string]bool)
@@ -5076,7 +5077,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			//}
 			//
 			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
+			compPkeyExpr, err = makeCompPkeyExprForTable(builder.GetContext(), tableDef, tableDef.Name2ColIndex)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
 				Expr: &plan.Expr_Col{
