@@ -109,3 +109,9 @@ d    result
 1.4    a
 1.5    b
 DROP TABLE make_set_decimal_bits;
+SELECT MAKE_SET(CAST('0.9' AS DECIMAL(38,38)), 'a', 'b') AS decimal_scale38_positive;
+decimal_scale38_positive
+a
+SELECT MAKE_SET(CAST('-0.9' AS DECIMAL(38,38)), 'a', 'b') AS decimal_scale38_negative;
+decimal_scale38_negative
+a,b
