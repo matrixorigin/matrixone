@@ -532,12 +532,29 @@ func validGeneralPayload(payload []byte) bool {
 func validatePayload(spec familySpec, params, payload []byte) error {
 	switch spec.typ {
 	case Text:
+		prefix, unit, ok := decodePrefixParams(params)
+		if !ok {
+			return wrapCodecError(ErrMalformedKey, "malformed text prefix parameters")
+		}
 		if spec.charset == CharsetUTF8MB4Bin {
 			if !utf8.Valid(payload) || (len(payload) > 0 && payload[len(payload)-1] == ' ') {
 				return wrapCodecError(ErrMalformedKey, "malformed utf8-bin payload")
 			}
+			if prefix != 0 && unit == PrefixCharacters && uint64(utf8.RuneCount(payload)) > uint64(prefix) {
+				return wrapCodecError(ErrMalformedKey, "utf8-bin payload exceeds character prefix")
+			}
 		} else if !validGeneralPayload(payload) {
 			return wrapCodecError(ErrMalformedKey, "malformed general-ci payload")
+		} else if prefix != 0 && unit == PrefixCharacters && uint64(len(payload)/4) > uint64(prefix) {
+			return wrapCodecError(ErrMalformedKey, "general-ci payload exceeds character prefix")
+		}
+	case Binary:
+		prefix, unit, ok := decodePrefixParams(params)
+		if !ok || unit != PrefixBytes {
+			return wrapCodecError(ErrMalformedKey, "malformed binary prefix parameters")
+		}
+		if prefix != 0 && uint64(len(payload)) > uint64(prefix) {
+			return wrapCodecError(ErrMalformedKey, "binary payload exceeds byte prefix")
 		}
 	case SignedInteger, UnsignedInteger:
 		if len(params) != 3 || len(payload) != int(binary.BigEndian.Uint16(params[1:])) {
@@ -549,6 +566,18 @@ func validatePayload(spec familySpec, params, payload []byte) error {
 		}
 	}
 	return nil
+}
+
+func decodePrefixParams(params []byte) (uint32, PrefixUnit, bool) {
+	if len(params) != 6 || params[0] != 1 {
+		return 0, 0, false
+	}
+	prefix := binary.BigEndian.Uint32(params[1:5])
+	unit := PrefixUnit(params[5])
+	if unit != PrefixCharacters && unit != PrefixBytes {
+		return 0, 0, false
+	}
+	return prefix, unit, true
 }
 
 func validDecimalPayload(params, payload []byte) bool {

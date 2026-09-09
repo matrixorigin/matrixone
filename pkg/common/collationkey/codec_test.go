@@ -16,6 +16,7 @@ package collationkey
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -376,6 +377,41 @@ func TestRegistryDigestIsStableAndCopied(t *testing.T) {
 	}
 	if got, want := hex.EncodeToString(second), "c69a5959e49d4fb193d8c8252e76eb5ea92e53be9594354d4e8befd4575db41a"; got != want {
 		t.Fatalf("registry digest=%s want=%s", got, want)
+	}
+}
+
+func TestValidateEncodedEnforcesPrefixPayloadBounds(t *testing.T) {
+	general, err := EncodePart(nil, Part{Domain: generalDomain(1), Value: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The encoded descriptor still declares one character, but the payload is
+	// expanded to two weights. A decoder must reject this before a caller can
+	// use the bytes as a physical identity.
+	general = append(general, 0, 0, 0, 0)
+	binary.BigEndian.PutUint32(general[19:23], 8)
+	if err := ValidateEncoded(general); err == nil {
+		t.Fatal("general-ci payload exceeded its character prefix")
+	}
+
+	binText, err := EncodePart(nil, Part{Domain: binTextDomain(1), Value: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binText = append(binText, 'b')
+	binary.BigEndian.PutUint32(binText[19:23], 2)
+	if err := ValidateEncoded(binText); err == nil {
+		t.Fatal("utf8-bin payload exceeded its character prefix")
+	}
+
+	binaryValue, err := EncodePart(nil, Part{Domain: binaryDomain(1), Value: []byte{'a'}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryValue = append(binaryValue, 'b')
+	binary.BigEndian.PutUint32(binaryValue[19:23], 2)
+	if err := ValidateEncoded(binaryValue); err == nil {
+		t.Fatal("binary payload exceeded its byte prefix")
 	}
 }
 
