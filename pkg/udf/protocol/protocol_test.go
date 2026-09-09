@@ -80,7 +80,9 @@ func TestOutputSnapshotFreezesBeforeWorkerCanRewrite(t *testing.T) {
 	worker[0] = 'X'
 
 	require.NoError(t, snapshot.Validate(len("trusted-before-barrier"), snapshot.Digest()))
+	worker[1] = 'Y'
 	require.Equal(t, "trusted-before-barrier", string(snapshot.Bytes()))
+	require.Equal(t, "trusted-before-barrier", string(snapshot.TrustedBytes()))
 
 	empty, err := FreezeOutput(nil, 1024)
 	require.NoError(t, err)
