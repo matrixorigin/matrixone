@@ -45,7 +45,7 @@ function run_bvt() {
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
    # use test/distributed/cases as default test cases
   echo "> test case: test/distributed/cases"
-  cd mo-tester && ./run.sh -n -g -o -p /matrixone-test/test/distributed/cases -e optimistic 2>&1
+  cd mo-tester && ./run.sh -n -g -o -p /matrixone-test/test/distributed/cases -e optimistic,udf_python 2>&1
 }
 
 function bvt_ut() {
