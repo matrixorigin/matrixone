@@ -303,6 +303,57 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+func TestCaptureAutoIncrementGeneratedRowsSkipsHiddenFakePK(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	visible := testutil.MakeInt64Vector([]int64{0, 42}, nil, proc.Mp())
+	visible.GetNulls().Add(0)
+	fake := testutil.MakeUint64Vector([]uint64{101, 102}, nil, proc.Mp())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = visible
+	bat.Vecs[1] = fake
+	bat.SetRowCount(2)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+
+	preInsert := &PreInsert{
+		TrackAutoIncrementGenerated: true,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		}},
+	}
+	require.NoError(t, preInsert.captureAutoIncrementGeneratedRows(bat))
+	require.Equal(t, []bool{true, false}, preInsert.ctr.autoIncrementGenerated)
+
+	fakeOnly := &PreInsert{
+		TrackAutoIncrementGenerated: true,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+			Name: catalog.FakePrimaryKeyColName, Hidden: true,
+			Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}}},
+	}
+	require.ErrorContains(t, fakeOnly.captureAutoIncrementGeneratedRows(bat),
+		"auto-increment provenance has no auto-increment column")
+}
+
+func TestHasUserVisibleAutoIncrementColumn(t *testing.T) {
+	require.False(t, hasUserVisibleAutoIncrementColumn(&plan.TableDef{Cols: []*plan.ColDef{{
+		Name:   catalog.FakePrimaryKeyColName,
+		Hidden: true,
+		Typ:    i32typ,
+	}}}))
+	require.True(t, hasUserVisibleAutoIncrementColumn(&plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  i32typ,
+	}}}))
+	require.True(t, hasUserVisibleAutoIncrementColumn(&plan.TableDef{Cols: []*plan.ColDef{
+		{Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: i32typ},
+		{Name: "id", Typ: i32typ},
+	}}))
+}
+
 func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
@@ -856,12 +907,12 @@ func TestGenAutoIncrColKeepsFirstGeneratedIDAcrossBatches(t *testing.T) {
 			TblId:       100,
 			IsTemporary: true,
 			Cols: []*plan.ColDef{{
-				Name: catalog.FakePrimaryKeyColName,
+				Name: "id",
 				Typ:  i32typ,
 			}},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 		},
-		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		Attrs:             []string{"id"},
 		EstimatedRowCount: 1,
 	}
 	preInsert.ctr.tblId = preInsert.TableDef.TblId
@@ -947,14 +998,15 @@ func TestGenAutoIncrColCoordinatesParallelFirstGeneratedID(t *testing.T) {
 		secondErr <- genAutoIncrCol(bat, proc, makePreInsert())
 	}()
 
-	// The second scope publishes 1 while the first scope is still blocked
-	// after allocating 8193.  The statement-wide coordinator must keep the
-	// lower value when the first scope resumes.
+	// Both allocations belong to the hidden fake primary key. They must not be
+	// published as a client-visible generated ID even when scopes complete out
+	// of order.
 	close(releaseFirstCall)
 	require.NoError(t, <-firstErr)
 	require.NoError(t, <-secondErr)
-	require.Equal(t, uint64(1), proc.GetStatementLastInsertID())
-	require.Equal(t, uint64(1), proc.GetLastInsertID())
+	require.Zero(t, proc.GetStatementLastInsertID())
+	require.Zero(t, proc.GetLastInsertID())
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
 }
 
 func resetChildren(arg *PreInsert, m *mpool.MPool) {

@@ -328,7 +328,7 @@ func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) 
 	}
 	autoCol := -1
 	for i, col := range preInsert.TableDef.Cols {
-		if !col.Typ.AutoIncr {
+		if col == nil || col.Hidden || catalog.IsFakePkName(col.Name) || !col.Typ.AutoIncr {
 			continue
 		}
 		if autoCol >= 0 {
@@ -352,6 +352,18 @@ func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) 
 	}
 	preInsert.ctr.autoIncrementGenerated = generated
 	return nil
+}
+
+func hasUserVisibleAutoIncrementColumn(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, col := range tableDef.Cols {
+		if col != nil && col.Typ.AutoIncr && !col.Hidden && !catalog.IsFakePkName(col.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
@@ -668,7 +680,8 @@ retryInsertValues:
 		}
 	}
 
-	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated {
+	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated &&
+		hasUserVisibleAutoIncrementColumn(preInsert.TableDef) {
 		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
 		// all sharing the statement-wide process state.  Publish the smallest
 		// generated value through the shared coordinator so scheduling cannot make

@@ -2100,7 +2100,7 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	}
 	pkPos, ok := tableColumnPosition(tableDef, tableDef.Pkey.PkeyColName)
 	if !ok || pkPos < 0 || int(pkPos) >= len(tableDef.Cols) ||
-		tableDef.Cols[pkPos] == nil || !tableDef.Cols[pkPos].Typ.AutoIncr {
+		!isUserVisibleAutoIncrementColumn(tableDef.Cols[pkPos]) {
 		return 0, false
 	}
 	if hasAutoIncrementDependentConstraint(tableDef, pkPos) {
@@ -2108,7 +2108,7 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	}
 	autoCount := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && col.Typ.AutoIncr {
+		if isUserVisibleAutoIncrementColumn(col) {
 			autoCount++
 		}
 	}
@@ -2132,6 +2132,11 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 		}
 	}
 	return int32(visibleWidth), true
+}
+
+func isUserVisibleAutoIncrementColumn(col *plan.ColDef) bool {
+	return col != nil && col.Typ.AutoIncr && !col.Hidden &&
+		!catalog.IsFakePkName(col.Name)
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
@@ -3414,7 +3419,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						RelPos: selectTag, ColPos: autoIncrementGeneratedColumn,
 					}
 					for _, col := range tableDef.Cols {
-						if !col.Typ.AutoIncr {
+						if !isUserVisibleAutoIncrementColumn(col) {
 							continue
 						}
 						pos, ok := colName2Idx[tableDef.Name+"."+col.Name]
@@ -4890,10 +4895,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
+	hasUserVisibleAutoCol := false
 	for _, col := range tableDef.Cols {
-		if col.Typ.AutoIncr {
+		if col != nil && col.Typ.AutoIncr {
 			hasAutoCol = true
-			break
+			if isUserVisibleAutoIncrementColumn(col) {
+				hasUserVisibleAutoCol = true
+			}
 		}
 	}
 
@@ -5052,7 +5060,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
-	if len(trackGenerated) > 0 && trackGenerated[0] && hasAutoCol {
+	if len(trackGenerated) > 0 && trackGenerated[0] && hasUserVisibleAutoCol {
 		// ODKU retains the PRE_INSERT provenance bit but publishes the allocator
 		// candidate only after DEDUP JOIN selects an unmatched row.
 		markerPhysicalPos = int32(len(projList2))

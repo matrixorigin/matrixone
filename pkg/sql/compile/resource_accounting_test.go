@@ -453,7 +453,37 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, zeroSender.dealRemoteTerminal(zeroData))
 	require.Zero(t, zeroProc.GetStatementLastInsertID())
+	require.Zero(t, zeroProc.GetLastInsertID())
 	require.True(t, zeroProc.HasStatementLastInsertIDGenerated())
+
+	for _, tc := range []struct {
+		name   string
+		values []uint64
+	}{
+		{name: "zero then nonzero", values: []uint64{0, 7}},
+		{name: "nonzero then zero", values: []uint64{7, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := uint64(99)
+			statement := uint64(99)
+			mergeProc := &process.Process{Base: &process.BaseProcess{
+				LastInsertID:          &last,
+				StatementLastInsertID: &statement,
+			}}
+			for _, value := range tc.values {
+				generated := true
+				data, err := json.Marshal(remoteTerminalEnvelope{
+					StatementLastInsertID:          value,
+					StatementLastInsertIDGenerated: &generated,
+				})
+				require.NoError(t, err)
+				require.NoError(t, (&messageSenderOnClient{proc: mergeProc}).dealRemoteTerminal(data))
+			}
+			require.Zero(t, mergeProc.GetStatementLastInsertID())
+			require.Zero(t, mergeProc.GetLastInsertID())
+			require.True(t, mergeProc.HasStatementLastInsertIDGenerated())
+		})
+	}
 
 	// A pre-resource client decodes the same payload as a non-empty PhyPlan.
 	var legacyClientPlan models.PhyPlan

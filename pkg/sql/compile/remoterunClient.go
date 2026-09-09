@@ -961,16 +961,14 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 			if envelope.StatementLastInsertIDGenerated == nil {
 				sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
 			} else {
-				if envelope.StatementLastInsertID != 0 {
-					// Preserve the session-visible value for non-zero generated
-					// results. The zero case deliberately skips this coordinator.
-					sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
-				}
-				// MarkWithValue also updates the statement field for an explicit
-				// zero; SetStatementLastInsertIDIfEarlier intentionally ignores
-				// that value and is therefore only used above for non-zero values.
+				// MarkWithValue carries an explicit valid bit, so zero remains a
+				// real fragment value instead of being treated as an empty merge.
 				sender.proc.MarkStatementLastInsertIDGeneratedWithValue(envelope.StatementLastInsertID)
 			}
+			// A remote terminal is already successful, so synchronize the
+			// session-visible value after the statement winner is selected. This
+			// avoids SetStatementLastInsertIDIfEarlier for explicit zero.
+			sender.proc.SetLastInsertID(sender.proc.GetStatementLastInsertID())
 			sender.proc.MarkStatementLastInsertIDGenerated()
 		}
 	}

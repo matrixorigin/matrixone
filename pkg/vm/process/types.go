@@ -457,7 +457,11 @@ type BaseProcess struct {
 	// is not sufficient: PRE_INSERT may materialize an allocator candidate that
 	// an ODKU later resolves to an existing row.
 	statementLastInsertIDGenerated bool
-	statementInsertIDMu            sync.Mutex
+	// statementLastInsertIDValueValid distinguishes a confirmed generated value
+	// of zero from an uninitialized statement value. Parallel fragments use the
+	// smallest confirmed value, including zero, as the deterministic winner.
+	statementLastInsertIDValueValid bool
+	statementInsertIDMu             sync.Mutex
 	// lastInsertIDExpr is the tentative value produced by LAST_INSERT_ID(expr)
 	// during the current statement.  It is deliberately separate from both
 	// generated-key protocol state and the cross-request Session value.  The
@@ -851,6 +855,7 @@ func (proc *Process) ResetStatementLastInsertID() {
 	}
 	proc.Base.statementInsertIDMu.Lock()
 	proc.Base.statementLastInsertIDGenerated = false
+	proc.Base.statementLastInsertIDValueValid = false
 	if proc.Base.StatementLastInsertID != nil {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, 0)
 	}
@@ -880,10 +885,11 @@ func (proc *Process) MarkStatementLastInsertIDGeneratedWithValue(num uint64) {
 	defer proc.Base.statementInsertIDMu.Unlock()
 	if proc.Base.StatementLastInsertID != nil {
 		current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
-		if !proc.Base.statementLastInsertIDGenerated || current == 0 || num < current {
+		if !proc.Base.statementLastInsertIDValueValid || num < current {
 			atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
 		}
 	}
+	proc.Base.statementLastInsertIDValueValid = true
 	proc.Base.statementLastInsertIDGenerated = true
 }
 
@@ -962,10 +968,10 @@ func (proc *Process) GetLastInsertIDExprState() (uint64, bool, bool) {
 }
 
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
-// value seen by any parallel scope of the current statement.  Statement
-// LAST_INSERT_ID is reset before execution starts, so the shared coordinator
-// makes the first generated value deterministic while keeping the session and
-// statement values synchronized.
+// value seen by any parallel scope of the current statement. An explicit zero
+// must use MarkStatementLastInsertIDGeneratedWithValue so zero is not mistaken
+// for an uninitialized value; once a confirmed zero exists, later non-zero
+// legacy fragments cannot overwrite it.
 func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
 	if num == 0 {
 		if proc.Base == nil {
@@ -985,8 +991,9 @@ func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
 		return num
 	}
 	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
-	if current == 0 || num < current {
+	if !proc.Base.statementLastInsertIDValueValid || num < current {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		proc.Base.statementLastInsertIDValueValid = true
 		if proc.Base.LastInsertID != nil {
 			atomic.StoreUint64(proc.Base.LastInsertID, num)
 		}

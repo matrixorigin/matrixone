@@ -187,6 +187,45 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
 }
 
+func TestStatementLastInsertIDGeneratedValueZeroPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		first  uint64
+		second uint64
+		want   uint64
+	}{
+		{name: "zero then nonzero", first: 0, second: 7, want: 0},
+		{name: "nonzero then zero", first: 7, second: 0, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := uint64(99)
+			statement := uint64(99)
+			proc := &Process{Base: &BaseProcess{
+				LastInsertID:          &last,
+				StatementLastInsertID: &statement,
+			}}
+			proc.ResetStatementLastInsertID()
+			proc.MarkStatementLastInsertIDGeneratedWithValue(tc.first)
+			proc.MarkStatementLastInsertIDGeneratedWithValue(tc.second)
+			require.True(t, proc.HasStatementLastInsertIDGenerated())
+			require.Equal(t, tc.want, proc.GetStatementLastInsertID())
+		})
+	}
+
+	// A legacy non-zero fragment arriving after an explicit zero must not
+	// reinterpret the valid zero as an empty coordinator slot.
+	last := uint64(99)
+	statement := uint64(99)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.ResetStatementLastInsertID()
+	proc.MarkStatementLastInsertIDGeneratedWithValue(0)
+	require.Equal(t, uint64(0), proc.SetStatementLastInsertIDIfEarlier(7))
+	require.Equal(t, uint64(0), proc.GetStatementLastInsertID())
+}
+
 func TestLastInsertIDExprIsStatementLocal(t *testing.T) {
 	last := uint64(17)
 	proc := &Process{Base: &BaseProcess{LastInsertID: &last}}
