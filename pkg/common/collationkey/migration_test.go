@@ -147,6 +147,30 @@ func TestMigrationGateRecoveryFencesStaleOwner(t *testing.T) {
 	}
 }
 
+func TestMigrationGateAbortedIsTerminalAndNilReplayCallsFailClosed(t *testing.T) {
+	gate, err := NewMigrationGate(17, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := migrationTestOwner("owner-a", 1)
+	if err := gate.BeginDraining(owner, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AbortBeforePublication(owner, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.ClaimExpired(20, migrationTestOwner("recovery", 2)); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("aborted gate was reclaimable: %v", err)
+	}
+	var nilGate *MigrationGate
+	if err := nilGate.AcknowledgeReplay(MigrationOwner{}, 1, "tn-1", 1); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("nil acknowledgement error = %v, want ErrMigrationGate", err)
+	}
+	if err := nilGate.RetireReplayTarget(MigrationOwner{}, 1, "tn-1", 1); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("nil retirement error = %v, want ErrMigrationGate", err)
+	}
+}
+
 func TestMigrationGateRejectsMalformedPersistedState(t *testing.T) {
 	gate, err := NewMigrationGate(17, 4)
 	if err != nil {

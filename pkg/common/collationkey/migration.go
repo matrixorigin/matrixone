@@ -394,7 +394,14 @@ func (g *MigrationGate) ClaimExpired(nowNanos int64, owner MigrationOwner) error
 	if err := g.Validate(); err != nil {
 		return err
 	}
-	if g.Phase == MigrationOpen || nowNanos < g.PhaseDeadlineNanos || !validOwner(owner) || sameOwner(g.Owner, owner) {
+	// ABORTED is terminal before publication.  It intentionally retains the
+	// owner and deadline for recovery/audit, but must not be claimable again:
+	// allowing a new owner to mutate an aborted gate could make an old
+	// temporary relation appear live after the old relation was released.
+	if g.Phase != MigrationDraining && g.Phase != MigrationExclusive && g.Phase != MigrationPublished {
+		return wrapMigrationError("expired claim is not eligible in phase %s", g.Phase)
+	}
+	if nowNanos < g.PhaseDeadlineNanos || !validOwner(owner) || sameOwner(g.Owner, owner) {
 		return wrapMigrationError("expired claim is not eligible")
 	}
 	g.Owner = MigrationOwner{OwnerID: owner.OwnerID, Incarnation: owner.Incarnation, ClaimToken: append([]byte(nil), owner.ClaimToken...)}
@@ -425,6 +432,9 @@ func (g *MigrationGate) acknowledgeReplay(owner MigrationOwner, nodeID string, i
 // AcknowledgeReplay records a target's exact incarnation for the published
 // generation. The generation argument is part of the stale-replay fence.
 func (g *MigrationGate) AcknowledgeReplay(owner MigrationOwner, generation uint64, nodeID string, incarnation uint64) error {
+	if g == nil {
+		return wrapMigrationError("nil gate")
+	}
 	if generation != g.ReplayGeneration {
 		return wrapMigrationError("replay generation mismatch")
 	}
