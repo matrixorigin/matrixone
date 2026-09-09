@@ -2023,7 +2023,7 @@ func validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc *process.Proces
 	}
 	if proc == nil || !supportsRemoteAutoIncrementGeneratedProvenance(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"remote DedupJoin generated provenance requires MORPC protocol version 58",
+			"remote DedupJoin generated provenance requires MORPC protocol version 59",
 		)
 	}
 	return nil
