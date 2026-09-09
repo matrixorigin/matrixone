@@ -2526,7 +2526,6 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 }
 
 // validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
-// occurs in the persisted VIEWS definition. It is used at both marshal and
 // occur in the persisted VIEWS definition. It is used at both marshal and
 // unmarshal boundaries, so a stale prepared or remote pipeline fails closed
 // instead of being bound by a CN that predates the function registration.
