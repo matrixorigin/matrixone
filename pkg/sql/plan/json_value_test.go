@@ -18,7 +18,9 @@ import (
 	"context"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -46,10 +48,7 @@ func TestJSONValueBindingContract(t *testing.T) {
 		require.Equal(t, int32(512), expr.Typ.Width)
 		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), expr.Typ.Charset)
 		require.False(t, expr.Typ.NotNullable)
-		require.Len(t, expr.GetF().Args, 7)
-		require.Equal(t, int32(types.T_varchar), expr.GetF().Args[2].Typ.Id)
-		require.Equal(t, int32(512), expr.GetF().Args[2].Typ.Width)
-		require.NotNil(t, expr.GetF().Args[2].GetT())
+		require.Len(t, expr.GetF().Args, 2)
 	})
 
 	t.Run("explicit unsigned default", func(t *testing.T) {
@@ -77,6 +76,44 @@ func TestJSONValueBindingContract(t *testing.T) {
 		require.Equal(t, int32(types.T_char), expr.Typ.Id)
 		require.Equal(t, int32(12), expr.Typ.Width)
 	})
+}
+
+func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
+	compilerContext := NewMockCompilerContext(true)
+	proc := compilerContext.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	bind := func(version int64, sql string) (*plan.Expr, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		builder := NewQueryBuilder(plan.Query_SELECT, compilerContext, false, true)
+		binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
+		return binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
+	}
+
+	legacy, err := bind(defines.MORPCVersion57, `select json_value('1', '$')`)
+	require.NoError(t, err)
+	require.Len(t, legacy.GetF().Args, 2)
+
+	_, err = bind(defines.MORPCVersion57, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 58")
+
+	contract, err := bind(defines.MORPCVersion58, `select json_value('1', '$' returning unsigned)`)
+	require.NoError(t, err)
+	require.Len(t, contract.GetF().Args, 7)
 }
 
 func TestJSONValueBindingRejectsInvalidUnusedDefault(t *testing.T) {
