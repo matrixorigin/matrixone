@@ -71,7 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonruntime"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -179,7 +179,7 @@ func NewService(
 		lockService lockservice.LockService,
 		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
+		udfService udf.Runtime,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -240,17 +240,17 @@ func NewService(
 	}
 
 	// init UdfService
-	var udfServices []udf.Service
+	var udfServices []udf.Runtime
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		var pc *pythonservice.Client
-		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		var pc *pythonruntime.Gateway
+		pc, err = pythonruntime.NewGateway(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
 		udfServices = append(udfServices, pc)
 	}
-	srv.udfService, err = udf.NewService(udfServices...)
+	srv.udfService, err = udf.NewRuntime(udfServices...)
 	if err != nil {
 		panic(err)
 	}

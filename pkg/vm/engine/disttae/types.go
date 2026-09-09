@@ -261,7 +261,7 @@ type Engine struct {
 	ls       lockservice.LockService
 	qc       qclient.QueryClient
 	hakeeper logservice.CNHAKeeperClient
-	us       udf.Service
+	us       udf.Runtime
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string

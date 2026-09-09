@@ -16229,7 +16229,7 @@ var supportedOthersBuiltIns = []FuncNew{
 	// function `python_user_defined_function`
 	{
 		functionId: PYTHON_UDF,
-		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		class:      plan.Function_INTERNAL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    checkPythonUdf,
 		Overloads: []overload{

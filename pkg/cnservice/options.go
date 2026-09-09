@@ -107,7 +107,7 @@ func WithMessageHandle(f func(ctx context.Context,
 	lockService lockservice.LockService,
 	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
+	udfService udf.Runtime,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {

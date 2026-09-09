@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 )
 
 type cloneDatabaseSource struct {
@@ -659,13 +660,36 @@ func validateCloneUserDefinedFunctions(functions []userDefinedFunctionDefinition
 			continue
 		}
 
-		var body function.NonSqlUdfBody
-		if json.Unmarshal([]byte(definition.body), &body) == nil && body.Import {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal([]byte(definition.body), &raw) != nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"CREATE DATABASE CLONE with malformed %s function %s is not supported",
+				definition.lang,
+				definition.name,
+			)
+		}
+		var importedBody bool
+		if value, ok := raw["import"]; ok {
+			_ = json.Unmarshal(value, &importedBody)
+		}
+		if importedBody {
 			return moerr.NewNotSupportedNoCtxf(
 				"CREATE DATABASE CLONE with imported %s function %s is not supported: imported UDF packages are not snapshot-versioned",
 				definition.lang,
 				definition.name,
 			)
+		}
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			var body function.PythonRoutineBody
+			if err := json.Unmarshal([]byte(definition.body), &body); err != nil ||
+				body.Handler == "" || (body.Source == "" && body.ArtifactDigest == "") ||
+				body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
+				return moerr.NewNotSupportedNoCtxf(
+					"CREATE DATABASE CLONE with incomplete %s function %s is not supported",
+					definition.lang,
+					definition.name,
+				)
+			}
 		}
 	}
 	return nil

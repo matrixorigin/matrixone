@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -4917,7 +4918,6 @@ type rmPkg func(path string) error
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
 	var sql string
 	var argstr string
-	var bodyStr string
 	var checkDatabase string
 	var dbName string
 	var dbExists bool
@@ -4988,10 +4988,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 			if err != nil {
 				return err
 			}
-			bodyStr, err = erArray[0].GetString(ctx, i, 2)
-			if err != nil {
-				return err
-			}
 			argList := make([]*function.Arg, 0)
 			json.Unmarshal([]byte(argstr), &argList)
 			if len(argList) == len(df.Args) {
@@ -5013,11 +5009,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					if rtnErr != nil {
 						return rtnErr
 					}
-					u := &function.NonSqlUdfBody{}
-					if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-						rm(u.Body)
-					}
-
 					return rtnErr
 				}
 				err = handleArgMatch()
@@ -5040,7 +5031,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 
 func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement, rm rmPkg) (err error) {
 	var sql string
-	var bodyStr string
 	var funcId int64
 	var erArray []ExecResult
 	var dbName string
@@ -5081,22 +5071,12 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 			if err != nil {
 				return err
 			}
-			bodyStr, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return err
-			}
-
 			handleArgMatch := func() (rtnErr error) {
 				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 				rtnErr = bh.Exec(ctx, sql)
 				if rtnErr != nil {
 					return rtnErr
-				}
-
-				u := &function.NonSqlUdfBody{}
-				if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-					rm(u.Body)
 				}
 
 				return rtnErr
@@ -11605,31 +11585,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = cf.Body
 	} else {
 		if cf.Import {
-			// check
-			if cf.Language == string(tree.PYTHON) {
-				if !strings.HasSuffix(cf.Body, ".py") &&
-					!strings.HasSuffix(cf.Body, ".whl") {
-					return moerr.NewInvalidInput(execCtx.reqCtx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
-				}
-				if strings.HasSuffix(cf.Body, ".whl") {
-					dotIdx := strings.LastIndex(cf.Handler, ".")
-					if dotIdx < 1 {
-						return moerr.NewInvalidInput(execCtx.reqCtx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
-					}
-				}
-			}
-			// upload
-			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = Upload(ses, execCtx, cf.Body, storageDir)
-			if err != nil {
-				return err
-			}
+			return moerr.NewNotSupportedNoCtx("Python artifact import requires the immutable artifact catalog")
 		}
 
-		nb := function.NonSqlUdfBody{
-			Handler: cf.Handler,
-			Import:  cf.Import,
-			Body:    cf.Body,
+		nb := function.PythonRoutineBody{
+			Handler:        cf.Handler,
+			Source:         cf.Body,
+			Mode:           "SCALAR",
+			NullPolicy:     udf.NullCallHandler,
+			ABIContract:    udf.PythonABIContract,
+			AdapterVersion: udf.PythonAdapterVersion,
+			SDKVersion:     udf.PythonSDKVersion,
 		}
 		var byt []byte
 		byt, err = json.Marshal(nb)
