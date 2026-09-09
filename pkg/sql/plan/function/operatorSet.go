@@ -884,7 +884,7 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetValue(i)
 		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err := r.Append(0, true); err != nil {
+			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
