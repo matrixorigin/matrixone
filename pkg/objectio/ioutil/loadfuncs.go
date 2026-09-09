@@ -91,6 +91,7 @@ func readColumnsData(
 	extraTSColumn *uint16,
 	m *mpool.MPool,
 	policy fileservice.Policy,
+	sharedPosition int,
 ) (ioVectors fileservice.IOVector, fromCache bool, err error) {
 	if len(columns) != len(typs) {
 		return ioVectors, false, moerr.NewInvalidInputNoCtxf(
@@ -119,17 +120,15 @@ func readColumnsData(
 	}
 	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	ioVectors, err = objectio.ReadOneBlock(
-		ctx,
-		&dataMeta,
-		name,
-		location.ID(),
-		readColumns,
-		readTypes,
-		m,
-		fs,
-		policy,
-	)
+	if sharedPosition >= 0 {
+		ioVectors, err = objectio.ReadOneBlockWithScopedDecode(
+			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy, sharedPosition,
+		)
+	} else {
+		ioVectors, err = objectio.ReadOneBlock(
+			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
+		)
+	}
 	if err != nil {
 		return ioVectors, false, err
 	}
@@ -206,6 +205,7 @@ func LoadColumnsDataInto(
 		commitTSColumn,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return deleteMask, false, err
@@ -317,6 +317,7 @@ func LoadColumnDataBySearch(
 		commitTSColumn,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return nil, false, err
@@ -359,31 +360,7 @@ func LoadColumnDataByTopN(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (sels []int64, dists []float64, fromCache bool, err error) {
-	if m == nil {
-		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column topn")
-	}
-	ioVectors, fromCache, err := readColumnsData(
-		ctx,
-		[]uint16{column},
-		[]types.Type{typ},
-		fs,
-		location,
-		nil,
-		m,
-		policy,
-	)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	defer objectio.ReleaseIOVector(&ioVectors)
-
-	sels, dists, err = objectio.SearchCachedVectorTopN(
-		ctx,
-		ioVectors.Entries[0],
-		selectRows,
-		orderByLimit,
-	)
-	return sels, dists, fromCache, err
+	return objectio.ReadColumnTopN(ctx, column, typ, fs, location, selectRows, orderByLimit, m, policy)
 }
 
 // LoadColumnsDataIntoAndTopN reads residual-filter columns, the vector order
@@ -485,6 +462,7 @@ func LoadColumnsDataIntoAndTopN(
 		nil,
 		m,
 		policy,
+		len(columns),
 	)
 	if err != nil {
 		return nil, nil, false, err
@@ -567,6 +545,7 @@ func LoadColumnDataBySearchAndCheckTS(
 		nil,
 		m,
 		policy,
+		-1,
 	)
 	if err != nil {
 		return false, false, false, err

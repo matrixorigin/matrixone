@@ -25,7 +25,7 @@ SELECT CONV('0', 10, 16) AS zero;
 SELECT CONV('1', 10, 2) AS one;
 SELECT CONV(NULL, 10, 16) AS null_input;
 
-# Invalid inputs (should return NULL)
+# Numeric-prefix inputs (invalid suffix/first character are ignored)
 SELECT CONV('G', 16, 10) AS invalid_hex;
 SELECT CONV('2', 2, 10) AS invalid_bin;
 

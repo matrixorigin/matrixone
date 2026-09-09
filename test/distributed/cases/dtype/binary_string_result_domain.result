@@ -32,7 +32,7 @@ select export_set(7, 'a', 'b', ',', 3) as bounded_export_set;
 ➤ bounded_export_set[12,127,0]  𝄀
 a,a,a
 select quote('') as bounded_quote;
-➤ bounded_quote[12,2,0]  𝄀
+➤ bounded_quote[12,4,0]  𝄀
 ''
 create table binary_sources(payload blob, needle varbinary(1), replacement varbinary(2));
 insert into binary_sources values(repeat(X'61', 70000), X'61', X'6262');
