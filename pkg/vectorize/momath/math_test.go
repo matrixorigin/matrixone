@@ -50,6 +50,18 @@ func TestCotPreservesOddSymmetry(t *testing.T) {
 	}
 }
 
+func TestCotPreservesNonFiniteInputs(t *testing.T) {
+	for _, input := range []float64{math.Inf(1), math.Inf(-1), math.NaN()} {
+		got, err := Cot(input)
+		if err != nil {
+			t.Errorf("Cot(%g) returned unexpected error: %v", input, err)
+		}
+		if !math.IsNaN(got) {
+			t.Errorf("Cot(%g) = %g, want NaN", input, got)
+		}
+	}
+}
+
 func TestCotRejectsZeroAndReciprocalOverflow(t *testing.T) {
 	for _, input := range []float64{0, math.Copysign(0, -1)} {
 		_, err := Cot(input)
