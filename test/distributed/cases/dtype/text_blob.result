@@ -85,7 +85,12 @@ select count(t1),max(t2),min(t3) from text_01;
 count(t1)    max(t2)    min(t3)
 5    7834    20
 select bin(t3) from text_01;
-Data truncation: data out of range: data type uint8, value '983'
+bin(t3)
+null
+1111010111
+0
+0
+10100
 select space(t3) from text_01;
 ➤ space(t3)[12,65535,0]  𝄀
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          𝄀

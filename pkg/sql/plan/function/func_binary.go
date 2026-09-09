@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -3260,8 +3259,7 @@ func absInt64(v int64) int64 {
 func formatUnsignedToBase(val uint64, toBase int64) string {
 	base := absInt64(toBase)
 	if toBase < 0 {
-		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
-		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+		return strings.ToUpper(strconv.FormatInt(int64(val), int(base)))
 	}
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
@@ -3284,14 +3282,17 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-		if len(strings.TrimSpace(string(nStr))) == 0 {
+		// MySQL returns NULL for the empty string, but a non-empty string with
+		// no usable numeric prefix (including whitespace-only input) converts
+		// to zero.
+		if len(nStr) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
 		if err != nil {
 			return err
 		}
@@ -3319,71 +3320,105 @@ func formatSignedToBase(val int64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatInt(val, int(base)))
 }
 
-func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
-	s := strings.TrimSpace(n)
-	if len(s) == 0 {
+func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, error) {
+	// Numeric conversion accepts ASCII whitespace before the prefix. Do not
+	// use strings.TrimSpace here: binary operands are byte-oriented and a
+	// UTF-8 Unicode whitespace sequence is data, not padding. There is no need
+	// to scan the suffix or allocate a string: the first non-digit terminates
+	// the prefix, and the bounded accumulator can decide overflow in one pass.
+	pos := 0
+	for pos < len(n) && isConvWhitespace(n[pos]) {
+		pos++
+	}
+
+	negative := false
+	if pos < len(n) {
+		switch n[pos] {
+		case '+':
+			pos++
+		case '-':
+			negative = true
+			pos++
+		}
+	}
+
+	base := absInt64(fromBase)
+	if base < 2 || base > 36 || pos >= len(n) {
 		return 0, 0, false, nil
 	}
 
-	base := int(absInt64(fromBase))
-	signOffset := 0
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		signOffset = 1
+	firstDigit, ok := convDigitValue(n[pos])
+	if !ok || int64(firstDigit) >= base {
+		return 0, 0, false, nil
 	}
-	if signOffset == len(s) {
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-	}
-	for _, ch := range s[signOffset:] {
-		var digit int
-		switch {
-		case ch >= '0' && ch <= '9':
-			digit = int(ch - '0')
-		case ch >= 'A' && ch <= 'Z':
-			digit = int(ch-'A') + 10
-		case ch >= 'a' && ch <= 'z':
-			digit = int(ch-'a') + 10
-		default:
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		if digit >= base {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+
+	limit := uint64(math.MaxUint64)
+	if fromBase < 0 {
+		limit = uint64(math.MaxInt64)
+		if negative {
+			limit++ // abs(math.MinInt64)
 		}
 	}
 
-	if fromBase < 0 {
-		val, err := strconv.ParseInt(s, base, 64)
-		if err != nil {
-			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				if strings.HasPrefix(s, "-") {
+	value := uint64(0)
+	for pos < len(n) {
+		digit, ok := convDigitValue(n[pos])
+		if !ok || int64(digit) >= base {
+			break
+		}
+		if value > (limit-uint64(digit))/uint64(base) {
+			if fromBase < 0 {
+				if negative {
 					return math.MinInt64, 0, true, nil
 				}
 				return math.MaxInt64, 0, true, nil
 			}
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		return val, 0, true, nil
-	}
-
-	if strings.HasPrefix(s, "-") {
-		magnitudeStr := s[1:]
-		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
-		if !ok {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
-		return 0, uint64(0) - reduced.Uint64(), false, nil
-	}
-
-	s = strings.TrimPrefix(s, "+")
-
-	uval, err := strconv.ParseUint(s, base, 64)
-	if err != nil {
-		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			if negative {
+				// A negative unsigned value whose magnitude is larger than
+				// UINT64_MAX converts to zero in MySQL.
+				return 0, 0, false, nil
+			}
 			return 0, math.MaxUint64, false, nil
 		}
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		value = value*uint64(base) + uint64(digit)
+		pos++
 	}
-	return 0, uval, false, nil
+
+	if fromBase < 0 {
+		if negative {
+			if value == uint64(math.MaxInt64)+1 {
+				return math.MinInt64, 0, true, nil
+			}
+			return -int64(value), 0, true, nil
+		}
+		return int64(value), 0, true, nil
+	}
+	if negative {
+		return 0, uint64(0) - value, false, nil
+	}
+	return 0, value, false, nil
+}
+
+func convDigitValue(ch byte) (uint8, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'A' && ch <= 'Z':
+		return ch - 'A' + 10, true
+	case ch >= 'a' && ch <= 'z':
+		return ch - 'a' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isConvWhitespace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {

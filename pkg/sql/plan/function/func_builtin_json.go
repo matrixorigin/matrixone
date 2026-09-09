@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -2907,6 +2908,9 @@ func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
 
 // JSON_SCHEMA_VALID
 func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2942,7 +2946,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_valid", err, "invalid schema JSON")
 		}
 		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_valid", schemaBJ)
 		if err != nil {
@@ -2951,6 +2955,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNull()
 			continue
@@ -2980,6 +2987,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // JSON_SCHEMA_VALIDATION_REPORT
 func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -3013,7 +3023,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_validation_report", err, "invalid schema JSON")
 		}
 		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_validation_report", schemaBJ)
 		if err != nil {
@@ -3022,6 +3032,9 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNullForBytesResult()
 			continue
@@ -3070,9 +3083,23 @@ func buildSchemaValidationReport(result *gojsonschema.Result) (bytejson.ByteJson
 // parseSchemaJSON parses the schema bytes into a ByteJson.
 func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
 	if isStr {
-		return types.ParseSliceToByteJson(raw)
+		return types.ParseSliceToByteJsonWithDepthLimit(raw, bytejson.JSONDocumentMaxNestingDepth)
 	}
-	return types.DecodeJson(raw), nil
+	document := types.DecodeJson(raw)
+	if err := bytejson.ValidateJSONDocumentDepth(document); err != nil {
+		return document, err
+	}
+	return document, nil
+}
+
+func jsonSchemaParseError(ctx context.Context, fnName string, err error, invalidReason string) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if bytejson.IsJSONDocumentDepthError(err) {
+		return moerr.NewInvalidArg(ctx, fnName, mysqlJSONSchemaDepthReason)
+	}
+	return moerr.NewInvalidArg(ctx, fnName, invalidReason)
 }
 
 func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) error {
@@ -3083,6 +3110,9 @@ func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.
 }
 
 func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) (*gojsonschema.Schema, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validateSchemaObject(ctx, fnName, schemaBJ); err != nil {
 		return nil, err
 	}
@@ -3098,48 +3128,92 @@ func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytej
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
 	}
 
-	if mysqlSchemaHasStringRef(schema) {
-		return nil, moerr.NewNotSupportedf(ctx, "%s: $ref is not supported", fnName)
+	if err := mysqlAnalyzeDraft4Schema(ctx, fnName, schema); err != nil {
+		return nil, err
 	}
 	normalizeMySQLDraft4Schema(schema)
-	schemaJSON, err = json.Marshal(schema)
-	if err != nil {
-		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
-	}
 
 	loader := gojsonschema.NewSchemaLoader()
 	loader.AutoDetect = false
 	loader.Validate = false
 	loader.Draft = gojsonschema.Draft4
-	compiled, err := loader.Compile(gojsonschema.NewBytesLoader(schemaJSON))
+	rootLoader := &mysqlDraft4RootLoader{
+		JSONLoader: gojsonschema.NewRawLoader(schema),
+		factory:    &mysqlDraft4DenyFactory{},
+	}
+	compiled, err := loader.Compile(rootLoader)
 	if err != nil {
+		if errors.Is(err, errMySQLJSONSchemaExternalLoad) {
+			return nil, moerr.NewNotSupportedf(ctx, "%s: %s", fnName, mysqlJSONSchemaExternalRefReason)
+		}
 		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return compiled, nil
 }
 
-func mysqlSchemaHasStringRef(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		if _, ok := value["$ref"].(string); ok {
-			return true
-		}
-		for _, child := range value {
-			if mysqlSchemaHasStringRef(child) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range value {
-			if mysqlSchemaHasStringRef(child) {
-				return true
-			}
-		}
-	}
-	return false
+func normalizeMySQLDraft4Schema(schema any) {
+	normalizeMySQLDraft4SchemaAliases(schema)
+	normalizeMySQLDraft4SchemaKeywords(schema)
 }
 
-func normalizeMySQLDraft4Schema(schema any) {
+// normalizeMySQLDraft4SchemaAliases mirrors gojsonschema's schema-pool walk.
+// The loader registers id/$id in arbitrary schema-valued maps and arrays, not
+// only in recognized Draft 4 keyword positions. Keep literal const/enum data
+// and property/dependency names out of that walk. For definitions/$defs,
+// preserve named schema containers while removing string members that the
+// loader would interpret as aliases.
+func normalizeMySQLDraft4SchemaAliases(value any) {
+	switch value := value.(type) {
+	case []any:
+		for _, child := range value {
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	case map[string]any:
+		delete(value, "id")
+		delete(value, "$id")
+		for key, child := range value {
+			switch key {
+			case "const", "enum":
+				continue
+			case "properties", "patternProperties", "dependencies":
+				named, ok := child.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, schema := range named {
+					normalizeMySQLDraft4SchemaAliases(schema)
+				}
+				continue
+			case "definitions", "$defs":
+				normalizeMySQLDraft4NamedSchemaAliases(child)
+				continue
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4NamedSchemaAliases(value any) {
+	switch named := value.(type) {
+	case []any:
+		normalizeMySQLDraft4SchemaAliases(named)
+	case map[string]any:
+		for key, child := range named {
+			if key == "id" || key == "$id" {
+				if _, ok := child.(string); ok {
+					delete(named, key)
+					continue
+				}
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4SchemaKeywords(schema any) {
 	obj, ok := schema.(map[string]any)
 	if !ok {
 		return
@@ -3156,40 +3230,40 @@ func normalizeMySQLDraft4Schema(schema any) {
 	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMinimum", "minimum")
 	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMaximum", "maximum")
 
-	for _, key := range []string{"properties", "patternProperties", "definitions"} {
-		normalizeMySQLDraft4NamedSchemas(obj[key])
+	for _, key := range []string{"properties", "patternProperties", "definitions", "$defs"} {
+		normalizeMySQLDraft4NamedSchemaKeywords(obj[key])
 	}
 	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
 		for _, dependency := range dependencies {
-			normalizeMySQLDraft4Schema(dependency)
+			normalizeMySQLDraft4SchemaKeywords(dependency)
 		}
 	}
 	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
-		normalizeMySQLDraft4Schema(obj[key])
+		normalizeMySQLDraft4SchemaKeywords(obj[key])
 	}
 	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
-		normalizeMySQLDraft4SchemaOrArray(obj[key])
+		normalizeMySQLDraft4SchemaKeywordsOrArray(obj[key])
 	}
 }
 
-func normalizeMySQLDraft4NamedSchemas(value any) {
+func normalizeMySQLDraft4NamedSchemaKeywords(value any) {
 	named, ok := value.(map[string]any)
 	if !ok {
 		return
 	}
 	for _, schema := range named {
-		normalizeMySQLDraft4Schema(schema)
+		normalizeMySQLDraft4SchemaKeywords(schema)
 	}
 }
 
-func normalizeMySQLDraft4SchemaOrArray(value any) {
+func normalizeMySQLDraft4SchemaKeywordsOrArray(value any) {
 	if schemas, ok := value.([]any); ok {
 		for _, schema := range schemas {
-			normalizeMySQLDraft4Schema(schema)
+			normalizeMySQLDraft4SchemaKeywords(schema)
 		}
 		return
 	}
-	normalizeMySQLDraft4Schema(value)
+	normalizeMySQLDraft4SchemaKeywords(value)
 }
 
 func normalizeMySQLDraft4ExclusiveBound(obj map[string]any, exclusiveKey, boundKey string) {
@@ -3226,24 +3300,39 @@ func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena],
 // If compiled is non-nil, the pre-compiled schema is reused; otherwise the
 // schema is parsed and validated per-row.
 func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema, fnName string) (interface{}, error) {
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
+	}
 	docBytes, _ := p2.GetStrValue(row)
 
 	var docJSON []byte
 	if docIsStr {
-		docBJ, err := types.ParseSliceToByteJson(docBytes)
+		docBJ, err := types.ParseSliceToByteJsonWithDepthLimit(docBytes, bytejson.JSONDocumentMaxNestingDepth)
 		if err != nil {
-			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid document JSON")
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
 		}
 		docJSON, _ = docBJ.MarshalJSON()
 	} else {
 		docBJ := types.DecodeJson(docBytes)
+		if err := bytejson.ValidateJSONDocumentDepth(docBJ); err != nil {
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
+		}
 		docJSON, _ = docBJ.MarshalJSON()
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	if compiled != nil {
 		result, err := compiled.Validate(gojsonschema.NewBytesLoader(docJSON))
 		if err != nil {
+			if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+		}
+		if err := proc.Ctx.Err(); err != nil {
+			return nil, err
 		}
 		if boolResult {
 			return result.Valid(), nil
@@ -3258,7 +3347,7 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	schemaBytes, _ := p1.GetStrValue(row)
 	schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid schema JSON")
+		return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid schema JSON")
 	}
 	compiled, err = compileMySQLDraft4Schema(proc.Ctx, fnName, schemaBJ)
 	if err != nil {
@@ -3267,7 +3356,13 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	dl := gojsonschema.NewBytesLoader(docJSON)
 	validationResult, err := compiled.Validate(dl)
 	if err != nil {
+		if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 	if boolResult {
 		return validationResult.Valid(), nil
