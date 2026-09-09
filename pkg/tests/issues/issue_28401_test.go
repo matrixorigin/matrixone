@@ -45,32 +45,33 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 		_, err = db.ExecContext(ctx, "use `"+database+"`")
 		require.NoError(t, err)
 
-		rows, err := db.QueryContext(ctx, `select
-			substring_index('a,b,c,d', ',', cast(1.4 as decimal(4,1))),
-			substring_index('a,b,c,d', ',', cast(1.5 as decimal(4,1))),
-			substring_index('a,b,c,d', ',', cast(-1.5 as decimal(4,1)))`)
-		require.NoError(t, err)
-		require.True(t, rows.Next())
-		var a, b, result string
-		require.NoError(t, rows.Scan(&a, &b, &result))
-		require.Equal(t, "a", a)
-		require.Equal(t, "a,b", b)
-		require.Equal(t, "c,d", result)
-		require.NoError(t, rows.Close())
+		func() {
+			rows, err := db.QueryContext(ctx, `select substring_index('a,b,c,d', ',', cast(1.4 as decimal(4,1))), substring_index('a,b,c,d', ',', cast(1.5 as decimal(4,1))), substring_index('a,b,c,d', ',', cast(-1.5 as decimal(4,1)))`)
+			require.NoError(t, err)
+			defer rows.Close()
+			require.True(t, rows.Next())
+			var a, b, result string
+			require.NoError(t, rows.Scan(&a, &b, &result))
+			require.Equal(t, "a", a)
+			require.Equal(t, "a,b", b)
+			require.Equal(t, "c,d", result)
+			require.NoError(t, rows.Err())
+		}()
 
 		_, err = db.ExecContext(ctx, "create table counts (n decimal(4,1))")
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, "insert into counts values (1.5), (-1.5)")
 		require.NoError(t, err)
-		rows, err = db.QueryContext(ctx, "select substring_index('a,b,c,d', ',', n) from counts order by n desc")
+		rows, err := db.QueryContext(ctx, "select substring_index('a,b,c,d', ',', n) from counts order by n desc")
 		require.NoError(t, err)
+		defer rows.Close()
 		var got []string
 		for rows.Next() {
 			var value string
 			require.NoError(t, rows.Scan(&value))
 			got = append(got, value)
 		}
-		require.NoError(t, rows.Close())
+		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"a,b", "c,d"}, got)
 
 		stmt, err := db.PrepareContext(ctx, `select substring_index('a,b,c,d', ',', ?)`)
