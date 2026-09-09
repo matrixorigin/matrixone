@@ -193,10 +193,12 @@ func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
 	})
 
 	arg := &DedupJoin{
-		RightTypes:        []types.Type{typ},
-		Conditions:        conditions,
-		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
-		OnDuplicateAction: plan.Node_FAIL,
+		RightTypes:                           []types.Type{typ},
+		Conditions:                           conditions,
+		Result:                               []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
 	}
 	installTestAllocation(t, arg)
 	require.NoError(t, arg.Prepare(proc))
@@ -269,13 +271,15 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 			matched.InitWithSize(1)
 			mailbox := NewWorkerJoinMailbox(2)
 			arg := &DedupJoin{
-				RightTypes:        []types.Type{typ},
-				Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
-				OnDuplicateAction: plan.Node_FAIL,
-				NumCPU:            2,
-				IsMerger:          false,
-				IsShuffle:         test.isShuffle,
-				Mailbox:           mailbox,
+				RightTypes:                           []types.Type{typ},
+				Result:                               []colexec.ResultPos{{Rel: 1, Pos: 0}},
+				AutoIncrementGeneratedResultPos:      -1,
+				AutoIncrementGeneratedValueResultPos: -1,
+				OnDuplicateAction:                    plan.Node_FAIL,
+				NumCPU:                               2,
+				IsMerger:                             false,
+				IsShuffle:                            test.isShuffle,
+				Mailbox:                              mailbox,
 			}
 			arg.ctr.mp = jm
 			arg.ctr.batches = jm.GetBatches()
@@ -366,10 +370,12 @@ func TestDedupPrepareFailureCanRetry(t *testing.T) {
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
 	arg := &DedupJoin{
-		Conditions:        [][]*plan.Expr{{valid}, {valid}},
-		LeftTypes:         []types.Type{typ},
-		UpdateColIdxList:  []int32{0, 0},
-		UpdateColExprList: []*plan.Expr{valid, invalid},
+		Conditions:                           [][]*plan.Expr{{valid}, {valid}},
+		LeftTypes:                            []types.Type{typ},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		UpdateColIdxList:                     []int32{0, 0},
+		UpdateColExprList:                    []*plan.Expr{valid, invalid},
 	}
 	installTestAllocation(t, arg)
 
@@ -587,8 +593,10 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 		proc:   proc,
 		cancel: cancel,
 		arg: &DedupJoin{
-			RightTypes: ts,
-			Conditions: cs,
+			RightTypes:                           ts,
+			Conditions:                           cs,
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -694,10 +702,12 @@ func TestDedupJoinCapture(t *testing.T) {
 			colexec.NewResultPos(1, 0), // build key
 			colexec.NewResultPos(1, 1), // build placeholder (capture target)
 		},
-		OnDuplicateAction:               plan.Node_FAIL,
-		OldColCapturePlaceholderIdxList: []int32{1},
-		OldColCaptureProbeIdxList:       []int32{1},
-		JoinMapTag:                      curTag,
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList:      []int32{1},
+		OldColCaptureProbeIdxList:            []int32{1},
+		JoinMapTag:                           curTag,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
 		},
@@ -797,10 +807,12 @@ func TestDedupJoinCapturePartialMatch(t *testing.T) {
 			colexec.NewResultPos(1, 0),
 			colexec.NewResultPos(1, 1),
 		},
-		OnDuplicateAction:               plan.Node_FAIL,
-		OldColCapturePlaceholderIdxList: []int32{1},
-		OldColCaptureProbeIdxList:       []int32{1},
-		JoinMapTag:                      curTag,
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList:      []int32{1},
+		OldColCaptureProbeIdxList:            []int32{1},
+		JoinMapTag:                           curTag,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
 		},
@@ -892,10 +904,12 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 			colexec.NewResultPos(1, 0),
 			colexec.NewResultPos(1, 1),
 		},
-		OnDuplicateAction:               plan.Node_FAIL,
-		OldColCapturePlaceholderIdxList: []int32{1},
-		OldColCaptureProbeIdxList:       []int32{1},
-		JoinMapTag:                      curTag,
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList:      []int32{1},
+		OldColCaptureProbeIdxList:            []int32{1},
+		JoinMapTag:                           curTag,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
 		},
