@@ -45,7 +45,7 @@ UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"70m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
-UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"0"}
 # A helper may own two independent child process groups. Its trap gives each
 # child a bounded TERM grace period, so the parent must retain the helper long
@@ -76,6 +76,7 @@ CLUSTER_PREBUILD_REPORT=""
 ENGINE_RACE_TEST_BINARY=""
 ENGINE_RACE_JOB_PID=""
 ENGINE_RACE_REPORT=""
+ENGINE_RACE_REPORT_READY=""
 CURRENT_UT_PID=""
 CURRENT_UT_STAGE="initializing"
 CURRENT_UT_LABEL="startup"
@@ -227,6 +228,51 @@ function report_cgroup_memory_usage(){
     fi
 }
 
+function consume_engine_race_report(){
+    if [[ -z "${ENGINE_RACE_REPORT}" ]]; then
+        return 0
+    fi
+
+    # A pending TERM may arrive after the helper has exited but while the
+    # parent is appending its report.  Hold the same single-owner boundary for
+    # both the normal path and the cancellation handler; otherwise the handler
+    # could append the same JSON a second time.
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    append_ut_report "${ENGINE_RACE_REPORT}" "${UT_REPORT}"
+    rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".* \
+        "${ENGINE_RACE_REPORT_READY}"
+    ENGINE_RACE_TEST_BINARY=""
+    ENGINE_RACE_REPORT=""
+    ENGINE_RACE_REPORT_READY=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function consume_plan_race_report(){
+    if [[ -z "${PLAN_RACE_REPORT}" ]]; then
+        return 0
+    fi
+
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    if [[ -s "${PLAN_RACE_REPORT}" ]]; then
+        cat "${PLAN_RACE_REPORT}" >> "${UT_REPORT}"
+    fi
+    rm -f "${PLAN_RACE_REPORT}"
+    PLAN_RACE_REPORT=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
 function handle_ut_termination(){
     trap - TERM
     if (( UT_TERMINATING != 0 )); then
@@ -234,7 +280,7 @@ function handle_ut_termination(){
     fi
     UT_TERMINATING=1
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
-        "current_pid=${CURRENT_UT_PID} engine_pid=${ENGINE_RACE_JOB_PID}"
+        "current_pid=${CURRENT_UT_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
     if [[ -n "${CURRENT_UT_PID}" ]]; then
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
@@ -257,13 +303,7 @@ function handle_ut_termination(){
         wait "${PLAN_RACE_JOB_PID}" 2>/dev/null || true
         PLAN_RACE_JOB_PID=""
     fi
-    if [[ -n "${PLAN_RACE_REPORT}" && -s "${PLAN_RACE_REPORT}" ]]; then
-        cat "${PLAN_RACE_REPORT}" >> "${UT_REPORT}"
-    fi
-    if [[ -n "${PLAN_RACE_REPORT}" ]]; then
-        rm -f "${PLAN_RACE_REPORT}"
-        PLAN_RACE_REPORT=""
-    fi
+    consume_plan_race_report
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         terminate_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" TERM
         wait_for_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
@@ -278,21 +318,10 @@ function handle_ut_termination(){
             "${G_WKSP}/${G_TS}-embedded-prebuild-"*.test
         CLUSTER_PREBUILD_REPORT=""
     fi
-    if [[ -n "${ENGINE_RACE_REPORT}" ]]; then
-        local partial_report
-        for partial_report in "${ENGINE_RACE_REPORT}".*; do
-            if [[ -f "${partial_report}" ]]; then
-                cat "${partial_report}" >> "${UT_REPORT}"
-            fi
-        done
-    fi
+    consume_engine_race_report
     if [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
         rm -f "${ENGINE_RACE_TEST_BINARY}"
         ENGINE_RACE_TEST_BINARY=""
-    fi
-    if [[ -n "${ENGINE_RACE_REPORT}" ]]; then
-        rm -f "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".*
-        ENGINE_RACE_REPORT=""
     fi
     if [[ -n "${PLAN_RACE_TEST_BINARY}" ]]; then
         rm -f "${PLAN_RACE_TEST_BINARY}"
@@ -327,6 +356,7 @@ function run_engine_race_shards(){
     local pid=""
     local metadata_status=0
     local previous_term_trap=""
+    local report_ready="${ENGINE_RACE_REPORT}.ready"
     local -a child_pids=(0)
     local -a shard_patterns
     local -a shard_counts
@@ -359,11 +389,15 @@ function run_engine_race_shards(){
         restore_ut_term_trap "${previous_term_trap}"
         set +m
         checkpoint_ut_event "finish" "engine" "${engine_package}" "${metadata_status}" "phase=discover"
+        if (( metadata_status != 0 )); then
+            return "${metadata_status}"
+        fi
         return 2
     fi
     rm -f "${metadata_file}"
 
     : > "${ENGINE_RACE_REPORT}"
+    rm -f "${report_ready}" "${ENGINE_RACE_REPORT}".*
     set -m
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
@@ -476,9 +510,12 @@ function run_engine_race_shards(){
         checkpoint_ut_event "finish" "engine" "${engine_package} shard $(( shard + 1 ))/${engine_race_shards}" "${wait_status}"
         cat "${shard_reports[shard]}" >> "${ENGINE_RACE_REPORT}"
     done
+    # The marker is written only after every shard has been copied.  The parent
+    # can therefore choose exactly one representation even if TERM arrives
+    # between helper completion and parent report ownership.
+    : > "${report_ready}"
+    rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}".[0-9]*
     restore_ut_term_trap "${previous_term_trap}"
-
-    rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}".*
     ENGINE_RACE_TEST_BINARY=""
     checkpoint_ut_event "finish" "engine" "${engine_package}" "${shard_status}"
     return "${shard_status}"
@@ -871,8 +908,14 @@ function run_tests(){
 
     mark_ut_stage "prepare" "clean go test cache" start
     logger "INF" "Clean go test cache"
-    go clean -testcache
-    mark_ut_stage "prepare" "clean go test cache" finish $?
+    local testcache_status=0
+    go clean -testcache || testcache_status=$?
+    mark_ut_stage "prepare" "clean go test cache" finish "${testcache_status}"
+    if (( testcache_status != 0 )); then
+        logger "ERR" "Failed to clean Go test cache"
+        UT_TEST_STATUS=1
+        return 0
+    fi
 
     local test_scope
     mark_ut_stage "discovery" "resolve UT package scope" start
@@ -916,7 +959,8 @@ function run_tests(){
             -count=1 -timeout=120s ./optools/testdata/mo_cgo_transitive; then
             logger "ERR" "Deterministic CGo test wrapper smoke failed"
             mark_ut_stage "build" "CGo wrapper smoke test" finish 1
-            exit 1
+            UT_TEST_STATUS=1
+            return 0
         fi
         mark_ut_stage "build" "CGo wrapper smoke test" finish 0
     fi
@@ -1127,10 +1171,13 @@ function run_tests(){
             fi
             ENGINE_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-engine-race.test"
             ENGINE_RACE_REPORT="${G_WKSP}/${G_TS}-engine-race-report.out"
+            ENGINE_RACE_REPORT_READY="${ENGINE_RACE_REPORT}.ready"
 
             if (( resource_heavy_parallel > 0 )); then
+                set -m
                 run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
                 ENGINE_RACE_JOB_PID=$!
+                set +m
             else
                 resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
             fi
@@ -1151,8 +1198,10 @@ function run_tests(){
             PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
             PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
             logger "INF" "Start plan race shards concurrently with the heavy stage"
+            set -m
             run_plan_race_shards "${plan_package}" &
             PLAN_RACE_JOB_PID=$!
+            set +m
         elif (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan && should_run_ut_stage heavy; then
             logger "WRN" "Plan overlap requested but disabled: HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL}, engine_shards=${ENGINE_RACE_SHARDS}, shard_engine=${shard_engine}"
         fi
@@ -1170,18 +1219,15 @@ function run_tests(){
                 else
                     # Keep the helper's process-group TERM trap scoped to a
                     # subshell even when a low budget requires sequential waves.
+                    set -m
                     run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
                     ENGINE_RACE_JOB_PID=$!
+                    set +m
                     wait "${ENGINE_RACE_JOB_PID}"
                     engine_status=$?
                     ENGINE_RACE_JOB_PID=""
                 fi
-                if [[ -s "${ENGINE_RACE_REPORT}" ]]; then
-                    cat "${ENGINE_RACE_REPORT}" >> "${UT_REPORT}"
-                fi
-                rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".*
-                ENGINE_RACE_TEST_BINARY=""
-                ENGINE_RACE_REPORT=""
+                consume_engine_race_report
             fi
 
             report_cgroup_memory_usage "Resource-heavy UT"
@@ -1198,18 +1244,17 @@ function run_tests(){
                 # Keep the sequential plan path in its own helper process too.
                 # The parent remains the cancellation/report owner, while the
                 # helper owns metadata, build, list, and shard descendants.
+                set -m
                 run_plan_race_shards "${plan_package}" &
                 PLAN_RACE_JOB_PID=$!
+                set +m
                 wait "${PLAN_RACE_JOB_PID}"
                 plan_status=$?
                 PLAN_RACE_JOB_PID=""
             fi
-            if [[ -s "${PLAN_RACE_REPORT}" ]]; then
-                cat "${PLAN_RACE_REPORT}" >> "${UT_REPORT}"
-            fi
-            rm -f "${PLAN_RACE_TEST_BINARY}" "${PLAN_RACE_REPORT}"
+            consume_plan_race_report
+            rm -f "${PLAN_RACE_TEST_BINARY}"
             PLAN_RACE_TEST_BINARY=""
-            PLAN_RACE_REPORT=""
         fi
 
         if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then

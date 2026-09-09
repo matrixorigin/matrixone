@@ -525,8 +525,10 @@ UT_SHARD ?= all
 # enough time after TERM for checkpoint flushing and artifact upload.
 UT_HARD_TIMEOUT ?= 70m
 # Build embedded test packages ahead of their execution while the issues
-# fixture is active; set to 0 for a direct A/B comparison.
-UT_PREBUILD_EMBEDDED ?= 1
+# fixture is active. This is an explicit A/B knob: compile-only work still
+# consumes CPU, memory, and linker capacity, so it remains opt-in until a
+# same-resource measurement proves a critical-path gain.
+UT_PREBUILD_EMBEDDED ?= 0
 # Plan overlap is an explicit A/B knob; it consumes one heavy process slot and
 # remains off until the runner's resource budget proves a gain.
 UT_OVERLAP_PLAN ?= 0

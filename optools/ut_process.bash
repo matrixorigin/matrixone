@@ -67,6 +67,48 @@ function terminate_ut_process_groups(){
     done
 }
 
+# append_ut_report copies a helper-owned report into the authoritative report
+# after the helper has stopped.  A helper may be interrupted while it is
+# merging shard files, so the completion marker is the ownership boundary:
+#
+#   marker exists  -> the complete base report is authoritative
+#   marker missing -> consume shard files (or an unmarked base as a last resort)
+#
+# Never concatenate both forms; doing so duplicates every event already copied
+# before cancellation and makes go-ut-analysis report false failures.  The
+# caller must serialize this operation with its TERM trap because appending to a
+# shared file is not intrinsically idempotent.
+function append_ut_report(){
+    if (( $# != 2 )); then
+        echo "Usage: append_ut_report REPORT DESTINATION" >&2
+        return 2
+    fi
+
+    local report=$1
+    local destination=$2
+    local partial=""
+    local partial_found=0
+
+    if [[ -f "${report}.ready" ]]; then
+        if [[ -f "${report}" ]]; then
+            cat "${report}" >> "${destination}"
+        fi
+        return 0
+    fi
+
+    for partial in "${report}".*; do
+        if [[ -f "${partial}" ]]; then
+            cat "${partial}" >> "${destination}"
+            partial_found=1
+        fi
+    done
+    if (( partial_found == 0 )) && [[ -f "${report}" ]]; then
+        # This covers a helper that failed before it could create the marker
+        # and left only a diagnostic base file.
+        cat "${report}" >> "${destination}"
+    fi
+}
+
 function restore_ut_term_trap(){
     local saved_trap=${1:-}
     if [[ -n "${saved_trap}" ]]; then

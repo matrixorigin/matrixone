@@ -65,13 +65,22 @@ def format_duration(seconds: float) -> str:
     return f"{seconds * 1e6:.2f}us"
 
 
-def setup_records(report_path: Path) -> Iterable[Tuple[Dict[str, str], float]]:
-    """Yield valid setup records from a possibly truncated Go test report."""
+def setup_records(
+    report_path: Path, parse_errors: Optional[List[int]] = None
+) -> Iterable[Tuple[Dict[str, str], float]]:
+    """Yield valid setup records from a possibly truncated Go test report.
+
+    Go's JSON stream can end in the middle of an event when the runner is
+    cancelled.  Keep accepting the valid prefix, but expose the number of
+    malformed lines so a summary cannot look complete by accident.
+    """
     with report_path.open(encoding="utf-8") as report:
         for line in report:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                if parse_errors is not None:
+                    parse_errors[0] += 1
                 continue
             if not isinstance(event, dict):
                 continue
@@ -143,7 +152,10 @@ def summarize_embedded_diagnostics(
     # A cluster may be started more than once in one test process.  Keep the
     # current lease state per cluster key and reset it at every successful
     # admission acquire; a historical release must not hide a later lease.
-    admission_state: Dict[Tuple[str, str], bool] = {}
+    # `unknown` means that a truncated/legacy report had a hold or release
+    # record without a matching acquire event.
+    admission_state: Dict[Tuple[str, str], str] = {}
+    release_seen = set()
     waiters: List[Tuple[float, str]] = []
     for fields, seconds in embedded:
         phase_totals[fields["phase"]].append(seconds)
@@ -157,7 +169,7 @@ def summarize_embedded_diagnostics(
             and fields["phase"] == "admission-acquire"
             and fields.get("status") != "error"
         ):
-            admission_state[cluster_key] = False
+            admission_state[cluster_key] = "active"
             wait_seconds = duration_seconds(fields.get("wait", ""))
             if wait_seconds is not None:
                 package = fields.get("package", "?")
@@ -174,12 +186,18 @@ def summarize_embedded_diagnostics(
                 if cluster_key not in admission_state:
                     # Keep truncated/legacy reports useful even when the
                     # acquire record is missing from the captured output.
-                    admission_state[cluster_key] = False
+                    admission_state[cluster_key] = "unknown"
             hold_seconds = duration_seconds(hold)
             if hold_seconds is not None:
                 holds.append(hold_seconds)
         if cluster_key is not None and fields.get("admission_released") == "true":
-            admission_state[cluster_key] = True
+            release_seen.add(cluster_key)
+            if cluster_key in admission_state:
+                admission_state[cluster_key] = "released"
+            else:
+                # A release without the matching acquire may be the prefix or
+                # suffix of a truncated report; do not call it complete.
+                admission_state[cluster_key] = "unknown"
 
     def phase_stats(phase: str) -> Optional[str]:
         values = phase_totals.get(phase)
@@ -211,11 +229,16 @@ def summarize_embedded_diagnostics(
         details.append(
             "admission_hold_observed_max=" + format_duration(max(holds))
         )
-        details.append(
-            "admission_unreleased_observed="
-            f"{sum(not released for released in admission_state.values())}"
-        )
-        details.append("admission_release_evidence=partial")
+    if admission_state:
+        unreleased = sum(state != "released" for state in admission_state.values())
+        details.append(f"admission_unreleased_observed={unreleased}")
+        if all(state == "released" for state in admission_state.values()):
+            evidence = "complete"
+        elif release_seen:
+            evidence = "partial"
+        else:
+            evidence = "none"
+        details.append(f"admission_release_evidence={evidence}")
     if waiters:
         slow_waiters = sorted(waiters, reverse=True)[:3]
         details.append(
@@ -237,7 +260,13 @@ def main(argv: List[str]) -> int:
         print(f"UT JSON report does not exist: {report_path}", file=sys.stderr)
         return 2
 
-    records = list(setup_records(report_path))
+    parse_errors = [0]
+    records = list(setup_records(report_path, parse_errors))
+    if parse_errors[0]:
+        print(
+            f"[ut_setup] ignored malformed JSON lines={parse_errors[0]} "
+            "(report may be truncated by cancellation)"
+        )
     totals = summarize_records(records)
     if not totals:
         return 0

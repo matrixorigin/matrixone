@@ -137,12 +137,13 @@ ready_one="$test_dir/ready-one"
 ready_two="$test_dir/ready-two"
 pid_one="$test_dir/pid-one"
 pid_two="$test_dir/pid-two"
-mkfifo "$ready_one" "$ready_two"
 first=0
 second=0
 cleanup() {
     for pid in "$first" "$second"; do
-        if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then kill -KILL "$pid" 2>/dev/null || true; fi
+        if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+            kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+        fi
     done
     for pid_file in "$pid_one" "$pid_two"; do
         [[ -f "$pid_file" ]] || continue
@@ -177,8 +178,15 @@ first=$!
 bash -c 'trap "" TERM; sleep 30 & child=$!; printf "%s %s\\n" "$BASHPID" "$child" > "$2"; printf ready > "$1"; wait "$child"' bash "$ready_two" "$pid_two" &
 second=$!
 set +m
-IFS= read -r token < "$ready_one"
-IFS= read -r token < "$ready_two"
+wait_ready() {
+    for attempt in {1..200}; do
+        [[ -s "$1" ]] && return 0
+        sleep 0.05
+    done
+    return 1
+}
+wait_ready "$ready_one" || { echo "first process did not become ready" >&2; exit 1; }
+wait_ready "$ready_two" || { echo "second process did not become ready" >&2; exit 1; }
 terminate_ut_process_groups 2 "$first" "$second"
 wait "$first" 2>/dev/null || true
 wait "$second" 2>/dev/null || true
@@ -214,6 +222,43 @@ done
 	}
 }
 
+func TestAppendUTReportUsesOneAuthoritativeRepresentation(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+report="$test_dir/engine.out"
+destination="$test_dir/all.out"
+printf 'complete-1\ncomplete-2\n' > "$report"
+printf 'stale-shard\n' > "$report.1"
+: > "$report.ready"
+append_ut_report "$report" "$destination"
+if [[ "$(cat "$destination")" != $'complete-1\ncomplete-2' ]]; then
+    echo "ready report was not selected" >&2
+    exit 1
+fi
+: > "$destination"
+rm -f "$report.ready"
+printf 'partial-one\n' > "$report.1"
+printf 'partial-two\n' > "$report.2"
+append_ut_report "$report" "$destination"
+if [[ "$(cat "$destination")" != $'partial-one\npartial-two' ]]; then
+    echo "partial reports were not selected" >&2
+    exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("report ownership harness failed: %v\n%s", err, output)
+	}
+}
+
 func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
 	if err != nil {
@@ -245,6 +290,9 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	}
 
 	text := runSummary(reportPath, report)
+	if !strings.Contains(text, "ignored malformed JSON lines=1 (report may be truncated by cancellation)") {
+		t.Fatalf("truncated report warning missing: %s", text)
+	}
 	if !strings.Contains(text, "fixture=shared-cluster phase=cluster-start count=2 total=2.50s max=2.00s") {
 		t.Fatalf("missing cumulative setup summary: %s", text)
 	}
@@ -278,8 +326,8 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=3s hold=3s admission_released=true\n"}`,
 	}, "\n")
 	text = runSummary(filepath.Join(t.TempDir(), "released.json"), released)
-	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=0 admission_release_evidence=partial") {
-		t.Fatalf("released reacquired lease was not accounted for: %s", text)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=0 admission_release_evidence=complete") {
+		t.Fatalf("reacquired lease was not accounted for: %s", text)
 	}
 }
 
