@@ -75,7 +75,8 @@ TERM 路径停止新的 command，抓取当前 checkpoint 和 active test，向�
 
 ## 6. 验收标准
 
-- 第一阶段在 TERM、包失败、报告截断、parser error 和子进程不退出时都能产生有界摘要，且保留原始失败状态；helper 已完成但父进程尚未接管报告时，必须按完成标记或 shard 备份选择唯一报告来源。
+- 第一阶段在 TERM、包失败、报告截断、parser error 和子进程不退出时都能产生有界摘要，且保留原始失败状态；helper 已完成但父进程尚未接管报告时，必须按完成标记或 shard 备份选择唯一报告来源。报告转移先写同目录临时文件并原子发布，复制被 TERM/KILL 打断时不得删除源或发布前缀。
+- admission 的 `complete` 只允许由当前 generation 的 acquire -> release 闭合得到；只有 hold/release 或旧 generation 的事件必须保持 `unknown`/`partial`，不能升级为完整证据。
 - 每个迁移、删除或缩小的测试都有独特 oracle 映射；无新增固定 sleep、盲目 retry 或 skip。
 - 被合并 suite 的 fixture start/close 次数与兼容矩阵预期一致，dirty fixture 不会被复用。
 - 同配置 A/B 能同时给出 wall time、资源成本、排队和失败率；不把累计 wait 当成 wall-time 收益。

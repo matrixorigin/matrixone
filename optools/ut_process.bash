@@ -77,7 +77,11 @@ function terminate_ut_process_groups(){
 # Never concatenate both forms; doing so duplicates every event already copied
 # before cancellation and makes go-ut-analysis report false failures.  The
 # caller must serialize this operation with its TERM trap because appending to a
-# shared file is not intrinsically idempotent.
+# shared file is not intrinsically idempotent.  Build the complete destination
+# in a same-directory temporary file and publish it with rename.  A TERM/KILL
+# during any source copy therefore leaves both the old destination and the
+# source representation intact; a direct `cat >> destination` would leave an
+# indistinguishable prefix that a retry could duplicate.
 function append_ut_report(){
     if (( $# != 2 )); then
         echo "Usage: append_ut_report REPORT DESTINATION" >&2
@@ -87,25 +91,57 @@ function append_ut_report(){
     local report=$1
     local destination=$2
     local partial=""
+    local staging=""
     local partial_found=0
 
+    # Select one authoritative representation.  A ready marker is meaningful
+    # only when its complete base file is still present; silently treating a
+    # missing base as success would allow the caller to delete the marker and
+    # lose the only diagnostic source.
+    local -a sources=()
     if [[ -f "${report}.ready" ]]; then
-        if [[ -f "${report}" ]]; then
-            cat "${report}" >> "${destination}"
+        if [[ ! -f "${report}" ]]; then
+            echo "UT report marker exists without its base report: ${report}" >&2
+            return 1
         fi
+        sources=("${report}")
+    else
+        for partial in "${report}".*; do
+            [[ -f "${partial}" ]] || continue
+            [[ "${partial}" == "${report}.ready" ]] && continue
+            # A hard kill can leave a previous transactional staging file.  It
+            # is not a report shard and must never be consumed as one.
+            [[ "${partial}" == "${report}.tmp."* ]] && continue
+            sources+=("${partial}")
+            partial_found=1
+        done
+        if (( partial_found == 0 )) && [[ -f "${report}" ]]; then
+            # This covers a helper that failed before it could create the
+            # marker and left only a diagnostic base file.
+            sources=("${report}")
+        fi
+    fi
+
+    if (( ${#sources[@]} == 0 )); then
         return 0
     fi
 
-    for partial in "${report}".*; do
-        if [[ -f "${partial}" ]]; then
-            cat "${partial}" >> "${destination}"
-            partial_found=1
+    staging=$(mktemp "${destination}.tmp.XXXXXX") || return 1
+    if [[ -f "${destination}" ]] && ! cat "${destination}" > "${staging}"; then
+        rm -f "${staging}"
+        return 1
+    fi
+    for partial in "${sources[@]}"; do
+        if ! cat "${partial}" >> "${staging}"; then
+            # Do not touch any source or publish a prefix.  The caller can
+            # retain the source for cancellation diagnostics or retry safely.
+            rm -f "${staging}"
+            return 1
         fi
     done
-    if (( partial_found == 0 )) && [[ -f "${report}" ]]; then
-        # This covers a helper that failed before it could create the marker
-        # and left only a diagnostic base file.
-        cat "${report}" >> "${destination}"
+    if ! mv -f "${staging}" "${destination}"; then
+        rm -f "${staging}"
+        return 1
     fi
 }
 

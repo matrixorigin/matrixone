@@ -183,20 +183,24 @@ def summarize_embedded_diagnostics(
         hold = fields.get("hold")
         if hold is not None:
             if cluster_key is not None:
-                if cluster_key not in admission_state:
+                if admission_state.get(cluster_key) != "active":
                     # Keep truncated/legacy reports useful even when the
-                    # acquire record is missing from the captured output.
+                    # acquire record is missing from the captured output.  A
+                    # hold after a previous released generation is also
+                    # unmatched; do not let it inherit that old generation's
+                    # terminal state.
                     admission_state[cluster_key] = "unknown"
             hold_seconds = duration_seconds(hold)
             if hold_seconds is not None:
                 holds.append(hold_seconds)
         if cluster_key is not None and fields.get("admission_released") == "true":
             release_seen.add(cluster_key)
-            if cluster_key in admission_state:
+            if admission_state.get(cluster_key) == "active":
                 admission_state[cluster_key] = "released"
             else:
                 # A release without the matching acquire may be the prefix or
-                # suffix of a truncated report; do not call it complete.
+                # suffix of a truncated report; do not call it complete.  This
+                # also covers a release after an already-closed generation.
                 admission_state[cluster_key] = "unknown"
 
     def phase_stats(phase: str) -> Optional[str]:

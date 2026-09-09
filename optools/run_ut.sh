@@ -239,9 +239,22 @@ function consume_engine_race_report(){
     # could append the same JSON a second time.
     local saved_term_trap
     local term_pending=0
+    local append_status=0
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
+    # append_ut_report publishes an atomic destination only after every source
+    # copy succeeds.  If TERM interrupts a copy, keep the source and marker so
+    # cancellation diagnostics (or a safe retry) cannot lose the report.
     append_ut_report "${ENGINE_RACE_REPORT}" "${UT_REPORT}"
+    append_status=$?
+    if (( append_status != 0 )); then
+        logger "ERR" "failed to consume engine race report; preserving ${ENGINE_RACE_REPORT}"
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+            handle_ut_termination
+        fi
+        return "${append_status}"
+    fi
     rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".* \
         "${ENGINE_RACE_REPORT_READY}"
     ENGINE_RACE_TEST_BINARY=""
@@ -260,10 +273,21 @@ function consume_plan_race_report(){
 
     local saved_term_trap
     local term_pending=0
+    local append_status=0
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
-    if [[ -s "${PLAN_RACE_REPORT}" ]]; then
-        cat "${PLAN_RACE_REPORT}" >> "${UT_REPORT}"
+    # Keep plan and engine report transfer on the same transactional path.  A
+    # direct append could publish a prefix before a group TERM and then delete
+    # the only source, making a retry duplicate or lose events.
+    append_ut_report "${PLAN_RACE_REPORT}" "${UT_REPORT}"
+    append_status=$?
+    if (( append_status != 0 )); then
+        logger "ERR" "failed to consume plan race report; preserving ${PLAN_RACE_REPORT}"
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+            handle_ut_termination
+        fi
+        return "${append_status}"
     fi
     rm -f "${PLAN_RACE_REPORT}"
     PLAN_RACE_REPORT=""
@@ -989,6 +1013,7 @@ function run_tests(){
         local resource_heavy_status=0
         local engine_status=0
         local plan_status=0
+        local report_status=0
         local resource_heavy_parallel=1
         local engine_race_parallel=1
         local shard_engine=1
@@ -1228,6 +1253,13 @@ function run_tests(){
                     ENGINE_RACE_JOB_PID=""
                 fi
                 consume_engine_race_report
+                report_status=$?
+                if (( report_status != 0 )); then
+                    # A report transfer failure is a failed UT stage, even if
+                    # all test processes themselves exited successfully.  The
+                    # source is intentionally retained for diagnostics.
+                    engine_status=1
+                fi
             fi
 
             report_cgroup_memory_usage "Resource-heavy UT"
@@ -1253,6 +1285,10 @@ function run_tests(){
                 PLAN_RACE_JOB_PID=""
             fi
             consume_plan_race_report
+            report_status=$?
+            if (( report_status != 0 )); then
+                plan_status=1
+            fi
             rm -f "${PLAN_RACE_TEST_BINARY}"
             PLAN_RACE_TEST_BINARY=""
         fi

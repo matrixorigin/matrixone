@@ -259,6 +259,84 @@ fi
 	}
 }
 
+func TestAppendUTReportPreservesSourcesWhenCopyIsInterrupted(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The injected cat emits one line and delivers TERM to the shell that owns
+	// append_ut_report.  The helper must leave the old destination and complete
+	// source untouched, then a retry must append exactly once.  Run both source
+	// representations used by the consumers: the engine's ready-marked base
+	// report and the plan helper's unmarked base report.
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+
+interrupt_once() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    interrupt_source="$report"
+    function cat() {
+        if [[ "$1" == "$interrupt_source" ]]; then
+            command head -n 1 "$1"
+            kill -TERM "$$"
+            return 143
+        fi
+        command cat "$@"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status == 0 || term_pending == 0 )); then
+        echo "interrupted transfer was not detected" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing' ]]; then
+        echo "destination changed after interrupted transfer" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$report")" != $'first\nsecond' ]]; then
+        echo "source changed after interrupted transfer" >&2
+        exit 1
+    fi
+    if [[ "$ready" == 1 && ! -f "$report.ready" ]]; then
+        echo "ready marker was lost after interrupted transfer" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "temporary destination survived interrupted transfer" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f cat
+    append_ut_report "$report" "$destination"
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "retry did not append the source exactly once" >&2
+        exit 1
+    fi
+    rm -f "$report" "$report.ready"
+}
+
+interrupt_once "$test_dir/engine.out" "$test_dir/engine-all.out" 1
+interrupt_once "$test_dir/plan.out" "$test_dir/plan-all.out" 0
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("interrupted report transfer harness failed: %v\n%s", err, output)
+	}
+}
+
 func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
 	if err != nil {
@@ -328,6 +406,27 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	text = runSummary(filepath.Join(t.TempDir(), "released.json"), released)
 	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=0 admission_release_evidence=complete") {
 		t.Fatalf("reacquired lease was not accounted for: %s", text)
+	}
+
+	// A release record can survive while its acquire record is truncated.  The
+	// real release event carries hold metadata, so this must remain unknown/
+	// partial rather than being promoted to a completed lease.
+	releaseOnly := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestReleaseOnly","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=8 pid=21 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "release-only.json"), releaseOnly)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_hold_observed_max=2.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
+		t.Fatalf("release-only record was promoted to complete: %s", text)
+	}
+
+	// A hold followed by a release is equally insufficient when the matching
+	// acquire event is absent from the captured prefix/suffix.
+	holdThenRelease := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestHoldThenRelease","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=9 pid=22 phase=service-start duration=3s status=ready hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=9 pid=22 phase=admission-release duration=1ms status=ready hold=3s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "hold-then-release.json"), holdThenRelease)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 service_start(total=3.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
+		t.Fatalf("hold-then-release record was promoted to complete: %s", text)
 	}
 }
 
