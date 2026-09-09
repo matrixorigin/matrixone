@@ -5813,7 +5813,7 @@ func makeSetDecimalToBits(s string) uint64 {
 	if fracDigits > 0 {
 		v.Quo(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(fracDigits)), nil))
 	}
-	return v.Uint64()
+	return uint64(v.Int64())
 }
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
