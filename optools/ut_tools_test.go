@@ -330,6 +330,151 @@ interrupt_once() {
 
 interrupt_once "$test_dir/engine.out" "$test_dir/engine-all.out" 1
 interrupt_once "$test_dir/plan.out" "$test_dir/plan-all.out" 0
+
+publish_after_rename() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    function mv() {
+        command mv "$@"
+        local status=$?
+        if (( status == 0 )); then
+            # Model GNU timeout delivering group TERM after rename(2) has
+            # committed but before the external mv reports its status.
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status != 0 || term_pending == 0 )); then
+        echo "post-rename interruption was not treated as committed" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "post-rename destination was not published exactly once" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "post-rename temporary state survived" >&2
+        exit 1
+    fi
+
+    # append_ut_report does not own source cleanup; the consumer removes the
+    # source only after this committed return.
+    trap - TERM
+    unset -f mv
+    rm -f "$report" "$report.ready"
+}
+
+publish_after_rename "$test_dir/engine-after-rename.out" "$test_dir/engine-after-rename-all.out" 1
+publish_after_rename "$test_dir/plan-after-rename.out" "$test_dir/plan-after-rename-all.out" 0
+
+publish_with_cleanup_interruption() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    local before_delete=${4:-0}
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    rm_interrupted=0
+    trap 'term_pending=1' TERM
+    function rm() {
+        if [[ "$*" == *".expected"* ]] &&
+            (( before_delete == 1 && rm_interrupted == 0 )); then
+            rm_interrupted=1
+            # Model TERM before unlink.  The retry must perform the cleanup
+            # after the pending trap has been recorded.
+            kill -TERM "$$"
+            return 143
+        fi
+        command rm "$@"
+        local status=$?
+        if (( status == 0 && before_delete == 0 && rm_interrupted == 0 )) &&
+            [[ "$*" == *".expected"* ]]; then
+            # The publication has already committed.  Model TERM after the
+            # expected hard link is removed but before rm reports status.
+            rm_interrupted=1
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status != 0 || term_pending == 0 )); then
+        echo "cleanup interruption changed the committed status" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "cleanup interruption duplicated or lost the report" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "cleanup interruption left transaction state" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f rm
+    rm -f "$report" "$report.ready"
+}
+
+publish_with_cleanup_interruption "$test_dir/engine-after-cleanup.out" "$test_dir/engine-after-cleanup-all.out" 1
+publish_with_cleanup_interruption "$test_dir/plan-after-cleanup.out" "$test_dir/plan-after-cleanup-all.out" 0
+publish_with_cleanup_interruption "$test_dir/engine-before-cleanup.out" "$test_dir/engine-before-cleanup-all.out" 1 1
+publish_with_cleanup_interruption "$test_dir/plan-before-cleanup.out" "$test_dir/plan-before-cleanup-all.out" 0 1
+
+link_after_creation_interruption() {
+    local report=$1
+    local destination=$2
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    function ln() {
+        command ln "$@"
+        local status=$?
+        if (( status == 0 )); then
+            # The hard link exists, but publication has not started.  The
+            # failed transfer must remove both temporary names.
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status == 0 || term_pending == 0 )); then
+        echo "link interruption was not reported as a failed transfer" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing' ]]; then
+        echo "link interruption changed the destination" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "link interruption left transaction state" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f ln
+    rm -f "$report"
+}
+
+link_after_creation_interruption "$test_dir/engine-after-link.out" "$test_dir/engine-after-link-all.out"
 `
 	cmd := exec.Command("bash", "-c", script, "bash", processPath)
 	if output, err := cmd.CombinedOutput(); err != nil {

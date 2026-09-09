@@ -67,6 +67,24 @@ function terminate_ut_process_groups(){
     done
 }
 
+function remove_ut_report_file(){
+    if (( $# != 1 )); then
+        echo "Usage: remove_ut_report_file PATH" >&2
+        return 2
+    fi
+
+    local path=$1
+    local attempts=0
+    # A group TERM may interrupt rm before it unlinks the file.  Retry once
+    # after the signal has been consumed; if rm was interrupted after unlink,
+    # the existence check avoids a needless second invocation.
+    while [[ -e "${path}" ]] && (( attempts < 2 )); do
+        rm -f "${path}" 2>/dev/null || true
+        attempts=$((attempts + 1))
+    done
+    return 0
+}
+
 # append_ut_report copies a helper-owned report into the authoritative report
 # after the helper has stopped.  A helper may be interrupted while it is
 # merging shard files, so the completion marker is the ownership boundary:
@@ -92,6 +110,7 @@ function append_ut_report(){
     local destination=$2
     local partial=""
     local staging=""
+    local expected=""
     local partial_found=0
 
     # Select one authoritative representation.  A ready marker is meaningful
@@ -139,10 +158,37 @@ function append_ut_report(){
             return 1
         fi
     done
-    if ! mv -f "${staging}" "${destination}"; then
-        rm -f "${staging}"
+
+    # Keep a hard link to the exact payload while publishing.  If TERM reaches
+    # the external mv after rename(2) succeeds but before mv can report status,
+    # its nonzero status is ambiguous.  The link lets us verify that the
+    # destination contains this transaction's complete payload and treat that
+    # outcome as committed; retrying the source in that case would duplicate
+    # the report.  A hard link is same-filesystem and avoids copying the whole
+    # report a second time.
+    expected="${staging}.expected"
+    if ! ln "${staging}" "${expected}"; then
+        remove_ut_report_file "${staging}"
+        remove_ut_report_file "${expected}"
         return 1
     fi
+    if ! mv -f "${staging}" "${destination}"; then
+        if [[ ! -e "${staging}" && -f "${destination}" ]] &&
+            cmp -s "${expected}" "${destination}"; then
+            # Publication is committed.  Cleanup is best effort and must not
+            # turn a committed transfer into an ambiguous retry.
+            remove_ut_report_file "${expected}"
+            return 0
+        fi
+        remove_ut_report_file "${staging}"
+        remove_ut_report_file "${expected}"
+        return 1
+    fi
+    # Once rename has returned success, cleanup status cannot roll back the
+    # publication.  Keep the transaction result authoritative even if TERM
+    # interrupts rm after it has removed the hard link.
+    remove_ut_report_file "${expected}"
+    return 0
 }
 
 function restore_ut_term_trap(){
