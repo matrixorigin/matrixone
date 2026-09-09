@@ -57,6 +57,39 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "result length"):
             worker._output_array(pa.array([7], type=pa.int64()), descriptor, 3)
 
+    def test_statement_context_is_whitelisted_and_frozen(self):
+        context = worker._statement_context(
+            {
+                "statement_id": "fence-only",
+                "statement_timestamp_utc": "1704067200123456",
+                "session_timezone_kind": "FIXED_OFFSET",
+                "session_timezone_offset_minutes": "+510",
+                "sql_mode": '["ANSI", "STRICT"]',
+                "current_database": "app",
+                "current_user": "alice",
+                "current_role": "writer",
+                "connection_collation": "utf8mb4_bin",
+            }
+        )
+        self.assertIsInstance(context, worker.StatementContext)
+        self.assertEqual(510, context.session_timezone.offset_minutes)
+        self.assertEqual(("ANSI", "STRICT"), context.sql_mode)
+        self.assertEqual("alice", context.current_user)
+        self.assertIsNone(worker._statement_context({"statement_id": "fence-only"}))
+        with self.assertRaisesRegex(ValueError, "unsupported statement context"):
+            worker._statement_context({"unexpected": "value"})
+        with self.assertRaisesRegex(ValueError, "not canonical"):
+            worker._statement_context(
+                {
+                    "statement_timestamp_utc": "1704067200000000",
+                    "session_timezone_kind": "FIXED_OFFSET",
+                    "session_timezone_offset_minutes": "0",
+                    "sql_mode": '["STRICT", "ANSI"]',
+                    "current_user": "alice",
+                    "connection_collation": "utf8mb4_bin",
+                }
+            )
+
     def test_terminal_admission_does_not_evict_live_tombstones(self):
         old_records = worker.MAX_TERMINAL_RECORDS
         old_bytes = worker.MAX_TERMINAL_BYTES
