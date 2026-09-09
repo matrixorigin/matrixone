@@ -1,6 +1,6 @@
 # Chunk-native Top-K for fused INCLUDE reads
 
-- Status: approved in conversation before implementation.
+- Status: implemented; approved in conversation before implementation.
 - Implementation branch: `perf/fused-chunk-topk`; one implementation PR.
 - Base: main `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`.
 - Related issue: #24097; follows merged #28434 and #28442.
@@ -41,6 +41,9 @@ rejects memory-cache admission. A distinct codec permits scoped sharing without
 polluting the decoded-column cache key. Drop obsolete raw read buffers only after
 FileService cache updates complete, releasing allocator ownership as well as
 clearing references.
+
+FileService decorators that hide the concrete scoped result use an owned
+encoded snapshot; they do not need to implement an ObjectIO-private marker.
 
 `fileservice.DecodeFromBytes` accepts one physical entry and matching immutable
 input. It does cache lookup, conversion, bounded sharing, and memory-cache
