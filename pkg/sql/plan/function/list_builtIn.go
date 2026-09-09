@@ -7911,7 +7911,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: BIN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    binTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8012,6 +8012,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BinFloat[float64]
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BinString
 				},
 			},
 		},

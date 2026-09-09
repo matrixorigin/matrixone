@@ -587,6 +587,40 @@ func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
 	return uintToBinary(uint64(int64(v))), nil
 }
 
+// BinString applies BIN's MySQL string contract: convert the leading base-10
+// integer prefix and format its uint64 bit pattern in binary. The empty string
+// is NULL, while a non-empty string without a usable prefix is zero.
+func BinString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	nParam := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		nStr, null := nParam.GetStrValue(i)
+		if null || len(nStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, unsignedVal, _, err := parseBaseIntegerPrefix(nStr, 10)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(unsignedVal)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Bin[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(v T) (string, error) {
 		val, err := binInteger[T](v, proc)
