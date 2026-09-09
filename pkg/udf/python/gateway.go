@@ -110,6 +110,7 @@ type openPayload struct {
 	Return         TypeDescriptor    `json:"return"`
 	MaxBatchBytes  int64             `json:"max_batch_bytes"`
 	MaxBatchRows   int64             `json:"max_batch_rows"`
+	HandlerTimeout float64           `json:"handler_timeout_seconds"`
 }
 
 func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
@@ -145,7 +146,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if err != nil {
 		return err
 	}
-	openBody, err := json.Marshal(openPayload{Handler: invocation.Handler, Source: invocation.Source, Mode: invocation.Mode, NullPolicy: invocation.NullPolicy, ABIContract: invocation.ABIContract, AdapterVersion: invocation.AdapterVersion, SDKVersion: invocation.SDKVersion, Context: cloneMap(invocation.Context), Args: args, Return: returnDescriptor, MaxBatchBytes: g.cfg.MaxBatchBytes, MaxBatchRows: g.cfg.MaxBatchRows})
+	openBody, err := json.Marshal(openPayload{Handler: invocation.Handler, Source: invocation.Source, Mode: invocation.Mode, NullPolicy: invocation.NullPolicy, ABIContract: invocation.ABIContract, AdapterVersion: invocation.AdapterVersion, SDKVersion: invocation.SDKVersion, Context: cloneMap(invocation.Context), Args: args, Return: returnDescriptor, MaxBatchBytes: g.cfg.MaxBatchBytes, MaxBatchRows: g.cfg.MaxBatchRows, HandlerTimeout: g.cfg.RequestTimeout.Seconds()})
 	if err != nil {
 		return fmt.Errorf("python udf: encode open payload: %w", err)
 	}

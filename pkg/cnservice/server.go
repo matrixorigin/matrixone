@@ -242,7 +242,7 @@ func NewService(
 	// init UdfService
 	var udfServices []udf.Runtime
 	// add python client to handle python udf
-	if srv.cfg.PythonUdfClient.ServerAddress != "" {
+	if srv.cfg.PythonUdfClient.Enabled {
 		var pc *python.Gateway
 		pc, err = python.NewGateway(srv.cfg.PythonUdfClient)
 		if err != nil {

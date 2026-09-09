@@ -16236,6 +16236,10 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType:    pythonUdfRetType,
+				// A Python routine is user code.  It may observe invocation
+				// context or maintain process-local state, so planning must never
+				// execute it once and broadcast the result to all rows.
+				volatile: true,
 				newOp: func() executeLogicOfOverload {
 					return runPythonUdf
 				},
