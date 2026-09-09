@@ -33,7 +33,8 @@ select bin(-0.00000000000000000000000001);
 bin(-0.00000000000000000000000001)
 0
 select bin("你好");
-invalid argument cast to int, bad value 你好
+bin("你好")
+0
 create table t1(a int);
 insert into t1 values();
 select bin(a) from t1;

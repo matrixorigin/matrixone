@@ -749,6 +749,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchCreateDatabase:
 
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)
 		authStats, authErr := authenticateDataBranchStatement(execCtx.reqCtx, ses, st)

@@ -709,7 +709,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
-%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type ctas_conflict_opt
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type ctas_conflict_opt ctas_conflict_required
 %type <str> iceberg_namespace_value iceberg_option_key iceberg_option_value iceberg_ref_name
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
@@ -721,7 +721,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens perform_select table_stmt
+%type <select> select_stmt ctas_select_stmt select_no_parens perform_select table_stmt
 %type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
@@ -3514,6 +3514,7 @@ prepareable_stmt:
     }
 |   perform_stmt
 |   analyze_stmt
+|   branch_stmt
 |   select_stmt
     {
         $$ = $1
@@ -6731,6 +6732,21 @@ select_stmt:
         }
     }
 
+// CTAS and CREATE VIEW accept VALUES as a query expression without requiring
+// an extra pair of parentheses. Keep this entry point scoped to statements
+// that accept a SELECT source; top-level VALUES continues to use
+// ValuesStatement, and parenthesized query expressions keep their existing
+// AST shape.
+ctas_select_stmt:
+    select_stmt
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list order_by_opt query_limit_opt
+    {
+        $$ = tree.NewSelect(&tree.ValuesClause{Rows: $2, RowWord: true}, $3, $4)
+    }
+
 select_no_parens:
     simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
@@ -8574,7 +8590,7 @@ func_handler:
     }
 
 create_view_stmt:
-    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace bool
         var Name = $5
@@ -8593,7 +8609,7 @@ create_view_stmt:
             IfNotExists,
         )
     }
-|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace = $2
         var Name = $5
@@ -10375,6 +10391,10 @@ ctas_conflict_opt:
     | IGNORE { $$ = "ignore" }
     | REPLACE { $$ = "replace" }
 
+ctas_conflict_required:
+    IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -10462,7 +10482,7 @@ create_table_stmt:
         t.ClusterByOption = $11
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($6); intoErr != "" {
             yylex.Error(intoErr)
@@ -10476,7 +10496,7 @@ create_table_stmt:
         t.AsSource = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_select_stmt
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" {
             yylex.Error(intoErr)
@@ -10491,36 +10511,25 @@ create_table_stmt:
         t.AsSource = $9
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_opt AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_required ctas_select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" {
-            yylex.Error(intoErr)
-            goto ret1
-        }
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.CTASConflict = $6
-        t.AsSource = $8
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $7; $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_opt AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_required ctas_select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" {
-            yylex.Error(intoErr)
-            goto ret1
-        }
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.Defs = $7
-        t.CTASConflict = $9
-        t.AsSource = $11
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $10; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {

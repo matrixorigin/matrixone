@@ -27,6 +27,10 @@ func TestCTASConflictModifiersParseAndFormat(t *testing.T) {
 	cases := []struct{ sql, modifier string }{
 		{"CREATE TABLE t IGNORE AS SELECT 1 AS a", "ignore"},
 		{"CREATE TABLE t REPLACE AS SELECT 1 AS a", "replace"},
+		{"CREATE TABLE t IGNORE SELECT 1 AS a", "ignore"},
+		{"CREATE TABLE t REPLACE SELECT 1 AS a", "replace"},
+		{"CREATE TABLE t (a INT) IGNORE SELECT 1", "ignore"},
+		{"CREATE TABLE t (a INT) REPLACE SELECT 1", "replace"},
 		{"CREATE TABLE t (a INT) IGNORE AS SELECT 1", "ignore"},
 		{"CREATE TABLE t (a INT) REPLACE AS SELECT 1", "replace"},
 		{"CREATE TABLE t AS SELECT 1 AS a", ""},

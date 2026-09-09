@@ -145,14 +145,23 @@ SELECT RANDOM_BYTES(NULL) AS null_input;
 null_input
 null
 SELECT RANDOM_BYTES(0) AS zero_length;
-zero_length
-null
+length value is out of range in 'random_bytes'
 SELECT RANDOM_BYTES(-1) AS negative_length;
-negative_length
-null
+length value is out of range in 'random_bytes'
 SELECT RANDOM_BYTES(1025) AS too_large;
-too_large
-null
+length value is out of range in 'random_bytes'
+DROP TABLE IF EXISTS random_bytes_lengths_28225;
+CREATE TABLE random_bytes_lengths_28225(id INT PRIMARY KEY, len_val BIGINT);
+INSERT INTO random_bytes_lengths_28225 VALUES (1, 1), (2, 1024), (3, 0);
+SELECT id, len_val, LENGTH(RANDOM_BYTES(len_val)) AS random_length
+FROM random_bytes_lengths_28225 ORDER BY id;
+length value is out of range in 'random_bytes'
+DROP TABLE random_bytes_lengths_28225;
+PREPARE random_bytes_28225 FROM 'SELECT LENGTH(RANDOM_BYTES(?)) AS random_length';
+SET @random_bytes_len_28225 = 1025;
+EXECUTE random_bytes_28225 USING @random_bytes_len_28225;
+length value is out of range in 'random_bytes'
+DEALLOCATE PREPARE random_bytes_28225;
 SELECT RANDOM_BYTES(16) != RANDOM_BYTES(16) AS different_values;
 different_values
 1
