@@ -47,3 +47,29 @@ func validateUniqueKeyCodecAdmission(ctx context.Context, tableDef *planpb.Table
 	}
 	return nil
 }
+
+// validateUniqueKeyCodecReadAdmission is the read-side companion to the DML
+// fence above.  A v2 relation cannot be opened by a planner that does not yet
+// have the versioned point-probe, scan, and fallback consumers wired through
+// the same activation generation.  Rejecting the read here prevents a legacy
+// reader from silently applying bytewise predicates to a relation whose
+// physical identity is collation-aware.
+func validateUniqueKeyCodecReadAdmission(ctx context.Context, tableDef *planpb.TableDef) error {
+	if tableDef == nil || tableDef.UniqueKeyCodecVersion == nil {
+		return nil
+	}
+	version := tableDef.UniqueKeyCodecVersion
+	metadata := collationkey.RelationMetadata{
+		Version:            version.Value,
+		RegistryVersion:    version.RegistryVersion,
+		RegistryDigest:     version.RegistryDigest,
+		MaxEncodedKeyBytes: version.MaxEncodedKeyBytes,
+	}
+	if err := metadata.Validate(); err != nil {
+		return moerr.NewInternalErrorf(ctx, "invalid unique-key codec metadata: %v", err)
+	}
+	if metadata.IsV2() {
+		return moerr.NewUnsupportedDML(ctx, "collation-aware unique-key reads are not enabled")
+	}
+	return nil
+}

@@ -50,6 +50,50 @@ func TestValidateUniqueKeyCodecAdmission(t *testing.T) {
 	require.ErrorContains(t, err, "collation-aware unique-key writes are not enabled")
 }
 
+func TestValidateUniqueKeyCodecReadAdmission(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"nil table", "missing metadata"} {
+		t.Run(name, func(t *testing.T) {
+			var tableDef *planpb.TableDef
+			if name == "missing metadata" {
+				tableDef = &planpb.TableDef{}
+			}
+			require.NoError(t, validateUniqueKeyCodecReadAdmission(ctx, tableDef))
+		})
+	}
+
+	legacy := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{Value: uint32(collationkey.LegacyVersion)}}
+	if err := validateUniqueKeyCodecReadAdmission(ctx, legacy); err != nil {
+		t.Fatalf("legacy read admission: %v", err)
+	}
+	bytewise := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{Value: uint32(collationkey.BytewiseVersion)}}
+	if err := validateUniqueKeyCodecReadAdmission(ctx, bytewise); err != nil {
+		t.Fatalf("bytewise read admission: %v", err)
+	}
+
+	v2 := collationkey.NewCollationAwareMetadata()
+	v2Def := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
+		Value:              v2.Version,
+		RegistryVersion:    v2.RegistryVersion,
+		RegistryDigest:     v2.RegistryDigest,
+		MaxEncodedKeyBytes: v2.MaxEncodedKeyBytes,
+	}}
+	err := validateUniqueKeyCodecReadAdmission(ctx, v2Def)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+		t.Fatalf("v2 read admission error = %v", err)
+	}
+	bad := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
+		Value:              v2Def.UniqueKeyCodecVersion.Value,
+		RegistryVersion:    v2Def.UniqueKeyCodecVersion.RegistryVersion,
+		RegistryDigest:     append([]byte(nil), v2Def.UniqueKeyCodecVersion.RegistryDigest...),
+		MaxEncodedKeyBytes: v2Def.UniqueKeyCodecVersion.MaxEncodedKeyBytes,
+	}}
+	bad.UniqueKeyCodecVersion.RegistryDigest[0]++
+	if err := validateUniqueKeyCodecReadAdmission(ctx, bad); err == nil || !moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		t.Fatalf("bad read metadata error = %v", err)
+	}
+}
+
 func TestValidateUniqueKeyCodecAdmissionFailsClosed(t *testing.T) {
 	metadata := collationkey.NewCollationAwareMetadata()
 	metadata.RegistryDigest[0] ^= 0xff
