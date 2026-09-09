@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -523,6 +524,119 @@ func TestMismatchedRangeEndRepairsLiveCounterpart(t *testing.T) {
 			require.Same(t, sharedHolders, endLock.holders)
 			require.Same(t, sharedWaiters, endLock.waiters)
 			require.True(t, endLock.isLockRangeEnd())
+		},
+	)
+}
+
+// staleSnapshotReadTrapQueue represents a waiter queue after its backing
+// object has been returned to the pool. A stale batch snapshot must never
+// call size on it. init/put clear the trap so a later legitimate pool reuse
+// does not poison unrelated tests.
+type staleSnapshotReadTrapQueue struct {
+	waiterQueue
+	returned bool
+}
+
+func (q *staleSnapshotReadTrapQueue) init(logger *log.MOLogger) {
+	q.waiterQueue.init(logger)
+	q.returned = false
+}
+
+func (q *staleSnapshotReadTrapQueue) put(ws ...*waiter) {
+	q.returned = false
+	q.waiterQueue.put(ws...)
+}
+
+func (q *staleSnapshotReadTrapQueue) reset() {
+	q.waiterQueue.reset()
+	q.returned = true
+}
+
+func (q *staleSnapshotReadTrapQueue) size() int {
+	if q.returned {
+		panic("stale batch snapshot read after lock state was returned to pool")
+	}
+	return q.waiterQueue.size()
+}
+
+func TestDeleteEmptyLockSkipsStaleBatchSnapshotAfterPairCleanup(t *testing.T) {
+	table := uint64(12)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			w := acquireWaiter(
+				pb.WaitTxn{TxnID: []byte("stale-batch-waiter")},
+				"stale batch snapshot test",
+				lt.logger,
+			)
+			defer w.close("stale batch snapshot test", lt.logger)
+
+			// closeRangeWaiterLocked collects both values before it starts
+			// deleting them. Use distinct backing states and queues to force the
+			// mismatched-pair cleanup path that returns both states to the pools.
+			startWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			startWaiters.init(lt.logger)
+			startWaiters.put(w)
+			endWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			endWaiters.init(lt.logger)
+			endWaiters.put(w)
+			start := Lock{
+				createAt: time.Now(),
+				value:    flagLockRangeStart | flagLockExclusiveMode,
+				holders:  newHolders(),
+				waiters:  startWaiters,
+			}
+			end := Lock{
+				createAt: time.Now(),
+				value:    flagLockRangeEnd | flagLockExclusiveMode,
+				holders:  newHolders(),
+				waiters:  endWaiters,
+			}
+
+			lt.mu.Lock()
+			defer lt.mu.Unlock()
+			lt.mu.store.Add([]byte{1}, start)
+			lt.mu.store.Add([]byte{5}, end)
+			second, secondOK := lt.mu.store.Get([]byte{5})
+			require.True(t, secondOK)
+
+			// The missing last-wait key forces the real batch path. The first
+			// endpoint removes both store entries and releases both queues. The
+			// second snapshot therefore points at an already returned queue; its
+			// size method traps the old implementation before it can inspect the
+			// pooled state.
+			c := &lockContext{
+				txn:              &activeTxn{txnKey: "stale-batch-test"},
+				rangeLastWaitKey: []byte{9},
+			}
+			require.NotPanics(t, func() {
+				lt.closeRangeWaiterLocked(c, w, false)
+			})
+			require.Zero(t, lt.mu.store.Len())
+			require.True(t, startWaiters.returned)
+			require.True(t, endWaiters.returned)
+
+			// Also cover replacement rather than deletion: an old snapshot must
+			// not remove a new lock installed at the same key.
+			replacement := Lock{
+				createAt: time.Now(),
+				value:    flagLockRangeEnd | flagLockExclusiveMode,
+				holders:  newHolders(),
+				waiters:  newWaiterQueue(),
+			}
+			lt.mu.store.Add([]byte{5}, replacement)
+			require.NotPanics(t, func() {
+				lt.deleteEmptyLockLocked([]byte{5}, second)
+			})
+			current, currentOK := lt.mu.store.Get([]byte{5})
+
+			require.True(t, currentOK)
+			require.Same(t, replacement.holders, current.holders)
+			require.Same(t, replacement.waiters, current.waiters)
+			_, deleted := lt.mu.store.Delete([]byte{5})
+			require.True(t, deleted)
+			replacement.release()
 		},
 	)
 }

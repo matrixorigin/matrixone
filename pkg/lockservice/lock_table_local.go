@@ -775,6 +775,19 @@ func (l *localLockTable) closeRangeWaiterLocked(
 // backed by the same holders and waiter queue, so both entries must disappear
 // before the shared state can be released.
 func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
+	// closeRangeWaiterLocked first collects Lock values and then processes them
+	// after the scan.  A previous endpoint may already have removed this key
+	// (and returned its holders/waiters to the pools), or a new lock may have
+	// replaced it.  Re-read the store before touching any backing state so an
+	// old snapshot can never inspect or release a pooled object owned elsewhere.
+	current, ok := l.mu.store.Get(key)
+	if !ok || current.value != lock.value ||
+		current.createAt != lock.createAt ||
+		!sameRangeLockState(current, lock) {
+		return
+	}
+	lock = current
+
 	if !lock.isEmpty() {
 		return
 	}
