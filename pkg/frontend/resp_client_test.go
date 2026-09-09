@@ -49,7 +49,7 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
 
-func TestPublishLastInsertIDExprAfterSuccess(t *testing.T) {
+func TestApplyLastInsertIDExprBeforeResponse(t *testing.T) {
 	ses := &Session{}
 	ses.SetLastInsertID(7)
 	proc := &process.Process{Base: &process.BaseProcess{
@@ -58,16 +58,29 @@ func TestPublishLastInsertIDExprAfterSuccess(t *testing.T) {
 	proc.SetLastInsertID(7)
 	proc.SetLastInsertIDExpr(0)
 	execCtx := &ExecCtx{proc: proc}
+	res := &Response{lastInsertId: 99}
 
-	publishLastInsertIDExpr(ses, execCtx)
+	applyLastInsertIDExprResponse(ses, execCtx, res, false)
 	require.Equal(t, uint64(0), ses.GetLastInsertID())
 	require.Equal(t, uint64(0), proc.GetLastInsertID())
+	require.Equal(t, uint64(0), res.lastInsertId)
 
 	proc.ResetLastInsertIDExpr()
 	proc.SetLastInsertIDExpr(42)
-	publishLastInsertIDExpr(ses, execCtx)
+	res.lastInsertId = 99
+	applyLastInsertIDExprResponse(ses, execCtx, res, true)
+	require.Equal(t, uint64(7), ses.GetLastInsertID(), "generated id keeps precedence")
+	require.Equal(t, uint64(99), res.lastInsertId)
+	applyLastInsertIDExprResponse(ses, execCtx, res, false)
 	require.Equal(t, uint64(42), ses.GetLastInsertID())
 	require.Equal(t, uint64(42), proc.GetLastInsertID())
+	require.Equal(t, uint64(42), res.lastInsertId)
+
+	proc.ResetLastInsertIDExpr()
+	proc.SetLastInsertIDExprNull()
+	applyLastInsertIDExprResponse(ses, execCtx, res, false)
+	require.Equal(t, uint64(0), ses.GetLastInsertID())
+	require.Equal(t, uint64(0), res.lastInsertId)
 }
 
 func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
@@ -101,10 +114,34 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
 
 	proc.SetStatementLastInsertID(11)
+	proc.SetLastInsertIDExpr(42)
 	require.NoError(t, resper.respStatus(ses, execCtx))
 	require.Len(t, writer.responses, 2)
 	require.Equal(t, uint64(11), writer.responses[1].lastInsertId)
 	require.Equal(t, uint64(11), ses.GetLastInsertID())
+}
+
+func TestRespStatusUpdateUsesExprAndODKUNoOpCanPublishZero(t *testing.T) {
+	ses := &Session{seqLastValue: new(string), feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}}
+	ses.SetLastInsertID(51)
+	proc := &process.Process{Base: &process.BaseProcess{LastInsertID: new(uint64), StatementLastInsertID: new(uint64)}}
+	proc.SetLastInsertID(51)
+	proc.SetLastInsertIDExpr(0)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}, responses: make([]*Response, 0, 2)}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.Update{}, proc: proc, runResult: &util.RunResult{AffectRows: 1}}
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Zero(t, ses.GetLastInsertID())
+
+	// An INSERT ... ON DUPLICATE KEY UPDATE no-op has no generated id. The
+	// expression result is therefore the only statement-local candidate.
+	execCtx.stmt = &tree.Insert{}
+	proc.SetStatementLastInsertID(0)
+	proc.SetLastInsertIDExprNull()
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Zero(t, writer.responses[1].lastInsertId)
+	require.Zero(t, ses.GetLastInsertID())
 }
 
 func TestSessionLastFoundRows(t *testing.T) {

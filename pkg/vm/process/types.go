@@ -459,6 +459,11 @@ type BaseProcess struct {
 	// frontend publishes it only after the statement succeeds.
 	lastInsertIDExpr      uint64
 	lastInsertIDExprValid bool
+	// lastInsertIDExprNull distinguishes a successful NULL expression from an
+	// expression that did not execute.  The wire OK packet has only an unsigned
+	// numeric insert-id field, but LAST_INSERT_ID(expr) still needs to preserve
+	// NULL as a successful session-state update.
+	lastInsertIDExprNull bool
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -842,6 +847,7 @@ func (proc *Process) ResetLastInsertIDExpr() {
 	proc.Base.statementInsertIDMu.Lock()
 	proc.Base.lastInsertIDExpr = 0
 	proc.Base.lastInsertIDExprValid = false
+	proc.Base.lastInsertIDExprNull = false
 	proc.Base.statementInsertIDMu.Unlock()
 }
 
@@ -855,11 +861,27 @@ func (proc *Process) SetLastInsertIDExpr(num uint64) {
 	proc.Base.statementInsertIDMu.Lock()
 	proc.Base.lastInsertIDExpr = num
 	proc.Base.lastInsertIDExprValid = true
+	proc.Base.lastInsertIDExprNull = false
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// SetLastInsertIDExprNull records a successful NULL evaluation.  NULL is a
+// real candidate, so publication must be able to clear a previous numeric
+// session value rather than treating the call as absent.
+func (proc *Process) SetLastInsertIDExprNull() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = 0
+	proc.Base.lastInsertIDExprValid = true
+	proc.Base.lastInsertIDExprNull = true
 	proc.Base.statementInsertIDMu.Unlock()
 }
 
 // GetLastInsertIDExpr returns the tentative statement-local value and whether
-// LAST_INSERT_ID(expr) successfully evaluated a non-NULL value.
+// LAST_INSERT_ID(expr) successfully evaluated. Use GetLastInsertIDExprState
+// when the distinction between numeric zero and NULL matters.
 func (proc *Process) GetLastInsertIDExpr() (uint64, bool) {
 	if proc == nil || proc.Base == nil {
 		return 0, false
@@ -867,6 +889,17 @@ func (proc *Process) GetLastInsertIDExpr() (uint64, bool) {
 	proc.Base.statementInsertIDMu.Lock()
 	defer proc.Base.statementInsertIDMu.Unlock()
 	return proc.Base.lastInsertIDExpr, proc.Base.lastInsertIDExprValid
+}
+
+// GetLastInsertIDExprState returns value, successful-call, and NULL state for
+// the current statement generation.
+func (proc *Process) GetLastInsertIDExprState() (uint64, bool, bool) {
+	if proc == nil || proc.Base == nil {
+		return 0, false, false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.lastInsertIDExpr, proc.Base.lastInsertIDExprValid, proc.Base.lastInsertIDExprNull
 }
 
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated

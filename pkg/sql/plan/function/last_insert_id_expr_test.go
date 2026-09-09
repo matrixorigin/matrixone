@@ -39,7 +39,7 @@ func TestLastInsertIDExprResolution(t *testing.T) {
 
 	for _, typ := range []types.T{types.T_float64, types.T_decimal64, types.T_varchar} {
 		_, err = GetFunctionByName(context.Background(), "last_insert_id", []types.Type{typ.ToType()})
-		require.Error(t, err, "conversion from %s must remain explicit", typ)
+		require.NoError(t, err, "conversion from %s follows CAST AS UNSIGNED", typ)
 	}
 }
 
@@ -52,20 +52,22 @@ func TestLastInsertIDExprExecutionDoesNotPublishUntilSuccess(t *testing.T) {
 	defer input.Free(proc.Mp())
 	out, err := RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{input}, 3)
 	require.NoError(t, err)
-	defer out.Free(proc.Mp())
 	require.Equal(t, []uint64{0, 42, 9}, vector.MustFixedColNoTypeCheck[uint64](out))
 	require.Equal(t, uint64(7), proc.GetLastInsertID())
 	value, valid := proc.GetLastInsertIDExpr()
 	require.True(t, valid)
 	require.Equal(t, uint64(9), value)
+	out.Free(proc.Mp())
 
 	proc.ResetLastInsertIDExpr()
 	negative := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{-1})
 	defer negative.Free(proc.Mp())
-	_, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{negative}, 1)
-	require.Error(t, err)
+	out, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{negative}, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(^uint64(0)), vector.MustFixedColNoTypeCheck[uint64](out)[0])
+	out.Free(proc.Mp())
 	_, valid = proc.GetLastInsertIDExpr()
-	require.False(t, valid, "a failed expression must leave no candidate")
+	require.True(t, valid)
 	require.Equal(t, uint64(7), proc.GetLastInsertID())
 }
 
@@ -79,8 +81,9 @@ func TestLastInsertIDExprNullAndMaxUint64(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, out.IsNull(0))
 	require.Equal(t, uint64(13), proc.GetLastInsertID())
-	_, valid := proc.GetLastInsertIDExpr()
-	require.False(t, valid)
+	_, valid, isNull := proc.GetLastInsertIDExprState()
+	require.True(t, valid)
+	require.True(t, isNull)
 	out.Free(proc.Mp())
 	nullInput.Free(proc.Mp())
 
@@ -123,8 +126,40 @@ func TestLastInsertIDExprPreparedIntegerUsesConversionMetadata(t *testing.T) {
 	negative.SetType(types.T_any.ToType())
 	negative.SetPrepareParamKind(vector.PrepareParamInteger)
 	defer negative.Free(proc.Mp())
-	_, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{negative}, 1)
-	require.Error(t, err)
+	out, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{negative}, 1)
+	require.NoError(t, err)
+	require.Equal(t, ^uint64(0), vector.MustFixedColNoTypeCheck[uint64](out)[0])
+	out.Free(proc.Mp())
 	_, valid = proc.GetLastInsertIDExpr()
-	require.False(t, valid)
+	require.True(t, valid)
+}
+
+func TestLastInsertIDExprUsesNumericAndStringConversions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	floatInput := testutil.NewVector(1, types.T_float64.ToType(), proc.Mp(), false, []float64{2.5})
+	out, err := RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{floatInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), vector.MustFixedColNoTypeCheck[uint64](out)[0])
+	out.Free(proc.Mp())
+	floatInput.Free(proc.Mp())
+
+	stringInput := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(stringInput, []byte("-1"), false, proc.Mp()))
+	out, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{stringInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, ^uint64(0), vector.MustFixedColNoTypeCheck[uint64](out)[0])
+	out.Free(proc.Mp())
+	stringInput.Free(proc.Mp())
+
+	decimal, err := types.Decimal64FromFloat64(2.5, 18, 1)
+	require.NoError(t, err)
+	decimalInput, err := vector.NewConstFixed(types.New(types.T_decimal64, 18, 1), decimal, 1, proc.Mp())
+	require.NoError(t, err)
+	out, err = RunFunctionDirectly(proc, EncodeOverloadID(LAST_INSERT_ID, LastInsertIDExprOverload), []*vector.Vector{decimalInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), vector.MustFixedColNoTypeCheck[uint64](out)[0])
+	out.Free(proc.Mp())
+	decimalInput.Free(proc.Mp())
 }

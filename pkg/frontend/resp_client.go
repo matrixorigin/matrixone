@@ -118,20 +118,61 @@ func setRowCount(ses *Session, proc *process.Process, v int64) {
 	}
 }
 
-// publishLastInsertIDExpr transfers a successful LAST_INSERT_ID(expr)
-// candidate from the statement's Process to the owning Session. Generated
-// auto-increment state remains owned by StatementLastInsertID and is handled
-// by the normal OK response path.
-func publishLastInsertIDExpr(ses *Session, execCtx *ExecCtx) {
-	if ses == nil || execCtx == nil || execCtx.proc == nil {
+// applyLastInsertIDExprResponse resolves the two statement-local sources of
+// an OK packet before it is written. A generated auto-increment id has packet
+// precedence; otherwise a successful LAST_INSERT_ID(expr), including NULL or
+// zero, updates the session and supplies the protocol value (NULL is encoded
+// as the protocol's numeric zero because OK packets have no NULL insert-id
+// representation).
+func applyLastInsertIDExprResponse(ses *Session, execCtx *ExecCtx, res *Response, generated bool) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil || res == nil || generated {
 		return
 	}
-	value, valid := execCtx.proc.GetLastInsertIDExpr()
+	value, valid, isNull := execCtx.proc.GetLastInsertIDExprState()
 	if !valid {
+		return
+	}
+	if isNull {
+		value = 0
+	}
+	res.lastInsertId = value
+	publishLastInsertIDExprState(ses, execCtx, value)
+}
+
+func publishLastInsertIDExprState(ses *Session, execCtx *ExecCtx, value uint64) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil {
 		return
 	}
 	ses.SetLastInsertID(value)
 	execCtx.proc.SetLastInsertID(value)
+}
+
+func publishLastInsertIDExprBeforeResponse(ses *Session, execCtx *ExecCtx) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	value, valid, isNull := execCtx.proc.GetLastInsertIDExprState()
+	if !valid {
+		return
+	}
+	if isNull {
+		value = 0
+	}
+	publishLastInsertIDExprState(ses, execCtx, value)
+}
+
+func statementHasGeneratedLastInsertID(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.proc == nil {
+		return false
+	}
+	switch execCtx.stmt.(type) {
+	case *tree.Insert, *tree.Replace:
+		return execCtx.proc.GetStatementLastInsertID() != 0
+	case *tree.MultiInsert:
+		return multiInsertHasUniqueAutoIncrTarget(execCtx) && execCtx.proc.GetStatementLastInsertID() != 0
+	default:
+		return false
+	}
 }
 
 // response the client

@@ -51,6 +51,18 @@ func TestLastInsertIDPlacementOnlyTracksExpressionOverload(t *testing.T) {
 	}}}
 	require.False(t, ContainsSequenceFunction(read))
 	require.True(t, ContainsSequenceFunction(expr))
+	require.True(t, ContainsLastInsertIDExpr(expr))
+	require.False(t, ContainsLastInsertIDExpr(read))
+}
+
+func TestQueryContainsLastInsertIDExpr(t *testing.T) {
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, function.LastInsertIDExprOverload)},
+	}}}
+	qry := &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}
+	require.True(t, QueryContainsLastInsertIDExpr(qry))
+	qry.Nodes[0].ProjectList = []*plan.Expr{sequenceExprForTest(function.NEXTVAL)}
+	require.False(t, QueryContainsLastInsertIDExpr(qry))
 }
 
 func TestQueryContainsSequenceFunctionVisitsSupplementalExpressions(t *testing.T) {

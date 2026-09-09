@@ -4910,16 +4910,17 @@ func executeStmtWithResponse(ses *Session,
 	// following statement (same proc for multi-statement COM_QUERY, or the next
 	// COM_QUERY via the session) reads the correct value.
 	recordLastAffectedRows(ses, execCtx)
+	// Result-set responses have no later OK-status arbitration point. Publish a
+	// successful expression state before their metadata/rows reach the client;
+	// status statements publish it in respStatus after generated-id arbitration.
+	if execCtx.stmt.StmtKind().RespType() != tree.RESP_STATUS && !statementHasGeneratedLastInsertID(execCtx) {
+		publishLastInsertIDExprBeforeResponse(ses, execCtx)
+	}
 
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
 		return err
 	}
-	// LAST_INSERT_ID(expr) is statement-local until execution has completed
-	// successfully. Publish it after the response path so an auto-increment
-	// generated-key packet can remain independent while the expression's
-	// session override wins for the following statement.
-	publishLastInsertIDExpr(ses, execCtx)
 	recordLastFoundRows(ses, execCtx)
 
 	return

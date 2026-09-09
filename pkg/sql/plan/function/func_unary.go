@@ -9188,11 +9188,10 @@ func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 // plan placement checks. Keep the zero-argument read at overload 0.
 const LastInsertIDExprOverload int32 = 1
 
-// lastInsertIDTypeMatch keeps LAST_INSERT_ID(expr) deliberately narrow until
-// its conversion contract is explicit.  Exact integer-like values are
-// accepted, including an unresolved NULL/prepared parameter (T_any); floats,
-// decimals, and strings are rejected instead of silently changing precision
-// or wrapping a negative value into uint64.
+// lastInsertIDTypeMatch follows the existing explicit numeric conversion
+// contract used by CAST(... AS UNSIGNED): integer, float, decimal, and string
+// expressions all have a deterministic uint64 result. T_any carries the
+// binary-prepared conversion kind at execution time.
 func lastInsertIDTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 0 {
 		return fixedTypeMatch(overloads, inputs)
@@ -9206,7 +9205,18 @@ func lastInsertIDTypeMatch(overloads []overload, inputs []types.Type) checkResul
 		oid == types.T_bit,
 		oid == types.T_enum,
 		oid == types.T_year,
-		oid.IsInteger():
+		oid.IsInteger(),
+		oid == types.T_float32,
+		oid == types.T_float64,
+		oid == types.T_decimal64,
+		oid == types.T_decimal128,
+		oid == types.T_decimal256,
+		oid == types.T_char,
+		oid == types.T_varchar,
+		oid == types.T_text,
+		oid == types.T_binary,
+		oid == types.T_varbinary,
+		oid == types.T_blob:
 		return newCheckResultWithSuccess(1)
 	default:
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -9214,25 +9224,21 @@ func lastInsertIDTypeMatch(overloads []overload, inputs []types.Type) checkResul
 }
 
 // LastInsertIDExpr evaluates the one-argument form and records only a
-// statement-local candidate.  The frontend publishes that candidate after
-// the whole statement succeeds, so an execution error cannot update the
-// session-visible LAST_INSERT_ID() value.
+// statement-local candidate. The frontend publishes that candidate before the
+// successful packet is written, so an execution error cannot update session
+// state and a generated id can retain protocol precedence.
 func LastInsertIDExpr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(ivecs) != 1 {
 		return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", len(ivecs))
 	}
 	input := ivecs[0]
 	rs := vector.MustFunctionResult[uint64](result)
-
-	// T_any is also the transport type for a prepared value whose source
-	// conversion kind is carried in vector metadata.  Decode only the exact
-	// integer/boolean domains here; floats, decimals, and ordinary strings stay
-	// rejected until their conversion contract is specified.
 	if input.GetType().Oid == types.T_any {
 		if input.IsConstNull() {
 			for i := 0; i < length; i++ {
 				rs.AppendMustNull()
 			}
+			proc.SetLastInsertIDExprNull()
 			return nil
 		}
 		return lastInsertIDExprPrepared(input, rs, proc, length, selectList)
@@ -9268,40 +9274,51 @@ func LastInsertIDExpr(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		return lastInsertIDExprUnsigned(input, rs, proc, length, selectList, func(v types.Enum) uint64 { return uint64(v) })
 	case types.T_year:
 		return lastInsertIDExprSigned(input, rs, proc, length, selectList, func(v types.MoYear) int64 { return int64(v) })
+	case types.T_float32:
+		return lastInsertIDExprFloat(input, rs, proc, length, selectList, func(v float32) float64 { return float64(v) })
+	case types.T_float64:
+		return lastInsertIDExprFloat(input, rs, proc, length, selectList, func(v float64) float64 { return v })
+	case types.T_decimal64:
+		return lastInsertIDExprDecimal(input, rs, proc, length, selectList, func(v types.Decimal64) string { return decimal64RoundedIntegerString(v, input.GetType().Scale) })
+	case types.T_decimal128:
+		return lastInsertIDExprDecimal(input, rs, proc, length, selectList, func(v types.Decimal128) string { return decimal128RoundedIntegerString(v, input.GetType().Scale) })
+	case types.T_decimal256:
+		return lastInsertIDExprDecimal(input, rs, proc, length, selectList, func(v types.Decimal256) string { return decimal256RoundedIntegerString(v, input.GetType().Scale) })
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		return lastInsertIDExprString(input, rs, proc, length, selectList)
 	default:
 		return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", input.GetType().Oid)
 	}
 }
 
-func lastInsertIDExprPrepared(
-	input *vector.Vector,
-	rs *vector.FunctionResult[uint64],
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
+func lastInsertIDExprPrepared(input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p := vector.GenerateFunctionStrParameter(input)
 	var last uint64
-	valid := false
+	valid, isNull := false, false
 	for i := 0; i < length; i++ {
 		if selectList != nil && selectList.Contains(uint64(i)) {
 			rs.AppendMustNull()
 			continue
 		}
-		raw, isNull := p.GetStrValue(uint64(i))
-		if isNull {
+		raw, null := p.GetStrValue(uint64(i))
+		if null {
 			rs.AppendMustNull()
+			valid, isNull = true, true
 			continue
 		}
-		var (
-			value uint64
-			err   error
-		)
+		var value uint64
+		var err error
 		switch input.GetPrepareParamKindAt(i) {
 		case vector.PrepareParamInteger:
 			value, err = parseLastInsertIDPreparedInteger(proc, raw)
 		case vector.PrepareParamBoolean:
 			value, err = parseLastInsertIDPreparedBoolean(proc, raw)
+		case vector.PrepareParamFloat:
+			value, err = parseLastInsertIDPreparedFloat(proc, raw)
+		case vector.PrepareParamDecimal:
+			value, err = parseLastInsertIDPreparedDecimal(proc, raw)
+		case vector.PrepareParamNone:
+			value, err = ParsePreparedStringToUint64(string(raw))
 		default:
 			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", input.GetPrepareParamKindAt(i))
 		}
@@ -9309,23 +9326,44 @@ func lastInsertIDExprPrepared(
 			return err
 		}
 		last = value
-		valid = true
+		valid, isNull = true, false
 		rs.AppendMustValue(last)
 	}
-	if valid {
-		proc.SetLastInsertIDExpr(last)
-	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
 	return nil
 }
 
-func parseLastInsertIDPreparedInteger(proc *process.Process, raw []byte) (uint64, error) {
-	text := strings.TrimSpace(string(raw))
-	if strings.HasPrefix(text, "-") {
-		return 0, moerr.NewOutOfRangef(proc.Ctx, "BIGINT UNSIGNED", "value %s", text)
+func publishLastInsertIDExprCandidate(proc *process.Process, value uint64, valid, isNull bool) {
+	if !valid {
+		return
 	}
-	value, err := strconv.ParseUint(text, 10, 64)
+	if isNull {
+		proc.SetLastInsertIDExprNull()
+	} else {
+		proc.SetLastInsertIDExpr(value)
+	}
+}
+
+func parseLastInsertIDPreparedInteger(proc *process.Process, raw []byte) (uint64, error) {
+	value, err := ParsePreparedStringToUint64(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return 0, moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", text)
+		return 0, moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
+	}
+	return value, nil
+}
+
+func parseLastInsertIDPreparedFloat(proc *process.Process, raw []byte) (uint64, error) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+	if err != nil {
+		return 0, moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
+	}
+	return lastInsertIDFloatValue(proc, value)
+}
+
+func parseLastInsertIDPreparedDecimal(proc *process.Process, raw []byte) (uint64, error) {
+	value, err := lastInsertIDDecimalString(string(raw))
+	if err != nil {
+		return 0, moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
 	}
 	return value, nil
 }
@@ -9341,70 +9379,161 @@ func parseLastInsertIDPreparedBoolean(proc *process.Process, raw []byte) (uint64
 	}
 }
 
-func lastInsertIDExprSigned[T types.Ints | types.MoYear](
-	input *vector.Vector,
-	rs *vector.FunctionResult[uint64],
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-	value func(T) int64,
-) error {
+func lastInsertIDExprSigned[T types.Ints | types.MoYear](input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList, value func(T) int64) error {
 	p := vector.GenerateFunctionFixedTypeParameter[T](input)
 	var last uint64
-	valid := false
+	valid, isNull := false, false
 	for i := 0; i < length; i++ {
 		if selectList != nil && selectList.Contains(uint64(i)) {
 			rs.AppendMustNull()
 			continue
 		}
-		v, isNull := p.GetValue(uint64(i))
-		if isNull {
+		v, null := p.GetValue(uint64(i))
+		if null {
 			rs.AppendMustNull()
+			valid, isNull = true, true
 			continue
 		}
-		signed := value(v)
-		if signed < 0 {
-			return moerr.NewOutOfRangef(proc.Ctx, "BIGINT UNSIGNED", "value %d", signed)
-		}
-		last = uint64(signed)
-		valid = true
+		last = uint64(value(v)) // same two's-complement conversion as CAST(... AS UNSIGNED)
+		valid, isNull = true, false
 		rs.AppendMustValue(last)
 	}
-	if valid {
-		proc.SetLastInsertIDExpr(last)
-	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
 	return nil
 }
 
-func lastInsertIDExprUnsigned[T types.UInts | bool | types.Enum](
-	input *vector.Vector,
-	rs *vector.FunctionResult[uint64],
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-	value func(T) uint64,
-) error {
+func lastInsertIDExprUnsigned[T types.UInts | bool | types.Enum](input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList, value func(T) uint64) error {
 	p := vector.GenerateFunctionFixedTypeParameter[T](input)
 	var last uint64
-	valid := false
+	valid, isNull := false, false
 	for i := 0; i < length; i++ {
 		if selectList != nil && selectList.Contains(uint64(i)) {
 			rs.AppendMustNull()
 			continue
 		}
-		v, isNull := p.GetValue(uint64(i))
-		if isNull {
+		v, null := p.GetValue(uint64(i))
+		if null {
 			rs.AppendMustNull()
+			valid, isNull = true, true
 			continue
 		}
 		last = value(v)
-		valid = true
+		valid, isNull = true, false
 		rs.AppendMustValue(last)
 	}
-	if valid {
-		proc.SetLastInsertIDExpr(last)
-	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
 	return nil
+}
+
+func lastInsertIDExprFloat[T constraints.Float](input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList, value func(T) float64) error {
+	p := vector.GenerateFunctionFixedTypeParameter[T](input)
+	var last uint64
+	valid, isNull := false, false
+	for i := 0; i < length; i++ {
+		if selectList != nil && selectList.Contains(uint64(i)) {
+			rs.AppendMustNull()
+			continue
+		}
+		v, null := p.GetValue(uint64(i))
+		if null {
+			rs.AppendMustNull()
+			valid, isNull = true, true
+			continue
+		}
+		converted, err := lastInsertIDFloatValue(proc, value(v))
+		if err != nil {
+			return err
+		}
+		last = converted
+		valid, isNull = true, false
+		rs.AppendMustValue(last)
+	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
+	return nil
+}
+
+func lastInsertIDFloatValue(_ *process.Process, value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) || rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
+		return 0, moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	if rounded < 0 {
+		return uint64(int64(rounded)), nil
+	}
+	return uint64(rounded), nil
+}
+
+func lastInsertIDExprDecimal[T types.FixedSizeTExceptStrType](input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList, round func(T) string) error {
+	p := vector.GenerateFunctionFixedTypeParameter[T](input)
+	var last uint64
+	valid, isNull := false, false
+	for i := 0; i < length; i++ {
+		if selectList != nil && selectList.Contains(uint64(i)) {
+			rs.AppendMustNull()
+			continue
+		}
+		v, null := p.GetValue(uint64(i))
+		if null {
+			rs.AppendMustNull()
+			valid, isNull = true, true
+			continue
+		}
+		text := round(v)
+		converted, err := explicitUint64FromIntegerString(text)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", text)
+		}
+		last = converted
+		valid, isNull = true, false
+		rs.AppendMustValue(last)
+	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
+	return nil
+}
+
+func lastInsertIDExprString(input *vector.Vector, rs *vector.FunctionResult[uint64], proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p := vector.GenerateFunctionStrParameter(input)
+	var last uint64
+	valid, isNull := false, false
+	for i := 0; i < length; i++ {
+		if selectList != nil && selectList.Contains(uint64(i)) {
+			rs.AppendMustNull()
+			continue
+		}
+		raw, null := p.GetStrValue(uint64(i))
+		if null {
+			rs.AppendMustNull()
+			valid, isNull = true, true
+			continue
+		}
+		converted, err := ParsePreparedStringToUint64(string(raw))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
+		}
+		last = converted
+		valid, isNull = true, false
+		rs.AppendMustValue(last)
+	}
+	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
+	return nil
+}
+
+func lastInsertIDDecimalString(text string) (uint64, error) {
+	r, ok := new(big.Rat).SetString(strings.TrimSpace(text))
+	if !ok {
+		return 0, strconv.ErrSyntax
+	}
+	n := new(big.Int).Abs(r.Num())
+	d := r.Denom()
+	q, rem := new(big.Int), new(big.Int)
+	q.QuoRem(n, d, rem)
+	if new(big.Int).Lsh(rem, 1).Cmp(d) >= 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if r.Sign() < 0 {
+		q.Neg(q)
+	}
+	return explicitUint64FromIntegerString(q.String())
 }
 
 // TODO: may support soon.

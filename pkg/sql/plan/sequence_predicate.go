@@ -51,6 +51,94 @@ func ContainsSequenceFunction(expr *planpb.Expr) bool {
 	return found
 }
 
+// ContainsLastInsertIDExpr is the narrower predicate used by DOP planning.
+// NEXTVAL/CURRVAL may retain local parallelism, while LAST_INSERT_ID(expr)
+// mutates one session-owned value and therefore requires a stable row order.
+func ContainsLastInsertIDExpr(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	found := false
+	_ = planpb.VisitExprTree(expr, func(candidate *planpb.Expr) error {
+		if found {
+			return nil
+		}
+		fn := candidate.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+		found = fid == function.LAST_INSERT_ID && overload == function.LastInsertIDExprOverload
+		return nil
+	})
+	return found
+}
+
+// QueryContainsLastInsertIDExpr walks executable plan owners and keeps the
+// stricter serialization rule separate from the broader sequence placement
+// predicate. Metadata-only expressions may conservatively force DOP=1; they
+// cannot make a mutating query less safe.
+func QueryContainsLastInsertIDExpr(qry *planpb.Query) bool {
+	if qry == nil {
+		return false
+	}
+	for _, expr := range qry.Params {
+		if ContainsLastInsertIDExpr(expr) {
+			return true
+		}
+	}
+	seen := make(map[int32]struct{}, len(qry.Nodes))
+	var visitNode func(int32) bool
+	visitNode = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			return false
+		}
+		if _, ok := seen[nodeID]; ok {
+			return false
+		}
+		seen[nodeID] = struct{}{}
+		node := qry.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		found := false
+		_ = planpb.VisitExpressionsInOwner(node, func(expr *planpb.Expr) error {
+			if ContainsLastInsertIDExpr(expr) {
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+		for _, child := range node.GetChildren() {
+			if visitNode(child) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(qry.Steps) == 0 {
+		for i := range qry.Nodes {
+			if visitNode(int32(i)) {
+				return true
+			}
+		}
+	} else {
+		for _, step := range qry.Steps {
+			if visitNode(step) {
+				return true
+			}
+		}
+	}
+	for _, background := range qry.BackgroundQueries {
+		if QueryContainsLastInsertIDExpr(background) {
+			return true
+		}
+	}
+	return false
+}
+
 // QueryContainsSequenceFunction reports whether any expression in the bound
 // query can evaluate a session sequence function. It walks only executable
 // plan fields (including supplemental operator fields) and then lets

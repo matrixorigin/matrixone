@@ -347,6 +347,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		ses.SetSeqLastValue(execCtx.proc)
 
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		applyLastInsertIDExprResponse(ses, execCtx, res, false)
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -361,6 +362,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		} else {
 			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			applyLastInsertIDExprResponse(ses, execCtx, res, false)
 			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -372,6 +374,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
 			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			applyLastInsertIDExprResponse(ses, execCtx, res, false)
 			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -380,6 +383,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		}
 	case *tree.CreateTable:
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		applyLastInsertIDExprResponse(ses, execCtx, res, false)
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
@@ -396,6 +400,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		}
 	default:
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		generatedPublished := false
 
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
@@ -411,6 +416,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		case *tree.Insert:
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 			if res.lastInsertId != 0 {
+				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
 			}
 		case *tree.Replace:
@@ -420,6 +426,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			// must make the inserted row's id visible to LAST_INSERT_ID().
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 			if res.lastInsertId != 0 {
+				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
 			}
 		case *tree.MultiInsert:
@@ -436,6 +443,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if multiInsertHasUniqueAutoIncrTarget(execCtx) {
 				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 				if res.lastInsertId != 0 {
+					generatedPublished = true
 					ses.SetLastInsertID(res.lastInsertId)
 				}
 			} else {
@@ -473,6 +481,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		}
 
+		applyLastInsertIDExprResponse(ses, execCtx, res, generatedPublished)
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			if isIssue3482 {
 				err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. local local '%s' response error:%v ", localFileName, err2)
