@@ -1339,8 +1339,32 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
+	// Keep the range proof in the expression tree instead of relying only on
+	// DECIMAL128-to-UINT64 conversion.  That conversion is normally strict, but
+	// it must never be the sole barrier between this intermediate result and a
+	// parent expression that could cancel a wrapped value.  CASE evaluates only
+	// its selected branch: in range, it preserves the DECIMAL result; above the
+	// UINT64 maximum, squaring the already-too-large value deterministically
+	// raises DECIMAL out-of-range before the final conversion can wrap it.
+	maxUnsigned := makePlan2Uint64ConstExprWithType(^uint64(0))
+	decimalMax, err := appendCastBeforeExpr(ctx, maxUnsigned, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	inRange, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*Expr{DeepCopyExpr(bound), decimalMax})
+	if err != nil {
+		return nil, err
+	}
+	overflow, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(bound), DeepCopyExpr(bound)})
+	if err != nil {
+		return nil, err
+	}
+	guarded, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{inRange, bound, overflow})
+	if err != nil {
+		return nil, err
+	}
 	resultType := types.T_uint64.ToType()
-	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+	return appendCastBeforeExpr(ctx, guarded, makePlan2Type(&resultType))
 }
 
 func preparedArithmeticOperandNeedsRuntimeBound(expr *plan.Expr) bool {
