@@ -4501,7 +4501,7 @@ func TestGetDecimalCountRounding(t *testing.T) {
 	tests := []struct {
 		value types.Decimal64
 		want  int64
-	}{{14, 1}, {15, 2}, {-15, -2}, {-25, -3}}
+	}{{14, 1}, {15, 2}, {types.Decimal64(15).Minus(), -2}, {types.Decimal64(25).Minus(), -3}}
 	typ := types.T_decimal64.ToType()
 	typ.Scale = 1
 	for _, tt := range tests {
