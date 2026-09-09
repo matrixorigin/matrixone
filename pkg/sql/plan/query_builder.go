@@ -11893,6 +11893,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			if err := validateUniqueKeyCodecReadAdmission(builder.GetContext(), tableDef); err != nil {
+				return 0, err
+			}
 
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,

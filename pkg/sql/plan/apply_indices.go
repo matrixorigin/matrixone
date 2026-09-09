@@ -4611,10 +4611,21 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	if idxDef == nil || node == nil {
+		return -1, -1
+	}
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
 		panic(err)
+	}
+	if idxDef.Unique {
+		// Hidden unique relations are physical readers too.  Do not let an
+		// opaque v2 key bypass the same relation/capability admission used by
+		// the base table scan; an optional index rewrite can safely fall back.
+		if err := validateUniqueKeyCodecReadAdmission(builder.GetContext(), idxTableDef); err != nil {
+			return node.NodeId, -1
+		}
 	}
 
 	var idxFilter *plan.Expr
