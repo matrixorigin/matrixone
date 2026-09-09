@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -54,16 +55,20 @@ func getAvailablePort() int {
 		if ok {
 			return false
 		}
-		ports := listAllPorts()
-		if len(ports) != 0 {
-			_, occupied := ports[uint16(p)]
-			if occupied {
-				return false
-			} else {
-				randomPorts.ports[p] = struct{}{}
-				return true
-			}
+		// A port table snapshot is unavailable on macOS and racy on every
+		// platform. Probe both protocols before releasing the sockets so test
+		// fixtures do not select a port already in use.
+		addr := fmt.Sprintf("127.0.0.1:%d", p)
+		tcp, err := net.Listen("tcp", addr)
+		if err != nil {
+			return false
 		}
+		defer tcp.Close()
+		udp, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return false
+		}
+		udp.Close()
 		randomPorts.ports[p] = struct{}{}
 		return true
 	}
