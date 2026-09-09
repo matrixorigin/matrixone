@@ -937,3 +937,21 @@ created, no existing hidden index changes type, and no planner, lock owner, TN
 commit path, or migration command consumes the locator yet. Until those paths
 are wired atomically with the base row and capability/activation checks, v2
 remains disabled and all production writes retain their existing behavior.
+
+### 10.5 Implementation series status (PR5)
+
+PR5 adds a dependency-light comparison adapter in the planner function package.
+`CollationKeyEqual` and `CollationKeyNullSafeEqual` evaluate an explicitly
+aligned UTF-8 general-ci or UTF-8 `_bin` text pair through the same immutable
+normalization used by the v2 codec. NULL-safe comparison keeps SQL `<=>`
+semantics, while unsupported or legacy domains fail closed instead of silently
+changing their bytewise behavior.
+
+The adapter is deliberately not registered as a user-visible function and is
+not called by the existing SQL equality operator, hash join, index probe, or
+ODKU planner. This preserves the legacy contract until a relation's codec
+version and comparison domain have been proven at every producer and consumer
+boundary. PR5 therefore supplies executable comparison tests only; it does not
+create a v2 relation, replace resident/spill key codecs, alter unique-index
+bytes, or enable any writer. Sidecar, lock, query-routing, migration, and
+activation work remain required before a production fix can be claimed.
