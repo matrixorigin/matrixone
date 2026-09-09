@@ -404,6 +404,44 @@ func TestMaterializedViewDeltaJoinUsesEqualityForNonNullableGroups(t *testing.T)
 	require.Contains(t, join, "t.`region` <=> d.__mo_g_1")
 }
 
+func TestMaterializedViewDeltaDeleteCleanupUsesNullableGroupIdentity(t *testing.T) {
+	desc := &incrementalDescription{
+		Version:        2,
+		Strategy:       "direct-delta",
+		SourceAlias:    "e",
+		SourceColumns:  []string{"service"},
+		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
+		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
+		GroupKeyColumn: "__group_key",
+		RowCountColumn: "__row_count",
+		StateColumns:   []string{"__row_count", "__group_key"},
+	}
+	info := &ConsumerInfo{DBName: "obs", TableName: "mv"}
+	varcharType := types.T_varchar.ToType()
+	rows := []materializedViewSignedRow{
+		{values: map[string]any{"service": nil}, sign: -1},
+		{values: map[string]any{"service": []byte("api")}, sign: -1},
+	}
+
+	service := "materialized-view-nullable-delete-cleanup"
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	var sqls []string
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	}))
+
+	require.NoError(t, applyMaterializedViewDeltaRows(
+		t.Context(), service, nil, info, desc, []*types.Type{&varcharType}, rows,
+	))
+	join := materializedViewDeltaJoin(desc, "t", "d")
+	require.Contains(t, join, "t.`service` <=> d.__mo_g_0")
+	require.NotContains(t, join, "t.`service` = d.__mo_g_0")
+	recorded := strings.Join(sqls, "\n")
+	require.Contains(t, recorded, "DELETE FROM `obs`.`mv` WHERE `__row_count` <= 0")
+}
+
 func TestMaterializedViewDeltaCTEReportsOversizedRows(t *testing.T) {
 	desc := &incrementalDescription{
 		SourceAlias: "e", SourceColumns: []string{"payload"},

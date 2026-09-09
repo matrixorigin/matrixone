@@ -165,3 +165,46 @@ p99 freshness 1.166 s and maximum 1.267 s; a 2 s burst drained in 0.205 s.
 Six insert/delete cycles with NULL and ordinary groups returned logical auxiliary
 row counts to zero every time. These measurements describe this harness, not a
 general capacity guarantee.
+
+## Public benchmark mapping
+
+There is no single industry benchmark that covers asynchronous incremental view
+maintenance, SQL correctness, and dashboard freshness at the same time. The
+validation therefore uses public workloads and records the maintenance mode
+separately from ordinary query throughput:
+
+- Materialize's public ingestion benchmark is the primary freshness reference
+  for the firehose scenario. It measures snapshot time, sustained ingestion,
+  p99 freshness, vertical scaling, and horizontal scaling. Its methodology uses
+  ten-minute ingestion runs and marker rows to measure database freshness:
+  <https://materialize.com/docs/reference/performance/>.
+- ClickBench is the primary scan/query-throughput reference for observability
+  shaped data. It compares persisted aggregate queries with source scans, but
+  does not define incremental MV maintenance semantics:
+  <https://benchmark.clickhouse.com/>.
+- TPC-H SF1/SF3 is used for complete-refresh and multi-source JOIN regression.
+  It is not an append-tail benchmark and its standard queries do not by
+  themselves measure asynchronous freshness.
+- The SQL MV BVT is the correctness workload. Each case compares the physical
+  result with an independently recomputed source query after snapshot, append,
+  delete, update, NULL grouping, DISTINCT, MIN/MAX, HAVING, UNION ALL, and
+  multi-source COMPLETE/FORCE refresh. A case is not admitted to the
+  performance table unless the independent-result comparison passes.
+
+The feature-to-workload mapping is:
+
+| Feature | Correctness workload | Performance metric |
+| --- | --- | --- |
+| COUNT/SUM/AVG, NULL groups | single-table firehose | source rows/s, freshness p50/p95/p99/max |
+| INSERT/DELETE/UPDATE | mixed tail rounds | freshness by operation and failed-group count |
+| DISTINCT, MIN/MAX, HAVING | adversarial group churn | refresh CPU, tail freshness, auxiliary-state rows |
+| UNION ALL | two-branch append/update/delete | branch routing cost and freshness |
+| multi-source JOIN | TPC-H-shaped complete/force refresh | full refresh duration and result query latency |
+| ON DEMAND COMPLETE | explicit refresh after bulk load | refresh duration and result availability |
+
+For every run record host model, vCPU/memory, GOMAXPROCS, source row count,
+offered rows/s, MV definition, refresh mode, run duration, correctness result,
+source throughput, refresh throughput, and freshness quantiles. Results from a
+small shared host must not be compared directly with Materialize's published
+cloud-cluster numbers; they are only a reproducible baseline until host
+capacity is matched.
