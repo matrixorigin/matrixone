@@ -560,10 +560,14 @@ it explicitly does not validate that keeper fix, let alone this unpublished
 follow-up. Both #28115 and #28343 are merged; no existing PR carries this branch.
 
 Fresh main was resolved to `f0c31cd4b8` for delivery. Lockservice, native sources,
-Makefile, lint configuration and PR template are unchanged from the explicit
-investigation base; main's dependency files and unrelated consumers have moved.
-Local evidence remains scoped to this branch; PR merge CI must cover integration
-with current main. No automatic rebase or unvalidated main-side claim is made.
+Makefile and PR template are unchanged from the explicit investigation base;
+dependency files, lint exclusions and unrelated consumers have moved. The
+reusable CI workflow explicitly checks out the immutable PR head, not an
+automatic merge with main. Therefore main was merged without conflicts into
+the delivery branch (`56fe252fd76d12e7507a7edcfa6257d559f14f9c`). Its diff from
+main remains exactly the eight scoped fix/test/evidence files. Owning-package,
+build, real-process and full SCA evidence will be rerun on this integrated head;
+the earlier baseline/intervention evidence remains historical causal proof.
 
 Read-only IDC verification found all seven Pods Ready in each of
 `mo-stb-main-845fff8-r33971015458-a2` and
@@ -577,6 +581,55 @@ authorized deployment/test action.
 
 The follow-up PR body uses the current repository template, references issue
 #27707 without auto-closing it, and carries the explicit field acceptance gate.
-Full-repository `make static-check-analysis GOLANGCI_LINT_CONCURRENCY=2` is being
-run with bounded local Go memory/concurrency; terminal results and the PR/CI
-identity will be recorded when available.
+The pre-integration full SCA run finished molint but was intentionally stopped
+during golangci (exit 143) when the newer dependency graph became the delivery
+target. It is not a pass. Full-repository
+`make static-check-analysis GOLANGCI_LINT_CONCURRENCY=2` will run against the
+integrated head with bounded local Go memory/concurrency; terminal results and
+the PR/CI identity will be recorded when available.
+
+Integrated build (`56fe252fd7`) completed with exit 0. The overlay-free binary
+SHA-256 is `0d65214a27aafbfd5cc0d574b71ecdbde0ba7f9539ec82bae92986b9f256f4c8`.
+The owning package passed `-short -count=1 -timeout=240s` (86.463s) and
+`-short -race -count=1 -timeout=240s` (91.534s), both with exit 0, using the
+repository CGo wrapper. These supersede the older-base package/build results
+for delivery. Full SCA, exact-test race stress and the integrated real-process
+acceptance are tracked separately and require their own terminal results.
+
+All ten exact race tests were remeasured and repeated individually on the
+integrated dependency graph (terminal exit 0). The five route/membership tests
+and four expiry safety tests selected 100 repetitions each;
+`TestCleanCommitStatePersistentDisconnectExpires` selected 47 from its measured
+duration and the 30-second adaptive budget. No package-wide repeat or weakened
+assertion was used. Logs are `/tmp/mo27707-integrated-<test>-measure.json` and
+`/tmp/mo27707-integrated-<test>-stress.log` and are archived with delivery evidence.
+
+Integrated real-process acceptance (`dn-expiry-compare-vrbvaws6`) exited 0:
+both CN replacements completed, with 33 commits in each 65-second observation
+window. DN departed-owner error counts stayed `[6] -> [6]` and
+`[6,6] -> [6,6]`. The second transition produced one transient bind-change retry
+and then continued. Both retained DN fences, killed transactions' invisibility,
+original-row rewrite/commit with cross-CN reads, and final data assertions passed.
+The DN `owner-absent` metric was independently observed increasing 10 -> 20
+during the second transition; the cleaner was not stopped to silence logs.
+All harness-owned processes exited, and no fatal/panic signature was found in
+their logs. This uses the same explicit 10-second CN lease and default DN
+retention/cleaner cadence as the historical formal topology test; it does not
+replace the 15-minute fixed-image field gate. Log:
+`/tmp/mo27707-integrated-live.log` (archived with the formal validation artifacts).
+
+Full-repository `make static-check-analysis GOLANGCI_LINT_CONCURRENCY=2`
+completed with exit 0 on the integrated sources: repository `err-check`,
+all-package molint and all-package golangci ran. Golangci reported 0 issues
+after the unchanged repository exclusions (11m21.365s for that stage; maximum
+reported RSS approximately 5.1 GiB). Molint retains its pre-existing diagnostic
+output; this is the repository command's successful result, not a claim that
+molint printed no diagnostics. No lint rule, exclusion or assertion was changed
+by this fix. Log `/tmp/mo27707-integrated-sca.log` is archived with the delivery
+evidence. The earlier interrupted SCA attempts remain historical non-passes.
+
+Delivery self-review has no unresolved local correctness/lifecycle finding or
+missing local behavior/race/SCA artifact. This does not grant review approval,
+CI success or field acceptance. Required GitHub checks and independent review
+remain delivery gates; shared-cluster merge/deployment/fault actions await
+explicit scope authorization. Issue #27707 remains open.
