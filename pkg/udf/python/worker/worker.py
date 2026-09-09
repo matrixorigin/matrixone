@@ -36,7 +36,10 @@ MAX_TERMINAL_RECORDS = 10000
 MAX_TERMINAL_BYTES = 16 << 20
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
-DEFAULT_MAX_BATCH_ROWS = 65536
+_MICROS_PER_SECOND = 1_000_000
+_MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
+_MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
+_MAX_TIMESTAMP = _datetime.datetime(9999, 12, 31, 23, 59, 59, 999999, tzinfo=_datetime.timezone.utc)
 
 BOOL = 10
 INT8, INT16, INT32, INT64 = 20, 21, 22, 23
@@ -57,7 +60,7 @@ ABI_CONTRACT = "PYTHON_ARROW"
 ADAPTER_VERSION = "2026-09"
 SDK_VERSION = "1.0"
 
-log = logging.getLogger("matrixone.python.runtime")
+log = logging.getLogger("matrixone.python.udf.worker")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +154,15 @@ def _required_context_value(context: Dict[str, Any], key: str) -> str:
     return value
 
 
+def _optional_context_value(context: Dict[str, Any], key: str) -> Optional[str]:
+    value = context.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"PROTOCOL: statement context field {key} must be text")
+    return value or None
+
+
 def _statement_context(raw: Any) -> Optional[StatementContext]:
     if raw is None:
         return None
@@ -175,7 +187,7 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
     if timezone_kind == "IANA":
         timezone_name = _required_context_value(raw, "session_timezone_name")
         tzdb_version = _required_context_value(raw, "session_timezone_tzdb_version")
-        if raw.get("session_timezone_offset_minutes"):
+        if "session_timezone_offset_minutes" in raw:
             raise ValueError("PROTOCOL: IANA timezone cannot carry a fixed offset")
         timezone = TimezoneContext("IANA", name=timezone_name, tzdb_version=tzdb_version)
     elif timezone_kind == "FIXED_OFFSET":
@@ -186,7 +198,7 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
             raise ValueError("PROTOCOL: invalid fixed timezone offset") from exc
         if offset_minutes < -839 or offset_minutes > 840:
             raise ValueError("PROTOCOL: fixed timezone offset is outside SQL range")
-        if raw.get("session_timezone_name") or raw.get("session_timezone_tzdb_version"):
+        if "session_timezone_name" in raw or "session_timezone_tzdb_version" in raw:
             raise ValueError("PROTOCOL: fixed timezone cannot carry IANA identity")
         timezone = TimezoneContext("FIXED_OFFSET", offset_minutes=offset_minutes)
     else:
@@ -200,7 +212,7 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
     if not isinstance(sql_mode_value, list) or any(not isinstance(item, str) for item in sql_mode_value):
         raise ValueError("PROTOCOL: sql_mode must be an array of strings")
     sql_mode = tuple(sorted(set(sql_mode_value)))
-    if list(sql_mode) != sql_mode_value:
+    if list(sql_mode) != sql_mode_value or json.dumps(sql_mode_value, separators=(",", ":"), ensure_ascii=True) != sql_mode_text:
         raise ValueError("PROTOCOL: sql_mode is not canonical")
 
     current_user = _required_context_value(raw, "current_user")
@@ -209,9 +221,9 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
         statement_timestamp_utc=timestamp,
         session_timezone=timezone,
         sql_mode=sql_mode,
-        current_database=raw.get("current_database") or None,
+        current_database=_optional_context_value(raw, "current_database"),
         current_user=current_user,
-        current_role=raw.get("current_role") or None,
+        current_role=_optional_context_value(raw, "current_role"),
         connection_collation=connection_collation,
     )
 
@@ -243,7 +255,13 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid control size")
     value = json.loads(bytes(data).decode("utf-8"))
-    if not isinstance(value, dict) or value.get("version") != PROTOCOL_VERSION or not isinstance(value.get("kind"), str) or not value["kind"]:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("version")) is not int
+        or value["version"] != PROTOCOL_VERSION
+        or not isinstance(value.get("kind"), str)
+        or not value["kind"]
+    ):
         raise ValueError("PROTOCOL: unsupported control")
     _tuple_key(value.get("tuple") or {})
     return value
@@ -252,6 +270,28 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
 def _require_tuple(value: Dict[str, Any], expected: Dict[str, Any]) -> None:
     if _tuple_key(value) != _tuple_key(expected):
         raise ValueError("PROTOCOL: fencing tuple changed")
+
+
+def _required_string(value: Dict[str, Any], key: str) -> str:
+    item = value.get(key)
+    if not isinstance(item, str) or not item:
+        raise ValueError(f"PROTOCOL: missing invocation field {key}")
+    return item
+
+
+def _required_positive_int(value: Dict[str, Any], key: str, maximum: int) -> int:
+    item = value.get(key)
+    if isinstance(item, bool) or not isinstance(item, int) or item <= 0 or item > maximum:
+        raise ValueError(f"PROTOCOL: invalid invocation field {key}")
+    return item
+
+
+def _required_uint64(value: Dict[str, Any], key: str, allow_zero: bool = False) -> int:
+    item = value.get(key)
+    minimum = 0 if allow_zero else 1
+    if isinstance(item, bool) or not isinstance(item, int) or item < minimum or item > (1 << 64) - 1:
+        raise ValueError(f"PROTOCOL: invalid control field {key}")
+    return item
 
 
 def _encode_control(value: Dict[str, Any]) -> bytes:
@@ -428,6 +468,19 @@ def _check_json(value: str) -> str:
     return value
 
 
+def _check_microsecond_scale(value: int, descriptor: Dict[str, Any]) -> None:
+    scale = int(descriptor.get("scale") or 0)
+    if scale < 0 or scale > 6:
+        raise ValueError("TYPE_CONTRACT: temporal scale is outside the supported range")
+    quantum = 10 ** (6 - scale)
+    if value % quantum != 0:
+        raise ValueError("TYPE_CONTRACT: temporal value exceeds the declared scale")
+
+
+def _timedelta_micros(value: _datetime.timedelta) -> int:
+    return (value.days * 24 * 60 * 60 + value.seconds) * _MICROS_PER_SECOND + value.microseconds
+
+
 def _check_scalar(value: Any, descriptor: Dict[str, Any]):
     if value is None:
         return None
@@ -435,21 +488,37 @@ def _check_scalar(value: Any, descriptor: Dict[str, Any]):
     if type_id == BOOL and type(value) is not bool: raise ValueError("TYPE_CONTRACT: expected bool")
     if type_id in (INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64) and (type(value) is not int): raise ValueError("TYPE_CONTRACT: expected integer")
     if type_id in (FLOAT32, FLOAT64) and type(value) is not float: raise ValueError("TYPE_CONTRACT: expected float")
-    if type_id in (CHAR, VARCHAR, TEXT) and type(value) is not str: raise ValueError("TYPE_CONTRACT: expected string")
+    if type_id in (CHAR, VARCHAR, TEXT):
+        if type(value) is not str: raise ValueError("TYPE_CONTRACT: expected string")
+        width = int(descriptor.get("width") or 0)
+        if width > 0 and len(value.encode("utf-8")) > width: raise ValueError("TYPE_CONTRACT: string exceeds the declared width")
+        return value
     if type_id == JSON: return _check_json(value)
-    if type_id in (BINARY, VARBINARY, BLOB) and type(value) is not bytes: raise ValueError("TYPE_CONTRACT: expected bytes")
+    if type_id in (BINARY, VARBINARY, BLOB):
+        if type(value) is not bytes: raise ValueError("TYPE_CONTRACT: expected bytes")
+        width = int(descriptor.get("width") or 0)
+        if width > 0 and len(value) > width: raise ValueError("TYPE_CONTRACT: binary value exceeds the declared width")
+        return value
     if type_id == UUID:
         if not isinstance(value, _uuid.UUID): raise ValueError("TYPE_CONTRACT: expected uuid.UUID")
         return value.bytes
-    if type_id == TIME and not isinstance(value, _datetime.timedelta): raise ValueError("TYPE_CONTRACT: expected datetime.timedelta")
+    if type_id == TIME:
+        if not isinstance(value, _datetime.timedelta): raise ValueError("TYPE_CONTRACT: expected datetime.timedelta")
+        micros = _timedelta_micros(value)
+        if abs(micros) > _MAX_TIME_MICROS: raise ValueError("TYPE_CONTRACT: TIME is outside the SQL range")
+        _check_microsecond_scale(micros, descriptor)
+        return value
     if type_id == DATE:
         if not isinstance(value, SqlDate) or (value.is_zero and value.value is not None) or (not value.is_zero and type(value.value) is not _datetime.date): raise ValueError("TYPE_CONTRACT: invalid SqlDate")
         return value
     if type_id == DATETIME:
         if not isinstance(value, SqlDatetime) or (value.is_zero and value.value is not None) or (not value.is_zero and (not isinstance(value.value, _datetime.datetime) or value.value.tzinfo is not None)): raise ValueError("TYPE_CONTRACT: invalid SqlDatetime")
+        if not value.is_zero: _check_microsecond_scale(value.value.microsecond, descriptor)
         return value
     if type_id == TIMESTAMP:
         if not isinstance(value, SqlTimestamp) or (value.is_zero and value.value is not None) or (not value.is_zero and (not isinstance(value.value, _datetime.datetime) or value.value.tzinfo is None or value.value.utcoffset() != _datetime.timedelta(0))): raise ValueError("TYPE_CONTRACT: invalid SqlTimestamp")
+        if not value.is_zero and not (_MIN_TIMESTAMP <= value.value <= _MAX_TIMESTAMP): raise ValueError("TYPE_CONTRACT: TIMESTAMP is outside the SQL range")
+        if not value.is_zero: _check_microsecond_scale(value.value.microsecond, descriptor)
         if not value.is_zero and value.value.tzinfo is not _datetime.timezone.utc:
             return SqlTimestamp(False, value.value.astimezone(_datetime.timezone.utc))
         return value
@@ -526,10 +595,7 @@ def _output_array(values: Any, descriptor: Dict[str, Any], rows: int) -> pa.Arra
 
 def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
     type_id = int(descriptor["type_id"])
-    if type_id == JSON:
-        for index in range(len(array)):
-            if not array.is_null(index): _check_json(array[index].as_py())
-    elif type_id in (DATE, DATETIME, TIMESTAMP):
+    if type_id in (DATE, DATETIME, TIMESTAMP):
         struct = array
         for index in range(len(struct)):
             if struct.is_null(index): continue
@@ -538,6 +604,18 @@ def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
             if value is None: raise ValueError("TYPE_CONTRACT: temporal child is null")
             if is_zero and ((type_id == DATE and value != _datetime.date(1970, 1, 1)) or (type_id == DATETIME and value != _datetime.datetime(1970, 1, 1)) or (type_id == TIMESTAMP and value != _datetime.datetime(1970, 1, 1, tzinfo=_datetime.timezone.utc))):
                 raise ValueError("TYPE_CONTRACT: temporal zero placeholder is invalid")
+            if not is_zero:
+                if type_id == DATE: _check_scalar(SqlDate(False, value), descriptor)
+                elif type_id == DATETIME: _check_scalar(SqlDatetime(False, value), descriptor)
+                else: _check_scalar(SqlTimestamp(False, value), descriptor)
+    elif type_id in (CHAR, VARCHAR, TEXT, JSON, BINARY, VARBINARY, BLOB, UUID, TIME, DECIMAL64, DECIMAL128):
+        for index in range(len(array)):
+            if array.is_null(index): continue
+            value = array[index].as_py()
+            if type_id == UUID:
+                if not isinstance(value, (bytes, bytearray)) or len(value) != 16: raise ValueError("TYPE_CONTRACT: UUID must contain 16 bytes")
+            else:
+                _check_scalar(value, descriptor)
 
 
 class _InvocationState:
@@ -643,9 +721,9 @@ class RoutineFlightServer(flight.FlightServerBase):
                 return
             raise ValueError("PROTOCOL: unknown invocation")
         if action.type == "AcknowledgeResults":
-            state.ack_result(int(control.get("ack_sequence", 0)))
+            state.ack_result(_required_uint64(control, "ack_sequence"))
         elif action.type == "AcknowledgeFinish":
-            state.ack_finish(str(control.get("finish_id", "")))
+            state.ack_finish(_required_string(control, "finish_id"))
         yield _encode_control({"kind": "Ack", "tuple": control["tuple"], "status": "OK", "ack_sequence": control.get("ack_sequence", 0)})
 
     def do_exchange(self, context, descriptor, reader, writer):
@@ -658,27 +736,30 @@ class RoutineFlightServer(flight.FlightServerBase):
                 raise ValueError("PROTOCOL: exchange is missing the invocation descriptor")
             open_control = _decode_control(command)
             if open_control["kind"] != "OpenInvocation": raise ValueError("PROTOCOL: first message must open an invocation")
-            if not isinstance(open_control.get("payload"), (dict, str)):
+            if not isinstance(open_control.get("payload"), dict):
                 raise ValueError("PROTOCOL: invocation payload must be an object")
             key = _tuple_key(open_control["tuple"])
-            payload = open_control.get("payload") or {}
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            if not isinstance(payload, dict):
-                raise ValueError("PROTOCOL: invocation payload must be an object")
-            args = list(payload.get("args", [])); result_descriptor = payload["return"]
+            payload = open_control["payload"]
+            args = payload.get("args")
+            result_descriptor = payload.get("return")
+            if not isinstance(args, list) or any(not isinstance(item, dict) for item in args):
+                raise ValueError("PROTOCOL: invocation args must be an array of descriptors")
+            if not isinstance(result_descriptor, dict):
+                raise ValueError("PROTOCOL: invocation return must be a descriptor")
             statement_context = _statement_context(payload.get("context"))
-            mode = payload.get("mode", MODE_SCALAR); null_policy = payload.get("null_policy", NULL_CALL)
-            abi_contract = payload.get("abi_contract", ABI_CONTRACT)
-            adapter_version = payload.get("adapter_version", ADAPTER_VERSION)
-            sdk_version = payload.get("sdk_version", SDK_VERSION)
-            max_batch_rows = int(payload.get("max_batch_rows", DEFAULT_MAX_BATCH_ROWS))
+            mode = _required_string(payload, "mode")
+            null_policy = _required_string(payload, "null_policy")
+            abi_contract = _required_string(payload, "abi_contract")
+            adapter_version = _required_string(payload, "adapter_version")
+            sdk_version = _required_string(payload, "sdk_version")
+            max_batch_bytes = _required_positive_int(payload, "max_batch_bytes", 1 << 30)
+            max_batch_rows = _required_positive_int(payload, "max_batch_rows", 1 << 30)
             if mode not in (MODE_SCALAR, MODE_VECTOR) or null_policy not in (NULL_CALL, NULL_RETURN): raise ValueError("PROTOCOL: unsupported call mode or NULL policy")
             if abi_contract != ABI_CONTRACT or adapter_version != ADAPTER_VERSION: raise ValueError("PROTOCOL: unsupported Python ABI contract")
-            if max_batch_rows <= 0: raise ValueError("PROTOCOL: invalid max batch rows")
+            if sdk_version != SDK_VERSION: raise ValueError("PROTOCOL: unsupported Python SDK")
             state = self._admit(key)
             state.tuple = open_control["tuple"]
-            handler = _load_handler(payload["source"], payload["handler"])
+            handler = _load_handler(_required_string(payload, "source"), _required_string(payload, "handler"))
             schema = None
             result_field = _field("result", result_descriptor)
             result_schema = pa.schema([result_field])
@@ -698,11 +779,12 @@ class RoutineFlightServer(flight.FlightServerBase):
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] != "InputBatch": raise ValueError("PROTOCOL: data batch is missing InputBatch")
-                    sequence = int(control.get("sequence", 0))
+                    sequence = _required_uint64(control, "sequence")
                     if sequence != state.last_result + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
                     batch = chunk.data
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
+                    if batch.nbytes > max_batch_bytes: raise ValueError("RESOURCE_EXHAUSTED: input batch exceeds byte limit")
                     if mode == MODE_VECTOR:
                         call_context = VectorContext(sdk_version, _CallLogger(), statement_context, batch.num_rows)
                         try:
@@ -725,6 +807,8 @@ class RoutineFlightServer(flight.FlightServerBase):
                         output = values
                     output_array = _output_array(output, result_descriptor, batch.num_rows)
                     output_batch = pa.RecordBatch.from_arrays([output_array], schema=result_schema)
+                    if pa.ipc.get_record_batch_size(output_batch) > max_batch_bytes:
+                        raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
                     state.last_result = sequence
                     writer.write_metadata(_encode_control({"kind": "InputConsumed", "tuple": open_control["tuple"], "sequence": sequence}))
                     writer.write_with_metadata(output_batch, _encode_control({"kind": "ResultBatch", "tuple": open_control["tuple"], "sequence": sequence}))
@@ -733,7 +817,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] == "EndInput":
-                        if ended or int(control.get("last_sequence", -1)) != state.last_result: raise ValueError("PROTOCOL: invalid EndInput")
+                        if ended or _required_uint64(control, "last_sequence", allow_zero=True) != state.last_result: raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True
                     elif control["kind"] != "OpenInvocation":
                         raise ValueError("PROTOCOL: unexpected control without Arrow data")

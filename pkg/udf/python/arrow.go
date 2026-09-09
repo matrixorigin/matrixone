@@ -70,11 +70,11 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 	default:
-		return TypeDescriptor{}, fmt.Errorf("python runtime does not support MatrixOne type %s", typ.String())
+		return TypeDescriptor{}, fmt.Errorf("python udf does not support MatrixOne type %s", typ.String())
 	}
 	if typ.Oid == types.T_array_float32 || typ.Oid == types.T_array_float64 {
 		if typ.Width <= 0 {
-			return TypeDescriptor{}, fmt.Errorf("python runtime requires a positive vector dimension for %s", typ.String())
+			return TypeDescriptor{}, fmt.Errorf("python udf requires a positive vector dimension for %s", typ.String())
 		}
 		d.OffsetWidth = 0
 	}
@@ -566,9 +566,12 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 		return nil
 	}
 	if mp == nil {
-		return fmt.Errorf("python runtime: missing memory pool for Arrow result")
+		return fmt.Errorf("python udf: missing memory pool for Arrow result")
 	}
 	if err := validateArrayType(descriptor, input); err != nil {
+		return err
+	}
+	if err := validateArrowValueDomain(descriptor, input); err != nil {
 		return err
 	}
 	result.GetResultVector().SetTypeScale(descriptor.Scale)
@@ -723,6 +726,100 @@ func validateArrayType(descriptor TypeDescriptor, input arrow.Array) error {
 		return fmt.Errorf("TYPE_CONTRACT: output Arrow type %s does not match %s", input.DataType(), want)
 	}
 	return nil
+}
+
+func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) error {
+	if input == nil {
+		return fmt.Errorf("TYPE_CONTRACT: missing Arrow result")
+	}
+	for row := 0; row < input.Len(); row++ {
+		if input.IsNull(row) {
+			continue
+		}
+		switch types.T(descriptor.TypeID) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if descriptor.Width > 0 && int32(len([]byte(input.(*array.String).Value(row)))) > descriptor.Width {
+				return fmt.Errorf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
+			}
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			if descriptor.Width > 0 && int32(len(input.(*array.Binary).Value(row))) > descriptor.Width {
+				return fmt.Errorf("TYPE_CONTRACT: binary row %d exceeds width %d", row, descriptor.Width)
+			}
+		case types.T_time:
+			value := types.Time(input.(*array.Duration).Value(row))
+			if !types.IsMySQLTime(value) || !hasExactMicrosecondScale(int64(value), descriptor.Scale) {
+				return fmt.Errorf("TYPE_CONTRACT: TIME row %d is outside the declared SQL domain", row)
+			}
+		case types.T_date, types.T_datetime, types.T_timestamp:
+			structValue := input.(*array.Struct)
+			zeroField, valueField := structValue.Field(0), structValue.Field(1)
+			if zeroField.IsNull(row) || valueField.IsNull(row) {
+				return fmt.Errorf("TYPE_CONTRACT: temporal row %d has a null child", row)
+			}
+			zero := zeroField.(*array.Boolean).Value(row)
+			switch types.T(descriptor.TypeID) {
+			case types.T_date:
+				value := valueField.(*array.Date32).Value(row)
+				if zero && value != 0 {
+					return fmt.Errorf("TYPE_CONTRACT: DATE zero row %d has a non-zero placeholder", row)
+				}
+				if !zero {
+					date := types.DaysFromUnixEpochToDate(int32(value))
+					year, month, day, _ := date.Calendar(true)
+					if !types.ValidDate(year, month, day) {
+						return fmt.Errorf("TYPE_CONTRACT: DATE row %d is outside the SQL domain", row)
+					}
+				}
+			case types.T_datetime:
+				value := valueField.(*array.Timestamp).Value(row)
+				if zero && value != 0 {
+					return fmt.Errorf("TYPE_CONTRACT: DATETIME zero row %d has a non-zero placeholder", row)
+				}
+				if !zero {
+					absolute, ok := addUnixEpoch(int64(value))
+					if !ok || !hasExactMicrosecondScale(absolute, descriptor.Scale) {
+						return fmt.Errorf("TYPE_CONTRACT: DATETIME row %d is outside the declared SQL domain", row)
+					}
+					datetime := types.Datetime(absolute)
+					year, month, day, _ := datetime.ToDate().Calendar(true)
+					if !types.ValidDatetime(year, month, day) {
+						return fmt.Errorf("TYPE_CONTRACT: DATETIME row %d is outside the SQL domain", row)
+					}
+				}
+			case types.T_timestamp:
+				value := valueField.(*array.Timestamp).Value(row)
+				if zero && value != 0 {
+					return fmt.Errorf("TYPE_CONTRACT: TIMESTAMP zero row %d has a non-zero placeholder", row)
+				}
+				if !zero {
+					absolute, ok := addUnixEpoch(int64(value))
+					if !ok || absolute < int64(types.TimestampMinValue) || absolute > int64(types.TimestampMaxValue) || !hasExactMicrosecondScale(absolute, descriptor.Scale) {
+						return fmt.Errorf("TYPE_CONTRACT: TIMESTAMP row %d is outside the declared SQL domain", row)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func addUnixEpoch(value int64) (int64, bool) {
+	epoch := types.GetUnixEpochSecs()
+	if value > math.MaxInt64-epoch || value < math.MinInt64+epoch {
+		return 0, false
+	}
+	return value + epoch, true
+}
+
+func hasExactMicrosecondScale(value int64, scale int32) bool {
+	if scale < 0 || scale > 6 {
+		return false
+	}
+	quantum := int64(1)
+	for i := scale; i < 6; i++ {
+		quantum *= 10
+	}
+	return value%quantum == 0
 }
 func decimalFromArray(value decimal128.Num, narrow bool) (any, error) {
 	high, low := uint64(value.HighBits()), value.LowBits()
