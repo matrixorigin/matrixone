@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -64,6 +65,52 @@ type viewReplacementCompilerContext struct {
 	historicalSnapshot  *Snapshot
 	timestampValid      bool
 	lowerCaseTableNames int64
+}
+
+func TestV2TextPrimaryKeyDefersHiddenColumnAppendToPreInsert(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(collationkey.WithAdmission(context.Background(), collationkey.Admission{
+		Activation: collationkey.Activation{
+			RequestedVersion: collationkey.CollationAwareVersion,
+			RegistryVersion:  uint32(collationkey.RegistryVersion),
+			RegistryDigest:   collationkey.RegistryDigest(),
+			Generation:       7,
+			Phase:            collationkey.ActivationEnabled,
+			CnTargets:        map[string]uint64{"cn-1": 11},
+			TnTargets:        map[string]uint64{"tn-1": 13},
+		},
+		Kind: collationkey.NodeCN,
+		Node: collationkey.NodeAcknowledgement{
+			NodeID:      "cn-1",
+			Incarnation: 11,
+			Capability: collationkey.Capability{
+				ReadableVersions:   1 << collationkey.CollationAwareVersion,
+				WritableVersions:   1 << collationkey.CollationAwareVersion,
+				RegistryVersion:    uint32(collationkey.RegistryVersion),
+				RegistryDigest:     collationkey.RegistryDigest(),
+				MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+			},
+		},
+	}))
+
+	userPK := &plan.ColDef{Name: "k", Typ: plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8),
+	}}
+	tableDef := &plan.TableDef{
+		Name: "v2_pk",
+		Cols: []*plan.ColDef{userPK},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"k"}, PkeyColName: "k"},
+	}
+
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, tableDef, nil))
+	require.NotNil(t, tableDef.UniqueKeyCodecVersion)
+	require.Equal(t, catalog.CPrimaryKeyColName, tableDef.Pkey.PkeyColName)
+	require.NotNil(t, tableDef.Pkey.CompPkeyCol)
+	// appendPreInsertPlan owns the physical Cols append for composite keys.
+	// The DDL helper must not pre-append the same object.
+	require.Len(t, tableDef.Cols, 1)
+	require.NotSame(t, tableDef.Pkey.CompPkeyCol, tableDef.Cols[0])
 }
 
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {

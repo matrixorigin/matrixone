@@ -4450,15 +4450,19 @@ func maybeEnableCollationKeyV2ForCreate(
 			}
 		} else {
 			// Single-part primary keys normally use the user column directly.
-			// Add the same hidden identity column used by composite primary keys so
-			// the base table's physical uniqueness is collation-aware without
-			// rewriting the stored user value.
+			// Describe the same hidden identity column used by composite primary
+			// keys so the base table's physical uniqueness is collation-aware
+			// without rewriting the stored user value.
 			hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 			hidden.Typ = collationKeyV2StorageType()
 			hidden.Primary = true
-			tableDef.Cols = append(tableDef.Cols, hidden)
+			// Keep the composite primary-key column out of Cols until the
+			// existing PRE_INSERT path appends CompPkeyCol. Adding it here
+			// would make that common path append the same physical column a
+			// second time when v2 is enabled.
 			tableDef.Pkey.PkeyColName = catalog.CPrimaryKeyColName
 			tableDef.Pkey.CompPkeyCol = hidden
+			colMap[catalog.CPrimaryKeyColName] = hidden
 		}
 	}
 	metadata := collationkey.NewCollationAwareMetadataAtGeneration(admission.Activation.Generation)
