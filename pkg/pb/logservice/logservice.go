@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -255,6 +256,58 @@ func cloneUniqueKeyCodecCapability(capability *UniqueKeyCodecCapability) *Unique
 	clone := *capability
 	clone.RegistryDigest = append([]byte(nil), capability.RegistryDigest...)
 	return &clone
+}
+
+// ToCollationKeyCapability converts the wire capability into the common
+// validation type. A missing message is intentionally represented by an
+// unsupported zero capability; callers must not treat protobuf field absence
+// as v2 support.
+func (c *UniqueKeyCodecCapability) ToCollationKeyCapability() collationkey.Capability {
+	if c == nil {
+		return collationkey.Capability{}
+	}
+	return collationkey.Capability{
+		ReadableVersions:   c.ReadableVersions,
+		WritableVersions:   c.WritableVersions,
+		RegistryVersion:    c.RegistryVersion,
+		RegistryDigest:     append([]byte(nil), c.RegistryDigest...),
+		MaxEncodedKeyBytes: c.MaxEncodedKeyBytes,
+	}
+}
+
+// ToCollationKeyActivation converts the replicated activation record while
+// preserving its fail-closed phase and target validation. The nil message is
+// the explicitly disabled state; a non-nil malformed record is returned as an
+// error instead of being silently downgraded.
+func (a *UniqueKeyCodecActivation) ToCollationKeyActivation() (collationkey.Activation, error) {
+	if a == nil {
+		return collationkey.Activation{Phase: collationkey.ActivationDisabled}, nil
+	}
+	phase := collationkey.ActivationPhase(a.Phase)
+	activation := collationkey.Activation{
+		RequestedVersion: a.RequestedVersion,
+		RegistryVersion:  a.RegistryVersion,
+		RegistryDigest:   append([]byte(nil), a.RegistryDigest...),
+		Generation:       a.Generation,
+		Phase:            phase,
+		CnTargets:        cloneUniqueKeyCodecTargets(a.CnTargets),
+		TnTargets:        cloneUniqueKeyCodecTargets(a.TnTargets),
+	}
+	if err := activation.Validate(); err != nil {
+		return collationkey.Activation{}, err
+	}
+	return activation, nil
+}
+
+func cloneUniqueKeyCodecTargets(src map[string]uint64) map[string]uint64 {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]uint64, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 // NewLogState creates a new LogState.

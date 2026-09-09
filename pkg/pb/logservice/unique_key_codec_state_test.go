@@ -14,7 +14,12 @@
 
 package logservice
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
+)
 
 func TestStoreStateCopiesUniqueKeyCodecCapabilities(t *testing.T) {
 	capability := &UniqueKeyCodecCapability{
@@ -42,5 +47,38 @@ func TestStoreStateCopiesUniqueKeyCodecCapabilities(t *testing.T) {
 	capability.RegistryDigest[0] = 8
 	if got := tn.Stores["tn-1"].UniqueKeyCodecCapability.RegistryDigest[0]; got != 4 {
 		t.Fatalf("TN state retained heartbeat digest alias: %d", got)
+	}
+}
+
+func TestUniqueKeyCodecWireAdaptersFailClosed(t *testing.T) {
+	var missing *UniqueKeyCodecCapability
+	if missing.ToCollationKeyCapability().Supports(collationkey.NewCollationAwareMetadata(), true) {
+		t.Fatal("missing capability advertised v2 support")
+	}
+	activation, err := (*UniqueKeyCodecActivation)(nil).ToCollationKeyActivation()
+	if err != nil || activation.Phase != collationkey.ActivationDisabled {
+		t.Fatalf("missing activation = %+v, %v", activation, err)
+	}
+	valid := &UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   collationkey.RegistryDigest(),
+		Generation:       4,
+		Phase:            ENABLED,
+		CnTargets:        map[string]uint64{"cn": 0},
+		TnTargets:        map[string]uint64{"tn": 2},
+	}
+	if _, err := valid.ToCollationKeyActivation(); !errors.Is(err, collationkey.ErrMalformedKey) {
+		t.Fatalf("incomplete enabled activation error = %v, want malformed", err)
+	}
+	valid.Phase = PREPARING
+	valid.CnTargets["cn"] = 1
+	converted, err := valid.ToCollationKeyActivation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.CnTargets["cn"] = 9
+	if converted.CnTargets["cn"] != 1 {
+		t.Fatal("activation adapter aliases target map")
 	}
 }

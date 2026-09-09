@@ -1065,3 +1065,11 @@ heartbeat that omits the capability clears stale state. This is necessary for
 an eventual activation coordinator to make decisions from replicated state;
 protobuf wire round-tripping alone was insufficient. It does not advertise v2
 support from current nodes or connect activation to HAKeeper decisions.
+
+The same increment adds explicit wire adapters from the replicated heartbeat
+messages to the common capability/activation validators. A missing capability
+is treated as unsupported, and a non-nil malformed activation is rejected;
+target maps and registry bytes are copied. This prevents a protobuf transport
+round-trip from becoming an accidental downgrade and gives the eventual
+coordinator a single validation boundary, while still leaving the actual
+heartbeat publication and activation state machine unconnected.
