@@ -1340,35 +1340,47 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 		return nil, err
 	}
 	// Keep the UINT64 cast directly around an arithmetic node so the typed
-	// runtime boundary survives nesting. Some vector backends convert DECIMAL
-	// 2^64 to UINT64 by wrapping instead of reporting an error, so the cast alone
-	// cannot be its only range proof. Reapply the same operator with its decimal
-	// identity while CASE selects an overflowing decimal operand outside the
-	// UINT64 range. In range, this is semantically neutral; out of range, the
-	// DECIMAL multiplication fails before conversion or any parent cancellation.
+	// runtime boundary survives nesting. Decimal-to-UINT64 conversion saturates
+	// positive values above UINT64_MAX on some vector backends, so the cast alone
+	// cannot be its only range proof. Build an always-evaluated UINT64 overflow
+	// sentinel instead of putting the failing expression behind CASE: a saturated
+	// out-of-range value plus one uses the native UINT64 overflow kernel, while an
+	// in-range value adds zero. This prevents a parent expression from cancelling
+	// an inner overflow and avoids relying on result-selector evaluation details.
 	maxUnsigned := makePlan2Uint64ConstExprWithType(^uint64(0))
 	decimalMax, err := appendCastBeforeExpr(ctx, maxUnsigned, makePlan2Type(&decimalType))
 	if err != nil {
 		return nil, err
 	}
-	inRange, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*Expr{DeepCopyExpr(bound), decimalMax})
+	outOfRange, err := BindFuncExprImplByPlanExpr(ctx, ">", []*Expr{DeepCopyExpr(bound), DeepCopyExpr(decimalMax)})
 	if err != nil {
 		return nil, err
 	}
-	// Multiplying by 10^19 overflows signed Decimal128 for every value beyond
-	// UINT64_MAX. Use a one-limb factor rather than bound*bound: the latter
-	// exercises the Decimal256 fallback when both operands have a high limb,
-	// while this path has one high-limb operand and reports the intended range
-	// failure consistently across vector backends.
-	overflowFactor, err := appendCastBeforeExpr(
-		ctx,
-		makePlan2Uint64ConstExprWithType(types.Pow10[19]),
-		makePlan2Type(&decimalType),
-	)
+	resultType := types.T_uint64.ToType()
+	saturated, err := appendCastBeforeExpr(ctx, DeepCopyExpr(bound), makePlan2Type(&resultType))
 	if err != nil {
 		return nil, err
 	}
-	overflow, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(bound), overflowFactor})
+	flag, err := appendCastBeforeExpr(ctx, outOfRange, makePlan2Type(&resultType))
+	if err != nil {
+		return nil, err
+	}
+	sentinel, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{DeepCopyExpr(saturated), flag})
+	if err != nil {
+		return nil, err
+	}
+	// The difference is zero for every valid input.  For a value above
+	// UINT64_MAX, evaluating sentinel has already returned the native overflow
+	// error, before this arithmetic identity or any parent can hide it.
+	sentinelDecimal, err := appendCastBeforeExpr(ctx, sentinel, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	saturatedDecimal, err := appendCastBeforeExpr(ctx, saturated, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	guardDelta, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{sentinelDecimal, saturatedDecimal})
 	if err != nil {
 		return nil, err
 	}
@@ -1386,7 +1398,7 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
-	guard, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{inRange, identity, overflow})
+	guard, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{identity, guardDelta})
 	if err != nil {
 		return nil, err
 	}
@@ -1394,7 +1406,6 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
-	resultType := types.T_uint64.ToType()
 	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
 }
 

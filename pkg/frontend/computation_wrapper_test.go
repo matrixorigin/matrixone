@@ -1057,6 +1057,16 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			runtimeBoundOperator: "+",
 		},
 		{
+			// The boundary itself is valid.  This distinguishes MAX_UINT64 from
+			// the immediately adjacent overflowing value exercised above, and
+			// catches guards that reject the inclusive upper bound.
+			name:                 "bare_absolute_value_max_boundary",
+			query:                "select (cast(? as unsigned) + abs(?)) is not null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "+",
+		},
+		{
 			name:  "bare_negated_peer",
 			query: "select (cast(? as unsigned) - -?) - cast(? as unsigned)",
 			// The second packet value is signed LONGLONG 1. Unary negation
