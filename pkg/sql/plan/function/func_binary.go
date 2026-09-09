@@ -5841,19 +5841,26 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
 // by MAKE_SET: round half away from zero, then saturate to the int64 range.
-// DECIMAL64/128 scales are nonnegative and bounded by their precision.
 func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
 	negative := value.Sign()
 	if negative {
 		value = value.Minus()
 	}
-	// Retain the first fractional digit without rounding. Rounding each chunk
-	// of a scale greater than 19 would incorrectly round values below a half.
-	if scale > 1 {
-		value, _ = value.ScaleTruncate(1 - scale)
-	}
 	if scale > 0 {
-		value, _ = value.Div128(types.Decimal128{B0_63: 10})
+		var power types.Decimal128
+		if scale <= 19 {
+			power = types.Decimal128{B0_63: types.Pow10[scale]}
+		} else {
+			power, _ = (types.Decimal128{B0_63: types.Pow10[19]}).Mul128(types.Decimal128{B0_63: types.Pow10[scale-19]})
+		}
+		quotient, _ := value.Div128Trunc(power)
+		product, _ := quotient.Mul128(power)
+		remainder, _ := value.Sub128(product)
+		twice, _ := remainder.Mul128(types.Decimal128{B0_63: 2})
+		if twice.Compare(power) >= 0 {
+			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
+		}
+		value = quotient
 	}
 	limit := uint64(math.MaxInt64)
 	if negative {
