@@ -163,7 +163,7 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                resolveSqlMode(proc),
+			SqlMode:                ResolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 			MaxDigestLength:     int64(ResolveMaxDigestLength(proc)),
