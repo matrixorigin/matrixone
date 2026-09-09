@@ -142,6 +142,24 @@ class WorkerContractTest(unittest.TestCase):
             worker._run_handler_process(None, request, 0.1)
         self.assertLess(time.monotonic() - started, 2)
 
+    def test_handler_stdout_cannot_inject_parent_protocol(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays([pa.array([1], type=pa.int64())], ["arg_0"])
+        request = {
+            "source": "import os\ndef f(ctx, x): os.write(1, b'\\x00' * 8); return x",
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "input": worker._serialize_record_batch(batch),
+        }
+        with self.assertRaisesRegex(ValueError, "handler process"):
+            worker._run_handler_process(None, request, 3)
+
     def test_zero_argument_vector_uses_context_rows(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         output = pa.array([7, 7, 7], type=pa.int64())

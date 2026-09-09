@@ -45,6 +45,8 @@ MAX_TERMINAL_BYTES = 16 << 20
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
+_HANDLER_RESPONSE_ERROR = 0
+_HANDLER_RESPONSE_OK = 1
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
 _MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
@@ -757,10 +759,10 @@ def _execute_handler_subprocess() -> None:
         if size > MAX_EXECUTION_FRAME_BYTES:
             raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
         request = pickle.loads(_read_exact(sys.stdin.buffer, size))
-        response = {"ok": True, "payload": _execute_handler_batch(request)}
+        response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(request)
     except Exception as exc:
-        response = {"ok": False, "error": _safe_error(exc)}
-    _write_execution_frame(sys.stdout.buffer, pickle.dumps(response, protocol=5))
+        response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
+    _write_execution_frame(sys.stdout.buffer, response)
 
 
 def _context_is_cancelled(context) -> bool:
@@ -830,13 +832,18 @@ def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: floa
                     raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
             if expected is not None and len(response) >= expected + 8:
                 break
-        payload = pickle.loads(bytes(response[8 : expected + 8]))
-        if not isinstance(payload, dict) or payload.get("ok") is not True:
-            raise ValueError(str(payload.get("error", "USER_CODE: handler process failed")))
-        result = payload.get("payload")
-        if not isinstance(result, bytes):
-            raise ValueError("PROTOCOL: handler process returned an invalid Arrow payload")
-        return result
+        payload = bytes(response[8 : expected + 8])
+        if not payload:
+            raise ValueError("PROTOCOL: handler process returned an empty response")
+        if payload[0] == _HANDLER_RESPONSE_ERROR:
+            try:
+                message = payload[1:].decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("PROTOCOL: handler process returned an invalid error") from exc
+            raise ValueError(message or "USER_CODE: handler process failed")
+        if payload[0] != _HANDLER_RESPONSE_OK:
+            raise ValueError("PROTOCOL: handler process returned an unknown status")
+        return payload[1:]
     finally:
         selector.close()
         if process.poll() is None:
