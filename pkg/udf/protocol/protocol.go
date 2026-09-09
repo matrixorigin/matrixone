@@ -325,6 +325,7 @@ type ExecutionGroup struct {
 	registered  int
 	inFlight    int
 	members     map[string]bool
+	pending     map[string]struct{}
 	terminal    map[string]bool
 	closing     bool
 	releaseBusy bool
@@ -339,7 +340,8 @@ func NewExecutionGroup(id string, epoch uint64, maxMembers int, release func() e
 	}
 	return &ExecutionGroup{
 		id: id, epoch: epoch, maxMembers: maxMembers,
-		members: make(map[string]bool), terminal: make(map[string]bool), release: release,
+		members: make(map[string]bool), pending: make(map[string]struct{}),
+		terminal: make(map[string]bool), release: release,
 	}, nil
 }
 
@@ -357,9 +359,13 @@ func (g *ExecutionGroup) BeginOpen(memberID string) (*OpenToken, error) {
 	if g.members[memberID] || g.terminal[memberID] {
 		return nil, ErrDuplicate
 	}
+	if _, exists := g.pending[memberID]; exists {
+		return nil, ErrDuplicate
+	}
 	if g.registered+g.inFlight >= g.maxMembers {
 		return nil, fmt.Errorf("%w: member limit %d reached", ErrLedgerFull, g.maxMembers)
 	}
+	g.pending[memberID] = struct{}{}
 	g.inFlight++
 	return &OpenToken{group: g, memberID: memberID}, nil
 }
@@ -378,6 +384,7 @@ func (t *OpenToken) Commit() error {
 	t.once.Do(func() {
 		g := t.group
 		g.mu.Lock()
+		delete(g.pending, t.memberID)
 		g.inFlight--
 		if g.closing || g.released {
 			t.result = ErrGroupClosed
@@ -404,6 +411,7 @@ func (t *OpenToken) Abort() error {
 	t.once.Do(func() {
 		g := t.group
 		g.mu.Lock()
+		delete(g.pending, t.memberID)
 		g.inFlight--
 		release := g.canReleaseLocked()
 		g.mu.Unlock()
@@ -606,6 +614,13 @@ func (l *TerminalLedger) Expire(now time.Time) int {
 	defer l.mu.Unlock()
 	removed := 0
 	for key, entry := range l.entries {
+		// Active entries represent work that may still produce a result.  Their
+		// admission credit belongs to the running execution and can only be
+		// released by an explicit termination/recovery path.  Expiry is solely
+		// for completed deduplication tombstones.
+		if !entry.tombstone {
+			continue
+		}
 		if !now.Before(entry.expiresAt) {
 			delete(l.entries, key)
 			l.reservedN--
@@ -614,6 +629,26 @@ func (l *TerminalLedger) Expire(now time.Time) int {
 		}
 	}
 	return removed
+}
+
+// Abandon removes an active execution after its owner has confirmed
+// cancellation, crash recovery, or another terminal failure.  It is separate
+// from Expire so a clock cannot reclaim a live invocation's deduplication
+// entry.
+func (l *TerminalLedger) Abandon(key string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok {
+		return ErrUnknownIdentity
+	}
+	if entry.tombstone {
+		return ErrProtocol
+	}
+	delete(l.entries, key)
+	l.reservedN--
+	l.reservedB -= entry.bytes
+	return nil
 }
 
 func (l *TerminalLedger) Counts() (entries int, bytes int64) {
