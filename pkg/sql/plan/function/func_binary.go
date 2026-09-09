@@ -5856,8 +5856,8 @@ func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
 		quotient, _ := value.Div128Trunc(power)
 		product, _ := quotient.Mul128(power)
 		remainder, _ := value.Sub128(product)
-		twice, _ := remainder.Mul128(types.Decimal128{B0_63: 2})
-		if twice.Compare(power) >= 0 {
+		halfPower, _ := power.Div128Trunc(types.Decimal128{B0_63: 2})
+		if remainder.Compare(halfPower) >= 0 {
 			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
 		}
 		value = quotient

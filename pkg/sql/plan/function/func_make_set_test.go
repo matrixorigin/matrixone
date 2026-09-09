@@ -61,6 +61,10 @@ func TestMakeSetDecimal(t *testing.T) {
 			{"-0.499999999999999999999999999999999999", ""},
 			{"-0.500000000000000000000000000000000000", "a,b,c,d,high"},
 		}},
+		{"decimal128/scale38", types.New(types.T_decimal128, 38, 38), []row{
+			{"0.9", "a"},
+			{"-0.9", "a,b,c,d,high"},
+		}},
 		{"decimal64/scale_zero", types.New(types.T_decimal64, 18, 0), []row{
 			{"1", "a"}, {"2", "b"}, {"-1", "a,b,c,d,high"}, {"-2", "b,c,d,high"},
 		}},
