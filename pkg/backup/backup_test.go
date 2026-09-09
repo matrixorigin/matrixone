@@ -24,7 +24,6 @@ import (
 
 	"github.com/prashantv/gostub"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -121,11 +120,10 @@ func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 	}
 }
 
-func TestExecBackupSkipsObjectDeletedInSpecialCheckpoint(t *testing.T) {
+func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	ctx := t.Context()
 	src := newBackupMemoryFS(t, "backup-soft-deleted-src")
-	legacyDst := newBackupMemoryFS(t, "backup-soft-deleted-legacy-dst")
-	fixedDst := newBackupMemoryFS(t, "backup-soft-deleted-fixed-dst")
+	dst := newBackupMemoryFS(t, "backup-soft-deleted-dst")
 
 	objectID := objectio.NewObjectid()
 	objectName := objectio.BuildObjectNameWithObjectID(&objectID)
@@ -166,41 +164,95 @@ func TestExecBackupSkipsObjectDeletedInSpecialCheckpoint(t *testing.T) {
 	checkpointLocation, _, err := checkpointData.Sync(ctx, src)
 	require.NoError(t, err)
 
-	softDeletes := make(map[string]bool)
-	objects, _, err := logtail.LoadCheckpointEntriesFromKey(
+	objects, reader, err := logtail.LoadCheckpointEntriesFromKey(
 		ctx,
 		"backup-test",
 		src,
 		checkpointLocation,
 		logtail.CheckpointCurrentVersion,
-		&softDeletes,
+		nil,
 		&types.TS{},
 	)
 	require.NoError(t, err)
-	require.Contains(t, softDeletes, objectName.String())
-	require.NoError(t, src.Delete(ctx, objectName.String()))
-	_, err = src.StatFile(ctx, objectName.String())
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 
-	// The object has a committed DropTS in the selected special checkpoint. A
-	// completed GC may have already removed its physical file before backup.
-	// The old selection path still schedules it and therefore fails with 20405.
-	legacyFiles := selectBackupObjects(objects, nil, nil, nil)
-	require.Contains(t, legacyFiles, objectName.String())
-	_, err = parallelCopyData(
+	// DropTS is after the restore timestamp. ReWriteCheckpointAndBlockFromKey
+	// clears this DeleteTS and retains the non-appendable object, so its physical
+	// file must be present in the backup.
+	files := selectBackupObjects(objects, checkpointStart, nil, nil)
+	require.Contains(t, files, objectName.String())
+	_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
+	require.NoError(t, err)
+	var restoredLive bool
+	rewrittenLocation, _, _, err := logtail.ReWriteCheckpointAndBlockFromKey(
 		ctx,
+		"backup-test",
 		src,
-		legacyDst,
-		legacyFiles,
-		1,
+		dst,
+		checkpointLocation,
+		reader,
+		logtail.CheckpointCurrentVersion,
+		checkpointStart,
+	)
+	require.NoError(t, err)
+	rewrittenReader, err := logtail.GetCheckpointReader(
+		ctx,
+		"backup-test",
+		dst,
+		rewrittenLocation,
+		logtail.CheckpointCurrentVersion,
+	)
+	require.NoError(t, err)
+	require.NoError(t, rewrittenReader.ForEachRow(
+		ctx,
+		func(
+			_ uint32,
+			_, _ uint64,
+			_ int8,
+			stats objectio.ObjectStats,
+			_ types.TS,
+			deleteTS types.TS,
+			_ types.Rowid,
+		) error {
+			if stats.ObjectName().String() == objectName.String() && deleteTS.IsEmpty() {
+				restoredLive = true
+			}
+			return nil
+		},
+	))
+	require.True(t, restoredLive)
+	_, err = dst.StatFile(ctx, objectName.String())
+	require.NoError(t, err)
+}
+
+func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *testing.T) {
+	newObject := func(dropTS types.TS) *objectio.BackupObject {
+		objectID := objectio.NewObjectid()
+		objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+		objectStats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsLocation(
+			objectStats,
+			objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0),
+		))
+		return &objectio.BackupObject{
+			Location: objectStats.ObjectLocation(),
+			CrateTS:  types.BuildTS(5, 0),
+			DropTS:   dropTS,
+			NeedCopy: true,
+		}
+	}
+
+	before := newObject(types.BuildTS(10, 0))
+	at := newObject(types.BuildTS(15, 0))
+	after := newObject(types.BuildTS(30, 0))
+	files := selectBackupObjects(
+		[]*objectio.BackupObject{before, at, after},
+		types.BuildTS(15, 0),
+		nil,
 		nil,
 	)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
-
-	files := selectBackupObjects(objects, softDeletes, nil, nil)
-	require.NotContains(t, files, objectName.String())
-	_, err = parallelCopyData(ctx, src, fixedDst, files, 1, nil)
-	require.NoError(t, err)
+	require.NotContains(t, files, before.Location.Name().String())
+	require.Contains(t, files, at.Location.Name().String())
+	require.Contains(t, files, after.Location.Name().String())
 }
 
 func TestBackupData(t *testing.T) {
