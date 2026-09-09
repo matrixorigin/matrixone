@@ -285,7 +285,7 @@ func makePrimaryKeyV2IdentityExprs(tableDef *planpb.TableDef, values []*planpb.E
 		return nil, moerr.NewInternalErrorNoCtx("invalid v2 primary-key identity parts")
 	}
 	if len(values) == 1 {
-		return makeCollationKeyV2Expr(values[0], 0)
+		return makePrimaryKeyV2IdentityExpr(tableDef, values[0])
 	}
 	prefixes := make([]int, len(values))
 	return makeCollationCompositeKeyV2Expr(values, prefixes)

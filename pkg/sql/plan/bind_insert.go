@@ -1852,6 +1852,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					// would allow two collation-equivalent FK values to lock
 					// different identities.
 					lockExpr, err = makePrimaryKeyV2IdentityExprs(parentTableDef, childExprs)
+					if err != nil {
+						return 0, nil, err
+					}
 				} else if len(childExprs) == 1 {
 					lockExpr = childExprs[0]
 				} else {
