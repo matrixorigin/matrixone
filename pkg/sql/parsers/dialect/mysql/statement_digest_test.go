@@ -62,6 +62,21 @@ func TestNormalizeStatementDigestSQLMode(t *testing.T) {
 	got, err = NormalizeStatementDigest(context.Background(), `SELECT /*+ INDEX(t "idx") */ * FROM t`, "ANSI_QUOTES", 1024)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT /*+ INDEX ( `t` `idx` ) */ * FROM `t`", got)
+
+	// The validation-only compatibility rewrite must honor NO_BACKSLASH_ESCAPES
+	// while skipping quoted source.  Otherwise the backslash causes it to skip
+	// the real closing quote and miss a later compatibility rewrite entirely.
+	got, err = NormalizeStatementDigest(context.Background(), `SELECT NCHAR(3), 'a\'`, "NO_BACKSLASH_ESCAPES", 1024)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT NCHAR (?) , ?", got)
+
+	got, err = NormalizeStatementDigest(context.Background(), `SELECT 'a\', ROW(1,2)`, "NO_BACKSLASH_ESCAPES", 1024)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ? , ROW (...)", got)
+
+	got, err = NormalizeStatementDigest(context.Background(), `SELECT a SOUNDS LIKE b, 'a\' FROM t`, "NO_BACKSLASH_ESCAPES", 1024)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `a` SOUNDS LIKE `b` , ? FROM `t`", got)
 }
 
 func TestNormalizeStatementDigestMySQLCounterexamples(t *testing.T) {

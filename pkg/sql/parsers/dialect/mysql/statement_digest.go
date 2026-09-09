@@ -250,7 +250,7 @@ func parseStatementDigestSQL(ctx context.Context, sql, sqlMode string) (tree.Sta
 	if err == nil {
 		return parsed, nil
 	}
-	rewritten := rewriteDigestParserCompatibility(sql)
+	rewritten := rewriteDigestParserCompatibility(sql, ParseSQLModeFlags(sqlMode).Has(SQLModeNoBackslashEscapes))
 	if rewritten == sql {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func parseStatementDigestSQL(ctx context.Context, sql, sqlMode string) (tree.Sta
 	return nil, err
 }
 
-func rewriteDigestParserCompatibility(sql string) string {
+func rewriteDigestParserCompatibility(sql string, noBackslashEscapes bool) string {
 	var b strings.Builder
 	b.Grow(len(sql))
 	changed := false
@@ -269,7 +269,7 @@ func rewriteDigestParserCompatibility(sql string) string {
 		ch := sql[i]
 		switch ch {
 		case '\'', '"', '`':
-			end, closed := skipDigestParserQuoted(sql, i, ch)
+			end, closed := skipDigestParserQuoted(sql, i, ch, noBackslashEscapes)
 			if !closed {
 				b.WriteString(sql[i:])
 				return b.String()
@@ -315,7 +315,7 @@ func rewriteDigestParserCompatibility(sql string) string {
 			i++
 		case '@':
 			if i+1 < len(sql) && (sql[i+1] == '\'' || sql[i+1] == '"' || sql[i+1] == '`') {
-				end, closed := skipDigestParserQuoted(sql, i+1, sql[i+1])
+				end, closed := skipDigestParserQuoted(sql, i+1, sql[i+1], noBackslashEscapes)
 				if closed {
 					b.WriteString("@digest_var")
 					i = end
@@ -346,7 +346,7 @@ func rewriteDigestParserCompatibility(sql string) string {
 				for j < len(sql) && isDigestHintSpace(sql[j]) {
 					j++
 				}
-				if j < len(sql) && sql[j] == '(' && digestRowConstructorHasComma(sql, j) {
+				if j < len(sql) && sql[j] == '(' && digestRowConstructorHasComma(sql, j, noBackslashEscapes) {
 					changed = true
 					i = j
 				} else {
@@ -375,9 +375,9 @@ func rewriteDigestParserCompatibility(sql string) string {
 	return b.String()
 }
 
-func skipDigestParserQuoted(source string, start int, delimiter byte) (int, bool) {
+func skipDigestParserQuoted(source string, start int, delimiter byte, noBackslashEscapes bool) (int, bool) {
 	for i := start + 1; i < len(source); i++ {
-		if source[i] == '\\' && delimiter != '`' && i+1 < len(source) {
+		if source[i] == '\\' && delimiter != '`' && !noBackslashEscapes && i+1 < len(source) {
 			i++
 			continue
 		}
@@ -393,12 +393,12 @@ func skipDigestParserQuoted(source string, start int, delimiter byte) (int, bool
 	return len(source), false
 }
 
-func digestRowConstructorHasComma(source string, start int) bool {
+func digestRowConstructorHasComma(source string, start int, noBackslashEscapes bool) bool {
 	depth := 0
 	for i := start; i < len(source); i++ {
 		switch source[i] {
 		case '\'', '"', '`':
-			end, closed := skipDigestParserQuoted(source, i, source[i])
+			end, closed := skipDigestParserQuoted(source, i, source[i], noBackslashEscapes)
 			if !closed {
 				return false
 			}

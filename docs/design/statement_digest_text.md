@@ -1,7 +1,7 @@
 # `STATEMENT_DIGEST_TEXT` compatibility design
 
 - Status: proposed; implementation review blocked pending independent design approval
-- Design revision: v4 (2026-09-08; SQL-mode fallback and encoding-error contract)
+- Design revision: v5 (2026-09-09; SQL-mode-aware compatibility rewrites)
 - Owning issue: [matrixorigin/matrixone#23025](https://github.com/matrixorigin/matrixone/issues/23025)
 - Implementation PR: [matrixorigin/matrixone#27990](https://github.com/matrixorigin/matrixone/pull/27990)
 - Compatibility target: MySQL 8.0.42 behavior, with the MySQL 8.4 documented SQL surface
@@ -74,9 +74,11 @@ example such as `SELECT 1` is necessary but insufficient evidence.
 ## 4. Invariants
 
 1. **Single-statement admission:** normalization succeeds only after the input is
-   validated as one statement under the current SQL mode. Empty/comment-only
-   input, multiple top-level statements, malformed SQL, and parameter markers in
-   the normalized statement fail.
+   validated as one statement under the current SQL mode. Validation-only
+   compatibility rewrites use the same quoting rules, including
+   `NO_BACKSLASH_ESCAPES`, so they cannot change statement boundaries while
+   scanning source. Empty/comment-only input, multiple top-level statements,
+   malformed SQL, and parameter markers in the normalized statement fail.
 2. **Value equivalence:** statements differing only in replaceable literal
    values normalize identically until the configured token budget is exhausted.
 3. **Identifier distinction:** identifiers, including ANSI-quoted user-variable
