@@ -77,40 +77,49 @@ func pythonUdfRetType(parameters []types.Type) types.Type {
 // the generic builtin STRICT bit.
 func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 0 || parameters[0] == nil {
-		return fmt.Errorf("python runtime: missing routine descriptor")
+		return fmt.Errorf("python udf: missing routine descriptor")
 	}
 	if length < 0 {
-		return fmt.Errorf("python runtime: negative input length %d", length)
+		return fmt.Errorf("python udf: negative input length %d", length)
 	}
 
 	routine := &UdfWithContext{}
 	encoded, isNull := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
 	if isNull {
-		return fmt.Errorf("python runtime: routine descriptor is NULL")
+		return fmt.Errorf("python udf: routine descriptor is NULL")
 	}
 	if err := json.Unmarshal(encoded, routine); err != nil {
-		return fmt.Errorf("python runtime: decode routine descriptor: %w", err)
+		return fmt.Errorf("python udf: decode routine descriptor: %w", err)
 	}
 	if routine.Udf == nil {
-		return fmt.Errorf("python runtime: routine descriptor has no function")
+		return fmt.Errorf("python udf: routine descriptor has no function")
 	}
 
 	body := PythonRoutineBody{}
 	if err := json.Unmarshal([]byte(routine.Body), &body); err != nil {
-		return fmt.Errorf("python runtime: decode Python routine body: %w", err)
+		return fmt.Errorf("python udf: decode Python routine body: %w", err)
 	}
 	if body.Handler == "" || body.Source == "" {
-		return fmt.Errorf("python runtime: routine handler and source are required")
+		return fmt.Errorf("python udf: routine handler and source are required")
+	}
+	if body.Mode != "SCALAR" && body.Mode != "VECTOR" {
+		return fmt.Errorf("python udf: unsupported mode %q", body.Mode)
+	}
+	if body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull {
+		return fmt.Errorf("python udf: unsupported NULL policy %q", body.NullPolicy)
 	}
 	if body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
-		return fmt.Errorf("python runtime: unsupported Python ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
+		return fmt.Errorf("python udf: unsupported Python ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
+	}
+	if body.SDKVersion != udf.PythonSDKVersion {
+		return fmt.Errorf("python udf: unsupported Python SDK %q", body.SDKVersion)
 	}
 	argTypes, err := routineArgumentTypes(routine)
 	if err != nil {
 		return err
 	}
 	if len(parameters)-1 != len(argTypes) {
-		return fmt.Errorf("python runtime: routine has %d arguments, received %d", len(argTypes), len(parameters)-1)
+		return fmt.Errorf("python udf: routine has %d arguments, received %d", len(argTypes), len(parameters)-1)
 	}
 
 	if length == 0 {
@@ -118,11 +127,11 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 	for index, input := range parameters[1:] {
 		if input == nil || (!input.IsConst() && input.Length() < length) {
-			return fmt.Errorf("python runtime: input vector %d is shorter than invocation length", index)
+			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
 		}
 	}
 	if selectList != nil && len(selectList.SelectList) < length {
-		return fmt.Errorf("python runtime: selection list is shorter than invocation length")
+		return fmt.Errorf("python udf: selection list is shorter than invocation length")
 	}
 
 	selected := make([]int64, 0, length)
@@ -150,13 +159,13 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		compacted = make([]*vector.Vector, len(inputs))
 		for i, input := range inputs {
 			if input == nil {
-				return fmt.Errorf("python runtime: input vector %d is nil", i)
+				return fmt.Errorf("python udf: input vector %d is nil", i)
 			}
 			compacted[i] = vector.NewOffHeapVecWithType(*input.GetType())
 			compacted[i].SetIsBin(input.GetIsBin())
 			if err := compacted[i].Union(input, selected, proc.Mp()); err != nil {
 				freeVectors(compacted, proc.Mp())
-				return fmt.Errorf("python runtime: compact input %d: %w", i, err)
+				return fmt.Errorf("python udf: compact input %d: %w", i, err)
 			}
 		}
 		inputs = compacted
@@ -173,7 +182,7 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 
 	accountID, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {
-		return fmt.Errorf("python runtime: resolve account: %w", err)
+		return fmt.Errorf("python udf: resolve account: %w", err)
 	}
 	tuple, err := invocationTuple(routine.Context, proc.QueryId(), accountID)
 	if err != nil {
@@ -241,11 +250,11 @@ func routineArgumentTypes(routine *UdfWithContext) ([]types.Type, error) {
 	args := make([]types.Type, len(routine.Args))
 	for i, arg := range routine.Args {
 		if arg == nil {
-			return nil, fmt.Errorf("python runtime: routine argument %d is nil", i)
+			return nil, fmt.Errorf("python udf: routine argument %d is nil", i)
 		}
 		typ, ok := types.Types[arg.Type]
 		if !ok {
-			return nil, fmt.Errorf("python runtime: unknown routine argument type %q", arg.Type)
+			return nil, fmt.Errorf("python udf: unknown routine argument type %q", arg.Type)
 		}
 		args[i] = typ.ToType()
 	}
@@ -279,7 +288,7 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 	if statementID == "" {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return protocol.FencingTuple{}, fmt.Errorf("python runtime: create statement fence: %w", err)
+			return protocol.FencingTuple{}, fmt.Errorf("python udf: create statement fence: %w", err)
 		}
 		statementID = id.String()
 	}
@@ -289,7 +298,7 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 	}
 	invocationID, err := uuid.NewV7()
 	if err != nil {
-		return protocol.FencingTuple{}, fmt.Errorf("python runtime: create invocation fence: %w", err)
+		return protocol.FencingTuple{}, fmt.Errorf("python udf: create invocation fence: %w", err)
 	}
 	groupEpoch, err := positiveContextUint(context, "group_epoch", 1)
 	if err != nil {
@@ -316,7 +325,7 @@ func positiveContextUint(context map[string]string, key string, fallback uint64)
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil || parsed == 0 {
-		return 0, fmt.Errorf("python runtime: invalid %s %q", key, value)
+		return 0, fmt.Errorf("python udf: invalid %s %q", key, value)
 	}
 	return parsed, nil
 }
