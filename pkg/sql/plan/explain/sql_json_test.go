@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -333,6 +334,49 @@ func TestBuildSQLJSONPlanPreservesUpdateAssignments(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	require.Len(t, decoded.MatrixOne.Nodes[0].Assignments, 2)
+	require.Equal(t, sqlJSONAssignment{Target: "db.t.v", Value: "2"}, decoded.MatrixOne.Nodes[0].Assignments[1])
+}
+
+func TestBuildSQLJSONPlanResolvesPrunedUpdateAssignments(t *testing.T) {
+	table := &plan.TableDef{
+		DbName: "db",
+		Name:   "t",
+		Cols: []*plan.ColDef{
+			sqlJSONTestColumn("id"),
+			sqlJSONTestColumn("v"),
+			sqlJSONTestColumn(catalog.Row_ID),
+		},
+	}
+	data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_UPDATE,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{
+			{
+				NodeId:   1,
+				NodeType: plan.Node_MULTI_UPDATE,
+				Children: []int32{2},
+				UpdateCtxList: []*plan.UpdateCtx{{
+					ObjRef:     &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+					TableDef:   table,
+					InsertCols: []plan.ColRef{{RelPos: 0, ColPos: 0}, {RelPos: 0, ColPos: 1}},
+				}},
+			},
+			{
+				NodeId:      2,
+				NodeType:    plan.Node_LOCK_OP,
+				ProjectList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2), sqlJSONTestInt32(3)},
+			},
+		},
+	})
+	require.NoError(t, err)
+	var decoded struct {
+		MatrixOne struct {
+			Nodes []sqlJSONNode `json:"nodes"`
+		} `json:"matrixone"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.MatrixOne.Nodes[0].Assignments, 2)
+	require.Equal(t, sqlJSONAssignment{Target: "db.t.id", Value: "1"}, decoded.MatrixOne.Nodes[0].Assignments[0])
 	require.Equal(t, sqlJSONAssignment{Target: "db.t.v", Value: "2"}, decoded.MatrixOne.Nodes[0].Assignments[1])
 }
 
