@@ -22,7 +22,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 FIELD_RE = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s]+)")
@@ -65,10 +65,8 @@ def format_duration(seconds: float) -> str:
     return f"{seconds * 1e6:.2f}us"
 
 
-def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
-    totals: Dict[Tuple[str, str], List[float]] = defaultdict(
-        lambda: [0, 0.0, 0.0, 0]
-    )
+def setup_records(report_path: Path) -> Iterable[Tuple[Dict[str, str], float]]:
+    """Yield valid setup records from a possibly truncated Go test report."""
     with report_path.open(encoding="utf-8") as report:
         for line in report:
             try:
@@ -84,7 +82,9 @@ def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
                 marker = output_line.find("MO_UT_SETUP ")
                 if marker < 0:
                     continue
-                fields = dict(FIELD_RE.findall(output_line[marker + len("MO_UT_SETUP ") :]))
+                fields = dict(
+                    FIELD_RE.findall(output_line[marker + len("MO_UT_SETUP ") :])
+                )
                 fixture = fields.get("fixture")
                 phase = fields.get("phase")
                 duration = fields.get("duration")
@@ -93,14 +93,112 @@ def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
                 seconds = duration_seconds(duration)
                 if seconds is None:
                     continue
-                count, total, maximum, errors = totals[(fixture, phase)]
-                totals[(fixture, phase)] = [
-                    int(count) + 1,
-                    float(total) + seconds,
-                    max(float(maximum), seconds),
-                    int(errors) + (fields.get("status") == "error"),
-                ]
+                yield fields, seconds
+
+
+def summarize_records(
+    records: Iterable[Tuple[Dict[str, str], float]],
+) -> Dict[Tuple[str, str], List[float]]:
+    totals: Dict[Tuple[str, str], List[float]] = defaultdict(
+        lambda: [0, 0.0, 0.0, 0]
+    )
+    for fields, seconds in records:
+        fixture = fields["fixture"]
+        phase = fields["phase"]
+        count, total, maximum, errors = totals[(fixture, phase)]
+        totals[(fixture, phase)] = [
+            int(count) + 1,
+            float(total) + seconds,
+            max(float(maximum), seconds),
+            int(errors) + (fields.get("status") == "error"),
+        ]
     return totals
+
+
+def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
+    return summarize_records(setup_records(report_path))
+
+
+def summarize_embedded_diagnostics(
+    records: Iterable[Tuple[Dict[str, str], float]],
+) -> Optional[str]:
+    """Return one bounded diagnosis line for embedded-cluster lifecycle cost."""
+    embedded = [
+        (fields, seconds)
+        for fields, seconds in records
+        if fields["fixture"] == "embedded-cluster"
+    ]
+    if not embedded:
+        return None
+
+    phase_totals: Dict[str, List[float]] = defaultdict(list)
+    holds: List[float] = []
+    cluster_ids = set()
+    # A cluster may be started more than once in one test process.  Keep the
+    # current lease state per cluster key and reset it at every successful
+    # admission acquire; a historical release must not hide a later lease.
+    admission_state: Dict[Tuple[str, str], bool] = {}
+    for fields, seconds in embedded:
+        phase_totals[fields["phase"]].append(seconds)
+        cluster_id = fields.get("cluster_id")
+        cluster_key = None
+        if cluster_id:
+            cluster_key = (fields.get("pid", ""), cluster_id)
+            cluster_ids.add(cluster_key)
+        if (
+            cluster_key is not None
+            and fields["phase"] == "admission-acquire"
+            and fields.get("status") != "error"
+        ):
+            admission_state[cluster_key] = False
+        hold = fields.get("hold")
+        if hold is not None:
+            if cluster_key is not None:
+                if cluster_key not in admission_state:
+                    # Keep truncated/legacy reports useful even when the
+                    # acquire record is missing from the captured output.
+                    admission_state[cluster_key] = False
+            hold_seconds = duration_seconds(hold)
+            if hold_seconds is not None:
+                holds.append(hold_seconds)
+        if cluster_key is not None and fields.get("admission_released") == "true":
+            admission_state[cluster_key] = True
+
+    def phase_stats(phase: str) -> Optional[str]:
+        values = phase_totals.get(phase)
+        if not values:
+            return None
+        return (
+            f"total={format_duration(sum(values))} "
+            f"max={format_duration(max(values))}"
+        )
+
+    cluster_count = len(cluster_ids)
+    if not cluster_count:
+        cluster_count = max(
+            len(phase_totals.get("cluster-construct", [])),
+            len(phase_totals.get("admission-acquire", [])),
+            len(phase_totals.get("service-start", [])),
+        )
+    details = [f"clusters={cluster_count}"]
+    admission = phase_stats("admission-acquire")
+    if admission is not None:
+        details.append(f"admission_wait({admission})")
+    service_start = phase_stats("service-start")
+    if service_start is not None:
+        details.append(f"service_start({service_start})")
+    service_close = phase_stats("service-close")
+    if service_close is not None:
+        details.append(f"service_close({service_close})")
+    if holds:
+        details.append(
+            "admission_hold_observed_max=" + format_duration(max(holds))
+        )
+        details.append(
+            "admission_unreleased="
+            f"{sum(not released for released in admission_state.values())}"
+        )
+    return "[ut_setup] embedded-cluster diagnosis: " + " ".join(details)
 
 
 def main(argv: List[str]) -> int:
@@ -112,7 +210,8 @@ def main(argv: List[str]) -> int:
         print(f"UT JSON report does not exist: {report_path}", file=sys.stderr)
         return 2
 
-    totals = summarize(report_path)
+    records = list(setup_records(report_path))
+    totals = summarize_records(records)
     if not totals:
         return 0
 
@@ -130,6 +229,9 @@ def main(argv: List[str]) -> int:
             f"total={format_duration(float(total))} max={format_duration(float(maximum))}"
             f"{error_suffix}"
         )
+    diagnosis = summarize_embedded_diagnostics(records)
+    if diagnosis is not None:
+        print(diagnosis)
     return 0
 
 

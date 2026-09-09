@@ -587,6 +587,40 @@ func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
 	return uintToBinary(uint64(int64(v))), nil
 }
 
+// BinString applies BIN's MySQL string contract: convert the leading base-10
+// integer prefix and format its uint64 bit pattern in binary. The empty string
+// is NULL, while a non-empty string without a usable prefix is zero.
+func BinString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	nParam := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		nStr, null := nParam.GetStrValue(i)
+		if null || len(nStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, unsignedVal, _, err := parseBaseIntegerPrefix(nStr, 10)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(unsignedVal)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Bin[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(v T) (string, error) {
 		val, err := binInteger[T](v, proc)
@@ -4885,7 +4919,11 @@ func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 const (
-	MaxAllowedValue = 8000
+	// SPACE returns a VARCHAR. Keep the execution bound aligned with the
+	// largest inline SQL string instead of an unrelated, smaller constant.
+	// The bound is still finite: a count supplied by a table must not turn one
+	// row into an unbounded allocation.
+	MaxAllowedValue = types.MaxVarcharLen
 )
 
 func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
@@ -4893,16 +4931,52 @@ func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
 	if v < 0 {
 		ilen = 0
 	} else {
-		ilen = int(v)
-		if ilen > MaxAllowedValue || ilen < 0 {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || float64(v) > MaxAllowedValue {
 			return "", moerr.NewInvalidInputNoCtxf("the space count is greater than max allowed value %d", MaxAllowedValue)
 		}
+		ilen = int(v)
 	}
 	return strings.Repeat(" ", ilen), nil
 }
 
 func SpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, FillSpaceNumber[T], selectList)
+}
+
+func fillSpaceNumberFromIntegerString(value string) (string, error) {
+	// Decimal-to-integer conversion for SPACE follows MySQL's half-up
+	// rounding. decimalInt64Explicit clamps values outside int64; that is safe
+	// here because every positive value above the SPACE bound is rejected and
+	// every negative value produces the empty string.
+	number, err := decimalInt64Explicit(value)
+	if err != nil {
+		return "", err
+	}
+	return FillSpaceNumber(number)
+}
+
+func SpaceDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal64](ivecs, result, proc, length,
+		func(value types.Decimal64) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal64RoundedIntegerString(value, scale))
+		}, selectList)
+}
+
+func SpaceDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal128](ivecs, result, proc, length,
+		func(value types.Decimal128) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal128RoundedIntegerString(value, scale))
+		}, selectList)
+}
+
+func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStrWithErrorCheck[types.Decimal256](ivecs, result, proc, length,
+		func(value types.Decimal256) (string, error) {
+			return fillSpaceNumberFromIntegerString(decimal256RoundedIntegerString(value, scale))
+		}, selectList)
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6711,21 +6785,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			var resultStr string
-			if len(v1) == 4 {
-				// IPv4: 4 bytes
-				ip := net.IP(v1)
-				resultStr = ip.String()
-			} else if len(v1) == 16 {
-				// IPv6: 16 bytes
-				ip := net.IP(v1)
-				// Check if it's an IPv4-mapped IPv6 address (::ffff:x.x.x.x)
-				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-					resultStr = ip4.String()
-				} else {
-					resultStr = ip.String()
-				}
-			} else {
+			resultStr, ok := inet6NtoaString(v1)
+			if !ok {
 				// Invalid length: return NULL for all rows
 				rs.SetNullResult(uint64(length))
 				return nil
@@ -6752,18 +6813,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			var resultStr string
-			if len(v1) == 4 {
-				ip := net.IP(v1)
-				resultStr = ip.String()
-			} else if len(v1) == 16 {
-				ip := net.IP(v1)
-				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-					resultStr = ip4.String()
-				} else {
-					resultStr = ip.String()
-				}
-			} else {
+			resultStr, ok := inet6NtoaString(v1)
+			if !ok {
 				// Invalid length: return NULL
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
@@ -6780,18 +6831,8 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		var resultStr string
-		if len(v1) == 4 {
-			ip := net.IP(v1)
-			resultStr = ip.String()
-		} else if len(v1) == 16 {
-			ip := net.IP(v1)
-			if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-				resultStr = ip4.String()
-			} else {
-				resultStr = ip.String()
-			}
-		} else {
+		resultStr, ok := inet6NtoaString(v1)
+		if !ok {
 			// Invalid length: return NULL
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
 				return err
@@ -6803,6 +6844,29 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		}
 	}
 	return nil
+}
+
+// inet6NtoaString implements the MySQL-compatible textual representation for
+// the binary input accepted by INET6_NTOA. In particular, MySQL emits the
+// dotted-decimal tail for an IPv4-compatible address only when the seventh
+// IPv6 hextet is non-zero. This preserves hexadecimal output for values such
+// as ::1 and ::100 while formatting ::192.0.2.1 as expected.
+func inet6NtoaString(v []byte) (string, bool) {
+	switch len(v) {
+	case net.IPv4len:
+		return net.IP(v).String(), true
+	case net.IPv6len:
+		ip := net.IP(v)
+		if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+			return ip4.String(), true
+		}
+		if isIPv4Compat(ip) && (v[12] != 0 || v[13] != 0) {
+			return "::" + net.IP(v[12:]).String(), true
+		}
+		return ip.String(), true
+	default:
+		return "", false
+	}
 }
 
 // isIPv4Mapped checks if an IPv6 address is IPv4-mapped (::ffff:x.x.x.x)
@@ -8069,10 +8133,27 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
+const randomBytesMaxLength = 1024
+
 // RandomBytes: RANDOM_BYTES(len) - Returns a binary string of len random bytes
 // Uses crypto/rand for cryptographically secure random bytes
-// Handles both int64 and uint64 parameter types
+// Handles both int64 and uint64 parameter types.
 func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return randomBytesWithReader(parameters, result, proc, length, selectList, rand.Read)
+}
+
+// randomBytesWithReader contains the execution logic behind RandomBytes and
+// accepts the reader as a dependency so the entropy-source failure contract is
+// testable without changing the production source.  The production operator
+// always passes crypto/rand.Read.
+func randomBytesWithReader(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	read func([]byte) (int, error),
+) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	paramType := parameters[0].GetType().Oid
 
@@ -8098,11 +8179,10 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		case types.T_uint64:
 			lenParam := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
 			val, nullVal := lenParam.GetValue(i)
-			if val > uint64(9223372036854775807) { // Max int64
-				lenVal = 1025 // Force > 1024 to return NULL
-			} else {
-				lenVal = int64(val)
+			if !nullVal && val > randomBytesMaxLength {
+				return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
 			}
+			lenVal = int64(val)
 			null = nullVal
 		default:
 			// Fallback to int64
@@ -8119,33 +8199,19 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		// Validate length (must be positive, MySQL allows 1 to 1024)
-		if lenVal < 1 {
-			// Return NULL for invalid length (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// MySQL limits RANDOM_BYTES to max 1024 bytes
-		if lenVal > 1024 {
-			// Return NULL for length > 1024 (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		// MySQL accepts only lengths in the inclusive range [1, 1024]. An
+		// invalid argument is an execution error, not a nullable function
+		// result; otherwise a query can silently return a wrong value or a
+		// partial result for a column containing an invalid length.
+		if lenVal < 1 || lenVal > randomBytesMaxLength {
+			return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
 		}
 
 		// Generate random bytes using crypto/rand
 		randomBytes := make([]byte, lenVal)
-		_, err := rand.Read(randomBytes)
+		_, err := read(randomBytes)
 		if err != nil {
-			// On error, return NULL
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+			return moerr.NewInternalErrorf(proc.Ctx, "random_bytes failed to generate %d bytes: %v", lenVal, err)
 		}
 
 		if err := rs.AppendBytes(randomBytes, false); err != nil {
