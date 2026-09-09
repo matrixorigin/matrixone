@@ -42,6 +42,8 @@ func TestControlRoundTripIsBoundedAndVersioned(t *testing.T) {
 
 	_, err = UnmarshalControl(bytes.Repeat([]byte{'x'}, MaxControlBytes+1))
 	require.ErrorIs(t, err, ErrProtocol)
+	_, err = UnmarshalControl(append(wire, []byte(" trailing")...))
+	require.ErrorIs(t, err, ErrProtocol)
 	_, err = MarshalControl(Control{Kind: "", Tuple: testTuple()})
 	require.ErrorIs(t, err, ErrProtocol)
 }
