@@ -137,6 +137,23 @@ func TestCollationKeyNullSafeSelectionMaskConstAndStaleRows(t *testing.T) {
 	defer proc.Free()
 
 	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	t.Run("all rows masked", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(typ, []string{"Alpha", "beta"}, []bool{false, false}),
+			NewFunctionTestInput(typ, []string{"Alpha", "BETA"}, []bool{false, false}),
+		}
+		testCase := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false}, []bool{true, true}),
+			CollationKeyNullSafeEqual).WithSelectList(&FunctionSelectList{
+			AnyNull:    true,
+			AllNull:    true,
+			SelectList: []bool{false, false},
+		})
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+
 	t.Run("constant left", func(t *testing.T) {
 		inputs := []FunctionTestInput{
 			NewFunctionTestConstInput(typ, []string{"Alpha"}, []bool{false}),
