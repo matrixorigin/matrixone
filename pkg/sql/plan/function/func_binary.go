@@ -5798,6 +5798,10 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+func makeSetDecimalToBits(v float64) uint64 {
+	return uint64(int64(v))
+}
+
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5897,6 +5901,26 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return 0, true
 			}
 			return uint64(int64(val)), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal64ToFloat64(val, scale)), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128ToFloat64(val, scale)), false
 		}
 	default:
 		// Fallback to int64
