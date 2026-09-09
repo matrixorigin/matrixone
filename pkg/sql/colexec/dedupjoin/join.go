@@ -749,8 +749,11 @@ func (ctr *container) finalizeODKUActionRows(
 				ctr.finalizeAnyChanged = ctr.finalizeAnyChanged || changed
 				ctr.finalizeLogicalAffect += odkuAffectedRows(changed, ap.CountFoundRows)
 				isFinal := ctr.finalizeActionIdx == len(sels)-1
+				// This group starts with a successful INSERT.  Its final image must
+				// be written even when later UPDATE actions are no-ops or restore the
+				// inserted values; the first INSERT is the physical write owner.
 				physicalChanged := isFinal && odkuPhysicalChanged(
-					ctr.finalizeAnyChanged, ctr.finalizeBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+					true, ctr.finalizeAnyChanged, ctr.finalizeBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 				affectedRows := uint64(0)
 				if isFinal {
 					affectedRows = ctr.finalizeLogicalAffect
@@ -1229,7 +1232,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 			} else {
 				var logicalAffectedRows uint64 = 1 // the first row is an INSERT
-				anyActionChanged := false
+				// The first action is a successful INSERT, so the group is always a
+				// physical write even when every later UPDATE is a no-op.
+				anyActionChanged := true
 				err := colexec.SetJoinBatchValues(ctr.joinBat1, ctr.batches[idx1], int64(idx2), 1, ctr.cfs1)
 				if err != nil {
 					return err
@@ -1421,11 +1426,15 @@ func snapshotChanged(before []*vector.Vector, after *batch.Batch, cols []int32) 
 }
 
 func odkuPhysicalChanged(
+	inserted bool,
 	anyActionChanged bool,
 	before []*vector.Vector,
 	after *batch.Batch,
 	cols []int32,
 ) bool {
+	if inserted {
+		return true
+	}
 	return anyActionChanged && snapshotChanged(before, after, cols)
 }
 
@@ -1996,7 +2005,7 @@ func (ctr *container) probeODKUActionRows(
 					ctr.recordODKUAction(ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 					isFinal := ctr.probeActionIdx == actionCount-1
 					physicalChanged := isFinal && odkuPhysicalChanged(
-						ctr.probeAnyChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+						false, ctr.probeAnyChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					affectedRows := uint64(0)
 					if isFinal {
 						affectedRows = ctr.probeLogicalAffected
@@ -2175,7 +2184,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 						isFinal := actionIdx == len(actionSels)-1
 						if ap.EmitActionRows || isFinal {
 							physicalChanged := isFinal && odkuPhysicalChanged(
-								anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+								false, anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 							affectedRows := uint64(0)
 							if isFinal {
 								affectedRows = logicalAffectedRows

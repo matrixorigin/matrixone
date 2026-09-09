@@ -179,8 +179,9 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		TargetRowIdCol:               ctx.TargetRowIdCol,
 		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
 		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
-		TrackODKUResult:              ctx.TrackODKUResult,
-		ODKUOrdinalColumn:            ctx.ODKUOrdinalColumn,
+		TrackOdkuResult:              ctx.TrackOdkuResult,
+		OdkuOrdinalColumn:            ctx.OdkuOrdinalColumn,
+		OdkuAutoIncrementColumn:      ctx.OdkuAutoIncrementColumn,
 	}
 
 	return newCtx

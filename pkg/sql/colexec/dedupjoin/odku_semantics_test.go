@@ -480,11 +480,15 @@ func TestODKUPhysicalChangeSeparatesImplicitColumnsFromNoOp(t *testing.T) {
 	final.SetRowCount(1)
 
 	require.True(t, odkuPhysicalChanged(
-		true, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
+		false, true, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
 		"an implicit-column change must survive when an earlier logical action changed the row")
 	require.False(t, odkuPhysicalChanged(
-		false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
+		false, false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
 		"a pure no-op must not fire an implicit ON UPDATE expression")
+	require.True(t, odkuPhysicalChanged(
+		true, false, []*vector.Vector{oldValue, oldTimestamp},
+		&batch.Batch{Vecs: []*vector.Vector{oldValue, oldTimestamp}}, []int32{0, 1}),
+		"a new-key group must retain its INSERT write even when later actions restore the image")
 }
 
 func TestODKUStableVectorPoolSurvivesJoinBatchWidthChange(t *testing.T) {

@@ -1088,6 +1088,7 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 		AutoIncrementGeneratedColumn: 0,
 		TrackODKUResult:              true,
 		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
 	}
 	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
@@ -1097,16 +1098,17 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 				TrackAutoIncrementGenerated: true,
 				TrackOdkuResult:             true,
 				OdkuOrdinalColumn:           1,
+				OdkuAutoIncrementColumn:     0,
 			},
 		}},
 	}}}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
 	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 57")
+	require.ErrorContains(t, err, "requires MORPC protocol version 58")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
-		"requires MORPC protocol version 57")
+		"requires MORPC protocol version 58")
 	dedup := &dedupjoin.DedupJoin{ODKUResultTracking: true}
 	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
@@ -1115,15 +1117,16 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 		}},
 	}}}
 	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 57")
+	require.ErrorContains(t, err, "requires MORPC protocol version 58")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
-		"requires MORPC protocol version 57")
+		"requires MORPC protocol version 58")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
 	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.Equal(t, int32(0), instruction.PreInsert.OdkuAutoIncrementColumn)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
 	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)

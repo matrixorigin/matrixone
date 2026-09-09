@@ -171,6 +171,45 @@ func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 	arg.Free(proc, false, nil)
 }
 
+func TestODKUAutoIncrementProvenanceSelectsUserColumnWithHiddenPrimaryKey(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	table := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	pre := &PreInsert{
+		HasAutoCol:                   true,
+		TableDef:                     table,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	require.NoError(t, pre.Prepare(proc))
+
+	userID := vector.NewVec(types.T_int64.ToType())
+	hiddenID := vector.NewVec(types.T_uint64.ToType())
+	defer userID.Free(proc.Mp())
+	defer hiddenID.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(userID, int64(0), false, proc.Mp()))
+	userID.GetNulls().Add(0)
+	require.NoError(t, vector.AppendFixed(hiddenID, uint64(101), false, proc.Mp()))
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = userID, hiddenID
+	input.SetRowCount(1)
+	require.NoError(t, pre.captureAutoIncrementGeneratedRows(input))
+	require.Equal(t, []bool{true}, pre.ctr.autoIncrementGenerated)
+
+	pre.ODKUAutoIncrementColumn = 1
+	require.ErrorContains(t, pre.Prepare(proc), "not a user auto-increment column")
+}
+
 func TestPreInsertNullCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

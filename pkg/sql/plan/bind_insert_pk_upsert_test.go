@@ -100,6 +100,7 @@ func TestInsertOnDupCarriesAutoIncrementResultProvenance(t *testing.T) {
 			require.GreaterOrEqual(t, node.PreInsertCtx.AutoIncrementGeneratedColumn, int32(0))
 			require.Equal(t, node.PreInsertCtx.AutoIncrementGeneratedColumn+1,
 				node.PreInsertCtx.OdkuOrdinalColumn)
+			require.Equal(t, int32(0), node.PreInsertCtx.OdkuAutoIncrementColumn)
 		}
 		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
 			node.OnDuplicateAction != planpb.Node_UPDATE || node.DedupJoinCtx == nil {

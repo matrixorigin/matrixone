@@ -412,7 +412,8 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			isODKU := len(st.OnDuplicateUpdate) > 0 &&
 				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
 			if isODKU {
-				res.lastInsertId, generated := execCtx.proc.GetODKUProtocolID()
+				lastInsertID, generated := execCtx.proc.GetODKUProtocolID()
+				res.lastInsertId = lastInsertID
 				if generated {
 					ses.SetLastInsertID(res.lastInsertId)
 				}

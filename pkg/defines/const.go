@@ -92,8 +92,8 @@ const (
 	MORPCVersion54     int64 = 54 // catalog-authenticated proxy cache reuse
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
-	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
-	MORPCVersion58     int64 = 58 // binary-string function semantics and runtime-domain metadata
+	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan payload and ODKU generated/action result summary
+	MORPCVersion58     int64 = 58 // binary-string semantics, runtime domains, and explicit ODKU source provenance
 	MORPCLatestVersion       = MORPCVersion58
 )
 

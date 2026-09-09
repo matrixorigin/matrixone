@@ -86,6 +86,9 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	if preInsert.TrackODKUResult && preInsert.ODKUOrdinalColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU input ordinal column")
 	}
+	if preInsert.TrackODKUResult && preInsert.ODKUAutoIncrementColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU auto-increment source column")
+	}
 	if preInsert.TrackODKUResult && !preInsert.TrackAutoIncrementGenerated {
 		return moerr.NewInvalidInput(proc.Ctx,
 			"ODKU result tracking requires auto-increment provenance")
@@ -93,6 +96,18 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	if preInsert.TrackODKUResult && !preInsert.HasAutoCol {
 		return moerr.NewInvalidInput(proc.Ctx,
 			"ODKU result tracking requires an auto-increment column")
+	}
+	if preInsert.TrackODKUResult {
+		colIdx := int(preInsert.ODKUAutoIncrementColumn)
+		if colIdx >= len(preInsert.TableDef.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx,
+				"ODKU auto-increment source column is outside table definition")
+		}
+		col := preInsert.TableDef.Cols[colIdx]
+		if col == nil || col.Hidden || col.Name == catalog.FakePrimaryKeyColName || !col.Typ.AutoIncr {
+			return moerr.NewInvalidInput(proc.Ctx,
+				"ODKU auto-increment source column is not a user auto-increment column")
+		}
 	}
 	return
 }
@@ -365,15 +380,25 @@ func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) 
 	if !preInsert.TrackAutoIncrementGenerated {
 		return nil
 	}
-	autoCol := -1
-	for i, col := range preInsert.TableDef.Cols {
-		if !col.Typ.AutoIncr {
-			continue
+	autoCol := int(preInsert.ODKUAutoIncrementColumn)
+	if preInsert.TrackODKUResult {
+		// ODKU carries the selected user column explicitly. MatrixOne tables can
+		// also contain a hidden fake primary-key allocator, which must never be
+		// mistaken for the column whose generated value is published.
+		if autoCol < 0 || autoCol >= len(preInsert.TableDef.Cols) {
+			return moerr.NewInvalidInputNoCtx("invalid ODKU auto-increment source column")
 		}
-		if autoCol >= 0 {
-			return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+	} else {
+		autoCol = -1
+		for i, col := range preInsert.TableDef.Cols {
+			if !col.Typ.AutoIncr {
+				continue
+			}
+			if autoCol >= 0 {
+				return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+			}
+			autoCol = i
 		}
-		autoCol = i
 	}
 	if autoCol < 0 {
 		return moerr.NewInvalidInputNoCtx("auto-increment provenance has no auto-increment column")

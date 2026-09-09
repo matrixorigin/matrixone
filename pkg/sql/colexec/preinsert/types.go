@@ -62,10 +62,13 @@ type PreInsert struct {
 	AutoIncrementGeneratedColumn int32
 	TrackODKUResult              bool
 	ODKUOrdinalColumn            int32
-	HasTargetSelector            bool
-	TargetRowNumberCol           int32
-	TargetActiveCol              int32
-	TargetRowIDCol               int32
+	// ODKUAutoIncrementColumn is the table-column index of the user-visible
+	// AUTO_INCREMENT source. It excludes MatrixOne's hidden fake primary key.
+	ODKUAutoIncrementColumn int32
+	HasTargetSelector       bool
+	TargetRowNumberCol      int32
+	TargetActiveCol         int32
+	TargetRowIDCol          int32
 
 	vm.OperatorBase
 }

@@ -576,6 +576,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
 		op.TrackODKUResult = t.TrackODKUResult
 		op.ODKUOrdinalColumn = t.ODKUOrdinalColumn
+		op.ODKUAutoIncrementColumn = t.ODKUAutoIncrementColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -913,8 +914,9 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.ColOffset = preCtx.ColOffset
 	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
 	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
-	op.TrackODKUResult = preCtx.TrackODKUResult
-	op.ODKUOrdinalColumn = preCtx.ODKUOrdinalColumn
+	op.TrackODKUResult = preCtx.TrackOdkuResult
+	op.ODKUOrdinalColumn = preCtx.OdkuOrdinalColumn
+	op.ODKUAutoIncrementColumn = preCtx.OdkuAutoIncrementColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol

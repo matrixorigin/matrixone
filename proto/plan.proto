@@ -1530,6 +1530,9 @@ message PreInsertCtx {
   // the DEDUP action owner can publish first-generated/last-action results.
   bool track_odku_result = 15;
   int32 odku_ordinal_column = 16;
+  // ODKU provenance names the user-visible AUTO_INCREMENT source column.
+  // Hidden fake-primary-key allocations must not be treated as the source.
+  int32 odku_auto_increment_column = 17;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

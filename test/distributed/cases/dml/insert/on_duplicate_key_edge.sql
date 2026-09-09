@@ -183,6 +183,22 @@ select id, code, payload from t_odku_return_id order by id;
 select last_insert_id();
 drop table if exists t_odku_return_id;
 drop table if exists t_odku_marker;
+
+-- A user AUTO_INCREMENT UNIQUE column coexists with MatrixOne's hidden
+-- AUTO_INCREMENT primary key. ODKU provenance must select the user column.
+drop table if exists t_odku_user_auto_uk;
+create table t_odku_user_auto_uk (
+    id int auto_increment unique,
+    payload int
+);
+insert into t_odku_user_auto_uk (payload) values (10);
+insert into t_odku_user_auto_uk (id, payload) values (1, 10)
+    on duplicate key update payload = values(payload);
+insert into t_odku_user_auto_uk (payload) values (20)
+    on duplicate key update payload = values(payload);
+select id, payload from t_odku_user_auto_uk order by id;
+drop table if exists t_odku_user_auto_uk;
+
 create table ai_duplicate_test (
     id int auto_increment primary key,
     code varchar(20) unique,
