@@ -318,6 +318,7 @@ type ExecutionGroup struct {
 	registered  int
 	inFlight    int
 	members     map[string]bool
+	terminal    map[string]bool
 	closing     bool
 	releaseBusy bool
 	released    bool
@@ -331,7 +332,7 @@ func NewExecutionGroup(id string, epoch uint64, maxMembers int, release func() e
 	}
 	return &ExecutionGroup{
 		id: id, epoch: epoch, maxMembers: maxMembers,
-		members: make(map[string]bool), release: release,
+		members: make(map[string]bool), terminal: make(map[string]bool), release: release,
 	}, nil
 }
 
@@ -346,7 +347,7 @@ func (g *ExecutionGroup) BeginOpen(memberID string) (*OpenToken, error) {
 	if g.closing || g.released {
 		return nil, ErrGroupClosed
 	}
-	if g.members[memberID] {
+	if g.members[memberID] || g.terminal[memberID] {
 		return nil, ErrDuplicate
 	}
 	if g.registered+g.inFlight >= g.maxMembers {
@@ -360,52 +361,48 @@ type OpenToken struct {
 	group    *ExecutionGroup
 	memberID string
 	once     sync.Once
+	result   error
 }
 
 func (t *OpenToken) Commit() error {
 	if t == nil || t.group == nil {
 		return ErrUnknownIdentity
 	}
-	var err error
-	var release bool
 	t.once.Do(func() {
 		g := t.group
 		g.mu.Lock()
 		g.inFlight--
 		if g.closing || g.released {
-			err = ErrGroupClosed
-			release = g.canReleaseLocked()
+			t.result = ErrGroupClosed
+			release := g.canReleaseLocked()
 			g.mu.Unlock()
+			if release {
+				_ = t.group.releaseIfReady()
+			}
 			return
 		}
 		g.members[t.memberID] = true
 		g.registered++
 		g.mu.Unlock()
 	})
-	if release {
-		if releaseErr := t.group.releaseIfReady(); err == nil {
-			err = releaseErr
-		}
-	}
-	return err
+	return t.result
 }
 
 func (t *OpenToken) Abort() error {
 	if t == nil || t.group == nil {
 		return ErrUnknownIdentity
 	}
-	var release bool
 	t.once.Do(func() {
 		g := t.group
 		g.mu.Lock()
 		g.inFlight--
-		release = g.canReleaseLocked()
+		release := g.canReleaseLocked()
 		g.mu.Unlock()
+		if release {
+			t.result = t.group.releaseIfReady()
+		}
 	})
-	if release {
-		return t.group.releaseIfReady()
-	}
-	return nil
+	return t.result
 }
 
 func (g *ExecutionGroup) Close(reason CloseReason) error {
@@ -431,11 +428,16 @@ func (g *ExecutionGroup) Close(reason CloseReason) error {
 
 func (g *ExecutionGroup) MemberTerminal(memberID string) error {
 	g.mu.Lock()
+	if g.terminal[memberID] {
+		g.mu.Unlock()
+		return nil
+	}
 	if !g.members[memberID] {
 		g.mu.Unlock()
 		return ErrUnknownIdentity
 	}
 	delete(g.members, memberID)
+	g.terminal[memberID] = true
 	release := g.canReleaseLocked()
 	g.mu.Unlock()
 	if release {
