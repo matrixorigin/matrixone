@@ -682,8 +682,11 @@ func validateCloneUserDefinedFunctions(functions []userDefinedFunctionDefinition
 		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
 			var body function.PythonRoutineBody
 			if err := json.Unmarshal([]byte(definition.body), &body); err != nil ||
-				body.Handler == "" || (body.Source == "" && body.ArtifactDigest == "") ||
-				body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
+				body.Handler == "" || body.Source == "" ||
+				(body.Mode != "SCALAR" && body.Mode != "VECTOR") ||
+				(body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull) ||
+				body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion ||
+				body.SDKVersion != udf.PythonSDKVersion {
 				return moerr.NewNotSupportedNoCtxf(
 					"CREATE DATABASE CLONE with incomplete %s function %s is not supported",
 					definition.lang,

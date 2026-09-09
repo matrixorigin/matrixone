@@ -300,7 +300,7 @@ func startService(
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PYTHON_UDF:
-		return startPythonUdfService(cfg, stopper)
+		return startPythonUdfWorker(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -738,8 +738,8 @@ func waitProxyFileServiceRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// startPythonUdfService starts the python udf service.
-func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+// startPythonUdfWorker starts the Python UDF worker.
+func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
@@ -752,12 +752,12 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 			finish(err)
 		})
 	}
-	err := stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+	err := stopper.RunNamedTask("python-udf-worker", func(ctx context.Context) {
 		var closeErr error
 		defer func() { finishTask(closeErr) }()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := python.NewSupervisor(cfg.PythonUdfServerConfig)
+		s, err := python.NewSupervisor(cfg.PythonUdfWorkerConfig)
 		if err != nil {
 			panic(err)
 		}
@@ -767,7 +767,7 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 		<-roleCtx.Done()
 		if err := s.Close(); err != nil {
 			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
+			logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
 		}
 	})
 	if err != nil {
