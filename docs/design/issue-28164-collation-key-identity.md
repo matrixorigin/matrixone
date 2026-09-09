@@ -955,3 +955,19 @@ boundary. PR5 therefore supplies executable comparison tests only; it does not
 create a v2 relation, replace resident/spill key codecs, alter unique-index
 bytes, or enable any writer. Sidecar, lock, query-routing, migration, and
 activation work remain required before a production fix can be claimed.
+
+### 10.6 Implementation series status (PR6)
+
+PR6 adds the common planner admission check for relation-local codec metadata.
+Legacy and explicitly bytewise relations continue through their existing DML
+paths. A relation carrying a valid v2 metadata record is rejected at the
+shared table-resolution boundary while the sidecar, capability, lock, commit,
+query, and migration consumers are incomplete; malformed metadata fails as an
+internal error. This prevents an early writer from emitting bytes that an
+older reader could not interpret.
+
+The check is a fail-closed safety fence, not a v2 enablement mechanism. It does
+not change existing relation behavior, create a management command, or claim
+that any DML entry point is v2-capable. The final implementation must replace
+this temporary rejection only after all required producers and consumers share
+the same activation generation and recovery protocol.
