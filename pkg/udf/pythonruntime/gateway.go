@@ -118,6 +118,8 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	streamCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
+	defer cancel()
 	if invocation == nil || result == nil || mp == nil {
 		return fmt.Errorf("python runtime: nil invocation, result, or memory pool")
 	}
@@ -152,7 +154,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		return err
 	}
 
-	stream, err := g.flight.DoExchange(ctx)
+	stream, err := g.flight.DoExchange(streamCtx)
 	if err != nil {
 		return fmt.Errorf("python runtime: open Arrow Flight exchange: %w", err)
 	}
@@ -223,7 +225,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 			}
 			inputEnded = true
 		}
-		batchRows, err := g.receiveResultBatch(ctx, stream, invocation.Tuple, sequenceNumber, batch.Rows, &schemaFrame, returnDescriptor, result, mp, &sequence)
+		batchRows, err := g.receiveResultBatch(streamCtx, stream, invocation.Tuple, sequenceNumber, batch.Rows, &schemaFrame, returnDescriptor, result, mp, &sequence)
 		if err != nil {
 			return err
 		}
@@ -237,7 +239,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if !inputEnded || lastSequence != batchIndex {
 		return fmt.Errorf("python runtime: input stream did not reach EndInput")
 	}
-	return g.receiveFinish(ctx, stream, invocation.Tuple, invocation.Length, rows, &sequence)
+	return g.receiveFinish(streamCtx, stream, invocation.Tuple, invocation.Length, rows, &sequence)
 }
 
 func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaining, maxBytes, maxRows int64) (encodedRecordBatch, error) {
