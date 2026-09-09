@@ -279,6 +279,8 @@ func nextval(tblname, db string, proc *process.Process, e engine.Engine, txn cli
 	}
 	values := _values[0]
 
+	// Keep the parsed value wide until after range validation. Narrowing first
+	// can wrap an out-of-range SETVAL into a value accepted by the sequence.
 	switch values[0].(type) {
 	case int16:
 		// Get values store in sequence table.
@@ -528,66 +530,60 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		snum := int16(setnum)
-		if snum < minv || snum > maxv {
+		if setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, int16(setnum), iscalled, rel, db, tblname)
 	case int32:
 		minv, maxv := values[1].(int32), values[2].(int32)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		snum := int32(setnum)
-		if snum < minv || snum > maxv {
+		if setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, int32(setnum), iscalled, rel, db, tblname)
 	case int64:
 		minv, maxv := values[1].(int64), values[2].(int64)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		snum := setnum
-		if snum < minv || snum > maxv {
+		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, rel, db, tblname)
 	case uint16:
 		minv, maxv := values[1].(uint16), values[2].(uint16)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		snum := uint16(setnum)
-		if snum < minv || snum > maxv {
+		if setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, uint16(setnum), iscalled, rel, db, tblname)
 	case uint32:
 		minv, maxv := values[1].(uint32), values[2].(uint32)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		snum := uint32(setnum)
-		if snum < minv || snum > maxv {
+		if setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, uint32(setnum), iscalled, rel, db, tblname)
 	case uint64:
 		minv, maxv := values[1].(uint64), values[2].(uint64)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		snum := uint64(setnum)
-		if snum < minv || snum > maxv {
+		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, snum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, rel, db, tblname)
 	}
 	return "", moerr.NewInternalError(proc.Ctx, "Wrong types of sequence number or failed to read the sequence table")
 }

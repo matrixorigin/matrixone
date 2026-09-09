@@ -31,13 +31,22 @@ func (i *IOVector) allDone() bool {
 }
 
 func (i *IOVector) Release() {
-	for _, entry := range i.Entries {
-		if entry.CachedData != nil {
-			entry.CachedData.Release()
+	entries := i.Entries
+	for idx := range entries {
+		// Snapshot the owned resources, not the entire IOEntry. In particular,
+		// none of the read/converter inputs are needed on this hot release path.
+		entry := &entries[idx]
+		data, releaseCachedData, releaseData, lease := entry.CachedData, entry.releaseCachedData, entry.releaseData, entry.decodeLease
+		if data != nil {
+			data.Release()
 		}
-		if entry.releaseData != nil {
-			entry.releaseData()
+		if releaseCachedData != nil {
+			releaseCachedData()
 		}
+		if releaseData != nil {
+			releaseData()
+		}
+		lease.release()
 	}
 }
 
@@ -48,10 +57,16 @@ func (i *IOVector) ReleaseReadResultOnError() {
 			entry.CachedData.Release()
 			entry.CachedData = nil
 		}
+		if entry.releaseCachedData != nil {
+			entry.releaseCachedData()
+			entry.releaseCachedData = nil
+		}
 		if entry.done && entry.releaseData != nil {
 			entry.releaseData()
 			entry.releaseData = nil
 		}
+		entry.decodeLease.release()
+		entry.decodeLease = nil
 		entry.done = false
 		entry.fromCache = nil
 	}

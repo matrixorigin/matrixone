@@ -116,6 +116,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "fk.table_id = fk_tbl.rel_id")
 	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
+	assert.Contains(t, InformationSchemaViewsDDL, "cast('NONE' as varchar(9)) AS `CHECK_OPTION`")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
 	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")
