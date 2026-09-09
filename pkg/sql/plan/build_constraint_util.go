@@ -199,7 +199,7 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 			return 0, err
 		}
 		errMsg := makePlan2StringConstExprWithType(
-			fmt.Sprintf("Check constraint '%s' is violated.", check.Name),
+			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
 		)
 		assertExpr, err := BindFuncExprImplByPlanExpr(
 			builder.GetContext(),
