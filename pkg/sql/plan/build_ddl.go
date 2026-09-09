@@ -5878,6 +5878,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
+		if err := rejectMaterializedViewAlter(oldViewDef); err != nil {
+			return nil, err
+		}
 		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
 		}

@@ -4636,6 +4636,11 @@ func TestBuildAlterView(t *testing.T) {
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel},
 	}
+	store["db.mv"] = arg{&plan.ObjectRef{},
+		&plan.TableDef{
+			TableType: catalog.SystemMaterializedRel,
+			ViewSql:   &plan.ViewDef{View: `{"Stmt":"create materialized view mv as select a from a"}`},
+		}}
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
@@ -4701,6 +4706,12 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
+
+	sql6 := "alter view mv as select a from a"
+	stmt6, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql6, 1)
+	assert.NoError(t, err)
+	_, err = buildAlterView(stmt6.(*tree.AlterView), ctx)
+	assert.ErrorContains(t, err, "ALTER, RENAME and TRUNCATE require dropping and recreating")
 }
 
 func TestBuildLockTables(t *testing.T) {
