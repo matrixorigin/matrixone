@@ -1330,10 +1330,10 @@ func boolToOthers(ctx context.Context,
 		return boolToInteger(source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return boolToFloat(source, rs, length)
+		return boolToFloat(source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return boolToFloat(source, rs, length)
+		return boolToFloat(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return boolToYear(source, rs, length, selectList)
@@ -3564,10 +3564,14 @@ func boolToStr(
 func boolToInteger[T constraints.Integer](
 	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	var dft T
-	for i = 0; i < l; i++ {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -3590,13 +3594,18 @@ func boolToInteger[T constraints.Integer](
 
 func boolToFloat[T constraints.Float](
 	from vector.FunctionParameterWrapper[bool],
-	to *vector.FunctionResult[T], length int) error {
-	var i uint64
-	l := uint64(length)
-	for i = 0; i < l; i++ {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	var dft T
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.Append(0, true); err != nil {
+			if err := to.Append(dft, true); err != nil {
 				return err
 			}
 			continue
@@ -3605,7 +3614,7 @@ func boolToFloat[T constraints.Float](
 			if err := to.Append(1, false); err != nil {
 				return err
 			}
-		} else if err := to.Append(0, false); err != nil {
+		} else if err := to.Append(dft, false); err != nil {
 			return err
 		}
 	}

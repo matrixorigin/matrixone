@@ -8221,7 +8221,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: CEIL,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8448,7 +8448,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: FLOOR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func TestMathFunctionsAcceptBoolInNumericContext(t *testing.T) {
 	floatType := types.T_float64.ToType()
 
 	for _, name := range []string{
-		"abs", "sign", "ceil", "floor", "round", "truncate",
+		"abs", "sign", "round", "truncate",
 	} {
 		resolved, err := GetFunctionByName(ctx, name, []types.Type{boolType})
 		require.NoError(t, err, name)
@@ -57,8 +58,6 @@ func TestMathFunctionsAcceptBoolInNumericContext(t *testing.T) {
 		{name: "atan2", args: []types.Type{boolType, boolType}, want: []types.T{types.T_float64, types.T_float64}},
 		{name: "log", args: []types.Type{boolType, boolType}, want: []types.T{types.T_float64, types.T_float64}},
 		{name: "power", args: []types.Type{boolType, boolType}, want: []types.T{types.T_float64, types.T_float64}},
-		{name: "ceil", args: []types.Type{boolType, boolType}, want: []types.T{types.T_int64, types.T_int64}},
-		{name: "floor", args: []types.Type{boolType, boolType}, want: []types.T{types.T_int64, types.T_int64}},
 		{name: "round", args: []types.Type{boolType, boolType}, want: []types.T{types.T_int64, types.T_int64}},
 		{name: "truncate", args: []types.Type{boolType, boolType}, want: []types.T{types.T_int64, types.T_int64}},
 	} {
@@ -69,6 +68,16 @@ func TestMathFunctionsAcceptBoolInNumericContext(t *testing.T) {
 		for i, want := range tc.want {
 			require.Equal(t, want, resolved.targetTypes[i].Oid, tc.name)
 		}
+	}
+}
+
+func TestMathBooleanCeilFloorKeepExistingStringFallback(t *testing.T) {
+	for _, name := range []string{"ceil", "floor"} {
+		resolved, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_bool.ToType()})
+		require.NoError(t, err, name)
+		require.True(t, resolved.needCast, name)
+		require.Equal(t, types.T_varchar, resolved.targetTypes[0].Oid, name)
+		require.Equal(t, types.T_float64, resolved.retType.Oid, name)
 	}
 }
 
@@ -108,16 +117,86 @@ func TestMathPreparedMarkersKeepNumericTargetsForBooleanValues(t *testing.T) {
 
 func TestMathBoolCastTargetsPreserveValuesAndNulls(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	caseTest := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, []bool{false, true, false}),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 0, 1}, []bool{false, true, false}),
-		NewCast)
+	for _, tc := range []struct {
+		name       string
+		targetType types.Type
+		target     any
+		want       any
+	}{
+		{name: "int64", targetType: types.T_int64.ToType(), target: []int64{}, want: []int64{1, 0, 1}},
+		{name: "float32", targetType: types.T_float32.ToType(), target: []float32{}, want: []float32{1, 0, 1}},
+		{name: "float64", targetType: types.T_float64.ToType(), target: []float64{}, want: []float64{1, 0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, []bool{false, true, false}),
+					NewFunctionTestInput(tc.targetType, tc.target, nil),
+				},
+				NewFunctionTestResult(tc.targetType, false, tc.want, []bool{false, true, false}),
+				NewCast)
 
-	succeed, info := caseTest.Run()
-	require.True(t, succeed, info)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestMathBoolCastsHonorMaskedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
+	target := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, 0}, nil)
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+	defer input.Free(proc.Mp())
+	defer target.Free(proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+
+	got := result.GetResultVector()
+	require.Equal(t, float64(1), vector.GetFixedAtNoTypeCheck[float64](got, 0))
+	require.False(t, got.GetNulls().Contains(0))
+	require.True(t, got.GetNulls().Contains(1))
+}
+
+func TestMathBooleanValuesReachMathExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+
+	castInput := func(t *testing.T, values []bool, targetType types.Type, targetValues []float64) (*vector.Vector, func()) {
+		t.Helper()
+		input := newVectorByType(proc.Mp(), types.T_bool.ToType(), values, nil)
+		target := newVectorByType(proc.Mp(), targetType, targetValues, nil)
+		castResult := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		require.NoError(t, castResult.PreExtendAndReset(len(values)))
+		require.NoError(t, NewCast([]*vector.Vector{input, target}, castResult, proc, len(values), nil))
+		return castResult.GetResultVector(), func() {
+			castResult.Free()
+			input.Free(proc.Mp())
+			target.Free(proc.Mp())
+		}
+	}
+
+	sin, err := GetFunctionByName(ctx, "sin", []types.Type{types.T_bool.ToType()})
+	require.NoError(t, err)
+	sinInput, releaseSinInput := castInput(t, []bool{true, false}, types.T_float64.ToType(), []float64{0, 0})
+	defer releaseSinInput()
+	sinOutput, err := RunFunctionDirectly(proc, sin.GetEncodedOverloadID(), []*vector.Vector{sinInput}, 2)
+	require.NoError(t, err)
+	require.Equal(t, []float64{0.8414709848078965, 0}, vector.MustFixedColNoTypeCheck[float64](sinOutput))
+	sinOutput.Free(proc.Mp())
+
+	power, err := GetFunctionByName(ctx, "power", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+	left, releaseLeft := castInput(t, []bool{true, false}, types.T_float64.ToType(), []float64{0, 0})
+	right, releaseRight := castInput(t, []bool{false, true}, types.T_float64.ToType(), []float64{0, 0})
+	defer releaseLeft()
+	defer releaseRight()
+	powerOutput, err := RunFunctionDirectly(proc, power.GetEncodedOverloadID(), []*vector.Vector{left, right}, 2)
+	require.NoError(t, err)
+	require.Equal(t, []float64{1, 0}, vector.MustFixedColNoTypeCheck[float64](powerOutput))
+	powerOutput.Free(proc.Mp())
 }
 
 func TestFixedTypeMatchWithBoolNumericCastKeepsNonNumericFallback(t *testing.T) {
