@@ -3805,7 +3805,7 @@ func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *
 // UPDATE, REPLACE and LOAD, so a v2 table must never silently fall back to the
 // legacy byte representation in one of those paths.
 func makeCompPkeyExprForTable(ctx context.Context, tableDef *plan.TableDef, name2ColIndex map[string]int32) (*plan.Expr, error) {
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil {
+	if tableDef == nil || tableDef.Pkey == nil {
 		return nil, nil
 	}
 
@@ -3814,6 +3814,9 @@ func makeCompPkeyExprForTable(ctx context.Context, tableDef *plan.TableDef, name
 		return nil, err
 	}
 	if !useV2 {
+		if tableDef.Pkey.CompPkeyCol == nil {
+			return nil, nil
+		}
 		return makeCompPkeyExpr(tableDef, name2ColIndex), nil
 	}
 	if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName || tableDef.Pkey.CompPkeyCol == nil {
