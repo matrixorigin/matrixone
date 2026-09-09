@@ -233,6 +233,13 @@ insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 select * from t_odku_row_alias order by id;
 
+-- The target row must be available to a correlated subquery below the
+-- candidate pipeline, even when the source alias does not shadow the row alias.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+select * from t_odku_row_alias order by id;
+
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 6, 0) as n on duplicate key update b = case when n.a > 5 then n.a else NULL end;
@@ -267,6 +274,18 @@ execute s_row_alias using @row_id, @row_a, @row_b;
 select * from t_odku_row_alias order by id;
 deallocate prepare s_row_alias;
 drop table t_odku_row_alias;
+
+-- A generated DEFAULT keeps the original row-alias positions while the
+-- no-key ODKU route falls back to a plain insert.
+drop table if exists t_odku_no_key_generated;
+create table t_odku_no_key_generated (
+    a int,
+    g int generated always as (a + 1) stored
+);
+insert into t_odku_no_key_generated(a, g) values (1, default) as n(x, y) on duplicate key update a = n.x;
+select * from t_odku_no_key_generated;
+drop table t_odku_no_key_generated;
+
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
