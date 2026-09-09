@@ -6552,10 +6552,10 @@ func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
 	if n < 0 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
 	}
-	result := types.Decimal256{1, 0, 0, 0}
+	result := types.Decimal256{B0_63: 1}
 	for n >= 19 {
 		var err error
-		result, err = result.Mul256(types.Decimal256{types.Pow10[19], 0, 0, 0})
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
 		if err != nil {
 			return types.Decimal256{}, err
 		}
@@ -6563,7 +6563,7 @@ func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
 	}
 	if n > 0 {
 		var err error
-		result, err = result.Mul256(types.Decimal256{types.Pow10[n], 0, 0, 0})
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[n]})
 		if err != nil {
 			return types.Decimal256{}, err
 		}
@@ -6619,12 +6619,12 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 		if modErr != nil {
 			return 0, 0, false, modErr
 		}
-		doubled, mulErr := remainder.Mul256(types.Decimal256{2, 0, 0, 0})
+		doubled, mulErr := remainder.Mul256(types.Decimal256{B0_63: 2})
 		if mulErr != nil {
 			return 0, 0, false, mulErr
 		}
 		if doubled.Compare(divisor) >= 0 {
-			quotient, err = quotient.Add256(types.Decimal256{1, 0, 0, 0})
+			quotient, err = quotient.Add256(types.Decimal256{B0_63: 1})
 			if err != nil {
 				return 0, 0, false, err
 			}
