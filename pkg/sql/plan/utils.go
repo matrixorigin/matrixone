@@ -1065,7 +1065,32 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 // decoded.  In particular, this avoids scanning/deep-copying the entire plan
 // on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
-	return preparedPlanFunctionFallbackParamPositions(preparePlan, "abs")
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
@@ -3989,15 +4014,8 @@ func preparedComparisonTypeIsNumeric(typ types.T) bool {
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
-	if position < 0 || position >= len(rule.runtimeParamTypes) {
-		return false
-	}
-	switch rule.runtimeParamTypes[position].Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-		return true
-	default:
-		return false
-	}
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
@@ -4046,10 +4064,8 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
 		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
-			// BIT_COUNT has its own value-aware trigger: unresolved markers keep
-			// the binary-string plan for text/BLOB packets and specialize only
-			// numeric executions. Do not put every execution on the generic
-			// deep-copy path.
+			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
+			// the binary default until a numeric execution advances its category.
 			return
 		}
 		if name == "cast" && isExplicitPreparedCast(expr) {
@@ -4238,6 +4254,12 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	switch name {
 	case "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"ord", "char_length", "character_length",
+		"left", "right", "substring", "substr", "mid", "reverse",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
+		"substring_index", "split_part", "repeat", "concat", "concat_ws",
+		"charset", "collation",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
 		"in", "not_in", "partition_in":
@@ -4871,11 +4893,8 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 type ParamValue struct {
 	Value any
 	IsBin bool
-	// IsBinaryString is the execute-time text/binary domain advertised by a
-	// prepared parameter. It is separate from IsBin (literal syntax) and from
-	// RuntimeType (numeric overload selection): COM_STMT BLOB families carry a
-	// binary string domain while retaining the prepared statement's text-shaped
-	// transport type.
+	// IsBinaryString is the legacy binary-domain metadata retained for
+	// compatibility with callers that have not adopted RuntimeStringDomain.
 	IsBinaryString bool
 	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
 	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
@@ -4884,11 +4903,12 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
 	// is deliberately separate from RuntimeType: SQL parameters are transported
-	// through a text vector. Numeric consumers use it only after establishing a
-	// numeric domain, while string consumers must retain its text/binary domain.
-	// Comparisons keep their existing common-type and numeric-prefix contracts.
-	SourceType    types.Type
-	HasSourceType bool
+	// through a text vector, and their source type is used only after an
+	// arithmetic consumer establishes a numeric domain. Comparisons keep their
+	// existing common-type and numeric-prefix contracts.
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -4918,24 +4938,17 @@ type ParamValue struct {
 	EnableNumericPrefix bool
 }
 
-// PreparedParamValueHasNumericRuntime reports whether a prepared marker's
-// current SQL/protocol value owns a numeric domain. It deliberately does not
-// infer numbers from text: consumers such as BIT_COUNT distinguish the binary
-// bytes "64" from the integer 64.
+// PreparedParamValueHasNumericRuntime reports whether the prepared value owns
+// an explicit numeric runtime domain without inferring one from text.
 func PreparedParamValueHasNumericRuntime(value any) bool {
 	_, ok := PreparedParamValueNumericReprepareType(value)
 	return ok
 }
 
-// PreparedParamValueNumericReprepareType returns the canonical numeric type that
-// a prepared marker owns after a MySQL-style reprepare. It deliberately does
-// not infer numbers from untyped text: consumers such as BIT_COUNT distinguish
-// the binary bytes "64" from the integer 64.
-//
-// This is a parameter category, not the source's physical width. MySQL
-// normalizes every integer to LONGLONG, every floating-point value to DOUBLE,
-// and DECIMAL to the maximum parameter precision. Retaining TINYINT or
-// DECIMAL(3,1), for example, would incorrectly constrain a later string value.
+// PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
+// textual value when it is used as an argument to a numeric overload.  A
+// direct SELECT ? remains TEXT unless the protocol supplied an explicit
+// numeric type; this helper is only used while rebinding a function argument.
 func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 	if param, ok := value.(ParamValue); ok {
 		if param.Value == nil {
@@ -5996,6 +6009,19 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
+func setPreparedRuntimeStringDomain(expr *Expr, domain types.RuntimeStringDomain) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return
+	}
+	switch domain {
+	case types.RuntimeStringText:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case types.RuntimeStringBinary:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	}
+}
+
 func replaceParamVals(
 	ctx context.Context,
 	plan0 *Plan,
@@ -6029,6 +6055,7 @@ func replaceParamValsWithSelection(
 		hasStringDomainType := false
 		numericPrefixSource := false
 		retainParamRef := false
+		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			if param.MaterializedValue != "" {
@@ -6039,22 +6066,20 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
-			// Plan specialization materializes every marker in the copied plan,
-			// including markers outside the expression that triggered it. Preserve
-			// an execute-time binary string domain here so functions such as ORD do
-			// not silently receive a TEXT literal merely because a sibling regexp or
-			// numeric expression required specialization. NULL keeps the prepared
-			// marker's domain, and numeric RuntimeType remains authoritative below.
-			if param.Value != nil {
-				switch {
-				case param.HasSourceType &&
-					types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
-					stringDomainType = param.SourceType
-					hasStringDomainType = true
-				case param.IsBinaryString:
-					stringDomainType = types.T_varbinary.ToType()
-					hasStringDomainType = true
-				}
+			runtimeStringDomain = param.RuntimeStringDomain
+			// Materialize only a non-NULL binary string domain. NULL retains the
+			// prepared marker type, while text sources keep the TEXT transport type.
+			switch {
+			case param.HasSourceType &&
+				types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
+				// A typed NULL still owns its assignment-time VARBINARY/BLOB type;
+				// RuntimeStringDomain may independently override row semantics.
+				stringDomainType = param.SourceType
+				hasStringDomainType = true
+			case param.Value != nil &&
+				(param.IsBinaryString || param.RuntimeStringDomain == types.RuntimeStringBinary):
+				stringDomainType = types.T_varbinary.ToType()
+				hasStringDomainType = true
 			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
@@ -6101,6 +6126,7 @@ func replaceParamValsWithSelection(
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
+				setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 				continue
 			}
 			pc := &plan.Literal{IsBin: isBin}
@@ -6112,6 +6138,7 @@ func replaceParamValsWithSelection(
 				},
 			}
 		}
+		setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
