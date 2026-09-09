@@ -675,6 +675,36 @@ func TestDoubleFree(t *testing.T) {
 }
 
 // TestConcurrentAllocFree tests concurrent allocation and free with sharded locks.
+func TestConcurrentReallocAddressReuse(t *testing.T) {
+	mp := MustNew("concurrent-realloc")
+	defer DeleteMPool(mp)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 64 {
+				old, err := mp.Alloc(64, true)
+				if err != nil {
+					t.Errorf("allocate: %v", err)
+					return
+				}
+				old[0] = 0x5a
+				next, err := mp.ReallocZero(old, 4096, true)
+				if err != nil {
+					mp.Free(old)
+					t.Errorf("reallocate: %v", err)
+					return
+				}
+				if next[0] != 0x5a || next[len(next)-1] != 0 {
+					t.Error("reallocate lost prefix or zero suffix")
+				}
+				mp.Free(next)
+			}
+		})
+	}
+	wg.Wait()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestConcurrentAllocFree(t *testing.T) {
 	for _, offHeap := range []bool{false, true} {
 		t.Run(fmt.Sprintf("offheap=%t", offHeap), func(t *testing.T) {

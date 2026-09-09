@@ -82,8 +82,10 @@ type VectorSortContext struct {
 
 	// ProviderNodeID and VecArgExpr are populated only when the ORDER
 	// BY reaches the scan through a JOIN (today only HNSW consumes them).
-	ProviderNodeID int32
-	VecArgExpr     *plan.Expr
+	ProviderNodeID   int32
+	VecArgExpr       *plan.Expr
+	MembershipNodeID int32
+	HasMembership    bool
 }
 
 // MultiTableIndexRef is the plugin-facing view of plan.MultiTableIndex.

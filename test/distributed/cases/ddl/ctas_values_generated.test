@@ -1,0 +1,83 @@
+-- @suite
+
+-- @case
+-- @desc: CTAS/VIEW VALUES sources and destination-only generated columns
+-- @label:bvt
+
+--- @metacmp(true)
+
+drop database if exists ctas_values_generated;
+create database ctas_values_generated;
+use ctas_values_generated;
+
+-- MySQL accepts VALUES directly as the query expression for CTAS and views.
+create table values_ctas values row(1, 2), row(3, 4);
+select * from values_ctas order by column_0;
+
+create table values_ctas_as as values row(5, 6), row(7, 8);
+select * from values_ctas_as order by column_0;
+
+create view values_view as values row(9, 10), row(11, 12);
+select * from values_view order by column_0;
+
+create table generated_source(a int, b int, doc json);
+insert into generated_source values
+    (1, 2, '{"sku":"A"}'),
+    (3, 4, '{"sku":"B"}');
+
+-- Generated columns are destination-computed and must not consume a source
+-- projection slot. Cover STORED, VIRTUAL, and generated-column indexes.
+create table generated_stored(
+    a int,
+    b int,
+    g int generated always as (a + b) stored,
+    index ix_g(g)
+) as select a, b from generated_source;
+select g, a, b from generated_stored order by a;
+
+create table generated_virtual(
+    a int,
+    b int,
+    g int generated always as (a * b) virtual
+) as select a, b from generated_source where a > 1;
+select g, a, b from generated_virtual order by a;
+
+create table generated_json(
+    a int,
+    b int,
+    doc json,
+    sku varchar(10) generated always as
+        (json_unquote(json_extract(doc, '$.sku'))) stored,
+    index ix_sku(sku)
+) as select a, b, doc from generated_source;
+select sku, a, b from generated_json order by a;
+
+-- Empty sources still create the complete target schema.
+create table generated_empty(
+    a int,
+    b int,
+    g int generated always as (a + b) stored
+) as select a, b from generated_source where 1 = 0;
+select count(*) from generated_empty;
+
+-- Ordinary destination-only defaults retain their existing CTAS behavior.
+create table default_extra(extra int default 9, a int, b int)
+    as select a, b from generated_source;
+select extra, a, b from default_extra order by a;
+
+-- Temporary CTAS uses the same generated-column projection path.
+create temporary table generated_temp(
+    a int,
+    b int,
+    g int generated always as (a - b) stored
+) as select a, b from generated_source;
+select g, a, b from generated_temp order by a;
+
+-- Explicitly projecting a generated target column remains invalid.
+create table generated_explicit(
+    a int,
+    b int,
+    g int generated always as (a + b) stored
+) as select a, b, a + b as g from generated_source;
+
+drop database ctas_values_generated;

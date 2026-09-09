@@ -21,7 +21,7 @@ sign-off they carry. Implementation conformance is reviewed against them.
 | Isolation and **eviction ownership** (per-tenant vs CN-wide, coldest-first, pay-first) | §5.2, §5.3 | Eric — 2026-09-07 |
 | **Migration**: widening every index metadata table, and the rolling-upgrade contract | §7 | Eric — 2026-09-07 |
 | **One metadata row per CDC tail frame** for fulltext2, cagra and ivfpq — reverses the original non-goal in §2, and tail sizing now depends on those rows | §7.1, §14 | Eric — 2026-09-08 |
-| **CREATE-time capability gate**: below `MOProtocolVersion 57` a metadata table is born in the legacy shape, so an index created mid-rollout carries no provenance until something widens it | §12 | Eric — 2026-09-08 |
+| **CREATE-time capability gate**: below `MOProtocolVersion 58` a metadata table is born in the legacy shape, so an index created mid-rollout carries no provenance until something widens it | §12 | Eric — 2026-09-08 |
 
 A later change to any of these rows is a change to the contract, not an
 implementation detail: it needs the row re-approved, not just the code updated.
@@ -643,7 +643,7 @@ first is CREATE-time and is covered in full by §12; the other two are here:
 
 | window | who meets what | answer |
 |---|---|---|
-| mixed CNs, a table is CREATED | a NEW CN would create a six-column table that an OLD CN's positional writer then fails on | `CREATE INDEX` builds the LEGACY shape until `MOProtocolVersion >= 57`; the migration widens it later (§12) |
+| mixed CNs, a table is CREATED | a NEW CN would create a six-column table that an OLD CN's positional writer then fails on | `CREATE INDEX` builds the LEGACY shape until `MOProtocolVersion >= 58`; the migration widens it later (§12) |
 | mixed CNs, migration not yet started | an OLD CN writes four positional values into a table another CN may have widened | `RequiredProtocolVersion` holds the tenant snapshot until every service reports the protocol carrying the new writer, so the widening cannot begin while such a CN is alive |
 | all CNs new, migration running | a NEW CN serves a tenant whose tables are not widened yet — the migration is asynchronous and per tenant | the writer **names its columns** and omits the provenance ones until the table has them |
 
@@ -973,7 +973,7 @@ check answers the other's question.
 
 | Question | Scope | Mechanism | Gates |
 |---|---|---|---|
-| Is any un-upgraded CN still out there? | deployment | `MOProtocolVersion >= MORPCVersion57` | CREATE-time schema width, CDC tail row emission, the v4_0_7 migration |
+| Is any un-upgraded CN still out there? | deployment | `MOProtocolVersion >= MORPCVersion58` | CREATE-time schema width, CDC tail row emission, the v4_0_7 migration |
 | Does THIS table carry the columns now? | one table | `sqlexec.HasProvenanceColumns` probe | whether a writer NAMES them |
 
 **Why CREATE needs the deployment gate.** The migration's `RequiredProtocolVersion` only covers

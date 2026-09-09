@@ -1,0 +1,28 @@
+SET block_encryption_mode = 'aes-256-cbc';
+SELECT AES_ENCRYPT('hello', 'key');
+Incorrect parameter count in the call to native function 'aes_encrypt'
+SELECT AES_ENCRYPT('hello', 'key', NULL);
+The initialization vector supplied to aes_encrypt is too short. Must be at least 16 bytes long
+SELECT AES_ENCRYPT('hello', 'key', 'short');
+The initialization vector supplied to aes_encrypt is too short. Must be at least 16 bytes long
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key');
+Incorrect parameter count in the call to native function 'aes_decrypt'
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key', NULL);
+The initialization vector supplied to aes_decrypt is too short. Must be at least 16 bytes long
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key', 'short');
+The initialization vector supplied to aes_decrypt is too short. Must be at least 16 bytes long
+SELECT AES_ENCRYPT(NULL, 'key') AS null_plaintext_missing_iv;
+➤ null_plaintext_missing_iv[-4,2147483647,0]  𝄀
+null
+SELECT AES_DECRYPT(NULL, 'key') AS null_ciphertext_missing_iv;
+➤ null_ciphertext_missing_iv[-4,2147483647,0]  𝄀
+null
+SELECT LENGTH(AES_ENCRYPT('hello', 'key', '0123456789abcdef')) AS valid_ciphertext_length;
+➤ valid_ciphertext_length[-5,64,0]  𝄀
+16
+SELECT AES_DECRYPT(
+AES_ENCRYPT('hello', 'key', '0123456789abcdef'),
+'key', '0123456789abcdef') AS valid_plaintext;
+➤ valid_plaintext[-4,2147483647,0]  𝄀
+hello
+SET block_encryption_mode = 'aes-128-ecb';

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -170,25 +171,41 @@ func TestResolveAnalyzeColumnsRejectsMissingAndDuplicate(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNewAnalyzedStatsGenerationDoesNotMixEpochs(t *testing.T) {
-	src := plan2.NewStatsInfo()
-	src.TableCnt = 100
-	src.BlockNumber = 7
-	src.NdvMap["a"] = 40
-	src.NullCntMap["a"] = 2
-	src.SizeMap["a"] = 800
-	src.DataTypeMap["a"] = uint64(types.T_int64)
+func TestComposeAnalyzedStatsGenerationKeepsFreshPhysicalDistribution(t *testing.T) {
+	metadata := plan2.NewStatsInfo()
+	metadata.TableCnt = 120
+	metadata.BlockNumber = 9
+	metadata.AccurateObjectNumber = 3
+	metadata.NdvMap["a"] = 12
+	metadata.NdvMap["b"] = 200
+	metadata.NullCntMap["b"] = 130
+	metadata.MinValMap["a"] = 1
+	metadata.MaxValMap["a"] = 99
+	metadata.ShuffleRangeMap["a"] = &pbstats.ShuffleRange{Overlap: 0.25}
 
-	published := newAnalyzedStatsGeneration(src)
+	collected := plan2.NewStatsInfo()
+	collected.TableCnt = 100
+	collected.BlockNumber = 7
+	collected.NdvMap["a"] = 40
+	collected.NullCntMap["a"] = 2
+	collected.SizeMap["a"] = 800
+	collected.DataTypeMap["a"] = uint64(types.T_int64)
+
+	published := composeAnalyzedStatsGeneration(metadata, collected)
 	require.Equal(t, float64(100), published.TableCnt)
 	require.Equal(t, int64(7), published.BlockNumber)
+	require.Equal(t, int64(3), published.AccurateObjectNumber)
 	require.Equal(t, float64(40), published.NdvMap["a"])
-	require.NotContains(t, published.NdvMap, "b")
-	require.Empty(t, published.MinValMap)
-	require.Empty(t, published.MaxValMap)
+	require.Equal(t, float64(100), published.NdvMap["b"], "metadata NDV must follow the exact row-count bound")
+	require.Equal(t, uint64(100), published.NullCntMap["b"], "metadata NULL count must follow the exact row-count bound")
+	require.Equal(t, float64(1), published.MinValMap["a"])
+	require.Equal(t, float64(99), published.MaxValMap["a"])
+	require.Equal(t, 0.25, published.ShuffleRangeMap["a"].Overlap)
 
-	src.NdvMap["a"] = 1
+	collected.NdvMap["a"] = 1
+	metadata.ShuffleRangeMap["a"].Overlap = 1
 	require.Equal(t, float64(40), published.NdvMap["a"], "published generation must own its maps")
+	require.Equal(t, 0.25, published.ShuffleRangeMap["a"].Overlap)
 }
 
 func TestAnalyzeValueWidthIncludesOnlyOutOfLinePayload(t *testing.T) {

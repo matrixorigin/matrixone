@@ -86,6 +86,10 @@ func main() {
 	flag.Parse()
 	maybePrintVersion()
 	maybeRunInDaemonMode()
+	// Connection tracking is optional debug instrumentation. Start it only
+	// after command-line handling so image validation with -h does not require
+	// netfilter capabilities.
+	startConnectionTracking()
 
 	uuid.EnableRandPool()
 

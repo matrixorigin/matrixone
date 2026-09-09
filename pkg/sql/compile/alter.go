@@ -302,6 +302,20 @@ func (c *Compile) prepareAlterDataBranchLineage(
 		if ownershipDAG.ComponentHasLiveLogicalBranch(oldTableID) {
 			op := c.proc.GetTxnOperator()
 			opts := op.TxnOptions()
+			// TRUNCATE commits the transaction that preceded the statement and
+			// plans against a fresh operator. Preserve the client's explicit-
+			// transaction origin across that boundary so a live data branch cannot
+			// bypass the same safety check as ALTER.
+			if !isExplicitAlterTxn(opts.GetByBegin(), opts.GetAutocommit()) {
+				if topContext := c.proc.GetTopContext(); topContext != nil {
+					fromExplicitTxn, _ := topContext.Value(
+						defines.ImplicitCommitFromExplicitTxn{},
+					).(bool)
+					if fromExplicitTxn {
+						opts.ByBegin = true
+					}
+				}
+			}
 			if err = validateAlterDataBranchLineageTxn(
 				statement, opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
 			); err != nil {
