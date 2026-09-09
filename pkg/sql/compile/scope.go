@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1151,6 +1153,11 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
+				if spec.MustApply && spec.UseMembershipFilter {
+					if err := validateRequiredVectorMembership(spec, msg); err != nil {
+						return nil, false, err
+					}
+				}
 				switch msg.Typ {
 				case message.RuntimeFilter_PASS:
 					if spec.MustApply {
@@ -1188,6 +1195,25 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 	}
 
 	return runtimeFilters, false, nil
+}
+
+func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.RuntimeFilterMessage) error {
+	if msg.Typ == message.RuntimeFilter_DROP || msg.Typ == message.RuntimeFilter_PASS {
+		// The caller handles terminal DROP and rejects required PASS.
+		return nil
+	}
+	if msg.Typ != message.RuntimeFilter_UNIQUEJOINKEYS || msg.Card <= 0 || spec.Expr == nil {
+		return moerr.NewInvalidStateNoCtx("required vector membership is unavailable or malformed")
+	}
+	var keys vector.Vector
+	defer keys.Free(nil)
+	if err := keys.UnmarshalBinary(msg.Data); err != nil {
+		return err
+	}
+	if keys.Length() != int(msg.Card) || keys.HasNull() || keys.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
+	}
+	return nil
 }
 
 func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
@@ -1818,7 +1844,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 		if emptyScan {
-			return []engine.Reader{new(readutil.EmptyReader)}, nil
+			return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
 		}
 		return s.buildVectorIndexReaders(runtimeFilterList)
 	}
@@ -2058,13 +2084,39 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	if !hasQuery {
-		return []engine.Reader{new(readutil.EmptyReader)}, nil
+		return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
+	}
+	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
+		readers, err := factory.NewReaders(s.Proc, spec, req, max(1, s.NodeInfo.Mcpu))
+		if err != nil {
+			return nil, err
+		}
+		if len(readers) != max(1, s.NodeInfo.Mcpu) {
+			for _, reader := range readers {
+				if reader != nil {
+					_ = reader.Close()
+				}
+			}
+			return nil, moerr.NewInvalidStateNoCtx("vector plugin returned an invalid reader count")
+		}
+		return readers, nil
+	}
+	if s.NodeInfo.Mcpu > 1 {
+		return nil, moerr.NewNotSupportedNoCtx("vector plugin has no local parallel-reader capability")
 	}
 	reader, err := searcher.Search().NewReader(s.Proc, spec, req)
 	if err != nil {
 		return nil, err
 	}
 	return []engine.Reader{reader}, nil
+}
+
+func emptyVectorScanReaders(count int) []engine.Reader {
+	readers := make([]engine.Reader, max(1, count))
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
 }
 
 func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool, bool) {
