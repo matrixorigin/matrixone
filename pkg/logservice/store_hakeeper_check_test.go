@@ -974,6 +974,10 @@ func TestSetInitialClusterInfo(t *testing.T) {
 
 func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// This test drives the state transitions itself. Join the background
+		// checker before initialization so its ID preallocation cannot change
+		// the watermark used to verify that rejected recovery has no effect.
+		store.tickerStopper.Stop()
 		require.NoError(t, store.setInitialClusterInfo(
 			1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 
