@@ -1191,3 +1191,22 @@ can be exposed. The existing `pkg/common/collationkey.SidecarStore` and
 increment therefore supplies planner and fallback safety for the eventual
 format but is not the complete #28164 fix; `production_fix` and
 `qa_acceptance` remain incomplete and the issue stays open.
+
+### 10.17 Implementation series status (sidecar snapshot boundary)
+
+The sidecar contract now has a deterministic checkpoint/clone envelope in
+`pkg/common/collationkey/snapshot.go`. Its `MOKP` body stores the codec version,
+registry version and digest, maximum key size, activation generation, owning
+relation ID, monotonic sidecar revision, and length-delimited `MOKS` entries;
+the body is followed by a SHA-256 checksum. All integer fields are fixed
+big-endian values and the format is independent of Go struct layout.
+
+Encoding requires a v2 metadata record, strictly ordered complete `MOKY` keys,
+matching `MOKL` relation locators, and a bounded entry count/total size.
+Decoding verifies the checksum first, then validates metadata, every nested
+entry, ordering, relation identity, and the 256 MiB allocation ceiling before
+returning any bytes. Restore therefore cannot expose a torn, mixed-generation,
+or legacy sidecar image. The snapshot codec is an in-process persistence
+boundary and is not yet wired to TN/catalog pages, backup/restore commands, or
+the migration management API; v2 remains disabled until those owners consume
+the same format and activation epoch.
