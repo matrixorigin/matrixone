@@ -66,3 +66,6 @@ enable-write = true
 enable-delete = true
 enable-dml = true
 enable-maintenance = true
+
+[cn.python-udf-client]
+server-address = "python-udf-worker-cn0:50051"
