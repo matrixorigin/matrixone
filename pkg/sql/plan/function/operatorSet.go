@@ -890,8 +890,8 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 			continue
 		}
 		if !null {
-			if _, ok := any(v).(int64); ok && v == T(math.MinInt64) {
-				return moerr.NewOutOfRangeNoCtxf("BIGINT", "unary minus value '%d'", v)
+			if signed, ok := any(v).(int64); ok && signed == math.MinInt64 {
+				return moerr.NewOutOfRangeNoCtxf("BIGINT", "unary minus value '%d'", signed)
 			}
 		}
 		if err := rs.Append(-v, null); err != nil {
