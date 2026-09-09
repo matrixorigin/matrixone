@@ -179,3 +179,126 @@ func TestCollationKeyV2IsPlannerOnly(t *testing.T) {
 	})
 	require.Equal(t, failedFunctionParametersWrong, check.status)
 }
+
+func TestCollationKeyV2RejectsMalformedParameterShapes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8)
+	value, err := vector.NewConstBytes(typ, []byte("a"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer value.Free(proc.Mp())
+	prefix, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer prefix.Free(proc.Mp())
+	charset, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.CharsetUTF8), 1, proc.Mp())
+	require.NoError(t, err)
+	defer charset.Free(proc.Mp())
+
+	for _, parameters := range [][]*vector.Vector{
+		{value},
+		{value, prefix},
+	} {
+		_, err := RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, parameters, 1)
+		require.Error(t, err)
+	}
+	require.Error(t, BuiltInCollationKeyV2([]*vector.Vector{nil, prefix, charset}, nil, proc, 1, nil))
+	badType, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badType.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, []*vector.Vector{badType, prefix, charset}, 1)
+	require.Error(t, err)
+	badDescriptor, err := vector.NewConstFixed(types.T_int32.ToType(), int32(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badDescriptor.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, []*vector.Vector{value, badDescriptor, charset}, 1)
+	require.Error(t, err)
+	_, err = RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, []*vector.Vector{value, prefix, badDescriptor}, 1)
+	require.Error(t, err)
+
+	checks := [][]types.Type{
+		{typ},
+		{typ, types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		{types.T_char.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+	}
+	for _, inputs := range checks {
+		check := collationKeyV2TypeMatch(nil, inputs)
+		require.Equal(t, failedFunctionParametersWrong, check.status)
+	}
+}
+
+func TestCollationCompositeKeyV2RejectsMalformedParametersAndNullDescriptors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8)
+	value, err := vector.NewConstBytes(typ, []byte("a"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer value.Free(proc.Mp())
+	prefix, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer prefix.Free(proc.Mp())
+	charset, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.CharsetUTF8), 1, proc.Mp())
+	require.NoError(t, err)
+	defer charset.Free(proc.Mp())
+	badArity := [][]*vector.Vector{{value, prefix, charset}, {value, prefix, charset, value}}
+	for _, parameters := range badArity {
+		_, err := RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID, parameters, 1)
+		require.Error(t, err)
+	}
+	require.Error(t, BuiltInCollationCompositeKeyV2(
+		[]*vector.Vector{nil, prefix, charset, value, prefix, charset}, nil, proc, 1, nil))
+	badType, err := vector.NewConstFixed(types.T_int32.ToType(), int32(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badType.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID,
+		[]*vector.Vector{value, badType, charset, value, prefix, charset}, 1)
+	require.Error(t, err)
+	badCharset, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.CharsetBinary), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badCharset.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID,
+		[]*vector.Vector{value, prefix, badCharset, value, prefix, charset}, 1)
+	require.Error(t, err)
+	badValueType := types.NewWithCharset(types.T_int64, 0, 0, types.CharsetUTF8)
+	badValue := vector.NewConstNull(badValueType, 1, proc.Mp())
+	defer badValue.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID,
+		[]*vector.Vector{badValue, prefix, charset, value, prefix, charset}, 1)
+	require.Error(t, err)
+
+	for _, inputs := range [][]types.Type{
+		{typ, types.T_int64.ToType(), types.T_int64.ToType()},
+		{typ, types.T_int64.ToType(), types.T_int64.ToType(), typ},
+		{types.T_char.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), typ, types.T_int64.ToType(), types.T_int64.ToType()},
+	} {
+		check := collationCompositeKeyV2TypeMatch(nil, inputs)
+		require.Equal(t, failedFunctionParametersWrong, check.status)
+	}
+}
+
+func TestCollationKeyV2SupportsVectorRowsAndRejectsDescriptorNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8)
+	values := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(values, []byte("Alpha"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(values, []byte("beta"), false, proc.Mp()))
+	defer values.Free(proc.Mp())
+	prefix := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(prefix, int64(0), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(prefix, int64(1), false, proc.Mp()))
+	defer prefix.Free(proc.Mp())
+	charsets := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(charsets, int64(types.CharsetUTF8), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(charsets, int64(types.CharsetUTF8), false, proc.Mp()))
+	defer charsets.Free(proc.Mp())
+	out, err := RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, []*vector.Vector{values, prefix, charsets}, 2)
+	require.NoError(t, err)
+	defer out.Free(proc.Mp())
+	require.False(t, out.IsNull(0))
+	require.False(t, out.IsNull(1))
+	require.NotEqual(t, out.GetBytesAt(0), out.GetBytesAt(1))
+	nullPrefix := vector.NewConstNull(types.T_int64.ToType(), 2, proc.Mp())
+	defer nullPrefix.Free(proc.Mp())
+	_, err = RunFunctionDirectly(proc, CollationKeyV2FunctionEncodedID, []*vector.Vector{values, nullPrefix, charsets}, 2)
+	require.Error(t, err)
+}

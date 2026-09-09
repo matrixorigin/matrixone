@@ -193,3 +193,99 @@ func TestV2CompositePrimaryKeyFramesEverySourcePart(t *testing.T) {
 	require.Equal(t, int64(types.CharsetUTF8), expr.GetF().GetArgs()[2].GetLit().GetI64Val())
 	require.Equal(t, int64(types.CharsetUTF8MB4Bin), expr.GetF().GetArgs()[5].GetLit().GetI64Val())
 }
+
+func TestCollationKeyV2ExpressionRejectsEveryMalformedBoundary(t *testing.T) {
+	valid := &planpb.Expr{Typ: v2PlannerTextType(uint32(types.CharsetUTF8))}
+	for _, value := range []*planpb.Expr{nil, {Typ: planpb.Type{Id: int32(types.T_char), Charset: uint32(types.CharsetUTF8)}}, {Typ: v2PlannerTextType(99)}} {
+		_, err := makeCollationKeyV2Expr(value, 0)
+		require.Error(t, err)
+	}
+	_, err := makeCollationKeyV2Expr(valid, -1)
+	require.Error(t, err)
+	_, err = makeCollationKeyV2Expr(valid, int(^uint32(0)))
+	require.NoError(t, err)
+	_, err = makeCollationKeyV2Expr(valid, int(^uint32(0))+1)
+	require.Error(t, err)
+
+	for _, part := range []string{"", catalog.CreateAlias("")} {
+		_, err := uniqueKeyPrefixLength(nil, part)
+		require.Error(t, err)
+	}
+	_, err = uniqueKeyPrefixLength(map[string]int{"name": int(^uint32(0)) + 1}, "name")
+	require.Error(t, err)
+	require.NoError(t, func() error {
+		_, err := uniqueKeyPrefixLength(map[string]int{"name": 3}, catalog.CreateAlias("name"))
+		return err
+	}())
+
+	table := &planpb.TableDef{Name: "t", UniqueKeyCodecVersion: v2PlannerMetadata()}
+	index := &planpb.IndexDef{Parts: []string{"name"}, Unique: true}
+	for _, values := range [][]*planpb.Expr{nil, {nil}, {valid}} {
+		if len(values) == 1 && values[0] == valid {
+			continue
+		}
+		require.Error(t, validateUniqueKeyInputExprs(table, index, values))
+	}
+	require.Error(t, validateUniqueKeyInputExprs(nil, index, []*planpb.Expr{valid}))
+	require.Error(t, validateUniqueKeyInputExprs(table, nil, []*planpb.Expr{valid}))
+	require.Error(t, validateUniqueKeyInputExprs(table, &planpb.IndexDef{}, nil))
+	require.Error(t, validateUniqueKeyInputExprs(table, &planpb.IndexDef{Parts: []string{""}}, []*planpb.Expr{valid}))
+
+	_, err = makeCollationCompositeKeyV2Expr(nil, nil)
+	require.Error(t, err)
+	_, err = makeCollationCompositeKeyV2Expr([]*planpb.Expr{valid, nil}, []int{0, 0})
+	require.Error(t, err)
+	_, err = makeCollationCompositeKeyV2Expr([]*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}, valid}, []int{0, 0})
+	require.Error(t, err)
+	_, err = makeCollationCompositeKeyV2Expr([]*planpb.Expr{valid, valid}, []int{-1, 0})
+	require.Error(t, err)
+}
+
+func TestV2UniqueKeyExpressionBuildersCoverSingleAndCompositePaths(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	table := &planpb.TableDef{
+		Name:                  "t_v2_expr",
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+	value := &planpb.Expr{Typ: v2PlannerTextType(uint32(types.CharsetUTF8))}
+	node := &planpb.Node{ProjectList: []*planpb.Expr{value, value}}
+	single := &planpb.IndexDef{Parts: []string{"a"}, Unique: true}
+	composite := &planpb.IndexDef{Parts: []string{"a", "b"}, Unique: true}
+	for _, index := range []*planpb.IndexDef{single, composite} {
+		expr, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, table, index,
+			map[string]int32{"t_v2_expr.a": 0, "t_v2_expr.b": 1}, map[string]int{"a": 2})
+		require.NoError(t, err)
+		require.NotNil(t, expr)
+	}
+	_, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, table, single, map[string]int32{}, nil)
+	require.Error(t, err)
+	_, err = builder.makeInsertUniqueIndexKeyExpr(nil, 3, table, single, nil, nil)
+	require.Error(t, err)
+
+	for _, index := range []*planpb.IndexDef{single, composite} {
+		values := []*planpb.Expr{value}
+		if len(index.Parts) == 2 {
+			values = append(values, value)
+		}
+		expr, err := builder.makeUniqueIndexKeyExprFromInputExprs(table, index, values, nil)
+		require.NoError(t, err)
+		require.NotNil(t, expr)
+	}
+	_, err = builder.makeUniqueIndexKeyExprFromInputExprs(table, single, []*planpb.Expr{value}, map[string]int{"a": 0})
+	require.Error(t, err)
+
+	pk := &planpb.TableDef{Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}}}
+	_, err = makePrimaryKeyV2IdentityExpr(nil, value)
+	require.Error(t, err)
+	_, err = makePrimaryKeyV2IdentityExpr(pk, nil)
+	require.Error(t, err)
+	pk.Pkey.Names = []string{"a", "b"}
+	_, err = makePrimaryKeyV2IdentityExpr(pk, value)
+	require.Error(t, err)
+	_, err = makePrimaryKeyV2IdentityExprs(pk, []*planpb.Expr{value})
+	require.Error(t, err)
+	pk.Pkey.Names = []string{"a"}
+	expr, err := makePrimaryKeyV2IdentityExprs(pk, []*planpb.Expr{value})
+	require.NoError(t, err)
+	require.NotNil(t, expr)
+}
