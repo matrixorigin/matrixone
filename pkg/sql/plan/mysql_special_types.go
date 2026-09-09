@@ -532,6 +532,26 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	}
 }
 
+// setTypeHasEmptyMember identifies a SET definition that has at least one
+// member whose display label is empty. Every bitmap containing only such a
+// member renders as the empty string, so display text alone cannot recover
+// the stored bitmap (the empty member may occur at any declaration position).
+func setTypeHasEmptyMember(typ *plan.Type) bool {
+	if !isSetPlanType(typ) {
+		return false
+	}
+	values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+	if err != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 	return moerr.NewNotSupported(ctx,
 		"definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values")

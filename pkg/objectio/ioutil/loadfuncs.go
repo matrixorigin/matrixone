@@ -91,7 +91,6 @@ func readColumnsData(
 	extraTSColumn *uint16,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-	sharedPosition int,
 ) (ioVectors fileservice.IOVector, fromCache bool, err error) {
 	if len(columns) != len(typs) {
 		return ioVectors, false, moerr.NewInvalidInputNoCtxf(
@@ -120,15 +119,9 @@ func readColumnsData(
 	}
 	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	if sharedPosition >= 0 {
-		ioVectors, err = objectio.ReadOneBlockWithScopedDecode(
-			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy, sharedPosition,
-		)
-	} else {
-		ioVectors, err = objectio.ReadOneBlock(
-			ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
-		)
-	}
+	ioVectors, err = objectio.ReadOneBlock(
+		ctx, &dataMeta, name, location.ID(), readColumns, readTypes, m, fs, policy,
+	)
 	if err != nil {
 		return ioVectors, false, err
 	}
@@ -205,7 +198,6 @@ func LoadColumnsDataInto(
 		commitTSColumn,
 		m,
 		policy,
-		-1,
 	)
 	if err != nil {
 		return deleteMask, false, err
@@ -317,7 +309,6 @@ func LoadColumnDataBySearch(
 		commitTSColumn,
 		m,
 		policy,
-		-1,
 	)
 	if err != nil {
 		return nil, false, err
@@ -453,30 +444,21 @@ func LoadColumnsDataIntoAndTopN(
 	readTypes[len(typs)] = topType
 	copy(readTypes[len(typs)+1:], deferredTypes)
 
-	ioVectors, fromCache, err := readColumnsData(
-		ctx,
-		readColumns,
-		readTypes,
-		fs,
-		location,
-		nil,
-		m,
-		policy,
-		len(columns),
-	)
+	read, err := objectio.ReadBlockForTopN(ctx, readColumns, readTypes, fs, location,
+		len(columns), orderByLimit, m, policy)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	defer objectio.ReleaseIOVector(&ioVectors)
-
+	defer read.Release()
+	fromCache = read.FromCache()
 	for i := range columns {
 		if materializeRows == nil {
 			err = objectio.CopyCachedVectorAll(
-				destinations[i], ioVectors.Entries[i].CachedData, m,
+				destinations[i], read.Entry(i).CachedData, m,
 			)
 		} else {
 			err = objectio.CopyCachedVectorRows(
-				destinations[i], ioVectors.Entries[i].CachedData, materializeRows, m,
+				destinations[i], read.Entry(i).CachedData, materializeRows, m,
 			)
 		}
 		if err != nil {
@@ -493,12 +475,7 @@ func LoadColumnsDataIntoAndTopN(
 			"fused object topn selector returned nil rows",
 		)
 	}
-	sels, dists, err = objectio.SearchCachedVectorTopN(
-		ctx,
-		ioVectors.Entries[len(columns)],
-		selectedRows,
-		orderByLimit,
-	)
+	sels, dists, err = read.TopN(ctx, selectedRows)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -506,7 +483,7 @@ func LoadColumnsDataIntoAndTopN(
 	for i := range deferredColumns {
 		err = objectio.CopyCachedVectorRows(
 			deferredDestinations[i],
-			ioVectors.Entries[deferredOffset+i].CachedData,
+			read.Entry(deferredOffset+i).CachedData,
 			sels,
 			m,
 		)
@@ -545,7 +522,6 @@ func LoadColumnDataBySearchAndCheckTS(
 		nil,
 		m,
 		policy,
-		-1,
 	)
 	if err != nil {
 		return false, false, false, err
