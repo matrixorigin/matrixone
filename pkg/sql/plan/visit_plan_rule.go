@@ -1339,11 +1339,48 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
-	// The cast must directly wrap this arithmetic node. Expression execution is
-	// bottom-up, so its UINT64 range check happens before a parent can consume or
-	// cancel the DECIMAL128 intermediate. Keeping it direct also preserves the
-	// typed per-node boundary when this runtime replacement is nested below ABS,
-	// CASE, COALESCE, or another arithmetic expression.
+	// Keep the UINT64 cast directly around an arithmetic node so the typed
+	// runtime boundary survives nesting. Some vector backends convert DECIMAL
+	// 2^64 to UINT64 by wrapping instead of reporting an error, so the cast alone
+	// cannot be its only range proof. Reapply the same operator with its decimal
+	// identity while CASE selects an overflowing decimal operand outside the
+	// UINT64 range. In range, this is semantically neutral; out of range, the
+	// DECIMAL multiplication fails before conversion or any parent cancellation.
+	maxUnsigned := makePlan2Uint64ConstExprWithType(^uint64(0))
+	decimalMax, err := appendCastBeforeExpr(ctx, maxUnsigned, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	inRange, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*Expr{DeepCopyExpr(bound), decimalMax})
+	if err != nil {
+		return nil, err
+	}
+	overflow, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(bound), DeepCopyExpr(bound)})
+	if err != nil {
+		return nil, err
+	}
+
+	identity := makePlan2Int64ConstExprWithType(1)
+	if name == "+" {
+		identity = makePlan2Int64ConstExprWithType(0)
+	} else if name == "%" {
+		identity, err = BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{decimalMax, identity})
+		if err != nil {
+			return nil, err
+		}
+	}
+	identity, err = appendCastBeforeExpr(ctx, identity, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	guard, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{inRange, identity, overflow})
+	if err != nil {
+		return nil, err
+	}
+	bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*Expr{bound, guard})
+	if err != nil {
+		return nil, err
+	}
 	resultType := types.T_uint64.ToType()
 	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
 }
