@@ -1,4 +1,5 @@
 # RANDOM_BYTES accepts MySQL numeric and numeric-string coercions.
+DROP TABLE IF EXISTS random_bytes_coercion_28483;
 SELECT LENGTH(RANDOM_BYTES(TRUE)) AS bool_true;
 SELECT LENGTH(RANDOM_BYTES('2tail')) AS string_prefix;
 SELECT LENGTH(RANDOM_BYTES('1.5')) AS string_fraction;

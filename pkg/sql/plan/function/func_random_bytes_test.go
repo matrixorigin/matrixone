@@ -69,7 +69,7 @@ func TestRandomBytesCoercesBoolTextFloatAndDecimalLengths(t *testing.T) {
 		want   []int
 	}{
 		{name: "bool", typ: types.T_bool.ToType(), values: []bool{true, false}, nulls: []bool{false, true}, want: []int{1, -1}},
-		{name: "numeric_text", typ: types.T_varchar.ToType(), values: []string{"2tail", "1.5"}, want: []int{2, 1}},
+		{name: "numeric_text", typ: types.T_varchar.ToType(), values: []string{"2tail", "1.5", "\t+2tail"}, want: []int{2, 1, 2}},
 		{name: "binary_integer", typ: types.T_binary.ToType(), values: []string{"\x02"}, want: []int{2}},
 		{name: "float", typ: types.T_float64.ToType(), values: []float64{1.5, 2.5}, want: []int{2, 2}},
 		{name: "decimal", typ: types.New(types.T_decimal64, 10, 1), values: []types.Decimal64{decimalValue}, want: []int{2}},
@@ -127,16 +127,20 @@ func TestRandomBytesUsesPreparedSourceKindForTextTransport(t *testing.T) {
 
 func TestRandomBytesTreatsInvalidNumericTextAsRangeError(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	caseTest := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, nil),
-		},
-		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+	for _, value := range []string{"abc", "\u00a02"} {
+		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil),
+				},
+				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
 
-	require.NoError(t, caseTest.result.PreExtendAndReset(1))
-	err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrPreparedParamOutOfRange), err)
+			require.NoError(t, caseTest.result.PreExtendAndReset(1))
+			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrPreparedParamOutOfRange), err)
+		})
+	}
 }
 
 func TestRandomBytesRejectsInvalidFloatLengths(t *testing.T) {

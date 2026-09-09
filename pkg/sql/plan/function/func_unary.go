@@ -8197,55 +8197,15 @@ func randomBytesRoundedFloat(value float64, proc *process.Process) (int64, error
 	return int64(rounded), nil
 }
 
-// parseRandomBytesIntegerPrefix follows MySQL's integer conversion for string
-// arguments, but only retains the range that RANDOM_BYTES can accept. Capping
-// as soon as the value exceeds 1024 avoids int64 overflow and still accepts
-// arbitrarily many leading zeroes (for example, "000...1024").
-func parseRandomBytesIntegerPrefix(s string) int64 {
-	if len(s) == 0 {
-		return 0
-	}
-	start := 0
-	negative := false
-	if s[0] == '+' || s[0] == '-' {
-		negative = s[0] == '-'
-		start = 1
-	}
-
-	value := int64(0)
-	hasDigit := false
-	for i := start; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
-		hasDigit = true
-		digit := int64(s[i] - '0')
-		if value > (randomBytesMaxLength-digit)/10 {
-			if negative {
-				return -1
-			}
-			return randomBytesMaxLength + 1
-		}
-		value = value*10 + digit
-	}
-	if !hasDigit || value == 0 {
-		return 0
-	}
-	if negative {
-		return -value
-	}
-	return value
-}
-
 func randomBytesTextLength(
 	param *vector.Vector,
 	value []byte,
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
 	switch param.GetPrepareParamKindAt(int(row)) {
 	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
+		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
 		// SQL PREPARE stores the value in a text transport vector. The source
 		// kind is the distinction between a string literal (integer prefix) and
 		// a numeric value (round-to-even).
@@ -8255,6 +8215,7 @@ func randomBytesTextLength(
 		}
 		return randomBytesRoundedFloat(floating, proc)
 	case vector.PrepareParamBoolean:
+		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
 		boolean, err := strconv.ParseBool(text)
 		if err != nil {
 			return 0, randomBytesRangeError(proc)
@@ -8264,7 +8225,10 @@ func randomBytesTextLength(
 		}
 		return 0, nil
 	default:
-		return parseRandomBytesIntegerPrefix(text), nil
+		// Keep ordinary character values byte-oriented. In particular, MySQL
+		// only ignores ASCII whitespace before the numeric prefix; using
+		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+		return parseMySQLIntegerPrefix(value), nil
 	}
 }
 
