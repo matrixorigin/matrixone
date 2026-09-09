@@ -980,3 +980,24 @@ the explicitly bytewise format remain unchanged; malformed v2 metadata fails
 closed as an internal error. This read-side fence is intentionally a temporary
 admission rule and is not a capability publication or storage-reader
 implementation.
+
+### 10.7 Implementation series status (v2 key materialization primitive)
+
+The next runtime increment adds `INTERNAL_COLLATION_KEY_V2`, an unregistered
+planner-owned vector primitive. Given a `VARCHAR`/`TEXT` value, a character
+prefix length, and an explicit supported charset descriptor, it emits the
+exact `collationkey.EncodePart` envelope used by the shared codec. It validates
+the value type and charset before evaluating rows, preserves NULL as a NULL
+result, rejects NULL or out-of-range descriptors, and propagates malformed
+UTF-8 or unsupported-domain errors without publishing a partial key. The
+result is a binary varlena value; the original user value is not overwritten.
+
+The primitive is intentionally absent from `functionIdRegister`, so SQL text
+cannot call or constant-fold it by name. A future v2 sidecar writer may build a
+plan expression with the exported encoded overload ID only after relation
+metadata, capability, activation generation, and migration gates have passed.
+No catalog relation, unique-index probe, lock, transaction commit, query
+consumer, or management command calls this primitive yet; the read/write
+admission fences therefore continue to reject v2 relations. This increment is
+an executable runtime foundation, not a user-visible fix or an enablement
+claim.
