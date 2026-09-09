@@ -94,6 +94,9 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	if routine.Udf == nil {
 		return fmt.Errorf("python udf: routine descriptor has no function")
 	}
+	if err := routine.LoadPythonTypeContract(); err != nil {
+		return fmt.Errorf("python udf: decode Python type contract: %w", err)
+	}
 
 	body := PythonRoutineBody{}
 	if err := json.Unmarshal([]byte(routine.Body), &body); err != nil {
@@ -249,6 +252,13 @@ func hasNullInput(inputs []*vector.Vector, row int) bool {
 }
 
 func routineArgumentTypes(routine *UdfWithContext) ([]types.Type, error) {
+	if len(routine.PythonArgTypes) != 0 {
+		args := make([]types.Type, len(routine.PythonArgTypes))
+		for i, descriptor := range routine.PythonArgTypes {
+			args[i] = descriptor.Type()
+		}
+		return args, nil
+	}
 	if len(routine.ArgsType) != 0 || len(routine.Args) == 0 {
 		return append([]types.Type(nil), routine.ArgsType...), nil
 	}
