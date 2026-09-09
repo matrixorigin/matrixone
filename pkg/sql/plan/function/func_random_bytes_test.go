@@ -15,6 +15,7 @@
 package function
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -116,4 +117,29 @@ func TestRandomBytesSkipsMaskedOutOfRangeRows(t *testing.T) {
 	require.False(t, result.IsNull(0))
 	require.Len(t, result.GetBytesAt(0), 1)
 	require.True(t, result.IsNull(1))
+}
+
+func TestRandomBytesReportsEntropySourceFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{16}, nil),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
+		RandomBytes,
+	)
+
+	require.NoError(t, testCase.result.PreExtendAndReset(1))
+	err := randomBytesWithReader(
+		testCase.parameters,
+		testCase.result,
+		proc,
+		1,
+		nil,
+		func([]byte) (int, error) { return 0, errors.New("entropy source unavailable") },
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
+	require.EqualError(t, err, "internal error: random_bytes failed to generate 16 bytes: entropy source unavailable")
 }

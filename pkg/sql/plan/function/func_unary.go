@@ -8152,6 +8152,21 @@ const randomBytesMaxLength = 1024
 // Uses crypto/rand for cryptographically secure random bytes
 // Handles both int64 and uint64 parameter types.
 func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return randomBytesWithReader(parameters, result, proc, length, selectList, rand.Read)
+}
+
+// randomBytesWithReader contains the execution logic behind RandomBytes and
+// accepts the reader as a dependency so the entropy-source failure contract is
+// testable without changing the production source.  The production operator
+// always passes crypto/rand.Read.
+func randomBytesWithReader(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	read func([]byte) (int, error),
+) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	paramType := parameters[0].GetType().Oid
 
@@ -8207,7 +8222,7 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 
 		// Generate random bytes using crypto/rand
 		randomBytes := make([]byte, lenVal)
-		_, err := rand.Read(randomBytes)
+		_, err := read(randomBytes)
 		if err != nil {
 			return moerr.NewInternalErrorf(proc.Ctx, "random_bytes failed to generate %d bytes: %v", lenVal, err)
 		}
