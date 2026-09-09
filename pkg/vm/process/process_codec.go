@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"maps"
 	"math"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,18 +101,20 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                proc.Base.SessionInfo.GetUser(),
-			Host:                proc.Base.SessionInfo.GetHost(),
-			Role:                proc.Base.SessionInfo.GetRole(),
-			ConnectionId:        proc.Base.SessionInfo.GetConnectionID(),
-			Database:            proc.Base.SessionInfo.GetDatabase(),
-			Version:             proc.Base.SessionInfo.GetVersion(),
-			TimeZone:            timeBytes,
-			QueryId:             proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:             resolveSqlMode(proc),
+			User:                  proc.Base.SessionInfo.GetUser(),
+			Host:                  proc.Base.SessionInfo.GetHost(),
+			Role:                  proc.Base.SessionInfo.GetRole(),
+			ConnectionId:          proc.Base.SessionInfo.GetConnectionID(),
+			Database:              proc.Base.SessionInfo.GetDatabase(),
+			Version:               proc.Base.SessionInfo.GetVersion(),
+			TimeZone:              timeBytes,
+			QueryId:               proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:       resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:    proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:   proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:               resolveSqlMode(proc),
+			CnLabels:              maps.Clone(proc.Base.SessionInfo.CNLabels),
+			QuerySchedulingIntent: encodeQuerySchedulingIntent(proc.Base.SessionInfo.QuerySchedulingIntent),
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -338,6 +342,8 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		CNLabels:                            maps.Clone(sei.CnLabels),
+		QuerySchedulingIntent:               decodeQuerySchedulingIntent(sei.QuerySchedulingIntent),
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -346,6 +352,42 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func encodeQuerySchedulingIntent(intent schedule.SchedulingIntent) *pipeline.QuerySchedulingIntent {
+	if intent == (schedule.SchedulingIntent{}) {
+		return nil
+	}
+	return &pipeline.QuerySchedulingIntent{
+		Explicit:          intent.Explicit,
+		RequestedPool:     intent.RequestedPool,
+		PoolFallback:      uint32(intent.PoolFallback),
+		EmptyWorkerPolicy: uint32(intent.EmptyWorkerPolicy),
+		CurrentCnPolicy:   uint32(intent.CurrentCNPolicy),
+		WorkerSetMode:     uint32(intent.WorkerSet.Mode),
+		MaxWorkers:        int32(intent.WorkerSet.MaxWorkers),
+		SelectionKey:      intent.WorkerSet.SelectionKey,
+		AlgorithmVersion:  intent.WorkerSet.AlgorithmVersion,
+	}
+}
+
+func decodeQuerySchedulingIntent(intent *pipeline.QuerySchedulingIntent) schedule.SchedulingIntent {
+	if intent == nil {
+		return schedule.SchedulingIntent{}
+	}
+	return schedule.SchedulingIntent{
+		Explicit:          intent.Explicit,
+		RequestedPool:     intent.RequestedPool,
+		PoolFallback:      schedule.PoolFallbackPolicy(intent.PoolFallback),
+		EmptyWorkerPolicy: schedule.EmptyWorkerPolicy(intent.EmptyWorkerPolicy),
+		CurrentCNPolicy:   schedule.CurrentCNPolicy(intent.CurrentCnPolicy),
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode:             schedule.WorkerSetMode(intent.WorkerSetMode),
+			MaxWorkers:       int(intent.MaxWorkers),
+			SelectionKey:     intent.SelectionKey,
+			AlgorithmVersion: intent.AlgorithmVersion,
+		},
+	}
 }
 
 func resolveSqlMode(proc *Process) string {

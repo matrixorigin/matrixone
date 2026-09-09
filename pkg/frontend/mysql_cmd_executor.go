@@ -4562,6 +4562,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LogLevel:      zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:     ses.GetSessId(),
 	}
+	// Establish the current statement's baseline routing snapshot before any
+	// frontend helper can create a background executor. createCompile replaces
+	// the policy with the statement's effective SET_VAR result later; this
+	// baseline preserves session-level query_pool settings for early internal
+	// SQL and for statements that do not compile (for example SET itself).
+	proc.Base.SessionInfo.CNLabels = maps.Clone(ses.getCNLabels())
+	proc.Base.SessionInfo.QuerySchedulingIntent = querySchedulingIntent(ses)
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the
 	// ROW_COUNT() builtin can read it.
@@ -4827,6 +4834,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			execCtx.cws = cws
 		}
 		execCtx.input = currentInput
+		// A COM_QUERY may contain a SET followed by another statement. Refresh
+		// the statement-owned snapshot after each preceding statement so a back
+		// session created during planning sees both session settings and the
+		// current statement's SET_VAR policy. sqlOfStmt is sanitized for logging;
+		// use the wrapper's raw scheduling fragment when it is available.
+		schedulingSQL := currentSQLRecord
+		if tcw, ok := cw.(*TxnComputationWrapper); ok {
+			schedulingSQL = tcw.schedulingSQLOr(schedulingSQL)
+		}
+		proc.Base.SessionInfo.CNLabels = maps.Clone(ses.getCNLabels())
+		proc.Base.SessionInfo.QuerySchedulingIntent = querySchedulingIntentForStatement(ses, schedulingSQL)
 
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()

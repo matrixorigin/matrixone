@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +33,38 @@ func TestOptionsStreaming(t *testing.T) {
 	require.True(t, ret == ch)
 	require.True(t, streaming)
 	require.True(t, err_chan == errors)
+}
+
+func TestOptionsCNLabelsUseIndependentSnapshots(t *testing.T) {
+	labels := map[string]string{"account": "tp", "role": "tp"}
+	opts := Options{}.WithCNLabels(labels)
+
+	labels["role"] = "ap"
+	first := opts.CNLabels()
+	require.Equal(t, map[string]string{"account": "tp", "role": "tp"}, first)
+
+	first["account"] = "other"
+	require.Equal(t, "tp", opts.CNLabels()["account"])
+	require.Nil(t, (Options{}).CNLabels())
+	require.NotNil(t, (Options{}).WithCNLabels(map[string]string{}).CNLabels())
+}
+
+func TestOptionsQuerySchedulingIntent(t *testing.T) {
+	intent := schedule.SchedulingIntent{
+		Explicit:          true,
+		RequestedPool:     "account:tp",
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+		CurrentCNPolicy:   schedule.CurrentCNPreferred,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode:             schedule.WorkerSetMax,
+			MaxWorkers:       2,
+			SelectionKey:     "statement-id",
+			AlgorithmVersion: schedule.WorkerSelectionAlgorithmV1,
+		},
+	}
+	require.Equal(t, intent, (Options{}).WithQuerySchedulingIntent(intent).QuerySchedulingIntent())
+	require.Equal(t, schedule.SchedulingIntent{}, (Options{}).QuerySchedulingIntent())
 }
 
 func TestOptionsLockWaitTimeout(t *testing.T) {

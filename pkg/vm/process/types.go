@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -128,18 +129,22 @@ type SessionInfo struct {
 	ExplicitZeroTemporalCastReturnsNull bool
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
-	SqlMode        string
-	StorageEngine  engine.Engine
-	QueryId        []string
-	ResultColTypes []types.Type
-	SeqCurValues   map[uint64]string
-	SeqDeleteKeys  []uint64
-	SeqAddValues   map[uint64]string
-	SeqLastValue   []string
-	SqlHelper      sqlHelper
-	Buf            *buffer.Buffer
-	LogLevel       zapcore.Level
-	SessionId      uuid.UUID
+	SqlMode string
+	// CNLabels is the immutable compute-pool selector captured from the parent
+	// statement and carried to remote and nested execution.
+	CNLabels              map[string]string
+	QuerySchedulingIntent schedule.SchedulingIntent
+	StorageEngine         engine.Engine
+	QueryId               []string
+	ResultColTypes        []types.Type
+	SeqCurValues          map[uint64]string
+	SeqDeleteKeys         []uint64
+	SeqAddValues          map[uint64]string
+	SeqLastValue          []string
+	SqlHelper             sqlHelper
+	Buf                   *buffer.Buffer
+	LogLevel              zapcore.Level
+	SessionId             uuid.UUID
 }
 
 type Session interface {

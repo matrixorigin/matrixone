@@ -1279,6 +1279,9 @@ func buildPlanForCompileRetry(
 }
 
 func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
+	if intent, ok := inheritedQuerySchedulingIntent(ses); ok {
+		return intent
+	}
 	intent := schedule.SchedulingIntent{
 		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
 		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
