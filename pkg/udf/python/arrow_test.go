@@ -95,6 +95,9 @@ func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
 func TestArrowTypeValidationIncludesFixedBinaryWidth(t *testing.T) {
 	descriptor, err := NewTypeDescriptor(types.T_uuid.ToType())
 	require.NoError(t, err)
+	fingerprint, err := descriptor.Fingerprint()
+	require.NoError(t, err)
+	require.Equal(t, "370e2939c178acee55aaae27a7bcf92937a203e2788e9e0140d84884be042780", fingerprint)
 	builder := array.NewFixedSizeBinaryBuilder(memory.NewGoAllocator(), &arrow.FixedSizeBinaryType{ByteWidth: 1})
 	builder.Append([]byte{0xff})
 	values := builder.NewFixedSizeBinaryArray()
