@@ -200,6 +200,37 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	if _, err := EncodePart(nil, Part{Domain: decimal, Value: []byte("1.234")}); err == nil {
 		t.Fatal("decimal precision overflow was accepted")
 	}
+	negative, err := EncodePart(nil, Part{Domain: decimal, Value: []byte("-1.20")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	negativeEquivalent, err := EncodePart(nil, Part{Domain: decimal, Value: []byte("-1.2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(negative, negativeEquivalent) {
+		t.Fatalf("negative decimal equivalents differ: %X != %X", negative, negativeEquivalent)
+	}
+	zero, err := EncodePart(nil, Part{Domain: decimal, Value: []byte("-0.00")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	positiveZero, err := EncodePart(nil, Part{Domain: decimal, Value: []byte("0")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(zero, positiveZero) {
+		t.Fatalf("zero signs/scales were not canonicalized: %X != %X", zero, positiveZero)
+	}
+	if _, err := EncodePart(nil, Part{Domain: Domain{Type: SignedInteger, Width: 33}, Value: make([]byte, 33)}); err == nil {
+		t.Fatal("oversized integer domain was accepted")
+	}
+	if _, err := EncodePart(nil, Part{Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixBytes}, Value: []byte("a")}); err == nil {
+		t.Fatal("text byte prefix domain was accepted")
+	}
+	if _, err := EncodePart(nil, Part{Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters, Collation: 1}, Value: []byte("a")}); err == nil {
+		t.Fatal("unregistered explicit collation was accepted")
+	}
 }
 
 func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
@@ -225,6 +256,37 @@ func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	badPayload[19] = 0xff
 	if err := ValidateEncoded(badPayload); err == nil {
 		t.Fatal("invalid payload length accepted")
+	}
+	badFamily := append([]byte(nil), valid...)
+	badFamily[9] = 0x7f
+	if err := ValidateEncoded(badFamily); err == nil {
+		t.Fatal("unknown registry family accepted")
+	}
+	badType := append([]byte(nil), valid...)
+	badType[8] = byte(Binary)
+	if err := ValidateEncoded(badType); err == nil {
+		t.Fatal("registry type mismatch accepted")
+	}
+	badParams := append([]byte(nil), valid...)
+	badParams[13] = 2
+	if err := ValidateEncoded(badParams); err == nil {
+		t.Fatal("non-canonical parameters accepted")
+	}
+	badWeight := append([]byte(nil), valid...)
+	badWeight[len(badWeight)-4] = 1
+	if err := ValidateEncoded(badWeight); err == nil {
+		t.Fatal("non-canonical general-ci weight accepted")
+	}
+	badNullPayload := append([]byte(nil), valid...)
+	badNullPayload[7] = 1
+	if err := ValidateEncoded(badNullPayload); err == nil {
+		t.Fatal("NULL part with payload accepted")
+	}
+	if _, err := EncodeComposite(nil, make([]Part, MaxParts+1)); err == nil {
+		t.Fatal("too many parts accepted")
+	}
+	if _, err := EncodeComposite(make([]byte, MaxKeyBytes-1), []Part{{Domain: generalDomain(0), Value: []byte("a")}}); err == nil {
+		t.Fatal("key exceeding maximum size accepted")
 	}
 }
 
@@ -268,6 +330,10 @@ func TestConcurrentEncodingIsDeterministic(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	copyOfWant := append([]byte(nil), want...)
+	if HashEncoded(want) != HashEncoded(copyOfWant) {
+		t.Fatal("hash of identical encoded keys changed")
+	}
 }
 
 func FuzzEncodeRejectsMalformedOrReturnsValid(f *testing.F) {
