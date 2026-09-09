@@ -252,7 +252,7 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 			return err
 		}
 	}
-	if valueScan.Batchs == nil || len(valueScan.Batchs) == 0 || valueScan.Batchs[0] == nil {
+	if len(valueScan.Batchs) == 0 || valueScan.Batchs[0] == nil {
 		return moerr.NewInternalErrorNoCtx("value scan has no input batch")
 	}
 	if len(valueScan.RowsetData.Cols) != len(valueScan.Batchs[0].Vecs) ||
