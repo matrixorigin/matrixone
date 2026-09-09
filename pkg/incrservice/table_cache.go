@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -109,14 +110,18 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(_ context.Context, colName string) (timestamp.Timestamp, error) {
+func (c *tableCache) getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error) {
 	cc := c.getColumnCache(colName)
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
 	}
 	cc.RLock()
 	ts := cc.oldestAllocateAtLocked()
+	unknown := cc.cfg.demandOnly && ts.IsEmpty() && (!cc.ranges.empty() || cc.terminal)
 	cc.RUnlock()
+	if unknown {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT range has no allocation timestamp")
+	}
 	// Log a warning if the allocation timestamp is empty, which may cause PrimaryKeysMayBeUpserted
 	// to scan a very large time range and impact performance.
 	if ts.IsEmpty() && c.logger.Enabled(zap.DebugLevel) {

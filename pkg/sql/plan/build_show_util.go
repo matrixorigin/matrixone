@@ -640,6 +640,9 @@ func constructCreateTableSQL(
 	}
 
 	createStr += comment
+	if tableDef.AutoIdCache != 0 {
+		createStr += fmt.Sprintf(" AUTO_ID_CACHE=%d", tableDef.AutoIdCache)
+	}
 
 	if tableDef.Partition != nil {
 		ps := ctx.GetProcess().GetPartitionService()

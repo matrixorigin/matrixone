@@ -1037,6 +1037,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
+%token <str> AUTO_ID_CACHE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -11437,6 +11438,10 @@ table_option:
     {
         $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
     }
+|   AUTO_ID_CACHE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAutoIDCache(integralToUint64($3))
+    }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAvgRowLength(uint64($3.(int64)))
@@ -16187,6 +16192,7 @@ non_reserved_keyword:
 |	MODIFY
 |	ASCII
 |	AUTO_INCREMENT
+|	AUTO_ID_CACHE
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS

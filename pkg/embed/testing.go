@@ -207,6 +207,8 @@ func adjustBasicClusterService(svc ServiceOperator) {
 				config.CN.LockService.MaxFixedSliceSize = 10001
 				config.CN.LockService.MaxLockRowCount = 10000
 				config.CN.Frontend.SkipCheckUser = false
+				// The shared feature-test fixture is a fully upgraded cluster.
+				config.CN.AutoIncrement.EnableAutoIDCache = true
 				config.CN.Frontend.Iceberg.Enable = true
 				config.CN.Frontend.Iceberg.EnableWrite = true
 				config.CN.Frontend.Iceberg.EnableDelete = true

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
@@ -2340,6 +2341,7 @@ func buildCreateTable(
 	}
 
 	// set option
+	seenAutoIDCache := false
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.TableOptionProperties:
@@ -2376,6 +2378,18 @@ func buildCreateTable(
 					},
 				},
 			})
+		case *tree.TableOptionAutoIDCache:
+			if seenAutoIDCache {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "AUTO_ID_CACHE specified more than once")
+			}
+			seenAutoIDCache = true
+			if opt.Value > incrservice.MaxAutoIDCache {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "AUTO_ID_CACHE must be between 0 and %d", incrservice.MaxAutoIDCache)
+			}
+			if opt.Value != 0 && !tableHasAutoIncrementColumn(createTable.TableDef) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "AUTO_ID_CACHE requires an AUTO_INCREMENT column")
+			}
+			createTable.TableDef.AutoIdCache = opt.Value
 		case *tree.TableOptionAutoIncrement:
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(opt.Value)

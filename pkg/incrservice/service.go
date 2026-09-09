@@ -166,12 +166,24 @@ func (s *service) UUID() string {
 	return s.sid
 }
 
+func (s *service) AutoIDCacheEnabled() bool {
+	return s.cfg.EnableAutoIDCache
+}
+
 func (s *service) Create(
 	ctx context.Context,
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator,
 ) error {
+	for _, col := range cols {
+		if _, err := s.cfg.forTable(ctx, col.CacheSize); err != nil {
+			return err
+		}
+		if err := checkAutoIDCacheProtocol(ctx, s.sid, col.CacheSize); err != nil {
+			return err
+		}
+	}
 	s.logger.Info(
 		"incrservice.create.table",
 		zap.Uint64("table-id", tableID),
@@ -228,7 +240,10 @@ func (s *service) Reset(
 		zap.Uint64("new-table-id", newTableID),
 	)
 
-	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
+	// The old catalog row may already be deleted by TRUNCATE. Read allocator
+	// state from the old ID but policy from its replacement in the same txn.
+	policyCtx := context.WithValue(ctx, autoColumnPolicyTableKey{}, newTableID)
+	cols, err := s.store.GetColumns(policyCtx, oldTableID, txnOp)
 	if err != nil {
 		return err
 	}
@@ -315,6 +330,16 @@ func (s *service) GetLastAllocateTS(
 		return timestamp.Timestamp{}, err
 	}
 
+	if ts.IsEmpty() && tableColumnDemandOnly(tc, colName) {
+		// A demand-only cache has no speculative allocation in flight. If
+		// the locked observation found no consumable range, future reservations
+		// commit after this transaction snapshot (private ones use that snapshot).
+		// Keep the existing pre-generation probe without scanning from TS zero.
+		if txnOp == nil || txnOp.SnapshotTS().IsEmpty() {
+			return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_ID_CACHE=1 requires a transaction snapshot for the allocation probe")
+		}
+		return txnOp.SnapshotTS(), nil
+	}
 	return ts, nil
 }
 
@@ -356,7 +381,34 @@ func (s *service) CurrentValue(
 		return 0, err
 	}
 	defer ts.release()
-	return ts.currentValue(ctx, tableID, col)
+	value, err := ts.currentValue(ctx, tableID, col)
+	if err != nil || value != 0 || !tableColumnDemandOnly(ts, col) {
+		return value, err
+	}
+	// With no local reservation, observe the persisted high watermark. Do not
+	// reserve an ID just to answer SHOW, or reuse the cache's creation-time offset.
+	cols, err := s.store.GetColumns(ctx, tableID, nil)
+	if err != nil {
+		return 0, err
+	}
+	for _, column := range cols {
+		if column.ColName == col {
+			if column.Step == 0 || column.Offset > math.MaxUint64-column.Step {
+				return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
+			}
+			return column.Offset + column.Step, nil
+		}
+	}
+	return 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", col, tableID)
+}
+
+func tableColumnDemandOnly(cache incrTableCache, name string) bool {
+	for _, col := range cache.columns() {
+		if col.ColName == name {
+			return col.CacheSize == 1
+		}
+	}
+	return false
 }
 
 func (s *service) Reload(

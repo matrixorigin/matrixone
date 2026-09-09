@@ -85,6 +85,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		AutoIdCache:       info.AutoIdCache,
 		DefaultCharset:    info.DefaultCharset,
 		Checks:            checks,
 	}

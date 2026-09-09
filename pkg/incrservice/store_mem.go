@@ -131,7 +131,7 @@ func (s *memStore) GetColumns(
 	if txnOp != nil {
 		m = s.uncommitted[string(txnOp.Txn().ID)]
 	}
-	return m[tableID], nil
+	return append([]AutoColumn(nil), m[tableID]...), nil
 }
 
 func (s *memStore) Allocate(
