@@ -2349,6 +2349,10 @@ message UniqueKeyCodecVersion {
   uint32 registry_version = 2;
   bytes registry_digest = 3;
   uint32 max_encoded_key_bytes = 4;
+  // Activation generation that published this relation format. A non-zero
+  // value prevents a plan or writer from silently mixing generations after a
+  // restart or migration replay.
+  uint64 activation_generation = 5;
 }
 
 // Physical input work is separate from the scan's narrow output cardinality.

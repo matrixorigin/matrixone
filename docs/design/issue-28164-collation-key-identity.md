@@ -1108,3 +1108,59 @@ management client proposes this command, so the admission fences continue to
 prevent production enablement. This command closes only the durable proposal
 and capability-check boundary; it does not implement sidecar writes, query
 consumers, TN commit validation, migration, or administrator authorization.
+
+### 10.14 Planner/runtime key materialization boundary
+
+The integration increment adds two planner-owned, unregistered primitives. A
+single text part is materialized as `__mo_collation_key_v2(value, prefix,
+charset)` and a composite key as repeated `(value, prefix, charset)` triplets.
+Both expressions return the exact `MOKY` bytes from the shared codec; prefix
+lengths are applied by the codec and are not implemented with a second
+`substring`/`serial` rule. Composite keys emit a NULL result when any part is
+NULL, preserving the existing UNIQUE NULL policy. The original user columns
+remain in the row image.
+
+For a v2 text primary key, DDL planning adds the hidden `__mo_cpkey` physical
+identity column (or changes the existing composite identity column to binary)
+and keeps the original columns in `Pkey.Names`. Insert/update projections fill
+that column with the same single/composite `MOKY` expression. Thus the base
+table's storage-level primary uniqueness is not left on raw user bytes; target
+and foreign-key-facing expressions can still refer to the original source
+columns.
+
+When a v2 relation definition is already present, the planner uses these
+expressions for unique-index projections, ODKU target probes, ordered dedup,
+row-level lock keys, and regular unique-index delete/reinsert joins. Hidden
+unique relations are typed as binary values and carry the same relation
+metadata, so every connected edge compares the framed bytes rather than raw
+text or an ad-hoc serial tuple. Composite primary-key comparisons use the same
+framing over the source parts; the stored target lookup identity is the hidden
+encoded primary-key column while the original source value remains available
+for user-facing and foreign-key expressions.
+
+The relation metadata now carries a non-zero activation generation. New text
+PRIMARY/UNIQUE definitions are marked v2 only when a request context contains
+an enabled, generation-matching activation and local CN/TN acknowledgement;
+otherwise creation remains legacy. A table mixing a v2 candidate with an
+unregistered key domain is rejected instead of silently creating a table-scoped
+hybrid. Missing or invalid admission still fails closed at both read and write
+planner boundaries. The HAKeeper command and storage/query/TN migration
+consumers are not yet connected, so no user-visible v2 relation can be created
+on the normal SQL path in this increment.
+
+### 10.15 Transactional sidecar owner contract
+
+`pkg/common/collationkey.SidecarStore` supplies the storage-owner contract used
+by a future hidden-relation adapter. It indexes the complete encoded `MOKY`
+bytes and stores a copied `MOKL` locator; hashes are never used as the unique
+identity. `Begin` requires the same enabled activation generation and local
+read/write acknowledgement as the planner. Per-key optimistic fencing rejects
+a commit that races another transaction on any touched key, while unrelated
+keys may commit independently. `Put` rejects a different locator for an
+existing identity, `Delete` can require the expected old locator, and all
+staged changes publish atomically or not at all. `Snapshot` and
+`RestoreSidecarStore` validate ordering, relation identity, key envelopes, and
+locator envelopes before exposing a recovered map. This package is a
+dependency-light reference for TN/catalog integration; it is not a process
+global index and is not itself connected to the production hidden-table write
+path yet.

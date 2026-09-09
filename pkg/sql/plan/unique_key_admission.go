@@ -34,16 +34,22 @@ func validateUniqueKeyCodecAdmission(ctx context.Context, tableDef *planpb.Table
 	}
 	version := tableDef.UniqueKeyCodecVersion
 	metadata := collationkey.RelationMetadata{
-		Version:            version.Value,
-		RegistryVersion:    version.RegistryVersion,
-		RegistryDigest:     version.RegistryDigest,
-		MaxEncodedKeyBytes: version.MaxEncodedKeyBytes,
+		Version:              version.Value,
+		RegistryVersion:      version.RegistryVersion,
+		RegistryDigest:       version.RegistryDigest,
+		MaxEncodedKeyBytes:   version.MaxEncodedKeyBytes,
+		ActivationGeneration: version.ActivationGeneration,
 	}
 	if err := metadata.Validate(); err != nil {
 		return moerr.NewInternalErrorf(ctx, "invalid unique-key codec metadata: %v", err)
 	}
 	if metadata.IsV2() {
-		return moerr.NewUnsupportedDML(ctx, "collation-aware unique-key writes are not enabled")
+		if err := validateEnabledAdmission(ctx, metadata, true); err != nil {
+			if err == errCodecAdmissionUnavailable {
+				return moerr.NewUnsupportedDML(ctx, "collation-aware unique-key writes are not enabled")
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -60,16 +66,44 @@ func validateUniqueKeyCodecReadAdmission(ctx context.Context, tableDef *planpb.T
 	}
 	version := tableDef.UniqueKeyCodecVersion
 	metadata := collationkey.RelationMetadata{
-		Version:            version.Value,
-		RegistryVersion:    version.RegistryVersion,
-		RegistryDigest:     version.RegistryDigest,
-		MaxEncodedKeyBytes: version.MaxEncodedKeyBytes,
+		Version:              version.Value,
+		RegistryVersion:      version.RegistryVersion,
+		RegistryDigest:       version.RegistryDigest,
+		MaxEncodedKeyBytes:   version.MaxEncodedKeyBytes,
+		ActivationGeneration: version.ActivationGeneration,
 	}
 	if err := metadata.Validate(); err != nil {
 		return moerr.NewInternalErrorf(ctx, "invalid unique-key codec metadata: %v", err)
 	}
 	if metadata.IsV2() {
-		return moerr.NewUnsupportedDML(ctx, "collation-aware unique-key reads are not enabled")
+		if err := validateEnabledAdmission(ctx, metadata, false); err != nil {
+			if err == errCodecAdmissionUnavailable {
+				return moerr.NewUnsupportedDML(ctx, "collation-aware unique-key reads are not enabled")
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+var errCodecAdmissionUnavailable = moerr.NewInternalErrorNoCtx("unique-key codec admission is unavailable")
+
+func validateEnabledAdmission(ctx context.Context, metadata collationkey.RelationMetadata, write bool) error {
+	admission, ok := collationkey.AdmissionFromContext(ctx)
+	if !ok {
+		return errCodecAdmissionUnavailable
+	}
+	if err := admission.Activation.Validate(); err != nil {
+		return moerr.NewInternalErrorf(ctx, "invalid unique-key activation: %v", err)
+	}
+	if err := admission.Node.Capability.Validate(); err != nil {
+		return moerr.NewInternalErrorf(ctx, "invalid unique-key node capability: %v", err)
+	}
+	if admission.Activation.Phase != collationkey.ActivationEnabled ||
+		metadata.ActivationGeneration != admission.Activation.Generation ||
+		!admission.Activation.NodeReady(admission.Kind, admission.Node) ||
+		!admission.Node.Capability.Supports(metadata, write) {
+		return errCodecAdmissionUnavailable
 	}
 	return nil
 }

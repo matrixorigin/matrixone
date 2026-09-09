@@ -33,10 +33,11 @@ const (
 // distinguish absence from a relation explicitly requesting v2 before
 // admitting a write.
 type RelationMetadata struct {
-	Version            uint32
-	RegistryVersion    uint32
-	RegistryDigest     []byte
-	MaxEncodedKeyBytes uint32
+	Version              uint32
+	RegistryVersion      uint32
+	RegistryDigest       []byte
+	MaxEncodedKeyBytes   uint32
+	ActivationGeneration uint64
 }
 
 // Capability is the node-local portion of the v2 admission contract.
@@ -51,11 +52,20 @@ type Capability struct {
 }
 
 func NewCollationAwareMetadata() RelationMetadata {
+	return NewCollationAwareMetadataAtGeneration(1)
+}
+
+// NewCollationAwareMetadataAtGeneration creates a relation identity for a
+// specific, already-published activation generation. Generation one is used
+// by the package fixture constructor above; production callers must pass the
+// generation returned by the durable activation record.
+func NewCollationAwareMetadataAtGeneration(generation uint64) RelationMetadata {
 	return RelationMetadata{
-		Version:            CollationAwareVersion,
-		RegistryVersion:    uint32(RegistryVersion),
-		RegistryDigest:     RegistryDigest(),
-		MaxEncodedKeyBytes: MaxKeyBytes,
+		Version:              CollationAwareVersion,
+		RegistryVersion:      uint32(RegistryVersion),
+		RegistryDigest:       RegistryDigest(),
+		MaxEncodedKeyBytes:   MaxKeyBytes,
+		ActivationGeneration: generation,
 	}
 }
 
@@ -70,6 +80,9 @@ func (m RelationMetadata) Validate() error {
 		}
 		return nil
 	case CollationAwareVersion:
+		if m.ActivationGeneration == 0 {
+			return wrapCodecError(ErrMalformedKey, "activation generation is zero")
+		}
 		if m.RegistryVersion != uint32(RegistryVersion) {
 			return wrapCodecError(ErrMalformedKey, "registry version %d", m.RegistryVersion)
 		}

@@ -38,6 +38,15 @@ func TestRelationMetadataV2RequiresExactRegistry(t *testing.T) {
 	if err := legacy.Validate(); !errors.Is(err, ErrMalformedKey) {
 		t.Fatalf("legacy with v2 fields error = %v, want ErrMalformedKey", err)
 	}
+
+	withoutGeneration := NewCollationAwareMetadataAtGeneration(0)
+	if err := withoutGeneration.Validate(); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("zero activation generation error = %v, want ErrMalformedKey", err)
+	}
+	withGeneration := NewCollationAwareMetadataAtGeneration(9)
+	if err := withGeneration.Validate(); err != nil {
+		t.Fatalf("non-zero activation generation rejected: %v", err)
+	}
 }
 
 func TestCapabilitySupportsReadAndWriteIndependently(t *testing.T) {

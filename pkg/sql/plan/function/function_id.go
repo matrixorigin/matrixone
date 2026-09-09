@@ -847,10 +847,14 @@ const (
 	// It is deliberately not exposed through functionIdRegister: v2 key
 	// encoding remains behind the relation capability and activation fences.
 	INTERNAL_COLLATION_KEY_V2 = 579
+	// INTERNAL_COLLATION_COMPOSITE_KEY_V2 frames multiple text parts with the
+	// same versioned codec. It is planner/runtime-only and intentionally absent
+	// from functionIdRegister.
+	INTERNAL_COLLATION_COMPOSITE_KEY_V2 = 580
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 580
+	FUNCTION_END_NUMBER = 581
 )
 
 // functionIdRegister is what function we have registered already.

@@ -1441,11 +1441,45 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			RelPos: probeTag, ColPos: pkColIdx,
 		}}}
 		var err error
-		inputPK, err = bindPrimaryKeyIdentityExpr(builder, inputPK, pkTyp)
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
 		if err != nil {
 			return 0, 0, 0, err
 		}
-		existingPK, err = bindPrimaryKeyIdentityExpr(builder, existingPK, pkTyp)
+		if useV2 {
+			values := make([]*plan.Expr, len(tableDef.Pkey.Names))
+			for i, name := range tableDef.Pkey.Names {
+				name = catalog.ResolveAlias(name)
+				pos, ok := colName2Idx[tableDef.Name+"."+name]
+				if !ok || pos < 0 || int(pos) >= len(incomingProjectList) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key part %s", name)
+				}
+				values[i] = &plan.Expr{Typ: incomingProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag, ColPos: pos, Name: name,
+				}}}
+			}
+			inputPK, err = makePrimaryKeyV2IdentityExprs(tableDef, values)
+		} else {
+			inputPK, err = bindPrimaryKeyIdentityExpr(builder, inputPK, pkTyp)
+		}
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, len(tableDef.Pkey.Names))
+			for i, name := range tableDef.Pkey.Names {
+				name = catalog.ResolveAlias(name)
+				pos, ok := tableDef.Name2ColIndex[name]
+				if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 existing primary-key part %s", name)
+				}
+				values[i] = &plan.Expr{Typ: tableDef.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: probeTag, ColPos: pos, Name: name,
+				}}}
+			}
+			existingPK, err = makePrimaryKeyV2IdentityExprs(tableDef, values)
+		} else {
+			existingPK, err = bindPrimaryKeyIdentityExpr(builder, existingPK, pkTyp)
+		}
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -1495,14 +1529,36 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 		priColPos := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
 		priColTyp := idxTableDef.Cols[priColPos].Typ
 
-		// The incoming unique-key value, matching what the hidden index table
-		// stores: for a single-part index the prefix-aware value (a substring for a
-		// prefix index like UNIQUE KEY u(col(4)), otherwise the raw column); for a
-		// composite index the serial composite already materialized in colName2Idx.
-		// Using the raw column for a prefix index would miss conflicts whose stored
-		// prefix keys collide (e.g. existing 'abcdxxxx' vs incoming 'abcdyyyy').
+		// The incoming unique-key value must be byte-identical to the value
+		// materialized for the hidden relation. For v2 relations the planner
+		// builds the complete framed key directly from the final input image;
+		// legacy relations retain the existing prefix/serial path.
 		var incomingValExpr *plan.Expr
-		if len(idxDef.Parts) == 1 {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, len(idxDef.Parts))
+			for k, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				pos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok || pos < 0 || int(pos) >= len(incomingProjectList) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 ODKU unique-key part %s", partName)
+				}
+				values[k] = &plan.Expr{Typ: incomingProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag, ColPos: pos, Name: partName,
+				}}}
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			incomingValExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+		} else if len(idxDef.Parts) == 1 {
 			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 			if err != nil {
 				return 0, 0, 0, err
@@ -3221,28 +3277,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		appendedUniqueProjs[idxPriColName] = idxPrimaryColExpr
 
-		// __mo_index_idx_col projection for index columns
-		argsLen := len(idxDef.Parts)
+		// __mo_index_idx_col projection for index columns. Legacy relations keep
+		// their typed/raw or serial key. A v2 relation uses the planner-only
+		// framed codec expression so the same bytes feed probes, statement-local
+		// arbitration, locks, and the physical unique relation.
 		var idxIndexColExpr *plan.Expr
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		if err != nil {
 			return 0, err
 		}
-		if argsLen == 1 {
-			idxIndexColExpr, err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			args := make([]*plan.Expr, argsLen)
-			for k := range argsLen {
-				args[k], err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[k], prefixLengths)
-				if err != nil {
-					return 0, err
-				}
-			}
-
-			idxIndexColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		idxIndexColExpr, err = builder.makeInsertUniqueIndexKeyExpr(
+			selectNode, selectTag, tableDef, idxDef, colName2Idx, prefixLengths)
+		if err != nil {
+			return 0, err
 		}
 		appendedUniqueProjs[idxIdxColName] = idxIndexColExpr
 	}
@@ -3380,11 +3427,43 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					Typ:  pkTyp,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: rightPkPos}},
 				}
-				leftPK, err = bindPrimaryKeyIdentityExpr(builder, leftPK, pkTyp)
+				useV2, keyErr := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+				if keyErr != nil {
+					return 0, keyErr
+				}
+				if useV2 {
+					leftValues := make([]*plan.Expr, len(tableDef.Pkey.Names))
+					rightValues := make([]*plan.Expr, len(tableDef.Pkey.Names))
+					for i, name := range tableDef.Pkey.Names {
+						name = catalog.ResolveAlias(name)
+						partPos, ok := tableDef.Name2ColIndex[name]
+						incomingPos, incomingOK := colName2Idx[tableDef.Name+"."+name]
+						if !ok || !incomingOK || partPos < 0 || incomingPos < 0 || partPos >= len(tableDef.Cols) || int(incomingPos) >= len(selectNode.ProjectList) {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key dedup part %s", name)
+						}
+						leftValues[i] = &plan.Expr{Typ: tableDef.Cols[partPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: scanTag, ColPos: int32(partPos), Name: name,
+						}}}
+						rightValues[i] = &plan.Expr{Typ: selectNode.ProjectList[incomingPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectTag, ColPos: incomingPos, Name: name,
+						}}}
+					}
+					leftPK, err = makePrimaryKeyV2IdentityExprs(tableDef, leftValues)
+					if err != nil {
+						return 0, err
+					}
+					// The target primary key remains the original storage identity;
+					// only the dedup comparison uses the framed key.
+					rightPK, err = makePrimaryKeyV2IdentityExprs(tableDef, rightValues)
+				} else {
+					leftPK, err = bindPrimaryKeyIdentityExpr(builder, leftPK, pkTyp)
+				}
 				if err != nil {
 					return 0, err
 				}
-				rightPK, err = bindPrimaryKeyIdentityExpr(builder, rightPK, pkTyp)
+				if !useV2 {
+					rightPK, err = bindPrimaryKeyIdentityExpr(builder, rightPK, pkTyp)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -4327,7 +4406,25 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 		}
 
 		var lockExpr *plan.Expr
-		if len(idxDef.Parts) == 1 {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+		if err != nil {
+			return err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, len(idxDef.Parts))
+			for k, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok || partPos < 0 || int(partPos) >= len(selectNode.ProjectList) {
+					return moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 unique-key lock part %s", partName)
+				}
+				values[k] = selectNode.ProjectList[partPos]
+			}
+			lockExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+			if err != nil {
+				return err
+			}
+		} else if len(idxDef.Parts) == 1 {
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
 			if !ok {

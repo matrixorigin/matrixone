@@ -116,6 +116,48 @@ func TestBuiltInCollationKeyV2PreservesNullAndRejectsBadDescriptors(t *testing.T
 	require.Error(t, err)
 }
 
+func TestBuiltInCollationCompositeKeyV2UsesFramedParts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8)
+	newInputs := func(v1, v2 string) []*vector.Vector {
+		one, err := vector.NewConstBytes(typ, []byte(v1), 1, proc.Mp())
+		require.NoError(t, err)
+		two, err := vector.NewConstBytes(typ, []byte(v2), 1, proc.Mp())
+		require.NoError(t, err)
+		prefix1, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+		require.NoError(t, err)
+		prefix2, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+		require.NoError(t, err)
+		charset1, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.CharsetUTF8), 1, proc.Mp())
+		require.NoError(t, err)
+		charset2, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.CharsetUTF8), 1, proc.Mp())
+		require.NoError(t, err)
+		return []*vector.Vector{one, prefix1, charset1, two, prefix2, charset2}
+	}
+	inputs := newInputs("Alpha", "Beta")
+	for _, input := range inputs {
+		t.Cleanup(func() { input.Free(proc.Mp()) })
+	}
+	out, err := RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID, inputs, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { out.Free(proc.Mp()) })
+	want, err := collationkey.EncodeComposite(nil, []collationkey.Part{
+		{Domain: collationkey.Domain{Type: collationkey.Text, Charset: collationkey.CharsetUTF8, Unit: collationkey.PrefixCharacters}, Value: []byte("Alpha")},
+		{Domain: collationkey.Domain{Type: collationkey.Text, Charset: collationkey.CharsetUTF8, Unit: collationkey.PrefixCharacters}, Value: []byte("Beta")},
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, out.GetBytesAt(0))
+
+	equivalent := newInputs("alpha ", "BETA")
+	for _, input := range equivalent {
+		t.Cleanup(func() { input.Free(proc.Mp()) })
+	}
+	eqOut, err := RunFunctionDirectly(proc, CollationCompositeKeyV2FunctionEncodedID, equivalent, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { eqOut.Free(proc.Mp()) })
+	require.Equal(t, out.GetBytesAt(0), eqOut.GetBytesAt(0))
+}
+
 func TestCollationKeyV2IsPlannerOnly(t *testing.T) {
 	_, ok := GetFunctionByNameWithoutError("__mo_collation_key_v2", []types.Type{
 		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),

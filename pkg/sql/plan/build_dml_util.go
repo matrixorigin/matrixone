@@ -4008,7 +4008,10 @@ func buildSerialFullAndPKColsProjMasterIndex(builder *QueryBuilder, bindCtx *Bin
 	var currLastNodeId = genLastNodeIdFn()
 
 	//2. recompute CP PK.
-	currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
+	currLastNodeId, err = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
+	if err != nil {
+		return nil, err
+	}
 
 	//3. add a new project for < serial_full("0", a, pk), pk >
 	projectProjection := make([]*Expr, 2)
@@ -4133,7 +4136,10 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	}
 
 	//1.b Handle mo_cp_key
-	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+	lastNodeId, err = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+	if err != nil {
+		return -1, err
+	}
 
 	// 2. scan meta table to find the `current version` number
 	metaCurrVersionRow, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
@@ -4186,7 +4192,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	return sourceStep, nil
 }
 
-func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
+func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) (int32, error) {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -4204,7 +4210,42 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 			}
 		}
 
-		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+		if err != nil {
+			return -1, err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, 0, len(tableDef.Pkey.Names))
+			for _, name := range tableDef.Pkey.Names {
+				name = catalog.ResolveAlias(name)
+				position := -1
+				for i, coldef := range tableDef.Cols {
+					if coldef != nil && coldef.Name == name {
+						position = i
+						break
+					}
+				}
+				if position < 0 || position >= len(lastProject) {
+					return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key source %s", name)
+				}
+				values = append(values, &plan.Expr{
+					Typ: lastProject[position].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0, ColPos: int32(position), Name: name,
+					}},
+				})
+			}
+			var identity *plan.Expr
+			if len(values) == 1 {
+				identity, err = makeCollationKeyV2Expr(values[0], 0)
+			} else {
+				identity, err = makeCollationCompositeKeyV2Expr(values, make([]int, len(values)))
+			}
+			if err != nil {
+				return -1, err
+			}
+			projectProjection[posOriginPk] = identity
+		} else if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			// pkNamesMap := make(map[string]int)
 			prikeyPos := make([]int, 0)
 			for _, name := range tableDef.Pkey.Names {
@@ -4259,7 +4300,7 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
-	return lastNodeId
+	return lastNodeId, nil
 }
 
 // appendPreInsertPlan  build preinsert plan.
@@ -4307,14 +4348,59 @@ func appendPreInsertPlan(
 	}
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
-	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
-	lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+	lastNodeId, err = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 	if err != nil {
 		return -1, err
 	}
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+	if err != nil {
+		return -1, err
+	}
+	if !useV2 {
+		lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+		if err != nil {
+			return -1, err
+		}
+	}
 
 	var ukType Type
-	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
+	if useV2 {
+		// The hidden relation stores one complete framed key.  Materialize it
+		// in a child PROJECT so PRE_INSERT_UK sees the same bytes as probes and
+		// lock-key construction.  Keep the base row projection unchanged and
+		// append the encoded key as the sole unique-column input.
+		child := builder.qry.Nodes[lastNodeId]
+		values := make([]*Expr, len(idxDef.Parts))
+		for i, part := range idxDef.Parts {
+			part = catalog.ResolveAlias(part)
+			pos, ok := colsMap[part]
+			if !ok || pos < 0 || pos >= len(child.ProjectList) {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 index part %s", part)
+			}
+			values[i] = &plan.Expr{
+				Typ: child.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: int32(pos), Name: part,
+				}},
+			}
+		}
+		keyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+		if err != nil {
+			return -1, err
+		}
+		projection := make([]*Expr, len(child.ProjectList)+1)
+		for i, expr := range child.ProjectList {
+			projection[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}}
+		}
+		projection[len(child.ProjectList)] = keyExpr
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: projection,
+		}, bindCtx)
+		useColumns = []int32{int32(len(projection) - 1)}
+		ukType = keyExpr.Typ
+	} else if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
 	} else {
 		ukType = makeHiddenColTyp()
@@ -4534,7 +4620,36 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	partsLength := len(indexdef.Parts)
-	if partsLength == 1 {
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+	if err != nil {
+		return -1, err
+	}
+	if useV2 {
+		// The source stream still carries original user values.  Rebuild the
+		// framed key at the join boundary rather than comparing it as raw text;
+		// uniqueTableDef carries the same relation metadata copied to the hidden
+		// v2 relation by DDL planning.
+		values := make([]*Expr, partsLength)
+		for i, column := range indexdef.Parts {
+			column = catalog.ResolveAlias(column)
+			pos, ok := posMap[column]
+			typ, typOK := typMap[column]
+			if !ok || !typOK || pos < 0 {
+				return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 delete index part %s", column)
+			}
+			values[i] = &plan.Expr{
+				Typ: typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: sourceTag, ColPos: int32(pos), Name: column,
+				}},
+			}
+		}
+		baseDef := &plan.TableDef{UniqueKeyCodecVersion: uniqueTableDef.UniqueKeyCodecVersion}
+		leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(baseDef, indexdef, values, prefixLengths)
+		if err != nil {
+			return -1, err
+		}
+	} else if partsLength == 1 {
 		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
 		leftExpr, err = builder.makeIndexPartExpr(
 			sourceTag,

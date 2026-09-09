@@ -13192,6 +13192,26 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// Internal v2 composite text-key materializer. The checker accepts a
+	// repeated value,prefix,charset triplet (one triplet per index part). It is
+	// not exposed by name; only a planner expression with the encoded overload
+	// id can reach it after relation admission succeeds.
+	{
+		functionId: INTERNAL_COLLATION_COMPOSITE_KEY_V2,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    collationCompositeKeyV2TypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       nil,
+				retType:    collationKeyV2ReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInCollationCompositeKeyV2
+				},
+			},
+		},
+	},
 
 	// Internal helper used by the interval binder for dynamic string values.
 	{

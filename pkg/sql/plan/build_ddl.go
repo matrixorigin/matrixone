@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -3813,6 +3814,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	if err != nil {
 		return err
 	}
+	if err := maybeEnableCollationKeyV2ForCreate(ctx, createTable.TableDef, uniqueIndexInfos); err != nil {
+		return err
+	}
+	// A v2 text primary key is stored in the hidden primary-key identity
+	// column. Keep the user-facing source column in Pkey.Names, but make every
+	// physical index consumer use the same framed bytes. Legacy tables retain
+	// the existing pkeyName and schema.
+	if createTable.TableDef.Pkey != nil {
+		pkeyName = createTable.TableDef.Pkey.PkeyColName
+		if pkeyName == catalog.CPrimaryKeyColName {
+			if col, ok := slicesxFindCol(createTable.TableDef.Cols, pkeyName); ok {
+				colMap[pkeyName] = col
+			}
+		}
+	}
 
 	// build index table
 	if len(uniqueIndexInfos) != 0 {
@@ -4359,7 +4375,129 @@ func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexe
 	return nil
 }
 
+// maybeEnableCollationKeyV2ForCreate applies the durable activation decision to
+// a newly created table. The default remains legacy: a planner context must
+// carry an enabled generation and a matching local node capability. Because
+// the current TableDef metadata is table-scoped, a table that mixes a text
+// unique key with an unsupported unique-key part is rejected rather than
+// silently storing some constraints as v1 and others as v2.
+func maybeEnableCollationKeyV2ForCreate(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	uniqueInfos []*tree.UniqueIndex,
+) error {
+	if tableDef == nil || tableDef.UniqueKeyCodecVersion != nil {
+		return nil
+	}
+	admission, ok := collationkey.AdmissionFromContext(ctx.GetContext())
+	if !ok || admission.Activation.Phase != collationkey.ActivationEnabled {
+		return nil
+	}
+	if err := admission.Activation.Validate(); err != nil {
+		return moerr.NewInternalErrorf(ctx.GetContext(), "invalid unique-key activation: %v", err)
+	}
+	if err := admission.Node.Capability.Validate(); err != nil {
+		return moerr.NewInternalErrorf(ctx.GetContext(), "invalid unique-key node capability: %v", err)
+	}
+
+	hasTextKey := false
+	hasUnsupportedKey := false
+	checkPart := func(name string) error {
+		name = catalog.ResolveAlias(name)
+		col, exists := slicesxFindCol(tableDef.Cols, name)
+		if !exists {
+			return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
+		}
+		if col.Typ.Id == int32(types.T_varchar) || col.Typ.Id == int32(types.T_text) {
+			hasTextKey = true
+			if _, err := collationKeyV2ValueCharset(col.Typ); err != nil {
+				hasUnsupportedKey = true
+			}
+		} else {
+			hasUnsupportedKey = true
+		}
+		return nil
+	}
+
+	if tableDef.Pkey != nil {
+		for _, name := range tableDef.Pkey.Names {
+			if err := checkPart(name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, indexInfo := range uniqueInfos {
+		for _, keyPart := range indexInfo.KeyParts {
+			if keyPart == nil || keyPart.ColName == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")
+			}
+			if err := checkPart(keyPart.ColName.ColName()); err != nil {
+				return err
+			}
+		}
+	}
+	if !hasTextKey {
+		return nil
+	}
+	if hasUnsupportedKey {
+		return moerr.NewNotSupported(ctx.GetContext(), "v2 unique-key activation requires all primary and unique key parts to use a registered text domain")
+	}
+	if tableDef.Pkey != nil {
+		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			if col, ok := slicesxFindCol(tableDef.Cols, catalog.CPrimaryKeyColName); ok {
+				col.Typ = collationKeyV2StorageType()
+				col.Primary = true
+			}
+		} else {
+			// Single-part primary keys normally use the user column directly.
+			// Add the same hidden identity column used by composite primary keys so
+			// the base table's physical uniqueness is collation-aware without
+			// rewriting the stored user value.
+			hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			hidden.Typ = collationKeyV2StorageType()
+			hidden.Primary = true
+			tableDef.Cols = append(tableDef.Cols, hidden)
+			tableDef.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			tableDef.Pkey.CompPkeyCol = hidden
+		}
+	}
+	metadata := collationkey.NewCollationAwareMetadataAtGeneration(admission.Activation.Generation)
+	if err := admission.Validate(metadata, true); err != nil {
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "collation-aware unique-key writes are not enabled")
+	}
+	tableDef.UniqueKeyCodecVersion = &plan.UniqueKeyCodecVersion{
+		Value:                metadata.Version,
+		RegistryVersion:      metadata.RegistryVersion,
+		RegistryDigest:       metadata.RegistryDigest,
+		MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+		ActivationGeneration: metadata.ActivationGeneration,
+	}
+	return nil
+}
+
+func slicesxFindCol(cols []*plan.ColDef, name string) (*plan.ColDef, bool) {
+	for _, col := range cols {
+		if col != nil && col.Name == name {
+			return col, true
+		}
+	}
+	return nil, false
+}
+
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
+	useV2 := false
+	var codecMetadata *plan.UniqueKeyCodecVersion
+	if createTable != nil && createTable.TableDef != nil && createTable.TableDef.UniqueKeyCodecVersion != nil {
+		metadata := createTable.TableDef.UniqueKeyCodecVersion
+		ok, err := tableUsesCollationKeyV2(ctx.GetContext(), createTable.TableDef)
+		if err != nil {
+			return err
+		}
+		useV2 = ok
+		if useV2 {
+			codecMetadata = proto.Clone(metadata).(*plan.UniqueKeyCodecVersion)
+		}
+	}
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
@@ -4371,6 +4509,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		}
 		tableDef := &TableDef{
 			Name: indexTableName,
+		}
+		if codecMetadata != nil {
+			tableDef.UniqueKeyCodecVersion = proto.Clone(codecMetadata).(*plan.UniqueKeyCodecVersion)
 		}
 		indexParts := make([]string, 0)
 
@@ -4402,6 +4543,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					OriginString: "",
 				},
 			}
+			if useV2 {
+				colDef.Typ = collationKeyV2StorageType()
+			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
 				Names:       []string{keyName},
@@ -4418,6 +4562,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 					Expr:         nil,
 					OriginString: "",
 				},
+			}
+			if useV2 {
+				colDef.Typ = collationKeyV2StorageType()
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{

@@ -44,6 +44,10 @@ var L2DistanceFunctionEncodedID = encodeOverloadID(L2_DISTANCE, 0)
 // this primitive as a callable function.
 var CollationKeyV2FunctionEncodedID = encodeOverloadID(INTERNAL_COLLATION_KEY_V2, 0)
 
+// CollationCompositeKeyV2FunctionEncodedID is the planner-only overload used
+// for a complete multi-part unique-key identity.
+var CollationCompositeKeyV2FunctionEncodedID = encodeOverloadID(INTERNAL_COLLATION_COMPOSITE_KEY_V2, 0)
+
 func init() {
 	// init fixed type cast rule for binary operator like
 	// +, -, x, /, div, >=, =, != and so on.

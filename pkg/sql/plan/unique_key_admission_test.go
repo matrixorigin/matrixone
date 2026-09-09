@@ -39,10 +39,11 @@ func TestValidateUniqueKeyCodecAdmission(t *testing.T) {
 
 	metadata := collationkey.NewCollationAwareMetadata()
 	v2 := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
-		Value:              metadata.Version,
-		RegistryVersion:    metadata.RegistryVersion,
-		RegistryDigest:     metadata.RegistryDigest,
-		MaxEncodedKeyBytes: metadata.MaxEncodedKeyBytes,
+		Value:                metadata.Version,
+		RegistryVersion:      metadata.RegistryVersion,
+		RegistryDigest:       metadata.RegistryDigest,
+		MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+		ActivationGeneration: metadata.ActivationGeneration,
 	}}
 	err := validateUniqueKeyCodecAdmission(ctx, v2)
 	require.Error(t, err)
@@ -73,20 +74,22 @@ func TestValidateUniqueKeyCodecReadAdmission(t *testing.T) {
 
 	v2 := collationkey.NewCollationAwareMetadata()
 	v2Def := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
-		Value:              v2.Version,
-		RegistryVersion:    v2.RegistryVersion,
-		RegistryDigest:     v2.RegistryDigest,
-		MaxEncodedKeyBytes: v2.MaxEncodedKeyBytes,
+		Value:                v2.Version,
+		RegistryVersion:      v2.RegistryVersion,
+		RegistryDigest:       v2.RegistryDigest,
+		MaxEncodedKeyBytes:   v2.MaxEncodedKeyBytes,
+		ActivationGeneration: v2.ActivationGeneration,
 	}}
 	err := validateUniqueKeyCodecReadAdmission(ctx, v2Def)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 		t.Fatalf("v2 read admission error = %v", err)
 	}
 	bad := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
-		Value:              v2Def.UniqueKeyCodecVersion.Value,
-		RegistryVersion:    v2Def.UniqueKeyCodecVersion.RegistryVersion,
-		RegistryDigest:     append([]byte(nil), v2Def.UniqueKeyCodecVersion.RegistryDigest...),
-		MaxEncodedKeyBytes: v2Def.UniqueKeyCodecVersion.MaxEncodedKeyBytes,
+		Value:                v2Def.UniqueKeyCodecVersion.Value,
+		RegistryVersion:      v2Def.UniqueKeyCodecVersion.RegistryVersion,
+		RegistryDigest:       append([]byte(nil), v2Def.UniqueKeyCodecVersion.RegistryDigest...),
+		MaxEncodedKeyBytes:   v2Def.UniqueKeyCodecVersion.MaxEncodedKeyBytes,
+		ActivationGeneration: v2Def.UniqueKeyCodecVersion.ActivationGeneration,
 	}}
 	bad.UniqueKeyCodecVersion.RegistryDigest[0]++
 	if err := validateUniqueKeyCodecReadAdmission(ctx, bad); err == nil || !moerr.IsMoErrCode(err, moerr.ErrInternal) {
@@ -98,13 +101,61 @@ func TestValidateUniqueKeyCodecAdmissionFailsClosed(t *testing.T) {
 	metadata := collationkey.NewCollationAwareMetadata()
 	metadata.RegistryDigest[0] ^= 0xff
 	bad := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
-		Value:              metadata.Version,
-		RegistryVersion:    metadata.RegistryVersion,
-		RegistryDigest:     metadata.RegistryDigest,
-		MaxEncodedKeyBytes: metadata.MaxEncodedKeyBytes,
+		Value:                metadata.Version,
+		RegistryVersion:      metadata.RegistryVersion,
+		RegistryDigest:       metadata.RegistryDigest,
+		MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+		ActivationGeneration: metadata.ActivationGeneration,
 	}}
 	err := validateUniqueKeyCodecAdmission(context.Background(), bad)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.ErrorContains(t, err, "invalid unique-key codec metadata")
+}
+
+func TestValidateUniqueKeyCodecAdmissionAcceptsEnabledFixture(t *testing.T) {
+	metadata := collationkey.NewCollationAwareMetadataAtGeneration(7)
+	capability := collationkey.Capability{
+		ReadableVersions:   uint32(1) << metadata.Version,
+		WritableVersions:   uint32(1) << metadata.Version,
+		RegistryVersion:    metadata.RegistryVersion,
+		RegistryDigest:     metadata.RegistryDigest,
+		MaxEncodedKeyBytes: metadata.MaxEncodedKeyBytes,
+	}
+	activation := collationkey.Activation{
+		RequestedVersion: collationkey.CollationAwareVersion,
+		RegistryVersion:  uint32(collationkey.RegistryVersion),
+		RegistryDigest:   collationkey.RegistryDigest(),
+		Generation:       7,
+		Phase:            collationkey.ActivationEnabled,
+		CnTargets:        map[string]uint64{"cn-1": 11},
+		TnTargets:        map[string]uint64{"tn-1": 12},
+	}
+	ctx := collationkey.WithAdmission(context.Background(), collationkey.Admission{
+		Activation: activation,
+		Kind:       collationkey.NodeCN,
+		Node: collationkey.NodeAcknowledgement{
+			NodeID:      "cn-1",
+			Incarnation: 11,
+			Capability:  capability,
+		},
+	})
+	def := &planpb.TableDef{UniqueKeyCodecVersion: &planpb.UniqueKeyCodecVersion{
+		Value:                metadata.Version,
+		RegistryVersion:      metadata.RegistryVersion,
+		RegistryDigest:       metadata.RegistryDigest,
+		MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+		ActivationGeneration: metadata.ActivationGeneration,
+	}}
+	require.NoError(t, validateUniqueKeyCodecAdmission(ctx, def))
+	require.NoError(t, validateUniqueKeyCodecReadAdmission(ctx, def))
+	activation.Generation++
+	staleCtx := collationkey.WithAdmission(context.Background(), collationkey.Admission{
+		Activation: activation,
+		Kind:       collationkey.NodeCN,
+		Node:       collationkey.NodeAcknowledgement{NodeID: "cn-1", Incarnation: 11, Capability: capability},
+	})
+	err := validateUniqueKeyCodecAdmission(staleCtx, def)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML))
 }
