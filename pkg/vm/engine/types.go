@@ -1186,6 +1186,14 @@ type RelationHandleFactory interface {
 	NewRelationHandle() Relation
 }
 
+// SourceCommitTSProvider is an optional relation capability used by async
+// indexes that must prove their source-table coverage.  It is intentionally not
+// part of Relation: engines without a logtail partition state simply do not
+// provide the proof and planners fail closed to a table scan.
+type SourceCommitTSProvider interface {
+	SourceCommitTS(ctx context.Context) (types.TS, error)
+}
+
 // NewRelationHandle returns an exclusively owned handle when the engine
 // supports one. Engines with immutable or already-exclusive relations may
 // return the relation itself by not implementing RelationHandleFactory.

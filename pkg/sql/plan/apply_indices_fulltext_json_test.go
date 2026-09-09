@@ -17,7 +17,6 @@ package plan
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -67,22 +66,6 @@ func jpExtractStr(col int32, path string) *plan.Expr {
 
 func jpExtractFloat(col int32, path string) *plan.Expr {
 	return jpCallExpr("json_extract_float64", jpColExpr(col), jpStrLit(path))
-}
-
-// asyncCoverageBar lowers the snapshot by delay; underflow clamps to the snapshot.
-func TestAsyncCoverageBar(t *testing.T) {
-	nowNanos := int64(1_700_000_000_000_000_000)
-	ts := types.BuildTS(nowNanos, 7)
-	delay := 15 * time.Second
-
-	bar := asyncCoverageBar(ts, delay)
-	require.Equal(t, nowNanos-int64(delay), bar.Physical())
-	require.Equal(t, uint32(7), bar.Logical())
-
-	require.Equal(t, ts, asyncCoverageBar(ts, 0))
-
-	tiny := types.BuildTS(10, 3)
-	require.Equal(t, tiny, asyncCoverageBar(tiny, delay))
 }
 
 // TestIndexCoversSnapshotReachesCoverageHook drives the async-coverage POSITIVE

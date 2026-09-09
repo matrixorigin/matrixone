@@ -102,20 +102,20 @@ func parseWatermark(s string) (types.TS, bool) {
 	return ts, !ts.IsEmpty()
 }
 
-// CoversSnapshot reports whether the index's watermark has reached req.Snapshot.
+// CoversSnapshot reports whether the index's watermark has reached the source
+// DML commit timestamp observed by the query CN.
 //
 // Fails closed everywhere: a missing job, a dropped one, a job that is not
 // running cleanly, a NULL/unparsable watermark, or any lookup error all report
 // false. Only an explicit "watermark >= snapshot" on a live job returns true.
 func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
-	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 || req.Snapshot.IsEmpty() {
+	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return false, err
 	}
-
 	// The ISCP log lives in the system tenant and carries account_id as an
 	// ordinary column, so the tenant is named in the predicate, not inherited
 	// from the context.
@@ -144,6 +144,10 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 		}
 		states := vector.MustFixedColWithTypeCheck[int8](cols[1])
 		for i := 0; i < rows; i++ {
+			watermarkText := "<NULL>"
+			if !cols[0].IsNull(uint64(i)) {
+				watermarkText = cols[0].GetStringAt(i)
+			}
 			if !cols[2].IsNull(uint64(i)) {
 				continue // dropped
 			}
@@ -161,8 +165,8 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 			// ISCP executor writes; parsed here rather than with
 			// types.StringToTS, which PANICS on anything malformed and would
 			// take the planner down over a corrupt catalog row
-			wm, ok := parseWatermark(cols[0].GetStringAt(i))
-			if !ok || wm.LT(&req.Snapshot) {
+			wm, ok := parseWatermark(watermarkText)
+			if !ok || wm.LT(&req.SourceCommitTS) {
 				covered = false
 				return false
 			}

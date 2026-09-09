@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // Turning a json_extract comparison into a fulltext2 index probe.
@@ -348,10 +348,9 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 }
 
 // indexCoversSnapshot reports whether idx may back a mandatory probe. A
-// synchronous index always may. An async index is checked via the coverage hook
-// against the read snapshot lowered by the fulltext_index_scan_watermark_delay
-// session variable. Returns false on nil builder/compCtx/process/transaction or a
-// lookup error.
+// synchronous index always may. An async index is checked against the largest
+// source DML commit represented by this CN's partition state. Returns false on
+// nil builder/compCtx/process/transaction or any uncertainty.
 func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
@@ -368,43 +367,38 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if txn == nil {
 		return false
 	}
-	bar := asyncCoverageBar(types.TimestampToTS(txn.SnapshotTS()), builder.fulltextIndexScanDelay())
+	eng := proc.GetSessionInfo().StorageEngine
+	if eng == nil {
+		return false
+	}
+	_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), txn, scanNode.TableDef.TblId)
+	if err != nil {
+		logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
+		return false
+	}
+	commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return false
+	}
+	sourceCommitTS, err := commitTSProvider.SourceCommitTS(proc.GetTopContext())
+	if err != nil {
+		logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
+		return false
+	}
 	// proc.Ctx is canceled during planning; use the top context.
 	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
-		CNUUID:   proc.GetService(),
-		Txn:      txn,
-		TableID:  scanNode.TableDef.TblId,
-		IndexDef: idx,
-		Snapshot: bar,
+		CNUUID:         proc.GetService(),
+		Txn:            txn,
+		TableID:        scanNode.TableDef.TblId,
+		IndexDef:       idx,
+		Snapshot:       types.TimestampToTS(txn.SnapshotTS()),
+		SourceCommitTS: sourceCommitTS,
 	})
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
 		return false
 	}
 	return covered
-}
-
-// fulltextIndexScanDelay returns the fulltext_index_scan_watermark_delay session
-// variable as a duration; 0 on a resolve error or unexpected type.
-func (builder *QueryBuilder) fulltextIndexScanDelay() time.Duration {
-	v, err := builder.compCtx.ResolveVariable("fulltext_index_scan_watermark_delay", true, false)
-	if err != nil {
-		return 0
-	}
-	secs, ok := v.(int64)
-	if !ok {
-		return 0
-	}
-	return time.Duration(secs) * time.Second
-}
-
-// asyncCoverageBar lowers ts by delay. Underflow clamps to ts.
-func asyncCoverageBar(ts types.TS, delay time.Duration) types.TS {
-	p := ts.Physical() - int64(delay)
-	if p <= 0 || p >= ts.Physical() {
-		return ts
-	}
-	return types.BuildTS(p, ts.Logical())
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose

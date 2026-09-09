@@ -95,6 +95,129 @@ type PartitionState struct {
 	shared *sharedStates
 }
 
+// SourceCommitTS is the timestamp an async index watermark must cover at a
+// snapshot. It combines the partition-state retention boundary with user-data
+// commit timestamps; it deliberately does not use an ordinary TN object's
+// CreateTime because flush/merge lifecycle is not a user-data commit.
+type SourceCommitTS struct {
+	// StateStart is the partition-state retention boundary. Partition-state
+	// truncation removes rows and object entries before this timestamp, so an
+	// async consumer watermark must have crossed it before the remaining state
+	// alone can prove index coverage.
+	StateStart types.TS
+	InMemory   types.TS // logtail rows that have not been compacted into an aobject
+	Appendable types.TS // hidden commit_ts values read from appendable objects
+	CNCreated  types.TS // commit time of a CN-created, non-appendable object
+}
+
+// Max returns the conservative source commit timestamp.
+func (s SourceCommitTS) Max() types.TS {
+	ret := s.StateStart
+	if s.InMemory.GT(&ret) {
+		ret = s.InMemory
+	}
+	if s.Appendable.GT(&ret) {
+		ret = s.Appendable
+	}
+	if s.CNCreated.GT(&ret) {
+		ret = s.CNCreated
+	}
+	return ret
+}
+
+// SourceCommitTSAt returns the partition-state retention boundary and source
+// commit timestamp candidates for a snapshot. Appendable objects are scanned on
+// disk because their ObjectEntry DeleteTime is a lifecycle timestamp and cannot
+// be used as a source DML timestamp. Any I/O uncertainty is returned to the
+// caller, which must fail closed before using an asynchronous index.
+func (p *PartitionState) SourceCommitTSAt(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (SourceCommitTS, error) {
+	ret := SourceCommitTS{StateStart: p.GetStart()}
+
+	// Keep committed in-memory inserts/deletes.  These entries disappear after
+	// their appendable object list is applied, at which point the object scan
+	// below takes over.
+	p.rows.Scan(func(entry *RowEntry) bool {
+		if entry.Time.LE(&snapshot) && entry.Time.GT(&ret.InMemory) {
+			ret.InMemory = entry.Time
+		}
+		return true
+	})
+
+	iter, err := p.NewObjectsIter(snapshot, true, false)
+	if err != nil {
+		return SourceCommitTS{}, err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		obj := iter.Entry()
+		if obj.GetAppendable() {
+			ts, err := maxCommitTSInAppendableObject(ctx, fs, obj, mp)
+			if err != nil {
+				return SourceCommitTS{}, err
+			}
+			if ts.GT(&ret.Appendable) {
+				ret.Appendable = ts
+			}
+			continue
+		}
+		// CN-created objects carry their data commit on CreateTime.  Do not use
+		// it for ordinary TN objects: that would reintroduce flush/merge as an
+		// artificial source-data change.
+		if obj.GetCNCreated() && obj.CreateTime.GT(&ret.CNCreated) {
+			ret.CNCreated = obj.CreateTime
+		}
+	}
+	return ret, nil
+}
+
+func maxCommitTSInAppendableObject(
+	ctx context.Context,
+	fs fileservice.FileService,
+	obj objectio.ObjectEntry,
+	mp *mpool.MPool,
+) (types.TS, error) {
+	if fs == nil || mp == nil {
+		return types.TS{}, fmt.Errorf("appendable object commit-ts scan requires file service and mpool")
+	}
+	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
+	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
+	cacheVectors := containers.NewVectors(len(cols))
+	var max types.TS
+	var loadErr error
+	objectio.ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+			_, release, _, err := ioutil.LoadColumnsData(
+				ctx, cols, typs, fs, blk.MetaLocation(), cacheVectors, mp, fileservice.Policy(0))
+			if err != nil {
+				loadErr = err
+				return false
+			}
+			defer release()
+			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
+			abortColumn, err := ioutil.ValidateTombstoneAbortColumn(len(commitTSCol), &cacheVectors[1])
+			if err != nil {
+				loadErr = err
+				return false
+			}
+			for row, ts := range commitTSCol {
+				if (!abortColumn.IsPresent() || !abortColumn.IsAborted(row)) && ts.GT(&max) {
+					max = ts
+				}
+			}
+			return true
+		}, obj.ObjectStats)
+	if loadErr != nil {
+		return types.TS{}, loadErr
+	}
+	return max, nil
+}
+
 func (p *PartitionState) GetStart() types.TS {
 	return p.start
 }

@@ -69,6 +69,26 @@ func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 
 }
 
+func TestSourceCommitTSMax(t *testing.T) {
+	info := SourceCommitTS{
+		StateStart: types.BuildTS(5, 1),
+		InMemory:   types.BuildTS(10, 1),
+		Appendable: types.BuildTS(30, 1),
+		CNCreated:  types.BuildTS(20, 1),
+	}
+	require.Equal(t, types.BuildTS(30, 1), info.Max())
+}
+
+func TestSourceCommitTSAtIncludesPartitionStateStart(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	state.UpdateDuration(types.BuildTS(100, 1), types.MaxTs())
+
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(100, 1), info.StateStart)
+	require.Equal(t, types.BuildTS(100, 1), info.Max())
+}
+
 func TestTruncate(t *testing.T) {
 	partition := NewPartitionState("", true, 42, false)
 	partition.UpdateDuration(types.BuildTS(0, 0), types.MaxTs())

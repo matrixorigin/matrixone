@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -71,16 +72,18 @@ func mockLog(t *testing.T, rows []logRow) *string {
 // (mocked) executor, so no behavior is needed.
 type fakeTxn struct{ client.TxnOperator }
 
+func (fakeTxn) SnapshotTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
 func sysCtx() context.Context {
 	return context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7))
 }
 
-// A live, running job whose watermark has reached the snapshot is the only
+// A live, running job whose watermark has reached the source commit is the only
 // shape that grants the probe.
 func TestCoversSnapshotWatermarkReached(t *testing.T) {
 	sql := mockLog(t, []logRow{{watermark: ts(200).ToString(), state: iscpJobStateRunning}})
 	r := coverage.Request{CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)}
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)}
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
 	require.True(t, covered)
@@ -94,12 +97,12 @@ func TestCoversSnapshotWatermarkReached(t *testing.T) {
 		"the table id comes from the planner; no cross-tenant name resolution")
 }
 
-// Equality is coverage: the watermark need only reach the snapshot.
+// Equality is coverage: the watermark need only reach the source commit.
 func TestCoversSnapshotWatermarkExactlyAtSnapshot(t *testing.T) {
 	mockLog(t, []logRow{{watermark: ts(100).ToString(), state: iscpJobStateCompleted}})
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)})
 	require.NoError(t, err)
 	require.True(t, covered)
 }
@@ -129,7 +132,7 @@ func TestCoversSnapshotFailsClosed(t *testing.T) {
 			mockLog(t, c.rows)
 			covered, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{
 				CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-				IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
+				IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)})
 			require.NoError(t, err)
 			require.False(t, covered)
 		})
@@ -145,7 +148,7 @@ func TestCoversSnapshotIgnoresDroppedRows(t *testing.T) {
 	})
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)})
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)})
 	require.NoError(t, err)
 	require.True(t, covered)
 }
@@ -161,7 +164,7 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	}
 
 	full := coverage.Request{CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, Snapshot: ts(100)}
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)}
 
 	noIdx := full
 	noIdx.IndexDef = nil
@@ -169,10 +172,7 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	noTxn.Txn = nil
 	noTable := full
 	noTable.TableID = 0
-	noSnap := full
-	noSnap.Snapshot = types.TS{}
-
-	for _, r := range []coverage.Request{noIdx, noTxn, noTable, noSnap} {
+	for _, r := range []coverage.Request{noIdx, noTxn, noTable} {
 		covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 		require.NoError(t, err)
 		require.False(t, covered)

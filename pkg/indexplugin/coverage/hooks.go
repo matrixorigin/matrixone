@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package coverage answers one question: is an index's durable state current
-// enough that the optimizer may use it as a MANDATORY filter?
+// Package coverage answers one question: is the index view used by execution
+// complete for the query, so the optimizer may use it as a MANDATORY filter?
 //
 // The distinction matters only for asynchronously maintained indexes. A search
 // operator (MATCH, vector top-k) may return slightly stale results and still be
@@ -49,15 +49,23 @@ type Request struct {
 	TableID  uint64
 	IndexDef *plan.IndexDef
 
-	// Snapshot is the timestamp the query reads at. The index covers it only if
-	// every base-table change visible at Snapshot is already indexed.
+	// Snapshot is the transaction read timestamp, retained for observability.
 	Snapshot types.TS
+
+	// SourceCommitTS is the greatest source DML commit or partition-state
+	// retention boundary represented by the query CN at Snapshot. The index is
+	// usable only after its watermark reaches this timestamp. It intentionally
+	// excludes flush/merge lifecycle timestamps.
+	SourceCommitTS types.TS
 }
 
 // Hooks reports index freshness.
 type Hooks interface {
-	// CoversSnapshot reports whether the index's durable state reflects every
-	// base-table change visible at req.Snapshot.
+	// CoversSnapshot reports whether the actual index view used by execution
+	// contains every candidate visible to the query, including transaction-local
+	// writes. The view must remain compatible with req.Snapshot when executed;
+	// an independently refreshed cache or a later generation can lose postings
+	// still visible to an older snapshot. Catalog progress alone is insufficient.
 	//
 	// It MUST FAIL CLOSED. Any uncertainty — no maintenance job, a paused or
 	// failed one, an unreadable watermark, a lookup error — is false, not an
