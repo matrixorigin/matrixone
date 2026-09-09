@@ -1,6 +1,6 @@
 # View 元数据生命周期与分布式激活设计
 
-- **状态**：Approved
+- **状态**：Pending re-approval（2026-09-09 后台锁协调修复；历史审批仍有效于其原 checkpoint）
 - **历史获批语义 checkpoint**：PR #27734 commit `351397e59a286ff13cef6113904f24313310a03c`，包含 cursor per-FETCH epoch fencing、E0 presence、disabled same-epoch semantics、metadata-only authority containment、独立 sealed provisional epoch gate，以及 multi-CN/frontend admission/hot-path evidence
 - **审批记录**：reviewer `fengttt` 于 `2026-09-06T17:41:15Z` 对 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b` 提交 GitHub `APPROVED` review（[review 5126100008](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5126100008)），覆盖最终 executable checkpoint `8c2332ecbbfc6e6c2196e734d345875b2edac134` 及其语义修订。
 - **重新审批原因**：`bc6f03e17e` 将 catalog capability 与 admission lease 解耦，使 catalog 已就绪但 admission-disabled 的 capable CN 仍维护当前 DDL metadata；后续 restore 修复改变 table/database restore 的 invalidation 与 rolling-upgrade catalog-readiness fallback。最终协议不使用 whole-account reset：relation-removal 在 restore 事务内将受影响 reverse closure 推进到非 `CURRENT` generation；disabled 但 catalog-ready 的 capable CN 同样发布 durable marker 与 affected-closure generation。事务末 reconciliation 按 restore scope 限定：table restore 只扫描目标 table identity/name，database restore 只扫描目标 database，只有 account restore 才扫描 account；各 scope 只删除 orphan targets/dependencies 并 seed missing restored Views。
@@ -248,4 +248,18 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-设计门禁已关闭：`fengttt` 的 review `5126100008` 覆盖获批 checkpoint；当前 executable/conformance head 为 `c19f1261404c8a4e816ac517f3ab13e8b349235a`。获批 head 之后的变更仅包含测试 fixture、main 合并、索引幂等检查/回归测试，以及对上游 deep-existential 构建常量的恢复，不改变已获批 View metadata 运行时语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。当前待审 executable/conformance checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（base `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+
+### 12.1 后台恢复与显式 owner 事务的锁协调修复
+
+显式 DATA BRANCH 事务刻意不跨用户语句持有全局 SNAPSHOT 行，而在 COMMIT 用 FastFail 写屏障验证 owner 世代。它已经持有的 catalog 锁可能阻止后台获得 View gate。后台若先拿 SNAPSHOT 再等待 View gate，会导致用户正常 COMMIT 被迫 FastFail，或与后续 DDL 构成锁环；该失败已在修复前的 quota 集成测试中复现。
+
+后台 Require/Start revalidation 和 CTL recovery 统一改为：
+
+1. 在任何 marker/target 操作前等待旧 View gate，此时不持有 SNAPSHOT 行。
+2. 以 `FastFail` 尝试 SNAPSHOT；失败向事务 owner 返回并回滚，不在持有 View gate 时等待 SNAPSHOT。
+3. 成功后同时保留两把锁直至事务结束，再执行既有 generation/CAS 操作。
+
+前台及旧 CN 的 `SNAPSHOT → View` 路径、COMMIT 写屏障、catalog 格式和 authority 协议均不变。后台反向取得第二把锁时没有等待边，故不会与前台/旧 CN 形成两锁等待环；旧 View gate 仍提供 rolling-upgrade 互斥。没有新重试层、后台状态或额外 gate SQL。
+
+当前 checkpoint 的本地证据：完整 compile 普通/race 通过；新锁协议确定性单测 race 100 次通过；原失败 quota 用例 race 3 次通过；完整 DataBranchDiffAsFile 普通/race 通过；双 CN restore commit fence 与 View/SNAPSHOT gate SQL 回归 race 通过；CN admission/recovery 定向回归通过。新 helper、Require/Start 覆盖率各 100%，CTL 87.5%。这些证据不替代当前完整 BVT/CI 或真实新旧 binary sequence；历史序列证据未重新标为当前 checkpoint。
