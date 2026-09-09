@@ -217,20 +217,41 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
 
 
 def _tuple_key(value: Dict[str, Any]) -> tuple:
-    required = ("account_id", "statement_id", "group_id", "group_epoch", "invocation_id", "lease_epoch")
-    if any(not value.get(k) for k in required):
+    string_fields = ("statement_id", "group_id", "invocation_id")
+    numeric_fields = ("account_id", "group_epoch", "lease_epoch")
+    if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in string_fields):
         raise ValueError("PROTOCOL: incomplete fencing tuple")
-    return tuple(value[k] for k in required)
+    if any(
+        isinstance(value.get(k), bool)
+        or not isinstance(value.get(k), int)
+        or value[k] <= 0
+        or value[k] > (1 << 64) - 1
+        for k in numeric_fields
+    ):
+        raise ValueError("PROTOCOL: incomplete fencing tuple")
+    return (
+        value["account_id"],
+        value["statement_id"],
+        value["group_id"],
+        value["group_epoch"],
+        value["invocation_id"],
+        value["lease_epoch"],
+    )
 
 
 def _decode_control(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid control size")
     value = json.loads(bytes(data).decode("utf-8"))
-    if value.get("version") != PROTOCOL_VERSION or not value.get("kind"):
+    if not isinstance(value, dict) or value.get("version") != PROTOCOL_VERSION or not isinstance(value.get("kind"), str) or not value["kind"]:
         raise ValueError("PROTOCOL: unsupported control")
     _tuple_key(value.get("tuple") or {})
     return value
+
+
+def _require_tuple(value: Dict[str, Any], expected: Dict[str, Any]) -> None:
+    if _tuple_key(value) != _tuple_key(expected):
+        raise ValueError("PROTOCOL: fencing tuple changed")
 
 
 def _encode_control(value: Dict[str, Any]) -> bytes:
@@ -586,6 +607,8 @@ class RoutineFlightServer(flight.FlightServerBase):
         size = self._entry_bytes(key)
         with self._lock:
             self._purge_terminal_locked(time.monotonic())
+            if key in self._active:
+                raise ValueError("PROTOCOL: invocation fence is active")
             if key in self._terminal:
                 raise ValueError("PROTOCOL: invocation fence is terminal")
             if len(self._active) + len(self._terminal) >= MAX_TERMINAL_RECORDS:
@@ -606,6 +629,10 @@ class RoutineFlightServer(flight.FlightServerBase):
     def do_action(self, context, action):
         control = _decode_control(action.body)
         key = _tuple_key(control["tuple"])
+        if action.type not in ("AcknowledgeResults", "AcknowledgeFinish"):
+            raise ValueError("PROTOCOL: unknown action")
+        if control["kind"] != action.type:
+            raise ValueError("PROTOCOL: action kind does not match action type")
         with self._lock:
             self._purge_terminal_locked(time.monotonic())
             state = self._active.get(key)
@@ -619,8 +646,6 @@ class RoutineFlightServer(flight.FlightServerBase):
             state.ack_result(int(control.get("ack_sequence", 0)))
         elif action.type == "AcknowledgeFinish":
             state.ack_finish(str(control.get("finish_id", "")))
-        else:
-            raise ValueError("PROTOCOL: unknown action")
         yield _encode_control({"kind": "Ack", "tuple": control["tuple"], "status": "OK", "ack_sequence": control.get("ack_sequence", 0)})
 
     def do_exchange(self, context, descriptor, reader, writer):
@@ -633,10 +658,14 @@ class RoutineFlightServer(flight.FlightServerBase):
                 raise ValueError("PROTOCOL: exchange is missing the invocation descriptor")
             open_control = _decode_control(command)
             if open_control["kind"] != "OpenInvocation": raise ValueError("PROTOCOL: first message must open an invocation")
+            if not isinstance(open_control.get("payload"), (dict, str)):
+                raise ValueError("PROTOCOL: invocation payload must be an object")
             key = _tuple_key(open_control["tuple"])
             payload = open_control.get("payload") or {}
             if isinstance(payload, str):
                 payload = json.loads(payload)
+            if not isinstance(payload, dict):
+                raise ValueError("PROTOCOL: invocation payload must be an object")
             args = list(payload.get("args", [])); result_descriptor = payload["return"]
             statement_context = _statement_context(payload.get("context"))
             mode = payload.get("mode", MODE_SCALAR); null_policy = payload.get("null_policy", NULL_CALL)
@@ -667,6 +696,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                         schema = reader.schema
                         _validate_schema(schema, args)
                     control = _decode_control(chunk.app_metadata)
+                    _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] != "InputBatch": raise ValueError("PROTOCOL: data batch is missing InputBatch")
                     sequence = int(control.get("sequence", 0))
                     if sequence != state.last_result + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
@@ -701,6 +731,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     state.wait_result_ack(sequence)
                 elif chunk.app_metadata:
                     control = _decode_control(chunk.app_metadata)
+                    _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] == "EndInput":
                         if ended or int(control.get("last_sequence", -1)) != state.last_result: raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True

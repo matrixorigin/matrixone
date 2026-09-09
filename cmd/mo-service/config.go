@@ -45,7 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonruntime"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -124,7 +124,7 @@ type Config struct {
 	// ProxyConfig is the config of proxy.
 	ProxyConfig proxy.Config `toml:"proxy"`
 	// PythonUdfServerConfig is the config of python udf server
-	PythonUdfServerConfig pythonruntime.Config `toml:"python-udf-server"`
+	PythonUdfServerConfig python.Config `toml:"python-udf-server"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 
