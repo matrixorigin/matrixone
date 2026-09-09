@@ -3438,7 +3438,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						name = catalog.ResolveAlias(name)
 						partPos, ok := tableDef.Name2ColIndex[name]
 						incomingPos, incomingOK := colName2Idx[tableDef.Name+"."+name]
-						if !ok || !incomingOK || partPos < 0 || incomingPos < 0 || partPos >= len(tableDef.Cols) || int(incomingPos) >= len(selectNode.ProjectList) {
+						if !ok || !incomingOK || partPos < 0 || incomingPos < 0 || int(partPos) >= len(tableDef.Cols) || int(incomingPos) >= len(selectNode.ProjectList) {
 							return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key dedup part %s", name)
 						}
 						leftValues[i] = &plan.Expr{Typ: tableDef.Cols[partPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
