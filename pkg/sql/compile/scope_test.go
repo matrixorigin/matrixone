@@ -2905,7 +2905,7 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	board := message.NewMessageBoard()
 	defer board.Reset()
 	proc.SetMessageBoard(board)
-	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
@@ -2928,9 +2928,54 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.Equal(t, payload, filters[0].data)
 }
 
+func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 110, UseMembershipFilter: true, MustApply: true}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required runtime filter 110 is unavailable")
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
+func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	const tag int32 = 111
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{
+			Tag: tag, UseMembershipFilter: true, MustApply: true,
+		}}},
+	}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
 func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	payload := []byte{2, 4, 6, 8}
-	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
 	filter := receivedRuntimeFilter{
 		spec: spec,
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
@@ -2939,9 +2984,10 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 		}}}},
 	}
 
-	membership, hasMembership := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
 
 	require.True(t, hasMembership)
+	require.True(t, required)
 	require.Equal(t, payload, membership)
 }
 
@@ -3016,27 +3062,31 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "is not registered")
 
-	membership, hasMembership := vectorScanMembershipFilter(nil)
+	membership, hasMembership, required := vectorScanMembershipFilter(nil)
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
-		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true},
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true},
 		expr: &plan.Expr{},
 	}})
 	require.Nil(t, membership)
 	require.True(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.True(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
 	}})
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
 			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
 		}}}},
 	}})
 	require.Equal(t, []byte{9, 8, 7}, membership)
 	require.False(t, hasMembership)
+	require.False(t, required)
 }
 
 func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {

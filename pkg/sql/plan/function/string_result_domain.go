@@ -113,9 +113,13 @@ func formattedStringByteBound(typ types.Type) stringResultBound {
 	case types.T_uint64, types.T_bit:
 		width = 20
 	case types.T_float32:
-		width = 15
-	case types.T_float64:
+		// floatToBytes uses fixed notation for values in [1e-13, 1e15).
+		// Keep room for the sign, the decimal point, leading fractional
+		// zeroes, and the maximum exact FLOAT32 digits.
 		width = 24
+	case types.T_float64:
+		// See FLOAT32 above. DOUBLE needs up to 17 exact significant digits.
+		width = 32
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width <= 0 {
 			return unknownStringResultBound()
@@ -156,6 +160,113 @@ func binaryStringResultType(bound stringResultBound) types.Type {
 		return types.T_blob.ToType()
 	}
 	return types.NewWithCharset(types.T_varbinary, int32(bound.bytes), 0, types.CharsetBinary)
+}
+
+func fixedBinaryResultType(width int32) types.Type {
+	return binaryStringResultType(stringResultBound{bytes: uint64(width)})
+}
+
+func fixedTextResultType(width uint64) types.Type {
+	return textStringResultType(stringResultBound{bytes: width}, types.CharsetUTF8)
+}
+
+// compressResultBound mirrors zlib's compressBound contract, the five
+// bytes added by MySQL's COMPRESS framing (four-byte length plus the optional
+// trailing dot), and the two-byte final empty block emitted by Go's zlib
+// writer. The latter is important: using MySQL's C-zlib bound verbatim can
+// understate the actual MatrixOne result for incompressible input. Keep the
+// arithmetic checked: a type callback must never wrap a large input into a
+// deceptively small VARCHAR/VARBINARY.
+func compressResultBound(input stringResultBound) stringResultBound {
+	if input.unknown {
+		return unknownStringResultBound()
+	}
+
+	bound := input
+	for _, divisor := range []uint64{1 << 12, 1 << 14, 1 << 25} {
+		bound = addStringResultBounds(bound, stringResultBound{bytes: input.bytes / divisor})
+	}
+	return addStringResultBounds(bound, stringResultBound{bytes: 20})
+}
+
+func roundedUpHalfStringResultBound(input stringResultBound) stringResultBound {
+	if input.unknown {
+		return unknownStringResultBound()
+	}
+	return stringResultBound{bytes: input.bytes/2 + input.bytes%2}
+}
+
+func aesPaddedResultBound(input stringResultBound) stringResultBound {
+	if input.unknown {
+		return unknownStringResultBound()
+	}
+	blocks := stringResultBound{bytes: input.bytes/16 + 1}
+	return multiplyStringResultBound(blocks, 16)
+}
+
+func fixedVarcharReturnType(width uint64) types.Type {
+	return fixedTextResultType(width)
+}
+
+func binReturnType(_ []types.Type) types.Type {
+	return fixedVarcharReturnType(65)
+}
+
+func convReturnType(_ []types.Type) types.Type {
+	return fixedVarcharReturnType(65)
+}
+
+func inetNtoaReturnType(_ []types.Type) types.Type {
+	return fixedVarcharReturnType(31)
+}
+
+func inet6NtoaReturnType(_ []types.Type) types.Type {
+	return fixedVarcharReturnType(39)
+}
+
+func numericHexReturnType(_ []types.Type) types.Type {
+	return fixedVarcharReturnType(16)
+}
+
+func stringHexReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_text.ToType()
+	}
+	return textStringResultType(
+		multiplyStringResultBound(declaredStringByteBound(parameters[0]), 2),
+		types.CharsetUTF8,
+	)
+}
+
+func arrayHexReturnType(_ []types.Type) types.Type {
+	// HexArray encodes the vector's serialized bytes. Its maximum byte count
+	// depends on the element type and dimension, and can exceed VARCHAR(65535);
+	// retain a lossless text domain until a dedicated array-byte bound exists.
+	return types.T_text.ToType()
+}
+
+func unhexReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_blob.ToType()
+	}
+	return binaryStringResultType(roundedUpHalfStringResultBound(
+		declaredStringByteBound(parameters[0])))
+}
+
+func compressReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_blob.ToType()
+	}
+	return binaryStringResultType(compressResultBound(
+		declaredStringByteBound(parameters[0])))
+}
+
+func aesEncryptReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_blob.ToType()
+	}
+	return binaryStringResultType(aesPaddedResultBound(
+		declaredStringByteBound(parameters[0])))
 }
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {

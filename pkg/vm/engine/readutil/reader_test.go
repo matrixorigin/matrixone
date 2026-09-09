@@ -46,6 +46,100 @@ type singlePersistedBlockSource struct {
 	closeCount int32
 }
 
+type singleInMemoryVectorSource struct {
+	batch      int
+	closeCount int32
+}
+
+func (s *singleInMemoryVectorSource) Next(
+	_ context.Context,
+	_ []string,
+	_ []types.Type,
+	_ []uint16,
+	_ int32,
+	_ any,
+	mp *mpool.MPool,
+	out *batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	if s.batch >= 2 {
+		return nil, engine.End, nil
+	}
+	rows := []struct {
+		id     int32
+		entry  []float32
+		bucket int32
+	}{
+		{id: 1, entry: []float32{0, 0}, bucket: 0},
+		{id: 2, entry: []float32{2, 0}, bucket: 1},
+	}
+	if s.batch == 1 {
+		rows = rows[:1]
+		rows[0] = struct {
+			id     int32
+			entry  []float32
+			bucket int32
+		}{id: 3, entry: []float32{3, 0}, bucket: 1}
+	}
+	for _, row := range rows {
+		if err := vector.AppendFixed(out.Vecs[0], row.id, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+		if err := vector.AppendArray(out.Vecs[1], row.entry, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+		if err := vector.AppendFixed(out.Vecs[2], row.bucket, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+	}
+	out.SetRowCount(len(rows))
+	s.batch++
+	return nil, engine.InMem, nil
+}
+
+func (*singleInMemoryVectorSource) ApplyTombstones(
+	context.Context, *objectio.Blockid, []int64, engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	return nil, nil
+}
+func (*singleInMemoryVectorSource) GetTombstones(
+	context.Context, *objectio.Blockid,
+) (objectio.Bitmap, error) {
+	return objectio.Bitmap{}, nil
+}
+func (*singleInMemoryVectorSource) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*singleInMemoryVectorSource) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*singleInMemoryVectorSource) SetFilterZM(objectio.ZoneMap)    {}
+func (s *singleInMemoryVectorSource) Close() {
+	atomic.AddInt32(&s.closeCount, 1)
+}
+func (*singleInMemoryVectorSource) String() string { return "singleInMemoryVectorSource" }
+
+func testVectorTopKParam(colPos int32, limit uint64) *plan.IndexReaderParam {
+	vectorType := plan.Type{Id: int32(types.T_array_float32), Width: 2}
+	vectorCol := &plan.Expr{
+		Typ: vectorType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			ColPos: colPos,
+		}},
+	}
+	query := &plan.Expr{
+		Typ: vectorType,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{0, 0}))},
+		}},
+	}
+	return &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+				Args: []*plan.Expr{vectorCol, query},
+			}},
+		}}},
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(limit),
+	}
+}
+
 func (s *singlePersistedBlockSource) Next(
 	context.Context,
 	[]string,
@@ -305,6 +399,81 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 	mpool.DeleteMPool(queryMP)
 }
 
+func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
+	ctx := context.Background()
+	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	tableDef := &plan.TableDef{
+		Name:          "in_memory_filtered_topk",
+		Name2ColIndex: map[string]int32{"id": 0, "entry": 1, "bucket": 2},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "entry", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
+			{Name: "bucket", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+	source := &singleInMemoryVectorSource{}
+	r, err := NewReader(
+		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{},
+	)
+	require.NoError(t, err)
+
+	output := batch.NewWithSize(3)
+	for pos, typ := range []types.Type{
+		types.T_int32.ToType(), types.New(types.T_array_float32, 2, 0), types.T_int32.ToType(),
+	} {
+		output.Vecs[pos] = vector.NewOffHeapVecWithType(typ)
+	}
+	isEnd, topKApplied, err := r.ReadWithFilterAndTopK(
+		ctx,
+		[]string{"id", "entry", "bucket"},
+		[]int{0, 2},
+		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Nil(t, loaded, "in-memory rows are already fully materialized")
+			buckets := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[2])
+			sels := make([]int64, 0, len(buckets))
+			for pos, bucket := range buckets {
+				if bucket == 1 {
+					sels = append(sels, int64(pos))
+				}
+			}
+			bat.Shrink(sels, false)
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		},
+		testVectorTopKParam(1, 1),
+		queryMP,
+		output,
+	)
+	require.NoError(t, err)
+	require.False(t, isEnd)
+	require.True(t, topKApplied)
+	require.Equal(t, 1, output.RowCount())
+	require.Equal(t, int32(2), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], 0),
+		"the nearest row fails the residual; filter-before-TopK must return the farther survivor")
+	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+
+	isEnd, topKApplied, err = r.ReadWithFilterAndTopK(
+		ctx,
+		[]string{"id", "entry", "bucket"},
+		[]int{0, 2},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			return engine.ReaderFilterResult{All: true}, nil
+		},
+		testVectorTopKParam(1, 1),
+		queryMP,
+		output,
+	)
+	require.NoError(t, err)
+	require.False(t, isEnd)
+	require.True(t, topKApplied)
+	require.True(t, output.IsEmpty(), "the reader must retain its heap and reject a farther row from the next batch")
+	require.NoError(t, r.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+	output.Clean(queryMP)
+	require.Zero(t, queryMP.CurrNB())
+}
+
 func TestMergeReaderRejectsNilReaderFilter(t *testing.T) {
 	mr := NewMergeReader(nil)
 	_, err := mr.ReadWithFilter(context.Background(), nil, nil, nil, nil, nil)
@@ -527,6 +696,41 @@ type countingReader struct {
 	closeErr     error
 }
 
+type filteredTopKCountingReader struct {
+	*countingReader
+	topKApplied bool
+}
+
+func (r *filteredTopKCountingReader) ReadWithFilterAndTopK(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, bool, error) {
+	isEnd, err := r.Read(ctx, cols, nil, mp, outBatch)
+	return isEnd, r.topKApplied, err
+}
+
+type lateMaterializedCountingReader struct {
+	*countingReader
+	filterCalls int
+}
+
+func (r *lateMaterializedCountingReader) ReadWithFilter(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, error) {
+	r.filterCalls++
+	return r.Read(ctx, cols, nil, mp, outBatch)
+}
+
 func (r *countingReader) Read(_ context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	if r.readErr != nil && int(atomic.LoadInt32(&r.emit)) >= r.readErrAfter {
 		return false, r.readErr
@@ -546,6 +750,77 @@ func (r *countingReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (r *countingReader) SetFilterZM(objectio.ZoneMap)         {}
 
 var _ engine.Reader = (*countingReader)(nil)
+
+func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
+	filter := func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		return engine.ReaderFilterResult{}, nil
+	}
+
+	t.Run("filtered topk reader", func(t *testing.T) {
+		var closeCount int32
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+			topKApplied:    true,
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.True(t, topKApplied)
+
+		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.True(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+
+	t.Run("late materialization reader", func(t *testing.T) {
+		var closeCount int32
+		child := &lateMaterializedCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, 1, child.filterCalls)
+	})
+
+	t.Run("plain reader", func(t *testing.T) {
+		var closeCount int32
+		child := &countingReader{rows: 1, closeCount: &closeCount}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+	})
+
+	t.Run("topk reader error closes child", func(t *testing.T) {
+		var closeCount int32
+		readErr := errors.New("topk reader failure")
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{readErr: readErr, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		_, _, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.ErrorIs(t, err, readErr)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+}
 
 func TestMergeReaderClosesEachChildOnExhaustion(t *testing.T) {
 	var closed int32

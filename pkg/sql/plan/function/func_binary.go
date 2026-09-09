@@ -5331,11 +5331,60 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
+			if r == types.T_bit {
+				return newCheckResultWithSuccess(8)
+			}
 			if i < 2 {
 				return newCheckResultWithSuccess(0)
 			} else {
 				return newCheckResultWithSuccess(i - 1)
 			}
+		}
+	}
+	allIntegers := true
+	for _, input := range inputs {
+		if !input.IsIntOrUint() && input.Oid != types.T_any {
+			allIntegers = false
+			break
+		}
+	}
+	if allIntegers {
+		// MySQL's integer comparison uses the 64-bit representation, including
+		// signed/unsigned combinations. An SQL cast to INT64 would reject UINT64_MAX.
+		return newCheckResultWithSuccess(13)
+	}
+	// DECIMAL comparisons must remain exact. Choose a common decimal storage
+	// family, but retain each operand's scale so no value is rounded during
+	// overload resolution.
+	hasDecimal := false
+	decimalInputs := true
+	for _, input := range inputs {
+		if input.Oid.IsDecimal() {
+			hasDecimal = true
+		} else if !input.Oid.IsInteger() && input.Oid != types.T_any {
+			decimalInputs = false
+		}
+	}
+	if hasDecimal && decimalInputs {
+		target := types.New(types.T_decimal128, 38, 0)
+		for _, input := range inputs {
+			if input.Oid == types.T_decimal256 {
+				target = types.New(types.T_decimal256, 65, 0)
+				break
+			}
+		}
+		castTypes := make([]types.T, len(inputs))
+		targetTypes := make([]types.Type, len(inputs))
+		for i, input := range inputs {
+			castTypes[i] = target.Oid
+			targetTypes[i] = target
+			targetTypes[i].Scale = input.Scale
+		}
+		if c, _ := tryToMatch(inputs, castTypes); c != matchFailed {
+			if target.Oid == types.T_decimal256 {
+				return newCheckResultWithCast(12, targetTypes)
+			}
+			return newCheckResultWithCast(11, targetTypes)
 		}
 	}
 	castTypes := make([]types.T, len(inputs))
@@ -5352,6 +5401,120 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(10, targetTypes)
 	}
 	return newCheckResultWithSuccess(10)
+}
+
+func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	getters := make([]func(uint64) (uint64, bool), len(ivecs))
+	for i, vec := range ivecs {
+		getters[i] = fieldIntegerGetter(vec)
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(getters); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := getters[0](i)
+			v2, null2 := getters[j](i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](vec)
+		return func(i uint64) (uint64, bool) { return p.GetValue(i) }
+	default:
+		panic("FIELD integer overload received non-integer vector")
+	}
+}
+
+func FieldDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal128](ivecs, result, length, func(x, y types.Decimal128, sx, sy int32) bool {
+		return types.CompareDecimal128WithScale(x, y, sx, sy) == 0
+	})
+}
+
+func FieldDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal256](ivecs, result, length, decimal256Equal)
+}
+
+type fieldDecimalType interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func fieldDecimalValues[T fieldDecimalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, equal func(T, T, int32, int32) bool) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(ivecs); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if equal(v1, v2, fs[0].GetType().Scale, fs[j].GetType().Scale) {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256Equal(x, y types.Decimal256, scaleX, scaleY int32) bool {
+	if scaleX == scaleY {
+		return x == y
+	}
+	if scaleX < scaleY {
+		x, err := x.Scale(scaleY - scaleX)
+		return err == nil && x == y
+	}
+	y, err := y.Scale(scaleX - scaleY)
+	return err == nil && x == y
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6667,6 +6830,97 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
+// Binary SUBSTRING uses byte offsets. Routing binary values through the text
+// implementation would decode invalid bytes as RuneError and could expand a
+// nominal 511-byte result beyond the planner's bound.
+func binarySubstringStartOffset(length int, start int64) (int, bool) {
+	if start > 0 {
+		offset := start - 1
+		if offset >= int64(length) {
+			return 0, false
+		}
+		return int(offset), true
+	}
+	if start < 0 {
+		if start < -int64(length) {
+			return 0, false
+		}
+		return length + int(start), true
+	}
+	return 0, false
+}
+
+func SubStringBinaryWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(v[offset:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if l <= 0 {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int64(len(v) - offset)
+		end := len(v)
+		if l < remaining {
+			end = offset + int(l)
+		}
+		if err = rs.AppendBytes(v[offset:end], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6804,36 +7058,31 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		str, isnull1 := strs.GetStrValue(i)
-		shaType, isnull2 := shaTypes.GetValue(i)
-
-		if isnull1 || isnull2 || !isSha2Family(shaType) {
+		if sha2RowMasked(selectList, i) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var checksum []byte
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
 
-			switch shaType {
-			case 0, 256:
-				sum256 := sha256.Sum256(str)
-				checksum = sum256[:]
-			case 224:
-				sum224 := sha256.Sum224(str)
-				checksum = sum224[:]
-			case 384:
-				sum384 := sha512.Sum384(str)
-				checksum = sum384[:]
-			case 512:
-				sum512 := sha512.Sum512(str)
-				checksum = sum512[:]
-			default:
-				panic("unexpected err happened in sha2 function")
-			}
-			checksum = []byte(hex.EncodeToString(checksum))
-			if err = res.AppendBytes(checksum, false); err != nil {
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
 		}
 
 	}
@@ -6841,9 +7090,92 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-// any one of 224 256 384 512 0 is valid
-func isSha2Family(len int64) bool {
-	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+// SHA2StringLengthFunc is the character-operand variant of SHA2. MySQL
+// converts the hash length as an integer at execution time, so a value such
+// as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
+// string wrapper preserves binary bytes and avoids the lossy implicit cast to
+// VARCHAR that would otherwise happen before execution.
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaLengths := vector.GenerateFunctionStrParameter(args[1])
+	lengthIsConst := args[1].IsConst()
+	var constLength int64
+	var constLengthNull bool
+	if lengthIsConst {
+		lengthValue, isnull := shaLengths.GetStrValue(0)
+		constLengthNull = isnull
+		if !isnull {
+			constLength = parseMySQLIntegerPrefix(lengthValue)
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if sha2RowMasked(selectList, i) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		var isnull2 bool
+		var shaType int64
+		if lengthIsConst {
+			isnull2 = constLengthNull
+			shaType = constLength
+		} else {
+			lengthValue, isnull := shaLengths.GetStrValue(i)
+			isnull2 = isnull
+			if !isnull {
+				shaType = parseMySQLIntegerPrefix(lengthValue)
+			}
+		}
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sha2Checksum(value []byte, length int64) ([]byte, bool) {
+	var checksum []byte
+	switch length {
+	case 0, 256:
+		sum256 := sha256.Sum256(value)
+		checksum = sum256[:]
+	case 224:
+		sum224 := sha256.Sum224(value)
+		checksum = sum224[:]
+	case 384:
+		sum384 := sha512.Sum384(value)
+		checksum = sum384[:]
+	case 512:
+		sum512 := sha512.Sum512(value)
+		checksum = sum512[:]
+	default:
+		return nil, false
+	}
+	encoded := make([]byte, hex.EncodedLen(len(checksum)))
+	hex.Encode(encoded, checksum)
+	return encoded, true
+}
+
+func sha2RowMasked(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row))
 }
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -7513,37 +7845,16 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
-func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	rs := vector.MustFunctionResult[float64](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && (selectList.IgnoreAllRow() ||
-			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		res := math.Pow(v1, v2)
+		if math.IsNaN(res) || math.IsInf(res, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf(
+				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
 		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := math.Pow(v1, v2)
-			if math.IsNaN(res) || math.IsInf(res, 0) {
-				return moerr.NewOutOfRangeNoCtxf(
-					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
-			}
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+		return res, nil
+	}, selectList)
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -9646,7 +9957,8 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if berr != nil {
 			return "", berr
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
+		out, err := geoEncodeWKB(b, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9658,6 +9970,13 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := source.GetStrValue(i)
 		dist, null2 := dists.GetValue(i)
 		qs, null3 := quads.GetValue(i)
@@ -9675,7 +9994,11 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if berr != nil {
 			return berr
 		}
-		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
+		out, err := geoEncodeWKB(b, f32)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -9700,7 +10023,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if oerr != nil {
 				return nil, oerr
 			}
-			return geoEncodeWKB(g, f32), nil
+			return geoEncodeWKB(g, f32)
 		}, selectList)
 	}
 }
@@ -9808,7 +10131,8 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9824,7 +10148,8 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
+		out, err := geoEncodeWKB(g, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9840,7 +10165,8 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9853,7 +10179,8 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
+		out, err := geoEncodeWKB(geo.Simplify(g, tol), f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9870,7 +10197,7 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.Collect(a, b), f32), nil
+		return geoEncodeWKB(geo.Collect(a, b), f32)
 	}, selectList)
 }
 
@@ -13256,6 +13583,19 @@ type aesModeInfo struct {
 	useCBC  bool
 }
 
+func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
+	if !modeInfo.needsIV {
+		return nil
+	}
+	if !hasIV {
+		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
+	}
+	if nullIV || len(iv) < aes.BlockSize {
+		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
+	}
+	return nil
+}
+
 func getAESMode(proc *process.Process) (aesModeInfo, error) {
 	mode := "aes-128-ecb"
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -13311,11 +13651,8 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13384,11 +13721,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13461,7 +13795,11 @@ func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, le
 		pt := geo.Point{X: x, Y: y}
 		var wkb []byte
 		if f32 {
-			wkb = geo.WriteWKBFloat32(pt)
+			var err error
+			wkb, err = geo.WriteWKBFloat32(pt)
+			if err != nil {
+				return err
+			}
 		} else {
 			wkb = geo.WriteWKB(pt)
 		}

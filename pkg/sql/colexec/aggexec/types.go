@@ -523,6 +523,11 @@ func makeSpecialAggExec(
 		return nil, true, moerr.NewNotSupportedNoCtx(
 			"distinct bit operations are not supported")
 	}
+	if len(params) == 1 &&
+		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) &&
+		IsBitwiseAggregateOperandTooWide(params[0]) {
+		return nil, true, moerr.NewInvalidBitwiseAggregateOperandsSizeNoCtx()
+	}
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
 	}

@@ -402,7 +402,7 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 					func(value []byte) (string, error) { return string(value), nil }, selectList)
 			},
 		},
-		{name: "inet6_aton", inputs: []FunctionTestInput{constNullString}, resultType: types.T_varbinary.ToType(), fn: Inet6Aton},
+		{name: "inet6_aton", inputs: []FunctionTestInput{constNullString}, resultType: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), fn: Inet6Aton},
 		{name: "inet6_ntoa", inputs: []FunctionTestInput{constNullString}, fn: Inet6Ntoa},
 		{
 			name:   "try_jq",
@@ -560,7 +560,7 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 					func(value []byte) (string, error) { return string(value), nil }, selectList)
 			},
 		},
-		{name: "inet6_aton", inputs: stringInput, resultType: types.T_varbinary.ToType(), fn: Inet6Aton},
+		{name: "inet6_aton", inputs: stringInput, resultType: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), fn: Inet6Aton},
 		{name: "inet6_ntoa", inputs: stringInput, fn: Inet6Ntoa},
 		{name: "try_jq", inputs: stringInputs, fn: newOpBuiltInJq().tryJq},
 		{name: "mo_tuple_expr", inputs: stringInput, fn: MoTupleExpr},

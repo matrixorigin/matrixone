@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1459,8 +1460,9 @@ func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T
 
 	rolledBack := uint64(0)
 	wcs := &process.WrapCs{
-		MsgId: 42,
-		Cs:    session,
+		MsgId:           42,
+		Cs:              session,
+		ReceiverStopped: func() bool { return true },
 		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
 			return 7, nil
 		},
@@ -1812,6 +1814,135 @@ func TestDataLossPrevention_ComparisonTable(t *testing.T) {
 		require.NoError(t, err, "SendToAny can tolerate failures")
 		t.Log("SendToAny: Can failover to other receivers")
 	})
+}
+
+func TestSendBatchRetiresOnlyCertifiedReceiverStop(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		done, stopped, canceled bool
+		reserveErr              error
+		wantRetired             bool
+	}{
+		{"stop before send", true, true, false, nil, true},
+		{"stop wakes reserve", false, true, false, context.Canceled, true},
+		{"stop interrupts reserve", false, true, false, moerr.NewQueryInterrupted(context.Background()), true},
+		{"uncertified done", true, false, false, nil, false},
+		{"uncertified cancellation", false, false, false, context.Canceled, false},
+		{"query cancellation wins", false, true, true, context.Canceled, false},
+		{"query cancellation with done", true, true, true, nil, false},
+		{"real reserve error wins", false, true, false, moerr.NewInternalErrorNoCtx("reserve failure"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			wcs := &process.WrapCs{
+				ReceiverDone:    tc.done,
+				ReceiverStopped: func() bool { return tc.stopped },
+				Err:             make(chan error, 1),
+				ReserveBatch:    func(context.Context, uint64) (uint64, error) { return 0, tc.reserveErr },
+			}
+			done, err := sendBatchToClientSession(ctx, []byte("batch"), wcs, FailureModeStrict, "receiver")
+			if tc.wantRetired {
+				require.NoError(t, err)
+				require.True(t, done)
+				select {
+				case err := <-wcs.Err:
+					require.NoError(t, err)
+				default:
+					t.Fatal("removed receiver's registration handler was not completed")
+				}
+			} else {
+				require.Error(t, err)
+				if !tc.done {
+					require.ErrorIs(t, err, tc.reserveErr)
+				}
+				require.Empty(t, wcs.Err)
+			}
+		})
+	}
+}
+
+func TestBroadcastContinuesAfterRemoteReceiverStop(t *testing.T) {
+	for _, remoteAlive := range []bool{false, true} {
+		t.Run(fmt.Sprint("remaining_remote_", remoteAlive), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			bat := newDispatchSpoolTestBatch(t, proc.Mp(), 3)
+			defer bat.Clean(proc.Mp())
+			reg := process.NewPipelineEdge(1, 0)
+			sp := pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+			defer func() { sp.Abort(context.Canceled); sp.Close() }()
+			d := &Dispatch{LocalRegs: []*process.WaitRegister{reg}, ctr: &container{
+				prepared: true, sp: sp, localRegsCnt: 1, remoteRegsCnt: 1, aliveRegCnt: 2,
+				remoteReceivers: []*process.WrapCs{{
+					ReceiverStopped: func() bool { return true }, Err: make(chan error, 1),
+					ReserveBatch: func(context.Context, uint64) (uint64, error) { return 0, context.Canceled },
+				}},
+			}}
+			stopped := d.ctr.remoteReceivers[0]
+			if remoteAlive {
+				ctrl := gomock.NewController(t)
+				cs := mock_morpc.NewMockClientSession(ctrl)
+				cs.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+				d.ctr.remoteReceivers = append(d.ctr.remoteReceivers, &process.WrapCs{Cs: cs})
+				d.ctr.remoteRegsCnt++
+				d.ctr.aliveRegCnt++
+			}
+			deadlineCtx, cancelDeadline := context.WithTimeout(proc.Ctx, 5*time.Second)
+			defer cancelDeadline()
+			ctx, cancel := context.WithCancelCause(deadlineCtx)
+			process.ReplacePipelineCtx(proc, ctx, cancel)
+			receiver := process.InitPipelineSignalReceiver(ctx, []*process.WaitRegister{reg})
+			sent := make(chan error, 1)
+			senderDone := make(chan struct{})
+			go func() {
+				defer close(senderDone)
+				for range 2 {
+					end, err := sendToAllFunc(bat, d, proc)
+					if err == nil && end {
+						err = fmt.Errorf("broadcast ended before local delivery")
+					}
+					if err != nil {
+						cancel(err)
+						sent <- err
+						return
+					}
+				}
+				_, err := sendToAllLocalFunc(nil, d, proc)
+				if err != nil {
+					cancel(err)
+				}
+				sent <- err
+			}()
+			defer func() { cancel(nil); <-senderDone }()
+			for range 2 {
+				got, err := receiver.GetNextBatch(nil)
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				require.Equal(t, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]), vector.MustFixedColWithTypeCheck[int64](got.Vecs[0]))
+			}
+			got, err := receiver.GetNextBatch(nil)
+			require.NoError(t, err)
+			require.Nil(t, got)
+			require.NoError(t, <-sent)
+			require.Len(t, stopped.Err, 1)
+		})
+	}
+}
+
+func TestBroadcastEndsAfterAllRemoteReceiversStop(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+	defer bat.Clean(proc.Mp())
+	stopped := &process.WrapCs{ReceiverDone: true, ReceiverStopped: func() bool { return true }, Err: make(chan error, 1)}
+	d := &Dispatch{ctr: &container{prepared: true, remoteRegsCnt: 1, aliveRegCnt: 1, remoteReceivers: []*process.WrapCs{stopped}}}
+	end, err := sendToAllRemoteFunc(bat, d, proc)
+	require.NoError(t, err)
+	require.True(t, end)
+	require.Empty(t, d.ctr.remoteReceivers)
+	require.Len(t, stopped.Err, 1)
 }
 
 func TestRemoteReceiverRollbackPublishesFailure(t *testing.T) {

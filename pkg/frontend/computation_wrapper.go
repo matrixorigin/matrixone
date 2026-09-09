@@ -544,6 +544,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				execCtx,
 				cwft.ses,
 				cwft.proc,
+				cwft.preparedStmt.defaultDatabase,
+				true,
 				cwft.ses.GetSql(),
 				originSQL,
 				schedulingSQLMode,
@@ -579,6 +581,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 					cwft.runtimeDirectResultSpecialization,
 				),
+				cwft.preparedStmt.defaultDatabase,
+				true,
 			))
 			retComp.SetPlanGenerationReused(cwft.planGenerationReused)
 			// originSQL is the prepared statement text here; the wrapper carries
@@ -612,6 +616,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			execCtx,
 			cwft.ses,
 			cwft.proc,
+			cwft.ses.GetDatabaseName(),
+			false,
 			execCtx.sqlOfStmt,
 			cwft.schedulingSQLOr(execCtx.sqlOfStmt),
 			nil,
@@ -1417,7 +1423,24 @@ func initExecuteStmtParamWithResolverInSession(
 				shouldCachePrepareCompile(preparePlan.Plan) {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, &prepareStmt.Ts, cwft.planGenerationReused, owner.GetOutputCallback(execCtx), true, nil, nil)
+				comp, err := createCompile(
+					execCtx,
+					executionSes,
+					cwft.proc,
+					prepareStmt.defaultDatabase,
+					true,
+					originSQL,
+					originSQL,
+					&prepareStmt.schedulingSQLMode,
+					prepareStmt.PrepareStmt,
+					preparePlan.Plan,
+					&prepareStmt.Ts,
+					cwft.planGenerationReused,
+					owner.GetOutputCallback(execCtx),
+					true,
+					nil,
+					nil,
+				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -1690,13 +1713,13 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
 		if runtimeCacheKey != "" && runtimeCacheKey == prepareStmt.runtimeSpecializationKey &&
-			prepareStmt.runtimePlan != nil && prepareStmt.runtimeCompile != nil {
+			prepareStmt.runtimePlan != nil {
 			runtimePlan = prepareStmt.runtimePlan
 			runtimePlanApplied = true
 			cachedRuntimeCompile = prepareStmt.runtimeCompile
 		}
 	}
-	if cachedRuntimeCompile == nil &&
+	if !runtimePlanApplied &&
 		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan ||
 			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
 		var laterRuntimeSpecialized bool
@@ -1746,10 +1769,11 @@ func initExecuteStmtParamWithResolverInSession(
 	retComp := prepareStmt.compile
 	if cachedRuntimeCompile != nil {
 		retComp = cachedRuntimeCompile
-	} else if runtimeSpecialized || prepareStmt.hasPaginationParams {
+	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
-		// values must be rebound for this execution.
+		// values must be rebound for this execution. An AP runtime cache hit
+		// reuses only the logical plan; its physical topology must be rebuilt.
 		retComp = nil
 	}
 	if executionSes.IsBackgroundSession() {
@@ -2769,6 +2793,8 @@ func createCompile(
 	execCtx *ExecCtx,
 	ses FeSession,
 	proc *process.Process,
+	databaseName string,
+	usePreparedDatabase bool,
 	originSQL string,
 	schedulingSQL string,
 	schedulingSQLMode *string,
@@ -2829,9 +2855,13 @@ func createCompile(
 			retCompile = nil
 		}
 	}()
+	// A prepared statement's unqualified names are bound to the database that
+	// was current at PREPARE time. Keep that binding on the Compile as well,
+	// because CTAS and other DDL may execute follow-up SQL through the internal
+	// executor after the client has switched databases.
 	retCompile = compile.NewCompile(
 		addr,
-		ses.GetDatabaseName(),
+		databaseName,
 		ses.GetSql(),
 		tenant,
 		ses.GetUserName(),
@@ -2862,7 +2892,7 @@ func createCompile(
 	}
 	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
-		ses, stmt, forcePrepare, preparedRetry))
+		ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase))
 
 	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
@@ -2958,10 +2988,21 @@ func preparedExecutionBuildPlanFunc(
 	stmt tree.Statement,
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
+	bindingDatabase string,
+	useBindingDatabase bool,
 ) func(context.Context) (*plan2.Plan, error) {
 	return func(ctx context.Context) (*plan2.Plan, error) {
+		compilerCtx := ses.GetTxnCompileCtx()
+		if useBindingDatabase {
+			// Compile retries rebuild through the session compiler context. Do not
+			// let an EXECUTE-time USE leak into that retry, and always restore the
+			// session context even when planning fails.
+			currentDatabase := compilerCtx.GetDatabase()
+			compilerCtx.SetDatabase(bindingDatabase)
+			defer compilerCtx.SetDatabase(currentDatabase)
+		}
 		return buildPlanForCompileRetry(
-			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, preparedRetry)
+			ctx, ses, compilerCtx, stmt, forcePrepare, preparedRetry)
 	}
 }
 

@@ -12795,6 +12795,32 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	})
 }
 
+func TestInitGeneralTenantLocksSnapshotBeforeAccountName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	wantErr := errors.New("snapshot lifecycle gate failed")
+	bh.sql2err[catalog.SnapshotLifecycleGateSQL] = wantErr
+
+	err := InitGeneralTenant(context.Background(), bh, ses, &createAccount{
+		Name:      "issue_28433_account",
+		AdminName: "admin",
+		IdentTyp:  tree.AccountIdentifiedByPassword,
+		IdentStr:  "111",
+	})
+	require.ErrorIs(t, err, wantErr)
+
+	accountLock, err := getSqlForLockMoAccountNameFormat(context.Background(), "issue_28433_account")
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"begin;", catalog.SnapshotLifecycleGateSQL, "rollback;"},
+		bh.executedSQLs,
+	)
+	require.NotContains(t, bh.executedSQLs, accountLock)
+}
+
 func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
 	//TODO implement me
 	panic("implement me")
@@ -17196,7 +17222,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setPu("", pu)
 
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,

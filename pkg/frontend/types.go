@@ -391,8 +391,8 @@ type PrepareStmt struct {
 	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
-	// ParamRefs, so equivalent values reuse the compile without embedding the
-	// preceding execution's literal.
+	// ParamRefs rather than the preceding execution's literals. Only TP plans
+	// retain a compile; AP plans rebuild statement-owned scan state and topology.
 	runtimeSpecializationKey string
 	runtimePlan              *plan.Plan
 	runtimeCompile           *compile.Compile
@@ -815,7 +815,16 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	runtimeCompile.SetIsPrepare(true)
+	// Match compileQuery's prepare-time eligibility: AP scopes contain
+	// execution-specific placement and scan state that Reset cannot rebuild.
+	// Keep the specialized logical plan, but leave the AP compile with its
+	// ordinary statement owner for execution and release.
+	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
+		runtimeCompile = nil
+	}
+	if runtimeCompile != nil {
+		runtimeCompile.SetIsPrepare(true)
+	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
@@ -1105,6 +1114,13 @@ type ExecCtx struct {
 	// prepared statement. Direct statements leave it empty and resolve against
 	// the current session database.
 	effectiveTxnDefaultDatabase string
+	// effectiveTxnStatement is resolved once per statement generation so
+	// transaction-boundary policy and later execution use the same prepared AST.
+	// The statement is borrowed from the computation wrapper or prepare cache.
+	effectiveTxnStatement tree.Statement
+	// implicitCommitBefore is the generation-level policy for a top-level
+	// implicit-commit statement. It is copied into txnOpt after admission.
+	implicitCommitBefore bool
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1154,6 +1170,8 @@ type ExecCtx struct {
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	if input != nil {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
@@ -1184,6 +1202,8 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""

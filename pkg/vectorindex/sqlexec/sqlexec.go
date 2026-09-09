@@ -90,6 +90,9 @@ type SqlProcess struct {
 	// separate from the payload because an empty set is semantically different
 	// from no filter (RF PASS).
 	IvfHasMembershipFilter bool
+	// True when IVF candidate limiting is only valid after applying the exact
+	// membership set. This path must not use filter-after-storage-TopK.
+	IvfMembershipFilterRequired bool
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, the legacy SQL search adapter uses it to build "pk IN (...)".
 	ExactPkFilter string
