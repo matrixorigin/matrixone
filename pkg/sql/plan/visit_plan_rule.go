@@ -1378,10 +1378,20 @@ func runtimePreparedUnsignedIntegerOperand(original, expr *plan.Expr) (integer, 
 		if isExplicitPreparedCast(original) && !original.GetPreparedNumeric().GetProvisionalResultCast() {
 			return false, false
 		}
-		if len(fn.Args) == 0 || original.GetF() == nil || len(original.GetF().Args) == 0 {
+		if len(fn.Args) == 0 {
 			return false, false
 		}
-		return runtimePreparedUnsignedIntegerOperand(original.GetF().Args[0], fn.Args[0])
+		// Rebinding may add a provisional DECIMAL cast around a result-selecting
+		// wrapper (for example ABS(?)) even though the prepare-time source was
+		// not itself a cast.  Only advance the source AST when the original
+		// expression is the matching cast; otherwise retain it so the wrapper's
+		// runtime marker remains visible.  Dropping ABS here made
+		// CAST(? AS UNSIGNED) + ABS(?) lose its UINT64 boundary at EXECUTE.
+		if originalFn := original.GetF(); originalFn != nil && originalFn.Func != nil &&
+			strings.EqualFold(originalFn.Func.GetObjName(), "cast") && len(originalFn.Args) > 0 {
+			return runtimePreparedUnsignedIntegerOperand(originalFn.Args[0], fn.Args[0])
+		}
+		return runtimePreparedUnsignedIntegerOperand(original, fn.Args[0])
 	}
 	if name == "abs" || name == "unary_plus" || name == "unary_minus" {
 		if len(fn.Args) != 1 || original.GetF() == nil || len(original.GetF().Args) != 1 {
