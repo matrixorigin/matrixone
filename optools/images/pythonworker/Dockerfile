@@ -1,6 +1,6 @@
 # run from root path for debug:
-# docker build -t mo-python-udf-runtime -f ./optools/images/pythonserver/Dockerfile ./pkg/udf/python/worker/
-# docker run -d --network host mo-python-udf-runtime
+# docker build -t mo-python-udf-worker -f ./optools/images/pythonworker/Dockerfile ./pkg/udf/python/worker/
+# docker run -d --network host mo-python-udf-worker
 
 FROM python:3.12-bookworm
 
