@@ -33,6 +33,8 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
 		"ColDef":           {"result_column_kind": 23},
+		"DedupJoinCtx":     {"auxiliary_row_id_col": 17},
+		"UpdateCtx":        {"partition_index_ctx": 20},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {

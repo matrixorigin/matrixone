@@ -1,0 +1,131 @@
+-- #28311: classic synchronous FULLTEXT maintenance follows the parent row
+-- across physical partitions for every DML shape.
+set experimental_fulltext_index = 1;
+drop database if exists fulltext_partition_28311;
+create database fulltext_partition_28311;
+use fulltext_partition_28311;
+
+create table ft_part(id int primary key, code int unique, body text, fulltext fti(body)) partition by hash(id) partitions 2;
+insert into ft_part values (1, 10, 'alpha one'), (2, 20, 'beta two'), (3, 30, 'gamma three');
+select id from ft_part where match(body) against('alpha') order by id;
+
+create table ft_multi(id int primary key, body text, title text, fulltext fti_multi(body, title)) partition by hash(id) partitions 2;
+insert into ft_multi values (1, 'body alpha', 'title one'), (2, 'body beta', 'title two');
+select id from ft_multi where match(body, title) against('alpha') order by id;
+update ft_multi set title = 'title alpha' where id = 2;
+select id from ft_multi where match(body, title) against('alpha') order by id;
+
+create table ft_src(id int primary key, code int unique, body text);
+insert into ft_src values (4, 40, 'delta four');
+insert into ft_part select * from ft_src;
+select id from ft_part where match(body) against('delta') order by id;
+
+update ft_part set body = 'epsilon five' where id = 1;
+select id from ft_part where match(body) against('alpha') order by id;
+select id from ft_part where match(body) against('epsilon') order by id;
+update ft_part set id = 5 where id = 1;
+select id from ft_part where match(body) against('epsilon') order by id;
+
+insert into ft_part values (3, 30, 'zeta three') on duplicate key update body = values(body);
+select id from ft_part where match(body) against('gamma') order by id;
+select id from ft_part where match(body) against('zeta') order by id;
+insert into ft_part values (6, 60, 'eta six') on duplicate key update body = values(body);
+select id from ft_part where match(body) against('eta') order by id;
+
+replace into ft_part values (7, 20, 'theta seven');
+select id from ft_part where match(body) against('beta') order by id;
+select id from ft_part where match(body) against('theta') order by id;
+
+begin;
+update ft_part set body = 'rollback three' where id = 3;
+rollback;
+select id from ft_part where match(body) against('rollback') order by id;
+select id from ft_part where match(body) against('zeta') order by id;
+
+create table ft_range(id int primary key, bucket int, body text, fulltext fti_range(body))
+partition by range(bucket)(partition r0 values less than (10), partition r1 values less than maxvalue);
+insert into ft_range values (101, 1, 'range alpha alpha'), (102, 20, 'range beta');
+select id from ft_range where match(body) against('alpha') order by id;
+update ft_range set bucket = 20, body = 'range moved' where id = 101;
+select id from ft_range where match(body) against('alpha') order by id;
+select id from ft_range where match(body) against('moved') order by id;
+
+create table ft_list(id int primary key, bucket int, body text, fulltext fti_list(body))
+partition by list(bucket)(partition l0 values in (1, 3), partition l1 values in (2, 4));
+insert into ft_list values (201, 1, 'list alpha alpha'), (202, 2, 'list beta');
+select id from ft_list where match(body) against('alpha') order by id;
+
+create table ft_key(id int primary key, bucket int, body text, fulltext fti_key(body))
+partition by key(bucket) partitions 2;
+insert into ft_key values (301, 11, 'key alpha'), (302, 12, 'key beta');
+select id from ft_key where match(body) against('alpha') order by id;
+
+create table ft_composite(id int, bucket int, body text, primary key(id, bucket), fulltext fti_composite(body))
+partition by key(bucket) partitions 2;
+insert into ft_composite values (401, 21, 'composite alpha'), (402, 22, 'composite beta');
+select id from ft_composite where match(body) against('alpha') order by id;
+
+create table ft_null(id int primary key, body text, fulltext fti_null(body)) partition by hash(id) partitions 2;
+insert into ft_null values (501, null), (502, ''), (503, 'repeat repeat alpha');
+select id from ft_null where match(body) against('alpha') order by id;
+select id from ft_null where match(body) against('repeat') order by id;
+
+create table ft_compare_part(id int primary key, body text, fulltext fti_compare(body)) partition by hash(id) partitions 2;
+create table ft_compare_plain(id int primary key, body text, fulltext fti_compare(body));
+insert into ft_compare_part values (901, 'shared alpha'), (902, 'shared beta');
+insert into ft_compare_plain values (901, 'shared alpha'), (902, 'shared beta');
+select id from ft_compare_part where match(body) against('alpha') order by id;
+select id from ft_compare_plain where match(body) against('alpha') order by id;
+
+create table ft_txn(id int primary key, body text, fulltext fti_txn(body)) partition by hash(id) partitions 2;
+insert into ft_txn values (1001, 'transaction original');
+begin;
+update ft_txn set body = 'transaction committed' where id = 1001;
+commit;
+select id from ft_txn where match(body) against('committed') order by id;
+begin;
+update ft_txn set body = 'transaction rollback' where id = 1001;
+rollback;
+select id from ft_txn where match(body) against('committed') order by id;
+
+create table ft_create(id int primary key, body text) partition by hash(id) partitions 2;
+insert into ft_create values (601, 'created alpha'), (602, 'created beta');
+create fulltext index fti_created on ft_create(body);
+select id from ft_create where match(body) against('created') order by id;
+
+create table ft_alter(id int primary key, body text) partition by hash(id) partitions 2;
+insert into ft_alter values (701, 'altered alpha'), (702, 'altered beta');
+alter table ft_alter add fulltext index fti_altered(body);
+select id from ft_alter where match(body) against('altered') order by id;
+
+create table ft_prepared(id int primary key, body text, fulltext fti_prepared(body)) partition by hash(id) partitions 2;
+insert into ft_prepared values (801, 'prepared one'), (802, 'prepared two');
+prepare p_update from 'update ft_prepared set body = ? where id = ?';
+set @prepared_body = 'prepared alpha';
+set @prepared_id = 801;
+execute p_update using @prepared_body, @prepared_id;
+set @prepared_body = 'prepared beta';
+set @prepared_id = 802;
+execute p_update using @prepared_body, @prepared_id;
+select id from ft_prepared where match(body) against('alpha') order by id;
+select id from ft_prepared where match(body) against('beta') order by id;
+deallocate prepare p_update;
+
+drop table ft_range;
+drop table ft_list;
+drop table ft_key;
+drop table ft_composite;
+drop table ft_null;
+drop table ft_compare_part;
+drop table ft_compare_plain;
+drop table ft_txn;
+drop table ft_create;
+drop table ft_alter;
+drop table ft_prepared;
+delete from ft_part where id = 5;
+select id from ft_part where match(body) against('epsilon') order by id;
+delete from ft_part;
+select count(*) from ft_part;
+
+drop table ft_multi;
+drop database fulltext_partition_28311;

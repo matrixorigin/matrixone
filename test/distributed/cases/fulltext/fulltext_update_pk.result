@@ -6,16 +6,18 @@ use db25617;
 create table ft (id bigint primary key, body text, tag int, fulltext fti(body));
 insert into ft values (1, 'alpha one', 0), (2, 'beta two', 0);
 update ft set id = 5 where id = 1;
-unsupported DML: update primary key on a table with a synchronous full-text/vector index
 select id from ft order by id;
 id
-1
 2
-update ft set tag = 7 where id = 1;
+5
+select id from ft where match(body) against('alpha') order by id;
+id
+5
+update ft set tag = 7 where id = 5;
 select id, tag from ft order by id;
 id    tag
-1    7
 2    0
+5    7
 create table iv (id bigint primary key, v vecf32(3));
 create index ix using ivfflat on iv(v) lists = 2 op_type 'vector_l2_ops';
 insert into iv values (1, '[1,1,1]'), (2, '[9,9,9]');

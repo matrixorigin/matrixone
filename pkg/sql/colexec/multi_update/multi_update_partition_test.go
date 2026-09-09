@@ -83,6 +83,53 @@ func TestClonePartitionTargetContextsSuppressesPhysicalAffectedRows(t *testing.T
 		"single-target partition updates still count physical inserts")
 }
 
+func TestBuildPartitionUpdateTargetsIndexOnlyContext(t *testing.T) {
+	ctx := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Obj: 901},
+		TableDef: &plan.TableDef{TblId: 902, FeatureFlag: features.IndexTable},
+		PartitionIndexCtx: &plan.PartitionIndexCtx{
+			ParentRef:    &plan.ObjectRef{Obj: 77},
+			ParentTable:  &plan.TableDef{TblId: 77, FeatureFlag: features.Partitioned},
+			PartitionCol: plan.ColRef{ColPos: 3},
+		},
+	}
+	targets := buildPartitionUpdateTargets([]*MultiUpdateCtx{ctx})
+	require.Len(t, targets, 1)
+	require.True(t, targets[0].indexOnly)
+	require.Equal(t, uint64(77), targets[0].tableID)
+	require.Len(t, targets[0].contexts, 1)
+	require.Equal(t, int32(3), targets[0].contexts[0].PartitionIndexCtx.PartitionCol.ColPos)
+	require.NotSame(t, ctx, targets[0].contexts[0])
+}
+
+func TestPartitionMultiUpdateIgnoresIndexOnlyAffectedRows(t *testing.T) {
+	op := &PartitionMultiUpdate{
+		raw:         &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{{IgnoreAffectedRows: true}}},
+		rawContexts: []*MultiUpdateCtx{{IgnoreAffectedRows: true}},
+	}
+	op.doAddAffectedRows(7)
+	require.Zero(t, op.GetAffectedRows())
+
+	op.raw.MultiUpdateCtx = []*MultiUpdateCtx{{}}
+	op.doAddAffectedRows(3)
+	require.EqualValues(t, 3, op.GetAffectedRows())
+}
+
+func TestPartitionRouteOrdinalAcceptsFixedIntegerRoutes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := testutil.NewInt32Vector(3, types.T_int32.ToType(), proc.Mp(), false, nil, []int32{0, 1, -1})
+	defer vec.Free(proc.Mp())
+	for row, want := range []int{0, 1, -1} {
+		got, ok := partitionRouteOrdinal(vec, row)
+		require.True(t, ok)
+		require.Equal(t, want, got)
+	}
+	str := testutil.NewStringVector(1, types.T_varchar.ToType(), proc.Mp(), false, nil, []string{"0"})
+	defer str.Free(proc.Mp())
+	_, ok := partitionRouteOrdinal(str, 0)
+	require.False(t, ok)
+}
+
 func TestClonePartitionContextsConsumeODKUMetadataOnce(t *testing.T) {
 	weightCol, physicalCol := 7, 8
 	contexts := []*MultiUpdateCtx{{
@@ -259,10 +306,12 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	secondaryName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
 		catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	fulltextName := catalog.FullTextIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	op := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{
 		{TableDef: &plan.TableDef{Name: "main_table"}},
 		{TableDef: &plan.TableDef{Name: uniqueName}},
 		{TableDef: &plan.TableDef{Name: secondaryName}},
+		{TableDef: &plan.TableDef{Name: fulltextName, TableType: catalog.FullTextIndex_TblType}},
 	}}
 
 	op.resetMultiUpdateCtxs()
@@ -270,6 +319,8 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[0]).tableType)
 	require.Equal(t, UpdateUniqueIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[1]).tableType)
 	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[2]).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[3]).tableType)
+	require.True(t, isSecondaryIndexTableName(fulltextName))
 }
 
 func TestPartitionMultiUpdateString(t *testing.T) {
