@@ -44,6 +44,16 @@ insert ignore into ck values (1, -1), (2, 2), (3, -3);
 show warnings;
 select * from ck order by id;
 
+-- A constant-false CHECK still runs once per input row.  Folding the
+-- predicate must not collapse three diagnostics into one.
+create table ck_const(
+    id int primary key,
+    constraint ck_never check (1 = 0)
+);
+insert ignore into ck_const values (1), (2), (3);
+show warnings;
+select * from ck_const order by id;
+
 -- UPDATE IGNORE must retain valid rows and report each rejected update.
 update ignore ck set v = -v;
 show warnings;

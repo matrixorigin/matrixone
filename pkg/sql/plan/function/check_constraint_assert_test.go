@@ -125,3 +125,54 @@ func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing
 		require.Equal(t, "Check constraint 'ck_pos' is violated.", warning.msg)
 	}
 }
+
+func TestCheckConstraintAssertIgnoreKeepsConstantRowsAndOwnsMessage(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	mp := proc.Mp()
+
+	flag, err := vector.NewConstFixed(types.T_bool.ToType(), false, 3, mp)
+	require.NoError(t, err)
+	message, err := vector.NewConstBytes(
+		types.T_varchar.ToType(),
+		[]byte("Check constraint 'ck_const' is violated."),
+		3,
+		mp,
+	)
+	require.NoError(t, err)
+	defer flag.Free(mp)
+	defer message.Free(mp)
+
+	fn, err := GetFunctionByName(
+		proc.Ctx,
+		"_check_constraint_assert",
+		[]types.Type{types.T_bool.ToType(), types.T_varchar.ToType()},
+	)
+	require.NoError(t, err)
+	// A constant result is still evaluated once per input row because the
+	// assertion owns a row-level warning side effect.
+	overload, ok := GetFunctionByIdWithoutError(fn.GetEncodedOverloadID())
+	require.True(t, ok)
+	require.True(t, overload.CannotFold())
+	result, err := RunFunctionDirectly(
+		proc,
+		fn.GetEncodedOverloadID(),
+		[]*vector.Vector{flag, message},
+		3,
+	)
+	require.NoError(t, err)
+	defer result.Free(mp)
+
+	// Mutating the input backing bytes after evaluation must not alter retained
+	// diagnostics; warning messages are owned strings, not vector views.
+	message.GetBytesAt(0)[0] = 'X'
+	require.Equal(t, []bool{false, false, false}, vector.MustFixedColWithTypeCheck[bool](result))
+	require.Len(t, session.warnings, 3)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_CHECK_CONSTRAINT_VIOLATED, warning.code)
+		require.Equal(t, "Check constraint 'ck_const' is violated.", warning.msg)
+	}
+}
