@@ -543,6 +543,19 @@ func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
 	}
 }
 
+func TestUnixTimestampPreEpochWholeSecondIsNonNullZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	preEpoch, err := types.ParseTimestamp(time.UTC, "1969-12-31 23:59:00", 6)
+	require.NoError(t, err)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{preEpoch}, []bool{false})},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		builtInUnixTimestamp)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
