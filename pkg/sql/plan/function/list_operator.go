@@ -2233,7 +2233,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorUnaryPlus[int8]
