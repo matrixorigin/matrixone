@@ -41,9 +41,10 @@ type Hooks struct{}
 // DMLMaintenanceNoOpColumns declares when an old fulltext posting set is
 // provably identical to the final one. FULLTEXT input includes the row
 // identity/doc_id as well as the indexed values. VARCHAR and TEXT preserve the
-// bytes that determine tokenization. CHAR, JSON, and DATALINK stay conservative
-// because SQL NULL-safe equality is not a proof of identical tokenizer input for
-// them.
+// bytes that determine tokenization; the planner compares those columns as
+// stored bytes rather than with their SQL collation. CHAR, JSON, and DATALINK
+// stay conservative because their SQL NULL-safe equality is not a proof of
+// identical tokenizer input.
 func (Hooks) DMLMaintenanceNoOpColumns(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,

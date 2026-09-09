@@ -293,6 +293,44 @@ func irregularIndexGroupKey(indexdef *plan.IndexDef) string {
 	return strings.ToLower(indexdef.IndexAlgo + "\x00" + indexdef.IndexTableName)
 }
 
+// bindStoredValueEquality compares the old and final row images using the
+// identity that the irregular-index leaf builder observes. SQL <=> applies the
+// expression collation, so it can incorrectly treat case-only or trailing-space
+// changes as equal even though a tokenizer receives different bytes. Convert
+// the hook-supported text families to an unbounded binary family before
+// binding <=>; binary and non-string inputs retain their existing typed
+// comparison. The hook is responsible for rejecting types whose stored
+// representation cannot be proven this way.
+func bindStoredValueEquality(ctx context.Context, oldCol, newCol *plan.Expr) (*plan.Expr, error) {
+	if oldCol == nil || newCol == nil {
+		return nil, moerr.NewInternalErrorNoCtx("irregular index stored-value comparison received nil expression")
+	}
+
+	oldType := types.T(oldCol.Typ.Id)
+	newType := types.T(newCol.Typ.Id)
+	if oldType == types.T_varchar || oldType == types.T_text ||
+		newType == types.T_varchar || newType == types.T_text {
+		// VARCHAR values are bounded by the string byte limit, while TEXT may
+		// be unbounded in the plan. Use the corresponding binary family with
+		// its native maximum width so the comparison cast does not truncate or
+		// trim the stored payload (in particular, trailing spaces).
+		binaryType := types.T_varbinary.ToType()
+		if oldType == types.T_text || newType == types.T_text {
+			binaryType = types.T_blob.ToType()
+		}
+		var err error
+		oldCol, err = appendComparisonCastBeforeExpr(ctx, oldCol, makePlan2Type(&binaryType))
+		if err != nil {
+			return nil, err
+		}
+		newCol, err = appendComparisonCastBeforeExpr(ctx, newCol, makePlan2Type(&binaryType))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "<=>", []*plan.Expr{oldCol, newCol})
+}
+
 type irregularIndexValueChangeFilter struct {
 	groupKey string
 	columns  []string
@@ -3804,8 +3842,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						ColPos: newColPos,
 					}},
 				}
-				equal, bindErr := BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "<=>", []*plan.Expr{oldCol, newCol})
+				equal, bindErr := bindStoredValueEquality(
+					builder.GetContext(), oldCol, newCol)
 				if bindErr != nil {
 					return 0, bindErr
 				}
