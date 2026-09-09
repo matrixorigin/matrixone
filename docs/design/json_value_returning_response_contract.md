@@ -33,11 +33,13 @@ use strict conversion. A conversion that exceeds the target or loses data is an
 The parser creates a dedicated JSON_VALUE expression carrying the document,
 path, target type, and both response policies. Its formatter preserves an omitted
 target so reparsing retains `VARCHAR(512)` rather than an explicit `CHAR(512)`,
-and preserves explicit policies. The
-binder lowers it to an internal seven-argument JSON_VALUE overload. The target
-type is carried by the existing plan `Expr_T`; response modes are integer
-constants and validated defaults are typed constants. The internal overload is
-not reachable through the public grammar, and no protobuf change is required.
+and preserves explicit policies. The binder keeps an expression with no
+`RETURNING`, `ON EMPTY`, or `ON ERROR` clause on the existing two-argument
+JSON_VALUE overload. When any new clause is present, it lowers the expression
+to an internal seven-argument JSON_VALUE overload. The target type is carried
+by the existing plan `Expr_T`; response modes are integer constants and
+validated defaults are typed constants. The internal overload is not reachable
+through the public grammar, and no protobuf change is required.
 
 The executor performs extraction first and applies the selected policy per row.
 It does not use a limiting ordinary cast for a document or prepared value. The
@@ -46,11 +48,37 @@ on generic strict-function NULL short-circuiting.
 
 ## Compatibility and rollout
 
-Existing two-argument calls remain valid and now receive the MySQL default type
-and collation. Existing persisted generated values are not automatically
-recomputed. Upgrade validation covers views, generated columns, indexes, values
-over the 512-character boundary, and the explicit rebuild procedure. New syntax
-cannot be downgraded to a server that does not parse these clauses.
+Existing two-argument calls remain valid on the legacy two-argument plan and
+receive the MySQL default type and collation. Existing persisted generated
+values are not automatically recomputed. Upgrade validation covers views,
+generated columns, indexes, values over the 512-character boundary, and the
+explicit rebuild procedure.
+
+### Versioned compatibility decision (revision 2, 2026-09-09)
+
+The seven-argument representation is a new wire and persisted-plan contract.
+MORPC version 58 is the first version that may carry JSON_VALUE function ID 462
+with overload index 2. The planner admits `RETURNING`, `ON EMPTY`, and `ON
+ERROR` only when the deployment-wide `MOProtocolVersion` is at least 58; below
+that threshold it returns a not-supported error before publishing the plan.
+An ordinary two-argument call remains the legacy overload and is still allowed
+at version 57.
+
+Both remote pipeline boundaries enforce the same contract. The sender and
+receiver expression validators identify overload 2 and reject it when the
+local deployment gate is below version 58 or unavailable. This prevents a new
+sender from sending the plan to an old CN and prevents a current receiver from
+executing a plan after a rollback lowered the gate. The function-ID lookup also
+rejects an out-of-range overload instead of indexing the overload slice.
+
+Creating a view, generated column, index expression, or persisted prepared plan
+that contains overload 2 is therefore a version-58-only operation. Upgrade all
+CNs and raise the oldest-live protocol gate to 58 before enabling the syntax.
+Do not lower the gate or roll back to a pre-58 binary while such a plan remains
+persisted; rebuild or remove that metadata first. A legacy two-argument plan
+does not carry this prerequisite and remains readable by older CNs. The
+regression matrix covers sender/receiver rejection below 58, acceptance at 58,
+planner admission at both thresholds, and the legacy two-argument control.
 
 ## Required evidence
 

@@ -486,6 +486,22 @@ func TestGetFunctionByNameWithoutError(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestFunctionLookupRejectsUnknownOverload(t *testing.T) {
+	for _, overloadID := range []int32{-1, 3} {
+		t.Run(fmt.Sprintf("overload_%d", overloadID), func(t *testing.T) {
+			encoded := encodeOverloadID(JSON_VALUE, overloadID)
+			require.NotPanics(t, func() {
+				_, err := GetFunctionById(context.Background(), encoded)
+				require.Error(t, err)
+				_, ok := GetFunctionByIdWithoutError(encoded)
+				require.False(t, ok)
+				_, err = GetFunctionIsZonemappableById(context.Background(), encoded)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
 func TestMakeTimeReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

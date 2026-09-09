@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2958,11 +2959,48 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+func jsonValueUsesContract(spec *tree.JsonValueSpec) bool {
+	return spec != nil && (spec.Returning != nil || spec.OnEmpty.IsExplicit() || spec.OnError.IsExplicit())
+}
+
+func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 58",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion58 {
+		return moerr.NewNotSupported(
+			ctx,
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 58",
+		)
+	}
+	return nil
+}
+
 func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
 	if len(astExpr.Exprs) != 2 {
 		return nil, moerr.NewInvalidArg(b.GetContext(), "json_value requires document and path", len(astExpr.Exprs))
 	}
 	spec := astExpr.JsonValue
+	if !jsonValueUsesContract(spec) {
+		args := make([]*Expr, len(astExpr.Exprs))
+		for i, arg := range astExpr.Exprs {
+			bound, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = bound
+		}
+		return bindFuncExprImplByPlanExpr(b.GetContext(), "json_value", args, false, nil, false)
+	}
 	target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 	if spec.Returning != nil {
 		if spec.Returning.Type == nil {
@@ -3053,6 +3091,11 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 			args = append(args, defaultExpr)
 		} else {
 			args = append(args, &Expr{Expr: &plan.Expr_Lit{Lit: &Const{Isnull: true}}, Typ: targetPlan})
+		}
+	}
+	if b.builder != nil {
+		if err := requireJSONValueContractProtocol(b.GetContext(), b.builder.compCtx.GetProcess()); err != nil {
+			return nil, err
 		}
 	}
 	argsType := make([]types.Type, len(args))

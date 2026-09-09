@@ -171,11 +171,21 @@ func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
 	return features.MixedJSONBooleanEquality, err
 }
 
+// RequiresMORPCVersion58JSONValueContract reports whether an owner contains
+// the planner-only seven-argument JSON_VALUE overload. The overload carries
+// target and response semantics that older receivers cannot dispatch.
+func RequiresMORPCVersion58JSONValueContract(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONValueContract, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	jsonValueFunctionID              int32 = 462
+	jsonValueContractOverloadID      int32 = 2
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 )
@@ -183,18 +193,21 @@ const (
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
-// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
-// call sites name every capability instead of relying on positional booleans.
+// MixedJSONBooleanEquality require MORPC v36. JSONValueContract requires
+// MORPC v58. A struct makes compatibility call sites name every capability
+// instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
+	JSONValueContract        bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
-		features.MixedJSONBooleanEquality
+		features.MixedJSONBooleanEquality ||
+		features.JSONValueContract
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -212,6 +225,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
+			}
+			if !features.JSONValueContract && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == jsonValueFunctionID &&
+				int32(fn.Func.Obj) == jsonValueContractOverloadID {
+				features.JSONValueContract = true
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
