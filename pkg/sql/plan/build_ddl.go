@@ -3824,7 +3824,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	if createTable.TableDef.Pkey != nil {
 		pkeyName = createTable.TableDef.Pkey.PkeyColName
 		if pkeyName == catalog.CPrimaryKeyColName {
-			if col, ok := slicesxFindCol(createTable.TableDef.Cols, pkeyName); ok {
+			if col := createTable.TableDef.Pkey.CompPkeyCol; col != nil {
+				// The hidden component is appended to TableDef.Cols by the
+				// existing PRE_INSERT owner.  DDL index construction still
+				// needs it in the local lookup map to type the source locator.
+				colMap[pkeyName] = col
+			} else if col, ok := slicesxFindCol(createTable.TableDef.Cols, pkeyName); ok {
 				colMap[pkeyName] = col
 			}
 		}
