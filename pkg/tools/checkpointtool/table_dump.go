@@ -246,14 +246,15 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	name       string
-	indexType  string
-	algo       string
-	algoParams string
-	comment    string
-	columns    map[string]indexDDLColumn
-	order      int
-	catalogID  uint64
+	name                 string
+	indexType            string
+	algo                 string
+	algoParams           string
+	comment              string
+	columns              map[string]indexDDLColumn
+	functionalExpression string
+	order                int
+	catalogID            uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -1173,6 +1174,54 @@ func buildTableSchemasForIDs(
 	return schemas
 }
 
+// functionalGeneratedExpressionsFromMoColumns decodes the origin text for
+// hidden functional-index columns. A hidden reserved-name column without a
+// complete generated payload is unrecoverable: silently emitting a DDL that
+// drops the expression would change the restored schema, so callers fail
+// closed instead.
+func functionalGeneratedExpressionsFromMoColumns(view *LogicalTableView, tableID uint64) (map[string]string, error) {
+	result := make(map[string]string)
+	if view == nil {
+		return result, nil
+	}
+	relIDCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	nameCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
+	hasGeneratedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasGenerated)
+	generatedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	if relIDCol < 0 || nameCol < 0 || hiddenCol < 0 || hasGeneratedCol < 0 || generatedCol < 0 {
+		return result, nil
+	}
+	tableIDStr := strconv.FormatUint(tableID, 10)
+	for _, fullRow := range view.Rows {
+		dataOffset := logicalViewDataOffset(view)
+		if len(fullRow) < dataOffset {
+			continue
+		}
+		row := fullRow[dataOffset:]
+		if relIDCol >= len(row) || nameCol >= len(row) || hiddenCol >= len(row) || row[relIDCol] != tableIDStr || !isTruthyCatalogValue(row[hiddenCol]) {
+			continue
+		}
+		name := strings.TrimSpace(row[nameCol])
+		if !catalog.IsFunctionalIndexColumnName(name) {
+			continue
+		}
+		if hasGeneratedCol >= len(row) || generatedCol >= len(row) || !isTruthyCatalogValue(row[hasGeneratedCol]) {
+			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has no generated metadata", name)
+		}
+		expr, stored := decodeMoColumnGenerated(row[generatedCol])
+		if stored || strings.TrimSpace(expr) == "" {
+			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has corrupt generated metadata", name)
+		}
+		expr = strings.TrimSpace(expr)
+		if previous, exists := result[name]; exists && previous != expr {
+			return nil, moerr.NewInternalErrorf(context.Background(), "hidden functional-index column %q has inconsistent generated metadata", name)
+		}
+		result[name] = expr
+	}
+	return result, nil
+}
+
 func groupCatalogRowsByUintColumn(view *LogicalTableView, columnName string) map[uint64][][]string {
 	result := make(map[uint64][][]string)
 	if view == nil {
@@ -1418,6 +1467,14 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	partitionToPrimary := make(map[uint64]uint64)
 	partitionIDsByPrimary := make(map[uint64][]uint64)
 	schemasByID := buildTableSchemasForIDs(tableIDs, moTablesView, moColumnsView)
+	functionalGeneratedByTable := make(map[uint64]map[string]string, len(tableIDs))
+	for _, tableID := range tableIDs {
+		generated, genErr := functionalGeneratedExpressionsFromMoColumns(moColumnsView, tableID)
+		if genErr != nil {
+			return nil, genErr
+		}
+		functionalGeneratedByTable[tableID] = generated
+	}
 	for _, tableID := range tableIDs {
 		if _, ok := tableSet[tableID]; ok {
 			continue
@@ -1482,8 +1539,9 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 		for primaryID := range primaries {
 			data := result[primaryID]
 			tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[primaryID])
-			data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(
+			data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexesWithGenerated(
 				tableIndexesView, primaryID, data.Schema.TableName,
+				functionalGeneratedByTable[primaryID],
 			)
 			if err != nil {
 				return nil, err
@@ -4193,7 +4251,15 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 	if err != nil {
 		return nil, err
 	}
-	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "read mo_columns for index restore: %v", err)
+	}
+	generated, err := functionalGeneratedExpressionsFromMoColumns(moColumnsView, tableID)
+	if err != nil {
+		return nil, err
+	}
+	return buildCreateIndexStatementsFromMoIndexesWithGenerated(view, tableID, tableName, generated)
 }
 
 func (r *CheckpointReader) getPartitionMetadataView(
@@ -4404,6 +4470,15 @@ func buildCreateIndexStatementsFromMoIndexes(
 	tableID uint64,
 	tableName string,
 ) ([]string, error) {
+	return buildCreateIndexStatementsFromMoIndexesWithGenerated(view, tableID, tableName, nil)
+}
+
+func buildCreateIndexStatementsFromMoIndexesWithGenerated(
+	view *LogicalTableView,
+	tableID uint64,
+	tableName string,
+	generated map[string]string,
+) ([]string, error) {
 	if view == nil {
 		return nil, nil
 	}
@@ -4433,6 +4508,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 	tableIDStr := strconv.FormatUint(tableID, 10)
 	matchedRows := 0
 	hiddenRows := 0
+	usedGenerated := make(map[string]bool)
 	dataOffset := logicalViewDataOffset(view)
 	for _, row := range view.Rows {
 		if len(row) < dataOffset {
@@ -4451,7 +4527,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 		}
 		name := dataRow[nameCol]
 		colName := dataRow[columnNameCol]
-		if name == "" || strings.EqualFold(name, "PRIMARY") || colName == "" || catalog.IsAlias(colName) {
+		if name == "" || strings.EqualFold(name, "PRIMARY") {
 			continue
 		}
 		info := byName[name]
@@ -4474,6 +4550,39 @@ func buildCreateIndexStatementsFromMoIndexes(
 		if commentCol >= 0 && commentCol < len(dataRow) && info.comment == "" {
 			info.comment = dataRow[commentCol]
 		}
+		isReservedFunctional := catalog.IsFunctionalIndexColumnName(colName)
+		if isReservedFunctional && (hiddenCol < 0 || hiddenCol >= len(dataRow) || !isTruthyCatalogValue(dataRow[hiddenCol])) {
+			return nil, moerr.NewInternalErrorf(context.Background(),
+				"functional index %q references reserved column %q without hidden metadata",
+				name, colName)
+		}
+		isHiddenFunctional := isReservedFunctional
+		if isHiddenFunctional {
+			if len(info.columns) > 0 || info.functionalExpression != "" {
+				return nil, moerr.NewInternalErrorf(context.Background(),
+					"functional index %q has mixed or repeated hidden key parts", name)
+			}
+			expression := strings.TrimSpace(generated[colName])
+			if expression == "" {
+				return nil, moerr.NewInternalErrorf(context.Background(),
+					"functional index %q references hidden column %q with missing generated metadata",
+					name, colName)
+			}
+			if info.functionalExpression != "" && info.functionalExpression != expression {
+				return nil, moerr.NewInternalErrorf(context.Background(),
+					"functional index %q has inconsistent generated metadata", name)
+			}
+			info.functionalExpression = expression
+			usedGenerated[colName] = true
+			continue
+		}
+		if colName == "" || catalog.IsAlias(colName) {
+			continue
+		}
+		if info.functionalExpression != "" {
+			return nil, moerr.NewInternalErrorf(context.Background(),
+				"functional index %q has mixed functional and ordinary key parts", name)
+		}
 		ordinal := len(info.columns) + 1
 		if ordinalCol >= 0 && ordinalCol < len(dataRow) {
 			if parsed, err := strconv.Atoi(dataRow[ordinalCol]); err == nil {
@@ -4484,10 +4593,16 @@ func buildCreateIndexStatementsFromMoIndexes(
 			info.columns[colName] = indexDDLColumn{name: colName, ordinal: ordinal}
 		}
 	}
+	for name := range generated {
+		if !usedGenerated[name] {
+			return nil, moerr.NewInternalErrorf(context.Background(),
+				"hidden functional-index column %q has no matching index metadata", name)
+		}
+	}
 
 	names := make([]string, 0, len(byName))
 	for name, info := range byName {
-		if len(info.columns) > 0 {
+		if len(info.columns) > 0 || info.functionalExpression != "" {
 			names = append(names, name)
 		}
 	}
@@ -4843,7 +4958,7 @@ func needsExplicitPartitionDefinitions(method string) bool {
 }
 
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
-	if info == nil || tableName == "" || len(info.columns) == 0 {
+	if info == nil || tableName == "" || (len(info.columns) == 0 && info.functionalExpression == "") {
 		return "", nil
 	}
 	cols := make([]indexDDLColumn, 0, len(info.columns))
@@ -4884,14 +4999,20 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	if !fullText {
 		appendIndexAlgorithmDDL(&sb, info.algo)
 	}
-	sb.WriteString("(")
-	for i, col := range cols {
-		if i > 0 {
-			sb.WriteString(", ")
+	if info.functionalExpression != "" {
+		sb.WriteString("((")
+		sb.WriteString(info.functionalExpression)
+		sb.WriteString("))")
+	} else {
+		sb.WriteString("(")
+		for i, col := range cols {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(quoteDDLIdent(col.name))
 		}
-		sb.WriteString(quoteDDLIdent(col.name))
+		sb.WriteString(")")
 	}
-	sb.WriteString(")")
 	if err := appendIndexTrailingOptionsDDL(&sb, fullText, info.algoParams, info.comment); err != nil {
 		return "", err
 	}

@@ -1776,6 +1776,16 @@ type KeyPart struct {
 }
 
 func (node *KeyPart) Format(ctx *FmtCtx) {
+	if node.Expr != nil {
+		ctx.WriteByte('(')
+		node.Expr.Format(ctx)
+		ctx.WriteByte(')')
+		if node.Direction != DefaultDirection {
+			ctx.WriteByte(' ')
+			ctx.WriteString(node.Direction.String())
+		}
+		return
+	}
 	if node.ColName != nil {
 		node.ColName.Format(ctx)
 	}
@@ -1792,15 +1802,6 @@ func (node *KeyPart) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Direction.String())
 		return
-	}
-	if node.Expr != nil {
-		ctx.WriteByte('(')
-		node.Expr.Format(ctx)
-		ctx.WriteByte(')')
-		if node.Direction != DefaultDirection {
-			ctx.WriteByte(' ')
-			ctx.WriteString(node.Direction.String())
-		}
 	}
 }
 
