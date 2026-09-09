@@ -152,6 +152,12 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	}}
 	proc.SetLastInsertID(11)
 	proc.SetStatementLastInsertID(5)
+	proc.MarkStatementLastInsertIDGenerated()
+	require.True(t, proc.HasStatementLastInsertIDGenerated())
+	proc.ResetStatementLastInsertID()
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
+	require.Zero(t, proc.GetStatementLastInsertID())
+	proc.SetStatementLastInsertID(5)
 	require.Equal(t, uint64(11), proc.GetLastInsertID())
 	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
 	empty := &Process{Base: &BaseProcess{}}

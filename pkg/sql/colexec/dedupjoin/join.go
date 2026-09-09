@@ -208,6 +208,21 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 			return err
 		}
 	}
+	if dedupJoin.AutoIncrementGeneratedResultPos >= 0 {
+		if err := validateMetadataPosition(
+			dedupJoin.AutoIncrementGeneratedResultPos, types.T_bool, "auto-increment generated"); err != nil {
+			return err
+		}
+	}
+	if dedupJoin.AutoIncrementGeneratedValueResultPos >= 0 {
+		if dedupJoin.AutoIncrementGeneratedResultPos < 0 {
+			return moerr.NewInternalError(proc.Ctx, "dedup join auto-increment value has no provenance marker")
+		}
+		if dedupJoin.AutoIncrementGeneratedValueResultPos < 0 ||
+			int(dedupJoin.AutoIncrementGeneratedValueResultPos) >= len(dedupJoin.Result) {
+			return moerr.NewInternalError(proc.Ctx, "dedup join auto-increment value result column out of range")
+		}
+	}
 	for i, check := range dedupJoin.ForeignKeyChecks {
 		if err := validateMetadataPosition(
 			check.EligibilityResultPos, types.T_bool, fmt.Sprintf("constraint eligibility %d", i)); err != nil {
@@ -575,6 +590,8 @@ func (ctr *container) appendBuildSelectionRow(
 	proc *process.Process,
 ) error {
 	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+	generated := false
+	var generatedValue uint64
 	for j, rp := range ap.Result {
 		if rp.Rel == 1 {
 			if err := dst.Vecs[j].UnionOne(
@@ -584,9 +601,50 @@ func (ctr *container) appendBuildSelectionRow(
 		} else if err := dst.Vecs[j].UnionNull(proc.Mp()); err != nil {
 			return err
 		}
+		if int32(j) == ap.AutoIncrementGeneratedResultPos && rp.Rel == 1 {
+			generated = !ctr.batches[idx1].Vecs[rp.Pos].IsNull(uint64(idx2)) &&
+				vector.MustFixedColNoTypeCheck[bool](ctr.batches[idx1].Vecs[rp.Pos])[idx2]
+		}
+		if int32(j) == ap.AutoIncrementGeneratedValueResultPos && rp.Rel == 1 &&
+			!ctr.batches[idx1].Vecs[rp.Pos].IsNull(uint64(idx2)) {
+			generatedValue = autoIncrementGeneratedValue(ctr.batches[idx1].Vecs[rp.Pos], int(idx2))
+		}
 	}
 	dst.AddRowCount(1)
+	if generated {
+		// This callback is reached only for an unmatched build group, after
+		// duplicate-key arbitration. A matched ODKU action uses probe/finalize
+		// action rows and cannot publish the PRE_INSERT candidate.
+		if ap.AutoIncrementGeneratedValueResultPos >= 0 {
+			proc.MarkStatementLastInsertIDGeneratedWithValue(generatedValue)
+		} else {
+			proc.MarkStatementLastInsertIDGenerated()
+		}
+	}
 	return nil
+}
+
+func autoIncrementGeneratedValue(vec *vector.Vector, row int) uint64 {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return uint64(vector.GetFixedAtNoTypeCheck[int8](vec, row))
+	case types.T_int16:
+		return uint64(vector.GetFixedAtNoTypeCheck[int16](vec, row))
+	case types.T_int32:
+		return uint64(vector.GetFixedAtNoTypeCheck[int32](vec, row))
+	case types.T_int64:
+		return uint64(vector.GetFixedAtNoTypeCheck[int64](vec, row))
+	case types.T_uint8:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row))
+	case types.T_uint16:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, row))
+	case types.T_uint32:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, row))
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, row)
+	default:
+		return 0
+	}
 }
 
 // finalizeODKUActionRows emits at most one bounded batch. finalizeGroup and

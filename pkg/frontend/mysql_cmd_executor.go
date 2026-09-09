@@ -5821,7 +5821,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// COM_QUERY.  The generated-key field belongs to this statement's OK
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
-		proc.SetStatementLastInsertID(0)
+		proc.ResetStatementLastInsertID()
 		proc.ResetLastInsertIDExpr()
 		// SET statements in the same COM_QUERY execute after the wrappers were
 		// planned.  Refresh the runtime snapshot immediately before each

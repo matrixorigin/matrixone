@@ -9235,10 +9235,16 @@ func LastInsertIDExpr(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[uint64](result)
 	if input.GetType().Oid == types.T_any {
 		if input.IsConstNull() {
+			selected := false
 			for i := 0; i < length; i++ {
 				rs.AppendMustNull()
+				if selectList == nil || !selectList.Contains(uint64(i)) {
+					selected = true
+				}
 			}
-			proc.SetLastInsertIDExprNull()
+			if selected {
+				proc.SetLastInsertIDExprNull()
+			}
 			return nil
 		}
 		return lastInsertIDExprPrepared(input, rs, proc, length, selectList)
@@ -9318,7 +9324,7 @@ func lastInsertIDExprPrepared(input *vector.Vector, rs *vector.FunctionResult[ui
 		case vector.PrepareParamDecimal:
 			value, err = parseLastInsertIDPreparedDecimal(proc, raw)
 		case vector.PrepareParamNone:
-			value, err = ParsePreparedStringToUint64(string(raw))
+			value, err = lastInsertIDStringValue(proc, raw, p.GetSourceVector().GetIsBin())
 		default:
 			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", input.GetPrepareParamKindAt(i))
 		}
@@ -9506,7 +9512,7 @@ func lastInsertIDExprString(input *vector.Vector, rs *vector.FunctionResult[uint
 			valid, isNull = true, true
 			continue
 		}
-		converted, err := ParsePreparedStringToUint64(string(raw))
+		converted, err := lastInsertIDStringValue(proc, raw, p.GetSourceVector().GetIsBin())
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
 		}
@@ -9516,6 +9522,24 @@ func lastInsertIDExprString(input *vector.Vector, rs *vector.FunctionResult[uint
 	}
 	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
 	return nil
+}
+
+// lastInsertIDStringValue reuses the CAST AS UNSIGNED parser and warning
+// collector. LAST_INSERT_ID(expr) therefore has the same value and
+// TRUNCATED_WRONG_VALUE behavior for prefixes such as "12x" and overflow as
+// the existing string cast path; binary literals retain byte-to-hex parsing.
+func lastInsertIDStringValue(proc *process.Process, raw []byte, isBinary bool) (uint64, error) {
+	if isBinary {
+		encoded := hex.EncodeToString(raw)
+		return strconv.ParseUint(encoded, 16, 64)
+	}
+	text := strings.TrimSpace(convertByteSliceToString(raw))
+	value, prefix, hasPrefix, outOfRange, err := parseUnsignedNumericPrefixCastString(text, 64)
+	if err != nil {
+		return 0, err
+	}
+	appendIntegerNumericCoercionWarning(proc, text, prefix, hasPrefix, outOfRange)
+	return value, nil
 }
 
 func lastInsertIDDecimalString(text string) (uint64, error) {

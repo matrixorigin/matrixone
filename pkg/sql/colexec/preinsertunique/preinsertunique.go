@@ -567,6 +567,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		// update the shared statement coordinator once rather than once per row.
 		if firstGenerated != 0 {
 			proc.SetStatementLastInsertIDIfEarlier(firstGenerated)
+			proc.MarkStatementLastInsertIDGenerated()
 		}
 	} else if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
 		return vm.CancelResult, err

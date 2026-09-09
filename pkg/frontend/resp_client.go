@@ -165,14 +165,7 @@ func statementHasGeneratedLastInsertID(execCtx *ExecCtx) bool {
 	if execCtx == nil || execCtx.proc == nil {
 		return false
 	}
-	switch execCtx.stmt.(type) {
-	case *tree.Insert, *tree.Replace:
-		return execCtx.proc.GetStatementLastInsertID() != 0
-	case *tree.MultiInsert:
-		return multiInsertHasUniqueAutoIncrTarget(execCtx) && execCtx.proc.GetStatementLastInsertID() != 0
-	default:
-		return false
-	}
+	return execCtx.proc.HasStatementLastInsertIDGenerated()
 }
 
 // response the client

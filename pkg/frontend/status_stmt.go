@@ -415,7 +415,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
+			if execCtx.proc.HasStatementLastInsertIDGenerated() {
 				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
 			}
@@ -425,7 +425,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			// value explicitly.  In particular, a delete-then-insert replacement
 			// must make the inserted row's id visible to LAST_INSERT_ID().
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
+			if execCtx.proc.HasStatementLastInsertIDGenerated() {
 				generatedPublished = true
 				ses.SetLastInsertID(res.lastInsertId)
 			}
@@ -440,12 +440,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			// rather than with the statement. Report an insert id only when a
 			// single target can generate one; otherwise the statement is
 			// ambiguous and reports none.
-			if multiInsertHasUniqueAutoIncrTarget(execCtx) {
+			if multiInsertHasUniqueAutoIncrTarget(execCtx) && execCtx.proc.HasStatementLastInsertIDGenerated() {
 				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-				if res.lastInsertId != 0 {
-					generatedPublished = true
-					ses.SetLastInsertID(res.lastInsertId)
-				}
+				generatedPublished = true
+				ses.SetLastInsertID(res.lastInsertId)
 			} else {
 				// Declining to report the ambiguous value is not enough. The
 				// targets' PRE_INSERTs published through

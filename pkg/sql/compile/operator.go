@@ -1618,6 +1618,12 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		if arg.EmitActionRows {
 			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
 		}
+		if node.DedupJoinCtx.AutoIncrementGeneratedCol != nil {
+			arg.AutoIncrementGeneratedResultPos = findJoinResultPos(result, node.DedupJoinCtx.AutoIncrementGeneratedCol)
+		}
+		if node.DedupJoinCtx.AutoIncrementGeneratedValueCol != nil {
+			arg.AutoIncrementGeneratedValueResultPos = findJoinResultPos(result, node.DedupJoinCtx.AutoIncrementGeneratedValueCol)
+		}
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
 		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{

@@ -6362,12 +6362,14 @@ type DedupJoinCtx struct {
 	// emit_action_rows keeps every ordered ODKU action visible until immediate
 	// CHECK/FK validation has completed.  action_final_col marks the one row per
 	// conflict group that may continue to unique-index and physical-write paths.
-	EmitActionRows       bool                  `protobuf:"varint,10,opt,name=emit_action_rows,json=emitActionRows,proto3" json:"emit_action_rows,omitempty"`
-	ActionFinalCol       *ColRef               `protobuf:"bytes,11,opt,name=action_final_col,json=actionFinalCol,proto3" json:"action_final_col,omitempty"`
-	ForeignKeyChecks     []ODKUForeignKeyCheck `protobuf:"bytes,12,rep,name=foreign_key_checks,json=foreignKeyChecks,proto3" json:"foreign_key_checks"`
-	XXX_NoUnkeyedLiteral struct{}              `json:"-"`
-	XXX_unrecognized     []byte                `json:"-"`
-	XXX_sizecache        int32                 `json:"-"`
+	EmitActionRows                 bool                  `protobuf:"varint,10,opt,name=emit_action_rows,json=emitActionRows,proto3" json:"emit_action_rows,omitempty"`
+	ActionFinalCol                 *ColRef               `protobuf:"bytes,11,opt,name=action_final_col,json=actionFinalCol,proto3" json:"action_final_col,omitempty"`
+	ForeignKeyChecks               []ODKUForeignKeyCheck `protobuf:"bytes,12,rep,name=foreign_key_checks,json=foreignKeyChecks,proto3" json:"foreign_key_checks"`
+	AutoIncrementGeneratedCol      *ColRef               `protobuf:"bytes,13,opt,name=auto_increment_generated_col,json=autoIncrementGeneratedCol,proto3" json:"auto_increment_generated_col,omitempty"`
+	AutoIncrementGeneratedValueCol *ColRef               `protobuf:"bytes,14,opt,name=auto_increment_generated_value_col,json=autoIncrementGeneratedValueCol,proto3" json:"auto_increment_generated_value_col,omitempty"`
+	XXX_NoUnkeyedLiteral           struct{}              `json:"-"`
+	XXX_unrecognized               []byte                `json:"-"`
+	XXX_sizecache                  int32                 `json:"-"`
 }
 
 func (m *DedupJoinCtx) Reset()         { *m = DedupJoinCtx{} }
@@ -6483,6 +6485,20 @@ func (m *DedupJoinCtx) GetActionFinalCol() *ColRef {
 func (m *DedupJoinCtx) GetForeignKeyChecks() []ODKUForeignKeyCheck {
 	if m != nil {
 		return m.ForeignKeyChecks
+	}
+	return nil
+}
+
+func (m *DedupJoinCtx) GetAutoIncrementGeneratedCol() *ColRef {
+	if m != nil {
+		return m.AutoIncrementGeneratedCol
+	}
+	return nil
+}
+
+func (m *DedupJoinCtx) GetAutoIncrementGeneratedValueCol() *ColRef {
+	if m != nil {
+		return m.AutoIncrementGeneratedValueCol
 	}
 	return nil
 }
@@ -21765,6 +21781,30 @@ func (m *DedupJoinCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.AutoIncrementGeneratedValueCol != nil {
+		{
+			size, err := m.AutoIncrementGeneratedValueCol.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x72
+	}
+	if m.AutoIncrementGeneratedCol != nil {
+		{
+			size, err := m.AutoIncrementGeneratedCol.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x6a
+	}
 	if len(m.ForeignKeyChecks) > 0 {
 		for iNdEx := len(m.ForeignKeyChecks) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -33405,6 +33445,14 @@ func (m *DedupJoinCtx) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 1 + l + sovPlan(uint64(l))
 		}
+	}
+	if m.AutoIncrementGeneratedCol != nil {
+		l = m.AutoIncrementGeneratedCol.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.AutoIncrementGeneratedValueCol != nil {
+		l = m.AutoIncrementGeneratedValueCol.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -48695,6 +48743,78 @@ func (m *DedupJoinCtx) Unmarshal(dAtA []byte) error {
 			}
 			m.ForeignKeyChecks = append(m.ForeignKeyChecks, ODKUForeignKeyCheck{})
 			if err := m.ForeignKeyChecks[len(m.ForeignKeyChecks)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AutoIncrementGeneratedCol", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AutoIncrementGeneratedCol == nil {
+				m.AutoIncrementGeneratedCol = &ColRef{}
+			}
+			if err := m.AutoIncrementGeneratedCol.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 14:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AutoIncrementGeneratedValueCol", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AutoIncrementGeneratedValueCol == nil {
+				m.AutoIncrementGeneratedValueCol = &ColRef{}
+			}
+			if err := m.AutoIncrementGeneratedValueCol.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

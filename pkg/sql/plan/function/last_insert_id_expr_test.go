@@ -99,6 +99,44 @@ func TestLastInsertIDExprNullAndMaxUint64(t *testing.T) {
 	maxInput.Free(proc.Mp())
 }
 
+func TestLastInsertIDExprConstNullHonorsSelectedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	input := vector.NewConstNull(types.T_any.ToType(), 3, proc.Mp())
+	defer input.Free(proc.Mp())
+	run := func(length int, selectList *FunctionSelectList) *vector.Vector {
+		result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(length))
+		require.NoError(t, LastInsertIDExpr([]*vector.Vector{input}, result, proc, length, selectList))
+		return result.GetResultVector()
+	}
+
+	proc.ResetLastInsertIDExpr()
+	proc.SetLastInsertIDExpr(77)
+	run(0, nil)
+	_, valid, _ := proc.GetLastInsertIDExprState()
+	require.True(t, valid, "zero-length evaluation must not replace an existing generation")
+	value, _, _ := proc.GetLastInsertIDExprState()
+	require.Equal(t, uint64(77), value)
+
+	proc.ResetLastInsertIDExpr()
+	out := run(3, &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false, false}})
+	require.True(t, out.IsNull(0))
+	_, valid, _ = proc.GetLastInsertIDExprState()
+	require.False(t, valid, "an all-masked const NULL must not publish")
+	out.Free(proc.Mp())
+
+	proc.ResetLastInsertIDExpr()
+	out = run(3, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}})
+	require.True(t, out.IsNull(0))
+	require.True(t, out.IsNull(1))
+	require.True(t, out.IsNull(2))
+	_, valid, isNull := proc.GetLastInsertIDExprState()
+	require.True(t, valid)
+	require.True(t, isNull)
+	out.Free(proc.Mp())
+}
+
 func TestLastInsertIDExprPreparedIntegerUsesConversionMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

@@ -67,6 +67,11 @@ func TestApplyLastInsertIDExprBeforeResponse(t *testing.T) {
 
 	proc.ResetLastInsertIDExpr()
 	proc.SetLastInsertIDExpr(42)
+	// Re-establish the generated-key state before testing precedence. The
+	// preceding expression-only response intentionally cleared it.
+	ses.SetLastInsertID(7)
+	proc.SetLastInsertID(7)
+	proc.SetStatementLastInsertID(7)
 	res.lastInsertId = 99
 	applyLastInsertIDExprResponse(ses, execCtx, res, true)
 	require.Equal(t, uint64(7), ses.GetLastInsertID(), "generated id keeps precedence")
@@ -95,6 +100,7 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	}}
 	proc.SetLastInsertID(7)
 	proc.SetStatementLastInsertID(0)
+	proc.MarkStatementLastInsertIDGenerated()
 	proc.InitSeq()
 	writer := &countingMysqlWriter{
 		testMysqlWriter: &testMysqlWriter{},
@@ -114,6 +120,7 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
 
 	proc.SetStatementLastInsertID(11)
+	proc.MarkStatementLastInsertIDGenerated()
 	proc.SetLastInsertIDExpr(42)
 	require.NoError(t, resper.respStatus(ses, execCtx))
 	require.Len(t, writer.responses, 2)

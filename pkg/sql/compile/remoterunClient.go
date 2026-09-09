@@ -951,6 +951,10 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+		// A non-zero value in this envelope can only come from the remote
+		// auto-increment path. Preserve its generated-row provenance locally so
+		// response arbitration does not mistake it for an expression value.
+		sender.proc.MarkStatementLastInsertIDGenerated()
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)

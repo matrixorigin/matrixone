@@ -676,6 +676,7 @@ retryInsertValues:
 		// batches in a serial scope naturally keep the first value because
 		// auto-increment allocations are monotonic.
 		proc.SetStatementLastInsertIDIfEarlier(lastInsertValue)
+		proc.MarkStatementLastInsertIDGenerated()
 	}
 	return nil
 }

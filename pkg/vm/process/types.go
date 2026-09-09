@@ -452,7 +452,12 @@ type BaseProcess struct {
 	// session value so LAST_INSERT_ID() continues to observe the previous
 	// value when an INSERT supplies all auto-increment values explicitly.
 	StatementLastInsertID *uint64
-	statementInsertIDMu   sync.Mutex
+	// statementLastInsertIDGenerated is true only after the execution path has
+	// committed a newly generated auto-increment row.  The numeric field alone
+	// is not sufficient: PRE_INSERT may materialize an allocator candidate that
+	// an ODKU later resolves to an existing row.
+	statementLastInsertIDGenerated bool
+	statementInsertIDMu            sync.Mutex
 	// lastInsertIDExpr is the tentative value produced by LAST_INSERT_ID(expr)
 	// during the current statement.  It is deliberately separate from both
 	// generated-key protocol state and the cross-request Session value.  The
@@ -835,6 +840,60 @@ func (proc *Process) SetStatementLastInsertID(num uint64) {
 	if proc.Base.StatementLastInsertID != nil {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
 	}
+}
+
+// ResetStatementLastInsertID starts a new statement generation.  It clears
+// both the candidate and its provenance so a retry or a reused Process cannot
+// report an allocator value that was never committed by this statement.
+func (proc *Process) ResetStatementLastInsertID() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.statementLastInsertIDGenerated = false
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, 0)
+	}
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// MarkStatementLastInsertIDGenerated records that the current statement
+// emitted a newly inserted row carrying an auto-increment value.
+func (proc *Process) MarkStatementLastInsertIDGenerated() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.statementLastInsertIDGenerated = true
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// MarkStatementLastInsertIDGeneratedWithValue publishes the value belonging
+// to the first confirmed generated row without changing the session value.
+// ODKU must call this after duplicate arbitration because PRE_INSERT may have
+// consumed lower allocator candidates for rows that resolve to existing rows.
+func (proc *Process) MarkStatementLastInsertIDGeneratedWithValue(num uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
+		current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+		if !proc.Base.statementLastInsertIDGenerated || current == 0 || num < current {
+			atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		}
+	}
+	proc.Base.statementLastInsertIDGenerated = true
+}
+
+func (proc *Process) HasStatementLastInsertIDGenerated() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.statementLastInsertIDGenerated
 }
 
 // ResetLastInsertIDExpr clears the statement-local LAST_INSERT_ID(expr)
