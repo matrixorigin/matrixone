@@ -642,4 +642,32 @@ func TestCagraSyncWritesOneFrameRowPerChunk(t *testing.T) {
 	}
 	require.Equal(t, storedChunks, covered,
 		"the tail is fully described: no uncovered chunk, so no phantom rows in the estimate")
+
+	// The reader's other input: SUM(nrow) is the tail's record count, exactly.
+	nrows := regexp.MustCompile(`'cdc_tail:\d+', '[^']*', \d+, \d+, (\d+),`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, nrows, storedChunks)
+	records := 0
+	for _, m := range nrows {
+		n, err := strconv.Atoi(m[1])
+		require.NoError(t, err)
+		records += n
+	}
+	require.Equal(t, nrec, records, "every record is described exactly once")
+
+	// END TO END, against what the OLD row produced from the same flush. Its filesize was the
+	// flush's RECORD bytes, and CdcTailRowsUpperBound derives coverage the same way it does
+	// here -- so run its arithmetic on both figures and compare the estimate each yields.
+	const recordBytes = nrec * 25 // op(1) + pkid(8) + vec(4*4)
+	oldCovered := (recordBytes + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize
+	require.Less(t, oldCovered, storedChunks,
+		"record bytes divide into fewer chunks than were written: that is the whole defect")
+
+	perChunk := vectorindex.MaxChunkSize / (4 * 4) // a chunk's rows, bounded by the vector width
+	oldEstimate := records + (storedChunks-oldCovered)*perChunk
+	newEstimate := records + (storedChunks-covered)*perChunk
+	require.Equal(t, nrec, newEstimate, "the tail is sized at exactly what it holds")
+	require.Greater(t, oldEstimate, newEstimate,
+		"the old row inflated the reservation with rows the tail does not hold")
+	t.Logf("stored=%d chunks; covered old=%d new=%d; estimate old=%d new=%d (holds %d)",
+		storedChunks, oldCovered, covered, oldEstimate, newEstimate, nrec)
 }
