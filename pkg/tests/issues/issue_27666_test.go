@@ -433,6 +433,11 @@ func execInternalSQL(ctx context.Context, sqlExec executor.SQLExecutor, statemen
 	return err
 }
 
+func execInternalTxnSQL(txn executor.TxnExecutor, statement string) error {
+	_, err := execInternalTxnSQLWithAffectedRows(txn, statement)
+	return err
+}
+
 func execInternalTxnSQLWithAffectedRows(txn executor.TxnExecutor, statement string) (uint64, error) {
 	result, err := txn.Exec(statement, executor.StatementOption{}.WithAccountID(0))
 	affectedRows := result.AffectedRows
