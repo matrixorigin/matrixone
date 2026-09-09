@@ -857,6 +857,50 @@ func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
 		proc.NewNoContextChildProc(0).StringShuffleHashAlgorithm())
 }
 
+func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	metadata := []uint32{uint32(types.RuntimeStringText)}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion57)
+	_, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
+	require.ErrorContains(t, err, "protocol version 58")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion58)
+	decoded, err := RuntimeStringDomainPrepareParamMetadataForRemote("", 1, metadata)
+	require.NoError(t, err)
+	require.Equal(t, metadata, decoded)
+	decoded[0] = uint32(types.RuntimeStringBinary)
+	require.Equal(t, uint32(types.RuntimeStringText), metadata[0],
+		"the receiver must own an independent runtime-domain generation")
+
+	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("", 1, []uint32{3})
+	require.ErrorContains(t, err, "invalid runtime string domain")
+	_, err = RuntimeStringDomainPrepareParamMetadataForRemote("", 2, metadata)
+	require.ErrorContains(t, err, "metadata length")
+}
+
+func TestBuildProcessInfoSerializesUniformRuntimeBinaryDomain(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("b"), false, proc.Mp()))
+	require.NoError(t, params.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Equal(t, []uint32{2, 2}, info.PrepareParams.RuntimeStringDomains)
+}
+
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	frameParams := vector.NewVec(types.T_text.ToType())
@@ -873,6 +917,9 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 		vector.PrepareParamDecimal,
 		vector.PrepareParamBoolean,
 	})
+	require.NoError(t, frameParams.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary,
+	}, proc.Mp()))
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
@@ -887,6 +934,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 		false, false, true,
 	}, info.PrepareParams.IsBin)
 	require.Equal(t, []uint32{4, 3, 2}, info.PrepareParams.StringSources)
+	require.Equal(t, []uint32{0, 1, 2}, info.PrepareParams.RuntimeStringDomains)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
@@ -908,6 +956,9 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.Equal(t, types.StringSourceCOMStmt, decodedParams.GetStringSourceAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, decodedParams.GetStringSourceAt(1))
 	require.Equal(t, types.StringSourceUserVariable, decodedParams.GetStringSourceAt(2))
+	require.Equal(t, types.RuntimeStringInherit, decodedParams.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, decodedParams.GetRuntimeStringDomainAt(1))
+	require.Equal(t, types.RuntimeStringBinary, decodedParams.GetRuntimeStringDomainAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {

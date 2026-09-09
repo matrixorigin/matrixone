@@ -25,7 +25,12 @@ import (
 type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
+var _ searchplugin.ParallelHooks = Hooks{}
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)
+}
+
+func (Hooks) NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
+	return ivfflat.NewPlanReaders(proc, spec, req, parallelism)
 }
