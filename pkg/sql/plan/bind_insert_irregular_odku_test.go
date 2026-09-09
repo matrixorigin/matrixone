@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -223,8 +224,8 @@ func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
 		}
 		require.Equal(t, "<=>", fn.Func.ObjName)
 		require.Len(t, fn.Args, 2)
-		oldCol := fn.Args[0].GetCol()
-		newCol := fn.Args[1].GetCol()
+		oldCol := storedValueComparisonColumn(t, fn.Args[0])
+		newCol := storedValueComparisonColumn(t, fn.Args[1])
 		require.NotNil(t, oldCol)
 		require.NotNil(t, newCol)
 		require.NotEqual(t, oldCol.ColPos, newCol.ColPos,
@@ -238,6 +239,114 @@ func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
 	}
 	collect(notFn.Args[0])
 	return columns
+}
+
+func storedValueComparisonColumn(t *testing.T, expr *planpb.Expr) *planpb.ColRef {
+	t.Helper()
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.NotNil(t, fn.Func)
+	require.Equal(t, "cast", fn.Func.ObjName)
+	require.Len(t, fn.Args, 2)
+	target := fn.Args[1].Typ
+	require.Contains(t, []int32{int32(types.T_varbinary), int32(types.T_blob)}, target.Id,
+		"stored-value marker must cast text to a binary type")
+	require.Equal(t, uint32(types.CharsetBinary), target.Charset)
+	return fn.Args[0].GetCol()
+}
+
+func assertStoredValueComparisonCasts(t *testing.T, marker *planpb.Expr, wantBinaryType int32) {
+	t.Helper()
+	notFn := marker.GetF()
+	require.NotNil(t, notFn)
+	require.Equal(t, "not", notFn.Func.ObjName)
+	require.Len(t, notFn.Args, 1)
+
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		if fn.Func.ObjName == "and" {
+			require.Len(t, fn.Args, 2)
+			visit(fn.Args[0])
+			visit(fn.Args[1])
+			return
+		}
+		require.Equal(t, "<=>", fn.Func.ObjName)
+		require.Len(t, fn.Args, 2)
+		for _, arg := range fn.Args {
+			if col := arg.GetCol(); col != nil {
+				continue
+			}
+			cast := arg.GetF()
+			require.NotNil(t, cast)
+			require.NotNil(t, cast.Func)
+			require.Equal(t, "cast", cast.Func.ObjName)
+			require.Len(t, cast.Args, 2)
+			require.Equal(t, wantBinaryType, cast.Args[1].Typ.Id)
+			require.Equal(t, uint32(types.CharsetBinary), cast.Args[1].Typ.Charset)
+			require.NotNil(t, cast.Args[0].GetCol())
+		}
+	}
+	visit(notFn.Args[0])
+}
+
+func TestBindStoredValueEqualityUsesStoredBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		textType   types.T
+		binaryType types.T
+	}{
+		{name: "varchar", textType: types.T_varchar, binaryType: types.T_varbinary},
+		{name: "text", textType: types.T_text, binaryType: types.T_blob},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldCol := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(tc.textType), Width: 32, Charset: uint32(types.CharsetUTF8)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 2, Name: "old.body"}},
+			}
+			newCol := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(tc.textType), Width: 32, Charset: uint32(types.CharsetUTF8)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 3, Name: "new.body"}},
+			}
+			got, err := bindStoredValueEquality(context.Background(), oldCol, newCol)
+			require.NoError(t, err)
+			fn := got.GetF()
+			require.NotNil(t, fn)
+			require.Equal(t, "<=>", fn.Func.ObjName)
+			require.Len(t, fn.Args, 2)
+			for _, arg := range fn.Args {
+				cast := arg.GetF()
+				require.NotNil(t, cast)
+				require.Equal(t, "cast", cast.Func.ObjName)
+				require.Len(t, cast.Args, 2)
+				require.Equal(t, int32(tc.binaryType), cast.Args[1].Typ.Id)
+				require.Equal(t, uint32(types.CharsetBinary), cast.Args[1].Typ.Charset)
+				require.NotNil(t, cast.Args[0].GetCol())
+			}
+		})
+	}
+
+	t.Run("non-text keeps typed comparison", func(t *testing.T) {
+		oldCol := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 2, Name: "old.id"}},
+		}
+		newCol := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 3, Name: "new.id"}},
+		}
+		got, err := bindStoredValueEquality(context.Background(), oldCol, newCol)
+		require.NoError(t, err)
+		fn := got.GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, "<=>", fn.Func.ObjName)
+		require.NotNil(t, fn.Args[0].GetCol())
+		require.NotNil(t, fn.Args[1].GetCol())
+	})
 }
 
 func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
@@ -259,6 +368,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 		require.Len(t, shape.valueChangeFilter, 1,
 			"affected fulltext maintenance must receive only new rows or rows whose indexed value changed")
 		require.Equal(t, []string{"id", "body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		assertStoredValueComparisonCasts(t, shape.valueChangeFilter[0].markerExpr, int32(types.T_varbinary))
 	})
 
 	t.Run("independent fulltext indexes use separate modes", func(t *testing.T) {
@@ -270,6 +380,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 		require.Equal(t, 1, shape.newRowsOnlyFilter, "all insert-only groups share one filtered source")
 		require.Len(t, shape.valueChangeFilter, 1, "only the affected fulltext index needs a value-change source")
 		require.Equal(t, []string{"id", "body"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		assertStoredValueComparisonCasts(t, shape.valueChangeFilter[0].markerExpr, int32(types.T_varbinary))
 	})
 
 	t.Run("plain insert with regular index keeps plain irregular source", func(t *testing.T) {
@@ -335,6 +446,7 @@ func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T)
 		require.Len(t, shape.valueChangeFilter, 1)
 		require.Equal(t, []string{"id", "body", "summary"},
 			nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr))
+		assertStoredValueComparisonCasts(t, shape.valueChangeFilter[0].markerExpr, int32(types.T_varbinary))
 	})
 
 	t.Run("independent fulltext indexes keep independent markers", func(t *testing.T) {
@@ -348,6 +460,9 @@ func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T)
 			strings.Join(nullSafeEqualityColumns(t, shape.valueChangeFilter[1].markerExpr), ","),
 		}
 		require.ElementsMatch(t, []string{"id,body", "id,summary"}, columns)
+		for _, marker := range shape.valueChangeFilter {
+			assertStoredValueComparisonCasts(t, marker.markerExpr, int32(types.T_varbinary))
+		}
 	})
 }
 
