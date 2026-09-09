@@ -9312,22 +9312,8 @@ func lastInsertIDExprPrepared(input *vector.Vector, rs *vector.FunctionResult[ui
 			valid, isNull = true, true
 			continue
 		}
-		var value uint64
-		var err error
-		switch input.GetPrepareParamKindAt(i) {
-		case vector.PrepareParamInteger:
-			value, err = parseLastInsertIDPreparedInteger(proc, raw)
-		case vector.PrepareParamBoolean:
-			value, err = parseLastInsertIDPreparedBoolean(proc, raw)
-		case vector.PrepareParamFloat:
-			value, err = parseLastInsertIDPreparedFloat(proc, raw)
-		case vector.PrepareParamDecimal:
-			value, err = parseLastInsertIDPreparedDecimal(proc, raw)
-		case vector.PrepareParamNone:
-			value, err = lastInsertIDStringValue(proc, raw, p.GetSourceVector().GetIsBin())
-		default:
-			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", input.GetPrepareParamKindAt(i))
-		}
+		value, err := lastInsertIDPreparedValue(
+			proc, raw, input.GetPrepareParamKindAt(i), p.GetSourceVector().GetIsBin())
 		if err != nil {
 			return err
 		}
@@ -9337,6 +9323,28 @@ func lastInsertIDExprPrepared(input *vector.Vector, rs *vector.FunctionResult[ui
 	}
 	publishLastInsertIDExprCandidate(proc, last, valid, isNull)
 	return nil
+}
+
+func lastInsertIDPreparedValue(
+	proc *process.Process,
+	raw []byte,
+	kind vector.PrepareParamKind,
+	isBinary bool,
+) (uint64, error) {
+	switch kind {
+	case vector.PrepareParamInteger:
+		return parseLastInsertIDPreparedInteger(proc, raw)
+	case vector.PrepareParamBoolean:
+		return parseLastInsertIDPreparedBoolean(proc, raw)
+	case vector.PrepareParamFloat:
+		return parseLastInsertIDPreparedFloat(proc, raw)
+	case vector.PrepareParamDecimal:
+		return parseLastInsertIDPreparedDecimal(proc, raw)
+	case vector.PrepareParamNone:
+		return lastInsertIDStringValue(proc, raw, isBinary)
+	default:
+		return 0, moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", kind)
+	}
 }
 
 func publishLastInsertIDExprCandidate(proc *process.Process, value uint64, valid, isNull bool) {
@@ -9512,7 +9520,8 @@ func lastInsertIDExprString(input *vector.Vector, rs *vector.FunctionResult[uint
 			valid, isNull = true, true
 			continue
 		}
-		converted, err := lastInsertIDStringValue(proc, raw, p.GetSourceVector().GetIsBin())
+		converted, err := lastInsertIDPreparedValue(
+			proc, raw, p.GetSourceVector().GetPrepareParamKindAt(i), p.GetSourceVector().GetIsBin())
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "function last_insert_id", string(raw))
 		}
