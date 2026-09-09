@@ -28,10 +28,20 @@ import (
 // Transaction workspace writes intentionally fail closed: they are visible to
 // the query but cannot have reached ISCP yet.
 func (tbl *txnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
-	for _, entry := range tbl.getTxn().writes {
+	// The workspace write list is guarded by the transaction mutex and re-sliced
+	// in place by concurrent dumps/compactions; read it under the lock.
+	txn := tbl.getTxn()
+	txn.Lock()
+	hasLocalWrite := false
+	for _, entry := range txn.writes {
 		if entry.tableId == tbl.tableId && entry.bat != nil && entry.bat.RowCount() > 0 {
-			return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable with transaction-local writes")
+			hasLocalWrite = true
+			break
 		}
+	}
+	txn.Unlock()
+	if hasLocalWrite {
+		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable with transaction-local writes")
 	}
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {

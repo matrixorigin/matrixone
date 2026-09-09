@@ -109,6 +109,7 @@ type SourceCommitTS struct {
 	InMemory   types.TS // logtail rows that have not been compacted into an aobject
 	Appendable types.TS // hidden commit_ts values read from appendable objects
 	CNCreated  types.TS // commit time of a CN-created, non-appendable object
+	TNObject   types.TS // max user commit_ts read from a TN non-appendable object's commit_ts zonemap
 }
 
 // Max returns the conservative source commit timestamp.
@@ -122,6 +123,9 @@ func (s SourceCommitTS) Max() types.TS {
 	}
 	if s.CNCreated.GT(&ret) {
 		ret = s.CNCreated
+	}
+	if s.TNObject.GT(&ret) {
+		ret = s.TNObject
 	}
 	return ret
 }
@@ -158,7 +162,7 @@ func (p *PartitionState) SourceCommitTSAt(
 	for iter.Next() {
 		obj := iter.Entry()
 		if obj.GetAppendable() {
-			ts, err := maxCommitTSInAppendableObject(ctx, fs, obj, mp)
+			ts, err := maxCommitTSInAppendableObject(ctx, snapshot, fs, obj, mp)
 			if err != nil {
 				return SourceCommitTS{}, err
 			}
@@ -167,29 +171,85 @@ func (p *PartitionState) SourceCommitTSAt(
 			}
 			continue
 		}
-		// CN-created objects carry their data commit on CreateTime.  Do not use
-		// it for ordinary TN objects: that would reintroduce flush/merge as an
-		// artificial source-data change.
-		if obj.GetCNCreated() && obj.CreateTime.GT(&ret.CNCreated) {
-			ret.CNCreated = obj.CreateTime
+		// CN-created objects carry their data commit on CreateTime.
+		if obj.GetCNCreated() {
+			if obj.CreateTime.GT(&ret.CNCreated) {
+				ret.CNCreated = obj.CreateTime
+			}
+			continue
+		}
+		// Ordinary TN non-appendable object (flush/merge output). CreateTime is
+		// the flush/merge time, not the data commit, so read the true max user
+		// commit_ts from the per-block commit_ts zonemap. This is required for
+		// correctness: after a flush soft-deletes the source rows' appendable
+		// object, the rows survive only in this replacement object, and skipping
+		// it would under-report SourceCommitTS and let a not-yet-indexed row pass
+		// the coverage gate. The object is sealed and visible at the snapshot, so
+		// its rows are committed at or before the snapshot.
+		ts, err := maxCommitTSFromZonemap(ctx, fs, obj)
+		if err != nil {
+			return SourceCommitTS{}, err
+		}
+		if ts.GT(&ret.TNObject) {
+			ret.TNObject = ts
 		}
 	}
 	return ret, nil
 }
 
-func maxCommitTSInAppendableObject(
+// maxCommitTSFromZonemap returns the maximum user commit_ts of a non-appendable
+// object from the per-block commit_ts zonemap in the object meta -- no data-column
+// load. A block whose commit_ts zonemap is unusable fails closed (returns an
+// error) rather than being skipped: an under-report would let a not-yet-indexed
+// row pass the coverage gate.
+func maxCommitTSFromZonemap(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry) (types.TS, error) {
+	if fs == nil {
+		return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts zonemap scan requires file service")
+	}
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs)
+	if err != nil {
+		return types.TS{}, err
+	}
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	var maxTS types.TS
+	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
+		blk := dataMeta.GetBlockMeta(uint32(i))
+		commitPos, ok := objectio.ResolveSpecialColumnLayout(blk).Resolve(objectio.SEQNUM_COMMITTS)
+		if !ok {
+			return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts column missing in non-appendable object")
+		}
+		zm := blk.ColumnMeta(commitPos).ZoneMap()
+		if !zm.IsInited() || zm.GetType() != types.T_TS {
+			return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts zonemap unusable in non-appendable object")
+		}
+		ts := types.DecodeFixed[types.TS](zm.GetMaxBuf())
+		if ts.GT(&maxTS) {
+			maxTS = ts
+		}
+	}
+	return maxTS, nil
+}
+
+// forEachVisibleCommitTS invokes fn once per non-aborted row of an appendable data
+// object whose commit_ts is at or before snapshot. An appendable object visible at
+// snapshot may hold on-disk blocks flushed after it, so the snapshot filter keeps
+// rows the reader cannot see out of the walk. Any load/validate error stops the
+// walk and is returned. Caller must pass non-nil fs and mp.
+func forEachVisibleCommitTS(
 	ctx context.Context,
+	snapshot types.TS,
 	fs fileservice.FileService,
 	obj objectio.ObjectEntry,
 	mp *mpool.MPool,
-) (types.TS, error) {
+	fn func(ts types.TS),
+) error {
 	if fs == nil || mp == nil {
-		return types.TS{}, moerr.NewInternalErrorNoCtx("appendable object commit-ts scan requires file service and mpool")
+		return moerr.NewInternalErrorNoCtx("appendable object commit-ts scan requires file service and mpool")
 	}
 	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
 	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
 	cacheVectors := containers.NewVectors(len(cols))
-	var max types.TS
 	var loadErr error
 	objectio.ForeachBlkInObjStatsList(true, nil,
 		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
@@ -200,6 +260,9 @@ func maxCommitTSInAppendableObject(
 				return false
 			}
 			defer release()
+			if cacheVectors[0].Length() == 0 {
+				return true
+			}
 			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
 			abortColumn, err := ioutil.ValidateTombstoneAbortColumn(len(commitTSCol), &cacheVectors[1])
 			if err != nil {
@@ -207,14 +270,32 @@ func maxCommitTSInAppendableObject(
 				return false
 			}
 			for row, ts := range commitTSCol {
-				if (!abortColumn.IsPresent() || !abortColumn.IsAborted(row)) && ts.GT(&max) {
-					max = ts
+				if (!abortColumn.IsPresent() || !abortColumn.IsAborted(row)) && ts.LE(&snapshot) {
+					fn(ts)
 				}
 			}
 			return true
 		}, obj.ObjectStats)
-	if loadErr != nil {
-		return types.TS{}, loadErr
+	return loadErr
+}
+
+// maxCommitTSInAppendableObject returns the maximum non-aborted commit_ts at or
+// before snapshot across the blocks of one appendable data object.
+func maxCommitTSInAppendableObject(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	obj objectio.ObjectEntry,
+	mp *mpool.MPool,
+) (types.TS, error) {
+	var max types.TS
+	err := forEachVisibleCommitTS(ctx, snapshot, fs, obj, mp, func(ts types.TS) {
+		if ts.GT(&max) {
+			max = ts
+		}
+	})
+	if err != nil {
+		return types.TS{}, err
 	}
 	return max, nil
 }
@@ -1358,39 +1439,12 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 	obj objectio.ObjectEntry,
 	mp *mpool.MPool,
 ) (uint64, error) {
-	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
-	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
-	cacheVectors := containers.NewVectors(2)
-
 	var count uint64
-	var loadErr error
-	objectio.ForeachBlkInObjStatsList(true, nil,
-		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-			loc := blk.MetaLocation()
-			_, release, _, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
-			if err != nil {
-				loadErr = err
-				return false // stop and propagate error
-			}
-			defer release()
-			if cacheVectors[0].Length() == 0 {
-				return true
-			}
-			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
-			abortColumn, err := ioutil.ValidateTombstoneAbortColumn(len(commitTSCol), &cacheVectors[1])
-			if err != nil {
-				loadErr = err
-				return false
-			}
-			for row, ts := range commitTSCol {
-				if (!abortColumn.IsPresent() || !abortColumn.IsAborted(row)) && ts.LE(&snapshot) {
-					count++
-				}
-			}
-			return true
-		}, obj.ObjectStats)
-	if loadErr != nil {
-		return 0, loadErr
+	err := forEachVisibleCommitTS(ctx, snapshot, fs, obj, mp, func(_ types.TS) {
+		count++
+	})
+	if err != nil {
+		return 0, err
 	}
 	return count, nil
 }
