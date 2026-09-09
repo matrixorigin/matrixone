@@ -11495,6 +11495,8 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	var argList []*function.Arg
 	var typeList []string
 	var erArray []ExecResult
+	var pythonArgTypes []function.PythonTypeDescriptor
+	var pythonReturnType *function.PythonTypeDescriptor
 
 	// a database must be selected or specified as qualifier when create a function
 	if cf.Name.HasNoNameQualifier() {
@@ -11538,6 +11540,18 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	if err != nil {
 		return err
 	}
+	if cf.Language == string(tree.PYTHON) {
+		returnType, typeErr := plan2.GetFunctionTypeFromAst(cf.ReturnType.Type)
+		if typeErr != nil {
+			return typeErr
+		}
+		descriptor, typeErr := function.NewPythonTypeDescriptor(returnType)
+		if typeErr != nil {
+			return typeErr
+		}
+		pythonReturnType = &descriptor
+		pythonArgTypes = make([]function.PythonTypeDescriptor, len(cf.Args))
+	}
 
 	// build argmap and marshal as json
 	argList = make([]*function.Arg, len(cf.Args))
@@ -11552,6 +11566,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		}
 		argList[i].Type = typ
 		typeList[i] = typ
+		if cf.Language == string(tree.PYTHON) {
+			argType, typeErr := plan2.GetFunctionTypeFromAst(cf.Args[i].(*tree.FunctionArgDecl).Type)
+			if typeErr != nil {
+				return typeErr
+			}
+			descriptor, typeErr := function.NewPythonTypeDescriptor(argType)
+			if typeErr != nil {
+				return typeErr
+			}
+			pythonArgTypes[i] = descriptor
+		}
 	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
@@ -11596,6 +11621,8 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			ABIContract:    udf.PythonABIContract,
 			AdapterVersion: udf.PythonAdapterVersion,
 			SDKVersion:     udf.PythonSDKVersion,
+			ArgTypes:       pythonArgTypes,
+			ReturnType:     pythonReturnType,
 		}
 		var byt []byte
 		byt, err = json.Marshal(nb)
