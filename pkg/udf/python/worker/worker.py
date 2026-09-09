@@ -40,8 +40,11 @@ import pyarrow.flight as flight
 
 PROTOCOL_VERSION = 1
 MAX_CONTROL_BYTES = 1 << 20
-MAX_TERMINAL_RECORDS = 10000
-MAX_TERMINAL_BYTES = 16 << 20
+# Admission bounds cover active fences and retained terminal tombstones.  The
+# names deliberately describe the whole ledger so a future cleanup change
+# cannot mistake active work for reclaimable terminal state.
+MAX_LEDGER_ENTRIES = 10000
+MAX_LEDGER_BYTES = 16 << 20
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
@@ -859,6 +862,7 @@ class _InvocationState:
         self.tuple = tuple_value
         self.terminal_bytes = terminal_bytes
         self.condition = threading.Condition()
+        self.last_input = 0
         self.last_result = 0
         self.acked_result = 0
         self.finish_id: Optional[str] = None
@@ -929,9 +933,9 @@ class RoutineFlightServer(flight.FlightServerBase):
                 raise ValueError("PROTOCOL: invocation fence is active")
             if key in self._terminal:
                 raise ValueError("PROTOCOL: invocation fence is terminal")
-            if len(self._active) + len(self._terminal) >= MAX_TERMINAL_RECORDS:
+            if len(self._active) + len(self._terminal) >= MAX_LEDGER_ENTRIES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger entries are full")
-            if self._active_bytes + self._terminal_bytes + size > MAX_TERMINAL_BYTES:
+            if self._active_bytes + self._terminal_bytes + size > MAX_LEDGER_BYTES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger bytes are full")
             state = _InvocationState({}, size)
             self._active[key] = state
@@ -1040,7 +1044,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] != "InputBatch": raise ValueError("PROTOCOL: data batch is missing InputBatch")
                     sequence = _required_uint64(control, "sequence")
-                    if sequence != state.last_result + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
+                    if sequence != state.last_input + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
                     batch = chunk.data
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
@@ -1068,6 +1072,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     _validate_array_values(output_array, result_descriptor)
                     if pa.ipc.get_record_batch_size(output_batch) > max_batch_bytes:
                         raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
+                    state.last_input = sequence
                     state.last_result = sequence
                     writer.write_metadata(_encode_control({"kind": "InputConsumed", "tuple": open_control["tuple"], "sequence": sequence}))
                     writer.write_with_metadata(output_batch, _encode_control({"kind": "ResultBatch", "tuple": open_control["tuple"], "sequence": sequence}))
@@ -1076,14 +1081,14 @@ class RoutineFlightServer(flight.FlightServerBase):
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] == "EndInput":
-                        if ended or _required_uint64(control, "last_sequence", allow_zero=True) != state.last_result: raise ValueError("PROTOCOL: invalid EndInput")
+                        if ended or _required_uint64(control, "last_sequence", allow_zero=True) != state.last_input: raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True
                     elif control["kind"] != "OpenInvocation":
                         raise ValueError("PROTOCOL: unexpected control without Arrow data")
             if not ended: raise ValueError("PROTOCOL: input stream ended before EndInput")
             if state.acked_result != state.last_result: raise ValueError("PROTOCOL: result is not acknowledged")
             state.finish_id = _uuid.uuid4().hex
-            writer.write_metadata(_encode_control({"kind": "Finish", "tuple": open_control["tuple"], "status": "OK", "finish_id": state.finish_id, "last_sequence": state.last_result}))
+            writer.write_metadata(_encode_control({"kind": "Finish", "tuple": open_control["tuple"], "status": "OK", "finish_id": state.finish_id, "last_sequence": state.last_input}))
             state.wait_finish_ack(context)
         except Exception as exc:
             if writer_started and key is not None:
