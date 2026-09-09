@@ -48,6 +48,14 @@ func TestControlRoundTripIsBoundedAndVersioned(t *testing.T) {
 	require.ErrorIs(t, err, ErrProtocol)
 }
 
+func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
+	tuple := testTuple()
+	tuple.AccountID = 0
+	require.NoError(t, tuple.Validate())
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple})
+	require.NoError(t, err)
+}
+
 func TestSequenceKeepsHalfCloseIndependentFromResults(t *testing.T) {
 	var sequence Sequence
 	require.NoError(t, sequence.AcceptInput(1))
