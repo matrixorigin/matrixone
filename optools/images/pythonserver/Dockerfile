@@ -1,8 +1,8 @@
 # run from root path for debug:
-# docker build -t mo-python-udf-server -f ./optools/images/pythonserver/Dockerfile ./pkg/udf/pythonservice/pyserver/
-# docker run -d --network host mo-python-udf-server
+# docker build -t mo-python-udf-runtime -f ./optools/images/pythonserver/Dockerfile ./pkg/udf/pythonruntime/pyserver/
+# docker run -d --network host mo-python-udf-runtime
 
-FROM python:3.9-bookworm
+FROM python:3.12-bookworm
 
 RUN useradd -m -s /bin/bash mo
 
@@ -14,13 +14,12 @@ WORKDIR /home/mo
 #    && apt-get update \
 #    && apt-get install -y vim
 
-COPY . .
+COPY requirements.txt worker.py ./
 
-RUN pip install -r requirements/base.txt
-RUN pip install -r requirements/pytorch.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 USER mo
 
 EXPOSE 50051
 
-CMD [ "/bin/bash", "-c", "python -u server.py >> server.log 2>&1" ]
+CMD [ "python", "-u", "worker.py", "--address=grpc://0.0.0.0:50051" ]
