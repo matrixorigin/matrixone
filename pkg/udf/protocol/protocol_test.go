@@ -158,6 +158,30 @@ func TestExecutionGroupZeroMemberAndAbortedOpenRelease(t *testing.T) {
 	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
 }
 
+func TestExecutionGroupReservesPendingMemberIdentity(t *testing.T) {
+	group, err := NewExecutionGroup("g", 1, 2, func() error { return nil })
+	require.NoError(t, err)
+	first, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	_, err = group.BeginOpen("member")
+	require.ErrorIs(t, err, ErrDuplicate)
+	registered, active, inFlight := group.Counts()
+	require.Equal(t, 0, registered)
+	require.Equal(t, 0, active)
+	require.Equal(t, 1, inFlight)
+	require.NoError(t, first.Abort())
+	_, _, inFlight = group.Counts()
+	require.Zero(t, inFlight)
+
+	second, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, second.Commit())
+	registered, active, inFlight = group.Counts()
+	require.Equal(t, 1, registered)
+	require.Equal(t, 1, active)
+	require.Zero(t, inFlight)
+}
+
 func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
 	ledger, err := NewTerminalLedger(2, 200)
 	require.NoError(t, err)
@@ -171,6 +195,7 @@ func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
 	second, err := ledger.Reserve("g2", 1, 100)
 	require.NoError(t, err)
 	require.NoError(t, second.Add("i2", 100, now.Add(time.Hour)))
+	require.NoError(t, ledger.Complete("i2"))
 	second.ReleaseUnused()
 	_, err = ledger.Reserve("g3", 1, 1)
 	require.ErrorIs(t, err, ErrLedgerFull)
@@ -186,6 +211,26 @@ func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
 	require.ErrorIs(t, ledger.Complete("missing"), ErrUnknownIdentity)
 	require.NoError(t, ledger.Complete("i3"))
 	require.NoError(t, ledger.Complete("i3"))
+}
+
+func TestTerminalLedgerDoesNotExpireActiveEntries(t *testing.T) {
+	ledger, err := NewTerminalLedger(1, 100)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	credit, err := ledger.Reserve("g", 1, 100)
+	require.NoError(t, err)
+	require.NoError(t, credit.Add("active", 100, now.Add(time.Second)))
+	credit.ReleaseUnused()
+	require.Equal(t, 0, ledger.Expire(now.Add(time.Hour)))
+	entries, bytes := ledger.Counts()
+	require.Equal(t, 1, entries)
+	require.Equal(t, int64(100), bytes)
+	_, err = ledger.Reserve("other", 1, 1)
+	require.ErrorIs(t, err, ErrLedgerFull)
+	require.NoError(t, ledger.Abandon("active"))
+	entries, bytes = ledger.Counts()
+	require.Zero(t, entries)
+	require.Zero(t, bytes)
 }
 
 func TestExecutionGroupReleaseErrorCanBeRetried(t *testing.T) {
