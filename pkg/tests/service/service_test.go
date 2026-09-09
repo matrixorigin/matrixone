@@ -65,6 +65,7 @@ func TestSetInitialClusterInfoUsesHAKeeperLeader(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	require.NoError(t, c.setInitialClusterInfo(ctx))
+	require.NoError(t, c.setInitialClusterInfo(ctx))
 
 	require.Equal(t, 0, follower.initialClusterInfoCalls)
 	require.Equal(t, 1, leader.initialClusterInfoCalls)

@@ -257,7 +257,8 @@ type testCluster struct {
 	}
 
 	log struct {
-		once sync.Once
+		once                  sync.Once
+		initialClusterInfoErr error
 
 		sync.Mutex
 		cfgs []logservice.Config
@@ -644,7 +645,12 @@ func (c *testCluster) IsClusterHealthy() bool {
 // The following are implements for interface `ClusterWaitState`.
 // --------------------------------------------------------------
 func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
+	ticker := time.NewTicker(defaultWaitInterval)
+	defer ticker.Stop()
 	for {
+		if leader := c.getHAKeeperLeader(); leader != nil {
+			return leader
+		}
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
@@ -652,13 +658,7 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 				"terminated when waiting for hakeeper leader",
 				"error: %s cause: %s ", ctx.Err(), context.Cause(ctx),
 			)
-		default:
-			time.Sleep(defaultWaitInterval)
-
-			leader := c.getHAKeeperLeader()
-			if leader != nil {
-				return leader
-			}
+		case <-ticker.C:
 		}
 	}
 }

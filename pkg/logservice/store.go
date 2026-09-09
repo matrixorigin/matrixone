@@ -140,7 +140,7 @@ type store struct {
 	tickerStopper          *stopper.Stopper
 	runtime                runtime.Runtime
 
-	bootstrapCheckCycles   uint64
+	bootstrapCheckDeadline time.Time
 	bootstrapMgr           *bootstrap.Manager
 	lastBootstrapLogTime   time.Time
 	bootstrapCommandsAdded func()
@@ -1521,7 +1521,7 @@ func (l *store) startTaskScheduleTicker(
 }
 
 func (l *store) ticker(ctx context.Context) {
-	if l.cfg.HAKeeperTickInterval.Duration == 0 {
+	if l.cfg.HAKeeperTickInterval.Duration <= 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
 	l.runtime.Logger().Info("Hakeeper interval configs",
@@ -1529,7 +1529,7 @@ func (l *store) ticker(ctx context.Context) {
 		zap.Int64("HAKeeperCheckInterval", int64(l.cfg.HAKeeperCheckInterval.Duration)))
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
-	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
+	if l.cfg.HAKeeperCheckInterval.Duration <= 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
 	defer func() {

@@ -475,7 +475,8 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	service := &Service{store: store}
 	service.handleStartReplica(cmd.Commands[0])
 
-	for state.State != pb.HAKeeperRunning && store.bootstrapCheckCycles > 0 {
+	deadline := time.Now().Add(10 * time.Second)
+	for state.State != pb.HAKeeperRunning && time.Now().Before(deadline) {
 		func() {
 			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
