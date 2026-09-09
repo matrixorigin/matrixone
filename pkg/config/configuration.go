@@ -1454,7 +1454,7 @@ type ParameterUnit struct {
 	// QueryClient instance
 	QueryClient qclient.QueryClient
 
-	UdfService udf.Service
+	UdfService udf.Runtime
 
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.

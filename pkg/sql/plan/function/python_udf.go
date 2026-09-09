@@ -1,25 +1,25 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
 
 package function
 
 import (
 	"encoding/json"
+	"fmt"
+	"strconv"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -70,57 +70,253 @@ func pythonUdfRetType(parameters []types.Type) types.Type {
 // param parameters has two parts:
 //  1. parameters[0]: const vector udf
 //  2. parameters[1:]: data vectors
+//
+// The SQL executor normally applies CASE/selection compaction before this
+// function is called.  The NULL policy is still enforced here because it is
+// part of the persisted Python routine contract and must not be inferred from
+// the generic builtin STRICT bit.
 func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// udf with context
-	u := &UdfWithContext{}
-	bytes, _ := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
-	err := json.Unmarshal(bytes, u)
+	if len(parameters) == 0 || parameters[0] == nil {
+		return fmt.Errorf("python runtime: missing routine descriptor")
+	}
+	if length < 0 {
+		return fmt.Errorf("python runtime: negative input length %d", length)
+	}
+
+	routine := &UdfWithContext{}
+	encoded, isNull := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
+	if isNull {
+		return fmt.Errorf("python runtime: routine descriptor is NULL")
+	}
+	if err := json.Unmarshal(encoded, routine); err != nil {
+		return fmt.Errorf("python runtime: decode routine descriptor: %w", err)
+	}
+	if routine.Udf == nil {
+		return fmt.Errorf("python runtime: routine descriptor has no function")
+	}
+
+	body := PythonRoutineBody{}
+	if err := json.Unmarshal([]byte(routine.Body), &body); err != nil {
+		return fmt.Errorf("python runtime: decode Python routine body: %w", err)
+	}
+	if body.Handler == "" || body.Source == "" {
+		return fmt.Errorf("python runtime: routine handler and source are required")
+	}
+	if body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
+		return fmt.Errorf("python runtime: unsupported Python ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
+	}
+	argTypes, err := routineArgumentTypes(routine)
 	if err != nil {
 		return err
 	}
+	if len(parameters)-1 != len(argTypes) {
+		return fmt.Errorf("python runtime: routine has %d arguments, received %d", len(argTypes), len(parameters)-1)
+	}
 
-	// request
-	body := &NonSqlUdfBody{}
-	err = json.Unmarshal([]byte(u.Body), body)
+	if length == 0 {
+		return result.PreExtendAndReset(0)
+	}
+	for index, input := range parameters[1:] {
+		if input == nil || (!input.IsConst() && input.Length() < length) {
+			return fmt.Errorf("python runtime: input vector %d is shorter than invocation length", index)
+		}
+	}
+	if selectList != nil && len(selectList.SelectList) < length {
+		return fmt.Errorf("python runtime: selection list is shorter than invocation length")
+	}
+
+	selected := make([]int64, 0, length)
+	for row := 0; row < length; row++ {
+		if selectList != nil && len(selectList.SelectList) > row && !selectList.SelectList[row] {
+			continue
+		}
+		if body.NullPolicy == udf.NullReturnNull && hasNullInput(parameters[1:], row) {
+			continue
+		}
+		selected = append(selected, int64(row))
+	}
+	if len(selected) == 0 {
+		if err := result.PreExtendAndReset(length); err != nil {
+			return err
+		}
+		result.GetResultVector().SetAllNulls(length)
+		result.GetResultVector().SetLength(length)
+		return nil
+	}
+
+	inputs := parameters[1:]
+	var compacted []*vector.Vector
+	if len(selected) != length {
+		compacted = make([]*vector.Vector, len(inputs))
+		for i, input := range inputs {
+			if input == nil {
+				return fmt.Errorf("python runtime: input vector %d is nil", i)
+			}
+			compacted[i] = vector.NewOffHeapVecWithType(*input.GetType())
+			compacted[i].SetIsBin(input.GetIsBin())
+			if err := compacted[i].Union(input, selected, proc.Mp()); err != nil {
+				freeVectors(compacted, proc.Mp())
+				return fmt.Errorf("python runtime: compact input %d: %w", i, err)
+			}
+		}
+		inputs = compacted
+		defer freeVectors(compacted, proc.Mp())
+	}
+
+	callResult := result
+	var temporary vector.FunctionResultWrapper
+	if len(selected) != length {
+		temporary = vector.NewFunctionResultWrapper(routine.GetRetType(), proc.Mp())
+		callResult = temporary
+		defer temporary.Free()
+	}
+
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return fmt.Errorf("python runtime: resolve account: %w", err)
+	}
+	tuple, err := invocationTuple(routine.Context, proc.QueryId(), accountID)
 	if err != nil {
 		return err
 	}
-	request := &udf.Request{
-		Udf: &udf.Udf{
-			Handler:      body.Handler,
-			IsImport:     body.Import,
-			Body:         body.Body,
-			RetType:      t2DataType[u.GetRetType().Oid],
-			Language:     udf.LanguagePython,
-			Db:           u.Db,
-			ModifiedTime: u.ModifiedTime,
-		},
-		Vectors: make([]*udf.DataVector, len(parameters)-1),
-		Length:  int64(length),
-		Type:    udf.RequestType_DataRequest,
-		Context: u.Context,
+	invocation := &udf.Invocation{
+		Language:       udf.LanguagePython,
+		Handler:        body.Handler,
+		Source:         body.Source,
+		Args:           argTypes,
+		ReturnType:     routine.GetRetType(),
+		Inputs:         inputs,
+		Length:         len(selected),
+		Mode:           body.Mode,
+		NullPolicy:     body.NullPolicy,
+		ABIContract:    body.ABIContract,
+		AdapterVersion: body.AdapterVersion,
+		SDKVersion:     body.SDKVersion,
+		Context:        cloneContext(routine.Context),
+		Tuple:          tuple,
 	}
-	for i := 1; i < len(parameters); i++ {
-		dataVector, _ := vector2DataVector(parameters[i])
-		request.Vectors[i-1] = dataVector
-	}
-
-	// getPkg
-	reader := &DefaultPkgReader{
-		Proc: proc,
-	}
-
-	// run
-	response, err := proc.Base.UdfService.Run(proc.Ctx, request, reader)
-	if err != nil {
+	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, callResult, proc.Mp()); err != nil {
 		return err
 	}
 
-	// response
-	err = writeResponse(response, result)
-	if err != nil {
+	if len(selected) == length {
+		return nil
+	}
+	if err := result.PreExtendAndReset(length); err != nil {
 		return err
 	}
-
+	full := result.GetResultVector()
+	full.ResetWithSameType()
+	nullResult := vector.NewConstNull(routine.GetRetType(), 1, proc.Mp())
+	defer nullResult.Free(proc.Mp())
+	selectedRow := int64(0)
+	for row := 0; row < length; row++ {
+		if selectedRow < int64(len(selected)) && selected[selectedRow] == int64(row) {
+			if err := full.UnionOne(callResult.GetResultVector(), selectedRow, proc.Mp()); err != nil {
+				return err
+			}
+			selectedRow++
+			continue
+		}
+		if err := full.UnionOne(nullResult, 0, proc.Mp()); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func hasNullInput(inputs []*vector.Vector, row int) bool {
+	for _, input := range inputs {
+		if input == nil || input.IsNull(uint64(row)) {
+			return true
+		}
+	}
+	return false
+}
+
+func routineArgumentTypes(routine *UdfWithContext) ([]types.Type, error) {
+	if len(routine.ArgsType) != 0 || len(routine.Args) == 0 {
+		return append([]types.Type(nil), routine.ArgsType...), nil
+	}
+	args := make([]types.Type, len(routine.Args))
+	for i, arg := range routine.Args {
+		if arg == nil {
+			return nil, fmt.Errorf("python runtime: routine argument %d is nil", i)
+		}
+		typ, ok := types.Types[arg.Type]
+		if !ok {
+			return nil, fmt.Errorf("python runtime: unknown routine argument type %q", arg.Type)
+		}
+		args[i] = typ.ToType()
+	}
+	return args, nil
+}
+
+func cloneContext(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func freeVectors(vectors []*vector.Vector, mp *mpool.MPool) {
+	for _, vector := range vectors {
+		if vector != nil {
+			vector.Free(mp)
+		}
+	}
+}
+
+func invocationTuple(context map[string]string, queryID string, accountID uint32) (protocol.FencingTuple, error) {
+	statementID := context["statement_id"]
+	if statementID == "" {
+		statementID = queryID
+	}
+	if statementID == "" {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return protocol.FencingTuple{}, fmt.Errorf("python runtime: create statement fence: %w", err)
+		}
+		statementID = id.String()
+	}
+	groupID := context["group_id"]
+	if groupID == "" {
+		groupID = statementID + "/python"
+	}
+	invocationID, err := uuid.NewV7()
+	if err != nil {
+		return protocol.FencingTuple{}, fmt.Errorf("python runtime: create invocation fence: %w", err)
+	}
+	groupEpoch, err := positiveContextUint(context, "group_epoch", 1)
+	if err != nil {
+		return protocol.FencingTuple{}, err
+	}
+	leaseEpoch, err := positiveContextUint(context, "lease_epoch", 1)
+	if err != nil {
+		return protocol.FencingTuple{}, err
+	}
+	return protocol.FencingTuple{
+		AccountID:    uint64(accountID),
+		StatementID:  statementID,
+		GroupID:      groupID,
+		GroupEpoch:   groupEpoch,
+		InvocationID: invocationID.String(),
+		LeaseEpoch:   leaseEpoch,
+	}, nil
+}
+
+func positiveContextUint(context map[string]string, key string, fallback uint64) (uint64, error) {
+	value := context[key]
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed == 0 {
+		return 0, fmt.Errorf("python runtime: invalid %s %q", key, value)
+	}
+	return parsed, nil
 }
