@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -53,4 +54,28 @@ func TestPythonTypeContractKeepsLegacyFallback(t *testing.T) {
 	require.NoError(t, routine.LoadPythonTypeContract())
 	require.Equal(t, types.T_int32.ToType(), routine.GetArgsType()[0])
 	require.Equal(t, types.T_int32.ToType(), routine.GetRetType())
+}
+
+func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
+	received := types.New(types.T_decimal64, 18, 2)
+	required := types.New(types.T_decimal64, 18, 6)
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		received,
+		required,
+		types.T_decimal64.ToType(),
+	}
+	result := checkPythonUdf(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, required, result.finalType[1])
+}
+
+func TestPythonRoutineIsVolatile(t *testing.T) {
+	resolved, err := GetFunctionByName(context.Background(), "python_user_defined_function", []types.Type{
+		types.T_text.ToType(),
+		types.T_text.ToType(),
+	})
+	require.NoError(t, err)
+	_, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.True(t, allSupportedFunctions[PYTHON_UDF].Overloads[overloadID].CannotFold())
 }
