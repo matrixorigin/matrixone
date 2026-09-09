@@ -1269,19 +1269,28 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 }
 
 func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
-	snapshot := time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
 
 	opts := &CDCCreateTaskOptions{NoFull: true}
-	opts.setNoFullStartTS(snapshot)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	opts.setNoFullStartTS(txnOp)
 	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
 
 	// An explicit StartTs remains the caller's activation boundary.
 	opts.StartTs = "2026-09-01T00:00:00Z"
-	opts.setNoFullStartTS(snapshot.Add(time.Hour))
+	opts.setNoFullStartTS(txnOp)
 	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
 
 	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
-	noSnapshot.setNoFullStartTS(time.Time{})
+	noSnapshot.setNoFullStartTS(nil)
+	require.Empty(t, noSnapshot.StartTs)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot.setNoFullStartTS(zeroTxnOp)
 	require.Empty(t, noSnapshot.StartTs)
 }
 

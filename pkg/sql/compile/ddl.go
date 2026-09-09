@@ -6617,6 +6617,15 @@ type CDCCreateTaskOptions struct {
 	UseConsole bool
 }
 
+func setNoFullStartTS(opts *CDCCreateTaskOptions, txnOp client.TxnOperator) {
+	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
+		snapshot := txnOp.SnapshotTS().ToStdTime()
+		if !snapshot.IsZero() {
+			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+		}
+	}
+}
+
 func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	ctx context.Context,
 	c *Compile,
@@ -6776,12 +6785,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	// A NoFull task starts asynchronously. Persist the CREATE transaction's
 	// snapshot as its incremental start point so a later executor startup cannot
 	// move the watermark past commits made after CREATE CDC returns.
-	if txnOp := c.proc.GetTxnOperator(); txnOp != nil && opts.NoFull && opts.StartTs == "" {
-		snapshot := txnOp.SnapshotTS().ToStdTime()
-		if !snapshot.IsZero() {
-			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
-		}
-	}
+	setNoFullStartTS(opts, c.proc.GetTxnOperator())
 
 	// fill default value for additional opts
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {

@@ -22,10 +22,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -96,13 +99,27 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 }
 
 func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
-	snapshot := time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
 
 	opts := &CDCCreateTaskOptions{NoFull: true}
-	if opts.NoFull && opts.StartTs == "" {
-		opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
-	}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	setNoFullStartTS(opts, txnOp)
 	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
+
+	// Explicit StartTs and absent transaction operators do not alter the start.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	setNoFullStartTS(opts, txnOp)
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+	setNoFullStartTS(&CDCCreateTaskOptions{NoFull: true}, nil)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	setNoFullStartTS(noSnapshot, zeroTxnOp)
+	require.Empty(t, noSnapshot.StartTs)
 }
 
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
