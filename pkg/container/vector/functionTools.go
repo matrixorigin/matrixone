@@ -612,8 +612,8 @@ func newResultFunc[T types.FixedSizeT](
 }
 
 func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
-	if fr.convenientParam == nil {
-		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	if len(fr.convenientParam) < paramCount {
+		fr.convenientParam = append(fr.convenientParam, make([]reusableParameterWrapper, paramCount-len(fr.convenientParam))...)
 	}
 }
 
