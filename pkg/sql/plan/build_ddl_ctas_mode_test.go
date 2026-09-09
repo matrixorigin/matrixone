@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -208,4 +209,24 @@ func TestCTASFullTextPatternSurvivesInternalReparse(t *testing.T) {
 		require.Equal(t, "a\nb", want)
 		require.Equal(t, want, executorPattern(t, generated))
 	})
+}
+
+func TestCTASConflictModifiersGenerateDML(t *testing.T) {
+	for _, tc := range []struct {
+		name, modifier, prefix string
+	}{
+		{"ignore", "IGNORE", "insert ignore into"},
+		{"replace", "REPLACE", "replace into"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			ctx := mock.CurrentContext()
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "CREATE TABLE t "+tc.modifier+" AS SELECT 1", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			logicPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.True(t, strings.HasPrefix(logicPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), tc.prefix))
+		})
+	}
 }
