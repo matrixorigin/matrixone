@@ -1311,6 +1311,20 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	unsigned := false
 	for i, arg := range args {
 		original := originalArgs[i]
+		if _, hasExplicitCast := findPreparedExplicitCast(original); hasExplicitCast {
+			// Numeric fallback binding may leave a provisional DOUBLE envelope
+			// inside an explicit CAST(? AS UNSIGNED).  Rebinding that envelope
+			// first rounds UINT64_MAX to 2^64 on some architectures, so an
+			// enclosing checked operation can no longer observe the true value.
+			// Restore the exact execute-time value under the user cast before
+			// widening arithmetic to DECIMAL128.
+			restored, restoreErr := restorePreparedExplicitCastOperand(ctx, original, arg)
+			if restoreErr != nil {
+				return nil, restoreErr
+			}
+			arg = restored
+			args[i] = arg
+		}
 		// Ignore only prepare-time coercion envelopes, never semantic CASTs.
 		for original.GetF() != nil && original.GetF().Func.GetObjName() == "cast" &&
 			!isExplicitPreparedCast(original) && arg.GetF() != nil && arg.GetF().Func.GetObjName() == "cast" {
@@ -1394,6 +1408,56 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	}
 	resultType := types.T_uint64.ToType()
 	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+}
+
+// restorePreparedExplicitCastOperand removes only binder-inserted numeric
+// envelopes below a user-written prepared CAST. The outer semantic cast is
+// rebuilt with its original target, preserving exact integer protocol values
+// instead of routing them through a provisional DOUBLE representation.
+func restorePreparedExplicitCastOperand(ctx context.Context, original, expr *plan.Expr) (*plan.Expr, error) {
+	explicit, ok := findPreparedExplicitCast(original)
+	if explicit == nil || expr == nil || !ok {
+		return expr, nil
+	}
+	expr = stripPreparedRuntimeNumericEnvelopes(expr)
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return expr, nil
+	}
+	child := stripPreparedRuntimeNumericEnvelopes(fn.Args[0])
+	return appendExplicitCastBeforeExpr(ctx, child, explicit.Typ)
+}
+
+func findPreparedExplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
+	for expr != nil {
+		if isExplicitPreparedCast(expr) {
+			return expr, true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return nil, false
+		}
+		expr = fn.Args[0]
+	}
+	return nil, false
+}
+
+func stripPreparedRuntimeNumericEnvelopes(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		len(fn.Args) == 1 && !isExplicitPreparedCast(expr) {
+		return stripPreparedRuntimeNumericEnvelopes(fn.Args[0])
+	}
+	if fn := expr.GetF(); fn != nil {
+		copy := DeepCopyExpr(expr)
+		for i, arg := range fn.Args {
+			copy.GetF().Args[i] = stripPreparedRuntimeNumericEnvelopes(arg)
+		}
+		return copy
+	}
+	return expr
 }
 
 func preparedArithmeticOperandNeedsRuntimeBound(expr *plan.Expr) bool {
