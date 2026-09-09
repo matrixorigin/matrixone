@@ -121,18 +121,66 @@ func TestCdcTailRowsFallsBackWhenTheColumnIsAbsent(t *testing.T) {
 // double the cost of every cache miss, so its chunk count bounds it: a chunk holds at most
 // MaxChunkSize, and a record is at least its vector.
 
-// A SIZING probe must never be the thing that breaks a load. RunSql reaches the executor, which
-// PANICS rather than erroring when the process has no lock service -- a shape internal callers
-// and unit contexts really do reach -- and this query runs inside Preload, on the path to every
-// cold load. Unguarded it converts a missing executor into a crashed load; the honest answer is
-// no estimate, which is exactly the behaviour that existed before the estimate did.
+// The chunk COUNT is what says whether the frame rows describe the whole tail. Discarding its
+// error made a migrated tail -- 400 legacy chunks with no rows, plus one recorded 1-row flush --
+// read as fully covered at 1 row, because an unreadable count came back as 0 chunks and 0 - 1 is
+// not positive. Load then replays all 401. Unknown is not zero.
+func TestCdcTailRowsErrorsWhenTheChunkCountIsUnreadable(t *testing.T) {
+	mp := mpool.MustNewZero()
+	prev := runSqlForTest
+	runSqlForTest = func(_ *SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("count unreadable")
+		}
+		return twoInt64Result(mp, 1, 1), nil // the one flush that did record its row
+	}
+	t.Cleanup(func() { runSqlForTest = prev })
+
+	rows, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", 512)
+	require.Error(t, err, "coverage cannot be judged without the chunks; it must not answer 'covered'")
+	require.Zero(t, rows)
+}
+
+// Narrow table AND an unreadable count: the sum errors, so the chunks are the only bound left,
+// and they cannot be read either. Reporting 0 here reserves nothing for a tail of any size.
+func TestCdcTailRowsErrorsWhenNeitherSourceCanBeRead(t *testing.T) {
+	prev := runSqlForTest
+	runSqlForTest = func(_ *SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("unreadable")
+	}
+	t.Cleanup(func() { runSqlForTest = prev })
+
+	rows, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "store", 512)
+	require.Error(t, err, "no source could be read, so there is no bound -- and no reservation")
+	require.Zero(t, rows)
+}
+
+// No storage table to count is a real 0, not an unknown: there is no tail.
+func TestCdcTailRowsNoStorageTableIsZeroNotUnknown(t *testing.T) {
+	mp := mpool.MustNewZero()
+	prev := runSqlForTest
+	runSqlForTest = func(_ *SqlProcess, _ string) (executor.Result, error) {
+		return twoInt64Result(mp, 0, 0), nil
+	}
+	t.Cleanup(func() { runSqlForTest = prev })
+
+	rows, err := CdcTailRowsUpperBound(&SqlProcess{}, "db", "meta", "", 512)
+	require.NoError(t, err)
+	require.Zero(t, rows)
+}
+
+// A SIZING probe must never CRASH a load. RunSql reaches the executor, which PANICS rather than
+// erroring when the process has no lock service -- a shape internal callers and unit contexts
+// really do reach. The recover turns that into an error; it does not turn it into an estimate.
+// An unreadable tail is unknown, and unknown reaches Preload as a refusal rather than as the 0
+// that would let Load allocate the overflow with nothing reserved for it.
 func TestCdcTailSizingSurvivesAProcessWithNoLockService(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	sqlproc := NewSqlProcess(proc)
 
 	require.NotPanics(t, func() {
 		rows, err := CdcTailRowsUpperBound(sqlproc, "db", "meta", "store", 512)
-		require.NoError(t, err, "a probe that cannot run is not a load failure")
-		require.Zero(t, rows, "every read is unreadable here, so there is no bound to give")
+		require.Error(t, err, "every read is unreadable here, so there is no bound to give")
+		require.Zero(t, rows)
 	})
 }

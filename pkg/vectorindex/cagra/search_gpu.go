@@ -200,12 +200,20 @@ func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
 	// Size the CDC overflow from the tail's metadata rows, BEFORE anything is allocated. Without
 	// this a generation whose rows all arrived by CDC measures 0 at Preload, so admission
 	// reserves nothing and Load allocates its VRAM unreserved -- and no post-load pass can undo
-	// an allocation. A read failure leaves the estimate at 0: the pre-existing behaviour, not a
-	// refused load.
-	if rows, rerr := sqlexec.CdcTailRowsUpperBound(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable,
-		s.Tblcfg.IndexTable, s.overflowVectorBytes()); rerr == nil {
-		s.overflowRowsEstimate = rows
+	// an allocation.
+	//
+	// A tail whose size cannot be read REFUSES the load, here, before a single tar is fetched.
+	// Carrying on with 0 reserves nothing and then allocates anyway, which is the outcome the
+	// estimate exists to prevent, and the refusal costs little: the sizing reads the same two
+	// tables loadCdcTail reads moments later, so a tail that cannot be counted is usually one
+	// that cannot be read either. Where the failure is transient instead, the query retries --
+	// against a reservation that exists, rather than against none.
+	rows, rerr := sqlexec.CdcTailRowsUpperBound(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable,
+		s.Tblcfg.IndexTable, s.overflowVectorBytes())
+	if rerr != nil {
+		return rerr
 	}
+	s.overflowRowsEstimate = rows
 	if len(indexes) > 0 {
 		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
 		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an

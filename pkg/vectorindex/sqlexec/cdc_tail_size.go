@@ -44,6 +44,13 @@ import (
 //
 // vectorBytes is the storage width of one vector (dimensions x element size). Zero or negative
 // disables the fallback, since the division is what makes it a row count.
+//
+// A tail whose SIZE CANNOT BE DETERMINED returns an error, and the caller must refuse the load
+// rather than proceed with 0. The estimate is what admission reserves against, and there is no
+// second chance at it: Load allocates the overflow on the GPU, and no post-load pass can give
+// back memory that is already taken. "Unknown" answered as 0 -- or, for a partly described tail
+// whose chunks could not be counted, as "fully covered" -- is the same allocation the reservation
+// exists to prevent, taken while another generation is resident or arrivals are concurrent.
 func CdcTailRowsUpperBound(sqlproc *SqlProcess, db, metaTable, storageTable string, vectorBytes int64) (rows int64, err error) {
 	if sqlproc == nil || db == "" || metaTable == "" {
 		return 0, nil
@@ -63,9 +70,18 @@ func CdcTailRowsUpperBound(sqlproc *SqlProcess, db, metaTable, storageTable stri
 	if cerr != nil {
 		// Narrow table (no nrow column) or an unreadable metadata table. This is an ordinary
 		// rollout state, not an outage, so it must not silently reserve zero.
-		return chunkBound(sqlproc, db, storageTable, vectorBytes), nil
+		return chunkBound(sqlproc, db, storageTable, vectorBytes)
 	}
-	totalChunks := tailChunkCount(sqlproc, db, storageTable)
+	totalChunks, terr := tailChunkCount(sqlproc, db, storageTable)
+	if terr != nil {
+		// The chunks are what says whether the frame rows describe the whole tail. Without
+		// them a partly-described tail is indistinguishable from a fully-described one, and
+		// answering "covered" for a migrated tail of 400 legacy chunks reserves for the one
+		// flush that has a row while Load replays all 401. UNKNOWN is not zero and it is not
+		// "fully covered": it is an error, and the caller refuses the load rather than
+		// allocating against a reservation that was never taken.
+		return 0, terr
+	}
 	uncovered := totalChunks - coveredChunks
 	if uncovered <= 0 || vectorBytes <= 0 {
 		return covered, nil
@@ -120,38 +136,47 @@ func coverageRead(sqlproc *SqlProcess, sql string) (res executor.Result, err err
 	return runSqlForTest(sqlproc, sql)
 }
 
-// tailChunkCount counts the tag=1 chunks actually stored. Unreadable answers 0, which leaves the
-// caller with whatever the frame rows covered.
-func tailChunkCount(sqlproc *SqlProcess, db, storageTable string) int64 {
+// tailChunkCount counts the tag=1 chunks actually stored. An unreadable count is returned as an
+// error, never as 0: 0 chunks and "we could not ask" are opposite answers -- the first says the
+// tail is empty, the second says its size is unknown -- and collapsing them is what let a load
+// size a 400-chunk tail at the one flush that carried a frame row. No storage table named is a
+// real 0: there is no tail to count.
+func tailChunkCount(sqlproc *SqlProcess, db, storageTable string) (int64, error) {
 	if storageTable == "" {
-		return 0
+		return 0, nil
 	}
 	sql := fmt.Sprintf("SELECT CAST(COUNT(*) AS SIGNED) FROM %s WHERE %s = %s AND %s = %d",
 		sqlquote.QualifiedIdent(db, storageTable),
 		catalog.IndexStorage_TblCol_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.IndexStorage_TblCol_Tag, int(vectorindex.Tag_CdcEvents))
-	n, _ := scalarInt64(sqlproc, sql)
-	return n
+	return scalarInt64(sqlproc, sql)
 }
 
 // chunkBound is the fallback when the frame rows cannot be read at all: every stored chunk,
-// ceilinged by how many records one can hold.
-func chunkBound(sqlproc *SqlProcess, db, storageTable string, vectorBytes int64) int64 {
+// ceilinged by how many records one can hold. With the count unreadable too there is nothing
+// left to bound the tail with, so it errors rather than reporting the empty tail it cannot
+// distinguish itself from. vectorBytes <= 0 is the one 0 that is not a guess: rows are bytes
+// divided by the vector width, and without a width the row figure means nothing either way --
+// the byte charge it feeds (rows x vectorBytes) is 0 regardless.
+func chunkBound(sqlproc *SqlProcess, db, storageTable string, vectorBytes int64) (int64, error) {
 	if vectorBytes <= 0 {
-		return 0
+		return 0, nil
 	}
-	chunks := tailChunkCount(sqlproc, db, storageTable)
+	chunks, err := tailChunkCount(sqlproc, db, storageTable)
+	if err != nil {
+		return 0, err
+	}
 	if chunks <= 0 {
-		return 0
+		return 0, nil
 	}
 	perChunk := int64(vectorindex.MaxChunkSize) / vectorBytes
 	if perChunk < 1 {
 		perChunk = 1
 	}
 	if chunks > math.MaxInt64/perChunk {
-		return math.MaxInt64
+		return math.MaxInt64, nil
 	}
-	return chunks * perChunk
+	return chunks * perChunk, nil
 }
 
 // runSqlForTest indirects the read so the sizing rules are testable without a cluster.
@@ -159,12 +184,13 @@ var runSqlForTest = RunSql
 
 // scalarInt64 reads a one-column, one-row result.
 //
-// A SIZING read must never be the thing that breaks a load, and RunSql reaches the executor,
-// which PANICS rather than erroring when a process has no lock service (internal callers, unit
-// contexts). Recovering HERE -- at the single point that touches RunSql -- rather than around the
-// caller matters: a recover wrapped around the caller would have to re-run a query to produce its
-// fallback, and a panic raised inside a deferred function propagates rather than being caught
-// again. Each read degrades independently, and the caller's own fallback chain does the rest.
+// A SIZING read must never CRASH a load, and RunSql reaches the executor, which PANICS rather
+// than erroring when a process has no lock service (internal callers, unit contexts). Recovering
+// HERE -- at the single point that touches RunSql -- rather than around the caller matters: a
+// recover wrapped around the caller would have to re-run a query to produce its fallback, and a
+// panic raised inside a deferred function propagates rather than being caught again. Each read
+// degrades independently into an ERROR, which the caller's fallback chain either answers from
+// another source or reports; it never degrades into a figure.
 func scalarInt64(sqlproc *SqlProcess, sql string) (n int64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
