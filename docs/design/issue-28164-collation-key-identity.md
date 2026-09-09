@@ -1019,3 +1019,19 @@ not yet wired to HAKeeper persistence, heartbeat publication, plan/TN commit
 admission, recovery owner, or a management command. Until those consumers are
 connected, the planner's v2 read/write rejection remains in force and no
 relation can be enabled by this package alone.
+
+### 10.9 Implementation series status (sidecar entry envelope)
+
+The sidecar increment adds a dependency-light `MOKS` entry envelope for the
+planned storage-owned mapping from a complete `MOKY` equality key to a stable
+`MOKL` row locator. Both variable-length components are length-delimited and
+validated before publication; decoding copies pooled input bytes and rejects
+unknown versions, malformed keys, malformed locators, and trailing data.
+The locator remains the original physical primary-key image plus relation and
+partition identity, never a transient `__mo_rowid`.
+
+This package is only a wire/validation contract. No catalog relation, hidden
+index schema, point probe, lock, transaction writer, replay consumer, or
+migration command uses it yet. The v2 read/write admission fences therefore
+remain active, and this increment does not change legacy or user-visible SQL
+behaviour.
