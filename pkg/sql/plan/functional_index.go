@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const functionalIndexProtocolError = "functional indexes require all CNs to support protocol version 57"
+const functionalIndexProtocolError = "functional indexes require all CNs to support protocol version 59"
 
 type functionalIndexExprKind uint8
 
@@ -89,7 +89,7 @@ func requireFunctionalIndexProtocol(ctx context.Context, proc *process.Process) 
 	default:
 		ok = false
 	}
-	if !ok || version < defines.MORPCVersion57 {
+	if !ok || version < defines.MORPCVersion59 {
 		return moerr.NewNotSupported(ctx, functionalIndexProtocolError)
 	}
 	return nil
