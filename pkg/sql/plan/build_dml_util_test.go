@@ -715,7 +715,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -744,7 +744,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, true, false,
+			false, true, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -753,6 +753,32 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.False(t, joinNode.IsRightJoin)
 		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("post-createQuery FK action uses local ABI without runtime filter", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			true, false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, indexScan.BindingTags)
+		require.Empty(t, builder.qry.Nodes[joinNode.Children[1]].BindingTags)
+		require.Len(t, joinNode.OnList, 1)
 	})
 
 	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
@@ -767,7 +793,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, false, false, true,
+			false, false, false, true, false,
 		)
 
 		require.NoError(t, err)
@@ -794,7 +820,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, false, false,
+			false, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -824,7 +850,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
