@@ -1001,3 +1001,21 @@ consumer, or management command calls this primitive yet; the read/write
 admission fences therefore continue to reject v2 relations. This increment is
 an executable runtime foundation, not a user-visible fix or an enablement
 claim.
+
+### 10.8 Implementation series status (activation contract)
+
+The activation increment adds a dependency-light `collationkey.Activation`
+contract for the durable PREPARING/ENABLED/ABORTED state. It validates the
+requested codec and registry digest, requires non-zero generation and explicit
+CN/TN target incarnations, copies target maps on creation, and exposes a
+single `Enable` operation that requires every target to acknowledge both read
+and write support. Acknowledgements are matched by node identity and exact
+incarnation, so a restarted or stale writer cannot satisfy a previous
+generation. `Advance` cannot bypass that check and enabled/aborted generations
+cannot be downgraded to disabled.
+
+This is the state-machine contract and its executable unit tests only. It is
+not yet wired to HAKeeper persistence, heartbeat publication, plan/TN commit
+admission, recovery owner, or a management command. Until those consumers are
+connected, the planner's v2 read/write rejection remains in force and no
+relation can be enabled by this package alone.
