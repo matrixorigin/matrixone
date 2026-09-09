@@ -74,11 +74,16 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"a,b", "c,d"}, got)
 
-		stmt, err := db.PrepareContext(ctx, `select substring_index('a,b,c,d', ',', ?)`)
-		require.NoError(t, err)
-		defer stmt.Close()
+		require.NoError(t, execIssue28401(ctx, db, `prepare stmt from "select substring_index('a,b,c,d', ',', ?)"`))
+		defer execIssue28401(ctx, db, "deallocate prepare stmt")
+		require.NoError(t, execIssue28401(ctx, db, "set @v = cast(1.5 as decimal(4,1))"))
 		var prepared string
-		require.NoError(t, stmt.QueryRowContext(ctx, "1.5").Scan(&prepared))
+		require.NoError(t, db.QueryRowContext(ctx, "execute stmt using @v").Scan(&prepared))
 		require.Equal(t, "a,b", prepared)
 	})
+}
+
+func execIssue28401(ctx context.Context, db *sql.DB, query string) error {
+	_, err := db.ExecContext(ctx, query)
+	return err
 }
