@@ -34,6 +34,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/big"
 	"math/bits"
 	"net"
 	"runtime"
@@ -8145,11 +8146,431 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 
 const randomBytesMaxLength = 1024
 
+func randomBytesCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	switch inputs[0].Oid {
+	case types.T_int64:
+		return newCheckResultWithSuccess(0)
+	case types.T_uint64:
+		return newCheckResultWithSuccess(1)
+	case types.T_any,
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32,
+		types.T_uint8, types.T_uint16, types.T_uint32,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_year,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary:
+		// Keep the source domain intact. Numeric values are rounded while
+		// strings consume a leading integer prefix, and prepared parameters
+		// must retain the type that was bound at execution time.
+		return newCheckResultWithSuccess(2)
+	default:
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+}
+
 // RandomBytes: RANDOM_BYTES(len) - Returns a binary string of len random bytes
 // Uses crypto/rand for cryptographically secure random bytes
-// Handles both int64 and uint64 parameter types.
+// Handles MySQL numeric and numeric-string argument coercions.
 func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return randomBytesWithReader(parameters, result, proc, length, selectList, rand.Read)
+}
+
+type randomBytesLengthGetter func(uint64) (int64, bool, error)
+
+func randomBytesRangeError(proc *process.Process) error {
+	return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
+}
+
+func randomBytesRoundedFloat(value float64, proc *process.Process) (int64, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, randomBytesRangeError(proc)
+	}
+	rounded := math.RoundToEven(value)
+	if rounded < 1 || rounded > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded), nil
+}
+
+// randomBytesRoundedDecimalIntegerString validates an already rounded,
+// decimal-domain integer. decimalInt64Explicit clamps values outside int64,
+// which is sufficient because every value outside [1, 1024] is rejected below
+// anyway.
+func randomBytesRoundedDecimalIntegerString(integer string, proc *process.Process) (int64, error) {
+	length, err := decimalInt64Explicit(integer)
+	if err != nil || length < 1 || length > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return length, nil
+}
+
+func randomBytesRoundedDecimal64(value types.Decimal64, scale int32, proc *process.Process) (int64, error) {
+	// Decimal64 normally has at most 18 fractional digits, so keep the
+	// allocation-free fixed-width path for the common case. Scale splits a
+	// larger divisor into 19-digit chunks and rounds each chunk; use the exact
+	// decimal conversion helper whenever that split would be needed.
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal64RoundedIntegerString(value, scale), proc)
+	}
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || uint64(rounded) < 1 || uint64(rounded) > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded), nil
+}
+
+func randomBytesRoundedDecimal128(value types.Decimal128, scale int32, proc *process.Process) (int64, error) {
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal128RoundedIntegerString(value, scale), proc)
+	}
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded.B0_63), nil
+}
+
+func randomBytesRoundedDecimal256(value types.Decimal256, scale int32, proc *process.Process) (int64, error) {
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal256RoundedIntegerString(value, scale), proc)
+	}
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.B192_255 != 0 || rounded.B128_191 != 0 || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded.B0_63), nil
+}
+
+// roundPreparedDecimalIntegerString keeps a decimal value in the exact
+// arithmetic domain while it is still represented by the text transport
+// vector used for prepared parameters.  big.Rat accepts the canonical decimal
+// spelling emitted by the MySQL protocol (including an optional exponent),
+// and the quotient/remainder step implements the engine's half-up, away from
+// zero tie rule without converting through float64.
+func roundPreparedDecimalIntegerString(value string) (string, error) {
+	if !isPreparedDecimalLiteral(value) {
+		return "", strconv.ErrSyntax
+	}
+	rational, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return "", strconv.ErrSyntax
+	}
+	numerator := rational.Num()
+	denominator := rational.Denom()
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if remainder.Sign() != 0 {
+		if new(big.Int).Lsh(new(big.Int).Abs(remainder), 1).Cmp(denominator) >= 0 {
+			if numerator.Sign() < 0 {
+				quotient.Sub(quotient, big.NewInt(1))
+			} else {
+				quotient.Add(quotient, big.NewInt(1))
+			}
+		}
+	}
+	return quotient.String(), nil
+}
+
+func isPreparedDecimalLiteral(value string) bool {
+	const (
+		maxLiteralLength = 256
+		maxExponent      = 256
+	)
+	if value == "" || len(value) > maxLiteralLength {
+		return false
+	}
+	pos := 0
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+		if pos == len(value) {
+			return false
+		}
+	}
+	digits := 0
+	for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+		pos++
+		digits++
+	}
+	if pos < len(value) && value[pos] == '.' {
+		pos++
+		for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+			pos++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return false
+	}
+	if pos < len(value) && (value[pos] == 'e' || value[pos] == 'E') {
+		pos++
+		if pos < len(value) && (value[pos] == '+' || value[pos] == '-') {
+			pos++
+		}
+		exponentDigits := 0
+		exponent := 0
+		for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+			pos++
+			exponentDigits++
+			if exponent > maxExponent/10 {
+				return false
+			}
+			exponent = exponent*10 + int(value[pos-1]-'0')
+			if exponent > maxExponent {
+				return false
+			}
+		}
+		if exponentDigits == 0 {
+			return false
+		}
+	}
+	return pos == len(value)
+}
+
+func randomBytesTextLength(
+	param *vector.Vector,
+	value []byte,
+	row uint64,
+	proc *process.Process,
+) (int64, error) {
+	kind := param.GetPrepareParamKindAt(int(row))
+	switch kind {
+	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
+		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
+		// SQL PREPARE stores the value in a text transport vector. The source
+		// kind is the distinction between a string literal (integer prefix) and
+		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
+		if kind == vector.PrepareParamDecimal {
+			integer, err := roundPreparedDecimalIntegerString(text)
+			if err != nil {
+				return 0, randomBytesRangeError(proc)
+			}
+			return randomBytesRoundedDecimalIntegerString(integer, proc)
+		}
+		floating, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return 0, randomBytesRangeError(proc)
+		}
+		return randomBytesRoundedFloat(floating, proc)
+	case vector.PrepareParamBoolean:
+		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
+		boolean, err := strconv.ParseBool(text)
+		if err != nil {
+			return 0, randomBytesRangeError(proc)
+		}
+		if boolean {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		// Keep ordinary character values byte-oriented. In particular, MySQL
+		// only ignores ASCII whitespace before the numeric prefix; using
+		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+		return parseMySQLIntegerPrefix(value), nil
+	}
+}
+
+func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {
+	if param == nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", "nil argument")
+	}
+
+	rangeError := func() error { return randomBytesRangeError(proc) }
+	switch param.GetType().Oid {
+	case types.T_any:
+		return func(i uint64) (int64, bool, error) {
+			if param.IsNull(i) {
+				return 0, true, nil
+			}
+			return 0, false, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", "untyped non-NULL argument")
+		}, nil
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			if value {
+				return 1, false, nil
+			}
+			return 0, false, nil
+		}, nil
+	case types.T_bit:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			if value > randomBytesMaxLength {
+				return 0, false, rangeError()
+			}
+			return int64(value), false, nil
+		}, nil
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return value, null, nil
+		}, nil
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return int64(value), null, nil
+		}, nil
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			if value > randomBytesMaxLength {
+				return 0, false, rangeError()
+			}
+			return int64(value), false, nil
+		}, nil
+	case types.T_float32:
+		p := vector.GenerateFunctionFixedTypeParameter[float32](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			converted, err := randomBytesRoundedFloat(float64(value), proc)
+			return converted, false, err
+		}, nil
+	case types.T_float64:
+		p := vector.GenerateFunctionFixedTypeParameter[float64](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			converted, err := randomBytesRoundedFloat(value, proc)
+			return converted, false, err
+		}, nil
+	case types.T_decimal64:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](param)
+		scale := param.GetType().Scale
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			converted, err := randomBytesRoundedDecimal64(value, scale, proc)
+			return converted, false, err
+		}, nil
+	case types.T_decimal128:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](param)
+		scale := param.GetType().Scale
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			converted, err := randomBytesRoundedDecimal128(value, scale, proc)
+			return converted, false, err
+		}, nil
+	case types.T_decimal256:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](param)
+		scale := param.GetType().Scale
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			converted, err := randomBytesRoundedDecimal256(value, scale, proc)
+			return converted, false, err
+		}, nil
+	case types.T_year:
+		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](param)
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetValue(i)
+			return value.ToInt64(), null, nil
+		}, nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary:
+		p := vector.GenerateFunctionStrParameter(param)
+		staticBinary := param.GetIsBin() ||
+			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
+		return func(i uint64) (int64, bool, error) {
+			value, null := p.GetStrValue(i)
+			if null {
+				return 0, true, nil
+			}
+			isBinary := staticBinary
+			switch param.GetRuntimeStringDomainAt(int(i)) {
+			case types.RuntimeStringText:
+				// A selected CASE/IF/COALESCE value can explicitly restore
+				// character semantics even when the common vector type is
+				// VARBINARY/BLOB.  The row-level override must win over the
+				// static type and any conservative vector summary.
+				isBinary = false
+			case types.RuntimeStringBinary:
+				isBinary = true
+			default:
+				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
+			}
+			if isBinary {
+				if len(value) == 0 {
+					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
+				}
+				if len(value) > 8 {
+					return 0, false, moerr.NewOutOfRange(proc.Ctx, "int", "")
+				}
+				var parsed uint64
+				for _, b := range value {
+					parsed = (parsed << 8) | uint64(b)
+					if parsed > math.MaxInt64 {
+						return 0, false, moerr.NewOutOfRange(proc.Ctx, "int", "")
+					}
+				}
+				return int64(parsed), false, nil
+			}
+			parsed, err := randomBytesTextLength(param, value, i, proc)
+			return parsed, false, err
+		}, nil
+	default:
+		return nil, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", param.GetType().Oid.String())
+	}
 }
 
 // randomBytesWithReader contains the execution logic behind RandomBytes and
@@ -8164,8 +8585,14 @@ func randomBytesWithReader(
 	selectList *FunctionSelectList,
 	read func([]byte) (int, error),
 ) error {
+	if len(parameters) != 1 {
+		return moerr.NewInvalidArg(proc.Ctx, "function random_bytes", fmt.Sprintf("expected 1 argument, got %d", len(parameters)))
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	paramType := parameters[0].GetType().Oid
+	getLength, err := makeRandomBytesLengthGetter(parameters[0], proc)
+	if err != nil {
+		return err
+	}
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -8176,30 +8603,9 @@ func randomBytesWithReader(
 			continue
 		}
 
-		var lenVal int64
-		var null bool
-
-		// Handle different numeric types
-		switch paramType {
-		case types.T_int64:
-			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
-			val, nullVal := lenParam.GetValue(i)
-			lenVal = val
-			null = nullVal
-		case types.T_uint64:
-			lenParam := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
-			val, nullVal := lenParam.GetValue(i)
-			if !nullVal && val > randomBytesMaxLength {
-				return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
-			}
-			lenVal = int64(val)
-			null = nullVal
-		default:
-			// Fallback to int64
-			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
-			val, nullVal := lenParam.GetValue(i)
-			lenVal = val
-			null = nullVal
+		lenVal, null, err := getLength(i)
+		if err != nil {
+			return err
 		}
 
 		if null {
@@ -8214,12 +8620,12 @@ func randomBytesWithReader(
 		// result; otherwise a query can silently return a wrong value or a
 		// partial result for a column containing an invalid length.
 		if lenVal < 1 || lenVal > randomBytesMaxLength {
-			return moerr.NewPreparedParamOutOfRange(proc.Ctx, "length", "random_bytes")
+			return randomBytesRangeError(proc)
 		}
 
 		// Generate random bytes using crypto/rand
 		randomBytes := make([]byte, lenVal)
-		_, err := read(randomBytes)
+		_, err = read(randomBytes)
 		if err != nil {
 			return moerr.NewInternalErrorf(proc.Ctx, "random_bytes failed to generate %d bytes: %v", lenVal, err)
 		}
