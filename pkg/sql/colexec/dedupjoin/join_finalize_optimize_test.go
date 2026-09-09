@@ -614,11 +614,13 @@ func TestDedupJoinFinalizeMatchedZero_WithCapture(t *testing.T) {
 			colexec.NewResultPos(1, 0), // build key — non-capture column, transfer path
 			colexec.NewResultPos(1, 1), // capture target — must be NULL-filled
 		},
-		OnDuplicateAction:               plan.Node_FAIL,
-		OldColCapturePlaceholderIdxList: []int32{1},
-		OldColCaptureProbeIdxList:       []int32{1},
-		JoinMapTag:                      curTag,
-		OperatorBase:                    vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList:      []int32{1},
+		OldColCaptureProbeIdxList:            []int32{1},
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:   true,
@@ -1005,9 +1007,11 @@ func TestDedupJoinFinalizeMatchedZero_DuplicateBuildPos(t *testing.T) {
 			colexec.NewResultPos(1, 1), // build payload
 			colexec.NewResultPos(1, 1), // SAME build payload — aliased projection
 		},
-		OnDuplicateAction: plan.Node_FAIL, // no capture, no matched marking
-		JoinMapTag:        curTag,
-		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL, // no capture, no matched marking
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:   true,
