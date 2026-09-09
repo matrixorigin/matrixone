@@ -329,13 +329,13 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 
 	loaded, err := LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
+	t.Cleanup(loaded.Free)
 	require.Equal(t, "seg0", loaded.Id)
 	require.Equal(t, int64(5), loaded.Recency)
 	require.Equal(t, seg.N, loaded.N)
 	df, ok := loaded.lookupLoadedDF("hello")
 	require.True(t, ok)
 	require.Equal(t, 2, df)
-	loaded.Free()
 
 	// A checksum authenticates bytes, not their internal structure. Persist a
 	// matching checksum for a blob whose "hello" entry has a valid DF header but
@@ -352,6 +352,7 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	})
 	loaded, err = LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
+	t.Cleanup(loaded.Free)
 	df, ok = loaded.lookupLoadedDF("hello")
 	require.True(t, ok)
 	require.Equal(t, 2, df)
@@ -359,7 +360,6 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	require.False(t, ok)
 	_, ok = loaded.LookupLoaded("world")
 	require.True(t, ok)
-	loaded.Free()
 
 	// a checksum mismatch (corrupt stream) is detected and rejected.
 	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
