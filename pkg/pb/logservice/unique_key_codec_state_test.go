@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
@@ -105,5 +106,80 @@ func TestUniqueKeyCodecCapabilityBuildsGenerationAcknowledgement(t *testing.T) {
 	if missing.NodeID != "cn-2" || missing.Incarnation != 0 ||
 		missing.Capability.Supports(collationkey.NewCollationAwareMetadata(), true) {
 		t.Fatalf("missing acknowledgement = %+v", missing)
+	}
+}
+
+func TestUniqueKeyMigrationGateWireAdapterRoundTripsRSMState(t *testing.T) {
+	gate, err := collationkey.NewMigrationGate(91, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := collationkey.MigrationOwner{OwnerID: "owner-a", Incarnation: 7, ClaimToken: []byte{1, 2, 3}}
+	if err := gate.BeginDraining(owner, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.EnterExclusive(owner, 200); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.SetBuildIdentity(owner, 12, 300, 400); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Publish(owner, 500, 600, map[string]uint64{"cn-a": 11, "tn-a": 13}, 700); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AcknowledgeReplay(owner, 600, "cn-a", 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.RetireReplayTarget(owner, 600, "tn-a", 13); err != nil {
+		t.Fatal(err)
+	}
+
+	wire, err := NewUniqueKeyMigrationGate(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := wire.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded UniqueKeyMigrationGate
+	if err := decoded.Unmarshal(encoded); err != nil {
+		t.Fatal(err)
+	}
+	converted, err := decoded.ToCollationKeyMigrationGate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(converted, gate) {
+		t.Fatalf("migration gate conversion differs: got=%+v want=%+v", converted, gate)
+	}
+
+	state := HAKeeperRSMState{UniqueKeyMigrationGate: &decoded}
+	stateWire, err := state.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored HAKeeperRSMState
+	if err := restored.Unmarshal(stateWire); err != nil {
+		t.Fatal(err)
+	}
+	if restored.UniqueKeyMigrationGate == nil || !reflect.DeepEqual(restored.UniqueKeyMigrationGate, &decoded) {
+		t.Fatalf("RSM migration gate was not restored: %+v", restored.UniqueKeyMigrationGate)
+	}
+
+	wire.ClaimToken[0] ^= 1
+	wire.ReplayTargets["cn-a"] = 99
+	if decoded.ClaimToken[0] != 1 || decoded.ReplayTargets["cn-a"] != 11 {
+		t.Fatal("wire adapter retained mutable source aliases")
+	}
+}
+
+func TestUniqueKeyMigrationGateWireAdapterRejectsMalformedState(t *testing.T) {
+	bad := &UniqueKeyMigrationGate{RelationId: 91, Phase: MIGRATION_EXCLUSIVE}
+	if _, err := bad.ToCollationKeyMigrationGate(); !errors.Is(err, collationkey.ErrMigrationGate) {
+		t.Fatalf("malformed migration gate error = %v", err)
+	}
+	if _, err := NewUniqueKeyMigrationGate(collationkey.MigrationGate{}); !errors.Is(err, collationkey.ErrMigrationGate) {
+		t.Fatalf("empty migration gate error = %v", err)
 	}
 }

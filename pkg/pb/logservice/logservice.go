@@ -325,6 +325,70 @@ func cloneUniqueKeyCodecTargets(src map[string]uint64) map[string]uint64 {
 	return dst
 }
 
+func cloneUniqueKeyMigrationMap(src map[string]uint64) map[string]uint64 {
+	if src == nil {
+		return make(map[string]uint64)
+	}
+	return cloneUniqueKeyCodecTargets(src)
+}
+
+// ToCollationKeyMigrationGate converts the replicated gate into the common
+// state-machine contract. A nil field is the clean OPEN state; malformed or
+// partially populated records are rejected instead of being interpreted as a
+// fresh migration.
+func (g *UniqueKeyMigrationGate) ToCollationKeyMigrationGate() (collationkey.MigrationGate, error) {
+	if g == nil {
+		return collationkey.MigrationGate{}, nil
+	}
+	gate := collationkey.MigrationGate{
+		RelationID:          g.RelationId,
+		MigrationEpoch:      g.MigrationEpoch,
+		Owner:               collationkey.MigrationOwner{OwnerID: g.OwnerId, Incarnation: g.OwnerIncarnation, ClaimToken: append([]byte(nil), g.ClaimToken...)},
+		Phase:               collationkey.MigrationPhase(g.Phase),
+		PhaseDeadlineNanos:  g.PhaseDeadlineNanos,
+		SourceSchemaEpoch:   g.SourceSchemaEpoch,
+		SourceSnapshotID:    g.SourceSnapshotId,
+		TempRelationID:      g.TempRelationId,
+		PublicationTxnID:    g.PublicationTxnId,
+		ReplayGeneration:    g.ReplayGeneration,
+		WritePermits:        cloneUniqueKeyMigrationMap(g.WritePermits),
+		ReplayTargets:       cloneUniqueKeyMigrationMap(g.ReplayTargets),
+		ReplayAcknowledged:  cloneUniqueKeyMigrationMap(g.ReplayAcknowledged),
+		RetiredReplayTarget: cloneUniqueKeyMigrationMap(g.RetiredReplayTarget),
+	}
+	if err := gate.Validate(); err != nil {
+		return collationkey.MigrationGate{}, err
+	}
+	return gate, nil
+}
+
+// NewUniqueKeyMigrationGate creates an ownership-safe protobuf record from a
+// validated common gate. The generated protobuf message is the RSM/catalog
+// persistence form; no caller-owned map or token is retained by reference.
+func NewUniqueKeyMigrationGate(gate collationkey.MigrationGate) (*UniqueKeyMigrationGate, error) {
+	if err := gate.Validate(); err != nil {
+		return nil, err
+	}
+	return &UniqueKeyMigrationGate{
+		RelationId:          gate.RelationID,
+		MigrationEpoch:      gate.MigrationEpoch,
+		OwnerId:             gate.Owner.OwnerID,
+		OwnerIncarnation:    gate.Owner.Incarnation,
+		ClaimToken:          append([]byte(nil), gate.Owner.ClaimToken...),
+		Phase:               UniqueKeyMigrationGate_Phase(gate.Phase),
+		PhaseDeadlineNanos:  gate.PhaseDeadlineNanos,
+		SourceSchemaEpoch:   gate.SourceSchemaEpoch,
+		SourceSnapshotId:    gate.SourceSnapshotID,
+		TempRelationId:      gate.TempRelationID,
+		PublicationTxnId:    gate.PublicationTxnID,
+		ReplayGeneration:    gate.ReplayGeneration,
+		WritePermits:        cloneUniqueKeyMigrationMap(gate.WritePermits),
+		ReplayTargets:       cloneUniqueKeyMigrationMap(gate.ReplayTargets),
+		ReplayAcknowledged:  cloneUniqueKeyMigrationMap(gate.ReplayAcknowledged),
+		RetiredReplayTarget: cloneUniqueKeyMigrationMap(gate.RetiredReplayTarget),
+	}, nil
+}
+
 // NewLogState creates a new LogState.
 func NewLogState() LogState {
 	return LogState{

@@ -67,6 +67,11 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 		CnTargets:        map[string]uint64{"cn-1": 21},
 		TnTargets:        map[string]uint64{"tn-1": 22},
 	}
+	migrationGate, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	migrationGateWire, err := pb.NewUniqueKeyMigrationGate(migrationGate)
+	require.NoError(t, err)
+	tsm1.state.UniqueKeyMigrationGate = migrationGateWire
 	tsm1.state.ScheduleCommands["tn-1"] = pb.CommandBatch{
 		BatchID:    9,
 		Commands:   []pb.ScheduleCommand{{UUID: "tn-1", ServiceType: pb.TNService}},
@@ -83,6 +88,11 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.True(t, tsm2.state.CommandDeliveryEnabled)
 	assert.True(t, tsm2.state.CommandDeliveryCommandIDsAssigned)
 	assert.Equal(t, tsm1.state.UniqueKeyCodecActivation, tsm2.state.UniqueKeyCodecActivation)
+	gotGate, err := tsm2.state.UniqueKeyMigrationGate.ToCollationKeyMigrationGate()
+	require.NoError(t, err)
+	wantGate, err := tsm1.state.UniqueKeyMigrationGate.ToCollationKeyMigrationGate()
+	require.NoError(t, err)
+	assert.Equal(t, wantGate, gotGate)
 	assert.Equal(t, tsm1.state.ScheduleCommands, tsm2.state.ScheduleCommands)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
@@ -102,8 +112,12 @@ func TestHAKeeperSnapshotWithoutCodecActivationClearsReusedState(t *testing.T) {
 		CnTargets:        map[string]uint64{"cn-1": 4},
 		TnTargets:        map[string]uint64{"tn-1": 5},
 	}
+	reused.state.UniqueKeyMigrationGate = &pb.UniqueKeyMigrationGate{
+		RelationId: 91,
+	}
 	require.NoError(t, reused.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
 	require.Nil(t, reused.state.UniqueKeyCodecActivation)
+	require.Nil(t, reused.state.UniqueKeyMigrationGate)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {
@@ -643,6 +657,23 @@ func TestStateQueryPreservesUniqueKeyCodecActivation(t *testing.T) {
 	state.UniqueKeyCodecActivation.CnTargets["cn-1"] = 99
 	require.Equal(t, byte(1), rsm.state.UniqueKeyCodecActivation.RegistryDigest[0])
 	require.Equal(t, uint64(4), rsm.state.UniqueKeyCodecActivation.CnTargets["cn-1"])
+}
+
+func TestStateQueryPreservesUniqueKeyMigrationGate(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	gate, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	rsm.state.UniqueKeyMigrationGate, err = pb.NewUniqueKeyMigrationGate(gate)
+	require.NoError(t, err)
+
+	value, err := rsm.Lookup(&StateQuery{})
+	require.NoError(t, err)
+	state := value.(*pb.CheckerState)
+	require.Equal(t, rsm.state.UniqueKeyMigrationGate, state.UniqueKeyMigrationGate)
+	state.UniqueKeyMigrationGate.ClaimToken = []byte{9}
+	state.UniqueKeyMigrationGate.RelationId = 99
+	require.Empty(t, rsm.state.UniqueKeyMigrationGate.ClaimToken)
+	require.Equal(t, uint64(91), rsm.state.UniqueKeyMigrationGate.RelationId)
 }
 
 func TestUniqueKeyCodecActivationUpdateRequiresTargetCapabilities(t *testing.T) {

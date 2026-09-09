@@ -1227,6 +1227,10 @@ entry ceilings, rejects unsorted or duplicate identities, and runs the
 recovered gate therefore cannot silently lose an outstanding writer, replay
 target, owner fence, or irreversible publication marker. This is a typed
 checkpoint contract for a future HAKeeper/catalog adapter; it is not yet
-connected to RSM fields, TN commit admission, `mo_ctl`, catalog relation
-publication, or the migration runbook. The v2 writer/read gates remain
-fail-closed and production v2 remains disabled.
+used to mutate the gate through a management command. A typed
+`UniqueKeyMigrationGate` field is now carried through HAKeeper RSM snapshots
+and `StateQuery`, with deep-copy and legacy-snapshot clearing tests; the RSM
+field is observation/persistence only until an owner-authorized transition
+command is specified. TN commit admission, `mo_ctl`, catalog relation
+publication, and the migration runbook are still not connected. The v2
+writer/read gates remain fail-closed and production v2 remains disabled.

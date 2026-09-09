@@ -851,6 +851,7 @@ message CheckerState {
   bool LogServiceRecoveryPrepared = 17;
   bool LogServiceRecoveryCompleted = 18;
   UniqueKeyCodecActivation unique_key_codec_activation = 19;
+  UniqueKeyMigrationGate unique_key_migration_gate = 20;
 }
 
 message DeletedStore {
@@ -940,6 +941,11 @@ message HAKeeperRSMState {
   // versioned unique-key codec.  It is kept in the RSM state so snapshots,
   // replay, backup and restore cannot lose an enabled generation.
   UniqueKeyCodecActivation UniqueKeyCodecActivation = 43;
+  // UniqueKeyMigrationGate is the durable stop-write/atomic-publication
+  // state for one physical relation.  It is intentionally separate from the
+  // cluster codec activation: an enabled codec does not imply that a table
+  // migration is in progress or that a published gate may be rolled back.
+  UniqueKeyMigrationGate UniqueKeyMigrationGate = 44;
 }
 
 // ReplicaInfo contains details of a replica
@@ -1033,4 +1039,37 @@ message UniqueKeyCodecActivation {
   Phase phase = 5;
   map<string, uint64> cn_targets = 6;
   map<string, uint64> tn_targets = 7;
+}
+
+// UniqueKeyMigrationGate is the typed replicated form of the common
+// collationkey.MigrationGate contract.  The gate is persisted before any
+// catalog relation switch so recovery can distinguish an old live relation,
+// an in-flight temporary relation, and an already-published irreversible
+// generation. Map values are node/permit incarnations or admission epochs;
+// they are not wall-clock timestamps.
+message UniqueKeyMigrationGate {
+  enum Phase {
+    MIGRATION_OPEN = 0;
+    MIGRATION_DRAINING = 1;
+    MIGRATION_EXCLUSIVE = 2;
+    MIGRATION_PUBLISHED = 3;
+    MIGRATION_ABORTED = 4;
+  }
+
+  uint64 relation_id = 1;
+  uint64 migration_epoch = 2;
+  string owner_id = 3;
+  uint64 owner_incarnation = 4;
+  bytes claim_token = 5;
+  Phase phase = 6;
+  int64 phase_deadline_nanos = 7;
+  uint64 source_schema_epoch = 8;
+  uint64 source_snapshot_id = 9;
+  uint64 temp_relation_id = 10;
+  uint64 publication_txn_id = 11;
+  uint64 replay_generation = 12;
+  map<string, uint64> write_permits = 13;
+  map<string, uint64> replay_targets = 14;
+  map<string, uint64> replay_acknowledged = 15;
+  map<string, uint64> retired_replay_target = 16;
 }
