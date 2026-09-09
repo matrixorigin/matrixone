@@ -55,7 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonruntime"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -330,7 +330,7 @@ type Config struct {
 	// "working", "draining" and "drained".
 	InitWorkState string `toml:"init-work-state"`
 
-	PythonUdfClient pythonruntime.ClientConfig `toml:"python-udf-client"`
+	PythonUdfClient python.ClientConfig `toml:"python-udf-client"`
 
 	// LogtailUpdateWorkerFactor is the times of CPU number of this node
 	// to start update workers.

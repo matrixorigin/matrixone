@@ -52,7 +52,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonruntime"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -757,7 +757,7 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 		defer func() { finishTask(closeErr) }()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := pythonruntime.NewSupervisor(cfg.PythonUdfServerConfig)
+		s, err := python.NewSupervisor(cfg.PythonUdfServerConfig)
 		if err != nil {
 			panic(err)
 		}

@@ -71,7 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonruntime"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -243,8 +243,8 @@ func NewService(
 	var udfServices []udf.Runtime
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		var pc *pythonruntime.Gateway
-		pc, err = pythonruntime.NewGateway(srv.cfg.PythonUdfClient)
+		var pc *python.Gateway
+		pc, err = python.NewGateway(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
