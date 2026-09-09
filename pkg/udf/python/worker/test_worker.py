@@ -3,12 +3,19 @@
 import datetime
 import importlib.util
 import json
+import os
 import pathlib
+import signal
 import struct
+import subprocess
 import sys
+import tempfile
+import threading
 import time
+import types
 import unittest
 import uuid
+from unittest import mock
 
 import pyarrow as pa
 
@@ -96,6 +103,11 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "child validity"):
             worker._output_array(vector, vector_descriptor, 2)
 
+        valid = pa.array([None, [1.0, 2.0]], type=pa.list_(pa.float32(), 2))
+        self.assertEqual(valid.to_pylist(), worker._output_array(valid, vector_descriptor, 2).to_pylist())
+        visible = valid.slice(1, 1)
+        self.assertEqual(visible.to_pylist(), worker._output_array(visible, vector_descriptor, 1).to_pylist())
+
     def test_scalar_vector_null_keeps_fixed_size_child_slots(self):
         descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
         array = worker._output_array(
@@ -158,8 +170,212 @@ class WorkerContractTest(unittest.TestCase):
             "max_batch_bytes": 1 << 20,
             "input": worker._serialize_record_batch(batch),
         }
-        with self.assertRaisesRegex(ValueError, "handler process"):
+        result = worker._deserialize_record_batch(
             worker._run_handler_process(None, request, 3)
+        )
+        self.assertEqual([1], result.column(0).to_pylist())
+
+    def test_handler_cannot_forge_completion_on_stdout(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays([pa.array([77], type=pa.int64())], ["arg_0"])
+        result_batch = pa.RecordBatch.from_arrays(
+            [pa.array([77], type=pa.int64())], ["result"]
+        )
+        frame = struct.pack(">Q", len(bytes([worker._HANDLER_RESPONSE_OK]) + worker._serialize_record_batch(result_batch)))
+        frame += bytes([worker._HANDLER_RESPONSE_OK]) + worker._serialize_record_batch(result_batch)
+        request = {
+            "source": (
+                "import os,time\n"
+                f"def f(ctx, x):\n    os.write(1, {frame!r})\n"
+                "    time.sleep(5)\n"
+                "    raise RuntimeError('handler never returned success')\n"
+            ),
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "input": worker._serialize_record_batch(batch),
+        }
+        with self.assertRaisesRegex(TimeoutError, "handler execution timeout"):
+            worker._run_handler_process(None, request, 0.1)
+
+    def test_end_input_rejects_late_batch_without_running_handler(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        fence = {
+            "account_id": 1,
+            "statement_id": "review",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "late-input",
+            "lease_epoch": 1,
+        }
+        key = worker._tuple_key(fence)
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1], type=pa.int64())],
+            schema=pa.schema([worker._field("arg_0", descriptor)]),
+        )
+        payload = {
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "abi_contract": worker.ABI_CONTRACT,
+            "adapter_version": worker.ADAPTER_VERSION,
+            "sdk_version": worker.SDK_VERSION,
+            "args": [descriptor],
+            "return": descriptor,
+            "source": "def f(ctx, x): return x",
+            "handler": "f",
+            "max_batch_bytes": 1 << 20,
+            "max_batch_rows": 1024,
+            "handler_timeout_seconds": 2,
+        }
+        messages = []
+
+        def control(kind, **fields):
+            return worker._encode_control(dict(kind=kind, tuple=fence, **fields))
+
+        chunks = iter(
+            [
+                types.SimpleNamespace(
+                    data=None,
+                    app_metadata=control("EndInput", last_sequence=0),
+                ),
+                types.SimpleNamespace(
+                    data=batch,
+                    app_metadata=control("InputBatch", sequence=1),
+                ),
+            ]
+        )
+        reader = types.SimpleNamespace(schema=batch.schema, read_chunk=lambda: next(chunks))
+
+        class Writer:
+            def begin(self, schema):
+                pass
+
+            def write_metadata(self, data):
+                messages.append(worker._decode_control(data))
+
+            def write_with_metadata(self, record, data):
+                messages.append(worker._decode_control(data))
+
+        handler = mock.Mock()
+        try:
+            with mock.patch.object(worker, "_run_handler_process", handler):
+                with self.assertRaisesRegex(ValueError, "after EndInput"):
+                    server.do_exchange(
+                        types.SimpleNamespace(is_cancelled=lambda: False),
+                        types.SimpleNamespace(
+                            command=control("OpenInvocation", payload=payload)
+                        ),
+                        reader,
+                        Writer(),
+                    )
+        finally:
+            server.shutdown()
+        self.assertEqual(0, handler.call_count)
+
+    @unittest.skipUnless(os.name == "posix", "process-group test")
+    def test_descendant_is_killed_after_handler_leader_exits(self):
+        with tempfile.TemporaryDirectory(prefix="mo-udf-owned-child-") as artifact:
+            witness = pathlib.Path(artifact) / "owned-child.json"
+            descendant = "import os,time; time.sleep(0.15); os.close(1); time.sleep(10)"
+            source = (
+                "import json,os,pathlib,subprocess,sys\n"
+                "def f(ctx,x):\n"
+                f"    child=subprocess.Popen([sys.executable,'-c',{descendant!r}],stdin=subprocess.DEVNULL)\n"
+                f"    pathlib.Path({str(witness)!r}).write_text(json.dumps(dict(pid=child.pid,pgid=os.getpgrp())))\n"
+                "    os._exit(7)\n"
+            )
+            descriptor = {"type_id": worker.INT64, "offset_width": 32}
+            batch = pa.RecordBatch.from_arrays([pa.array([1], type=pa.int64())], ["arg_0"])
+            request = {
+                "source": source,
+                "handler": "f",
+                "mode": worker.MODE_SCALAR,
+                "null_policy": worker.NULL_CALL,
+                "sdk_version": worker.SDK_VERSION,
+                "context": None,
+                "args": [descriptor],
+                "return": descriptor,
+                "max_batch_bytes": 1 << 20,
+                "input": worker._serialize_record_batch(batch),
+            }
+            try:
+                with self.assertRaisesRegex(ValueError, "handler process"):
+                    worker._run_handler_process(None, request, 2)
+                observed = json.loads(witness.read_text())
+                try:
+                    survived = os.getpgid(observed["pid"]) == observed["pgid"]
+                except ProcessLookupError:
+                    survived = False
+                self.assertFalse(survived)
+            finally:
+                if witness.exists():
+                    owned = json.loads(witness.read_text())
+                    try:
+                        if os.getpgid(owned["pid"]) == owned["pgid"]:
+                            os.kill(owned["pid"], signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    @unittest.skipUnless(os.name == "posix", "non-blocking pipe test")
+    def test_request_write_observes_handler_deadline(self):
+        created = []
+        entered = threading.Event()
+        real_popen = subprocess.Popen
+
+        def no_reader(argv, **kwargs):
+            process = real_popen(
+                [sys.executable, "-c", "import time; time.sleep(10)"], **kwargs
+            )
+            created.append(process)
+            entered.set()
+            return process
+
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays([pa.array([1], type=pa.int64())], ["arg_0"])
+        request = {
+            "source": "def f(ctx, x): return x",
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "input": worker._serialize_record_batch(batch),
+            "probe_padding": b"x" * (1 << 20),
+        }
+        outcome = []
+
+        def invoke():
+            try:
+                worker._run_handler_process(None, request, 0.05)
+            except Exception as exc:
+                outcome.append(type(exc).__name__)
+
+        thread = threading.Thread(target=invoke, daemon=True)
+        try:
+            with mock.patch.object(worker.subprocess, "Popen", side_effect=no_reader):
+                thread.start()
+                self.assertTrue(entered.wait(1))
+                thread.join(0.5)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(["TimeoutError"], outcome)
+        finally:
+            for process in created:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+            thread.join(2)
+            for process in created:
+                process.wait(timeout=1)
+                if process.stdin:
+                    process.stdin.close()
 
     def test_zero_argument_vector_uses_context_rows(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
