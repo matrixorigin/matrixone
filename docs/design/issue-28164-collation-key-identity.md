@@ -3,7 +3,7 @@
 - Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline for implementation increment: `81a6fc70e50d4ccc28d09b0d5e87f18a97a2ad9e` (`upstream/main` at the post-rebase exact-head validation freeze)
+- Frozen baseline for implementation increment: `7c643f469b9162dec19b7f880e4cf6b2c12507d9` (`upstream/main` at the post-rebase exact-head validation freeze)
 - Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
@@ -392,9 +392,11 @@ available:
 ### 5.1 Version location
 
 The encoding version belongs to the physical relation that owns the key, not to
-the SQL expression alone. The next implementation PR adds the following
-length-delimited protobuf message and fields (the design PR does not modify
-the `.proto` files):
+the SQL expression alone. This implementation increment adds the following
+length-delimited protobuf message and fields; generated bindings and the
+currently reachable plan/schema copy boundaries are included in the same
+change. The fields remain inert until the complete storage and activation
+series is connected:
 
 ```protobuf
 message UniqueKeyCodecVersion {
@@ -428,9 +430,12 @@ the version:
   overloaded with a collation encoding version;
 - non-unique and FULLTEXT relations do not opt into this key contract.
 
-The next implementation PR copies the message through
-`PlanDefsToExeDefs`, `DefsToSchema`, `SchemaToDefs`, table-schema
-serialization, catalog replay, plan deep-copy, snapshot, clone, and restore.
+The current increment copies the message through the plan deep-copy and the
+existing schema/catalog-cache boundaries. `PlanDefsToExeDefs`,
+`DefsToSchema`, `SchemaToDefs`, table-schema serialization, catalog replay,
+snapshot, clone, and restore still require end-to-end verification before v2
+can be enabled; any boundary that cannot preserve the fields must remain
+fail-closed.
 The `value` values are:
 
 ```text
@@ -449,9 +454,11 @@ continues to mean the FULLTEXT algorithm version and is not reused.
 
 ### 5.2 Capability publication and activation fence
 
-The version message describes a relation; it is not a node capability. The next
-implementation adds a typed capability and a replicated activation record (the
-design PR does not edit `proto/*.proto`):
+The version message describes a relation; it is not a node capability. This
+increment also reserves typed capability and activation records in
+`proto/logservice.proto` and carries them through the HAKeeper snapshot/state
+adapters. Heartbeat publication, administrator authorization, and the complete
+rolling-upgrade fence remain follow-up work; no current service advertises v2.
 
 ```protobuf
 message UniqueKeyCodecCapability {
