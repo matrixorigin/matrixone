@@ -1,0 +1,10 @@
+drop database if exists arrow_load_bvt;
+create database arrow_load_bvt;
+use arrow_load_bvt;
+create table arrow_gate_off(id bigint, name varchar(50));
+load data infile {'filepath'='$resources/load_data/arrow_file.arrow', 'format'='arrow'} into table arrow_gate_off;
+not supported: Arrow LOAD is disabled by configuration
+select count(*) from arrow_gate_off;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database arrow_load_bvt;
