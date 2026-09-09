@@ -898,33 +898,42 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 	return nil
 }
 
-func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
+		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			continue
+		}
 		if err := r.Append(-int64(v), n); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
+		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			continue
+		}
 		if err := r.Append(-int64(v), n); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
 	r := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
+		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			continue
+		}
 		if err := r.Append(-int64(v), n); err != nil {
 			return err
 		}
