@@ -86,3 +86,26 @@ a,b,c,d,e,f,g,h
 SELECT MAKE_SET(256, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i') AS make_set_256;
 make_set_256
 i
+SELECT MAKE_SET(CAST('1.4' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_below_half;
+decimal_below_half
+a
+SELECT MAKE_SET(CAST('1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_half;
+decimal_half
+b
+SELECT MAKE_SET(CAST('-1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_negative_half;
+decimal_negative_half
+b,c,d
+SELECT MAKE_SET(CAST('1.9999999999999999' AS DECIMAL(18,16)), 'a', 'b', 'c', 'd') AS decimal_precision_boundary;
+decimal_precision_boundary
+b
+SELECT MAKE_SET(CAST('18446744073709551616' AS DECIMAL(38,0)), 'a', 'b', 'c', 'd') AS decimal_positive_overflow;
+decimal_positive_overflow
+a,b,c,d
+CREATE TABLE make_set_decimal_bits(d DECIMAL(38,1));
+INSERT INTO make_set_decimal_bits VALUES (1.4), (1.5), (-1.5);
+SELECT d, MAKE_SET(d, 'a', 'b', 'c', 'd') AS result FROM make_set_decimal_bits ORDER BY d;
+d    result
+-1.5    b,c,d
+1.4    a
+1.5    b
+DROP TABLE make_set_decimal_bits;

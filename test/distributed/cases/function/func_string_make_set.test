@@ -56,3 +56,14 @@ SELECT MAKE_SET(1 | 2, '你好', '世界', '测试') AS make_set_unicode;
 SELECT MAKE_SET(255, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h') AS make_set_255;
 SELECT MAKE_SET(256, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i') AS make_set_256;
 
+# DECIMAL numeric conversion uses HALF_UP and saturates at signed BIGINT limits
+SELECT MAKE_SET(CAST('1.4' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_below_half;
+SELECT MAKE_SET(CAST('1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_half;
+SELECT MAKE_SET(CAST('-1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_negative_half;
+SELECT MAKE_SET(CAST('1.9999999999999999' AS DECIMAL(18,16)), 'a', 'b', 'c', 'd') AS decimal_precision_boundary;
+SELECT MAKE_SET(CAST('18446744073709551616' AS DECIMAL(38,0)), 'a', 'b', 'c', 'd') AS decimal_positive_overflow;
+
+CREATE TABLE make_set_decimal_bits(d DECIMAL(38,1));
+INSERT INTO make_set_decimal_bits VALUES (1.4), (1.5), (-1.5);
+SELECT d, MAKE_SET(d, 'a', 'b', 'c', 'd') AS result FROM make_set_decimal_bits ORDER BY d;
+DROP TABLE make_set_decimal_bits;
