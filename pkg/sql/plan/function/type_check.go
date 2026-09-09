@@ -170,9 +170,19 @@ const (
 
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
+// the original overload slice avoids planner-time allocations for matchers
+// that need to reserve a dedicated string overload.
+func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded int) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
+		if i == excluded {
+			continue
+		}
 		if len(ov.args) != len(inputs) {
 			continue
 		}
@@ -200,6 +210,9 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 			castType[i] = inputs[i]
 		} else {
 			castType[i] = ov.args[i].ToType()
+			if ov.args[i] == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				castType[i] = formattedScalarStringType(inputs[i])
+			}
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
 			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
 				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the
@@ -210,6 +223,284 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+// binTypeMatch keeps numeric inputs on their existing typed overloads and
+// routes MySQL string domains through the prefix-aware string executor. An
+// unresolved parameter is cast to VARCHAR so each execution can retain the
+// normal NULL and runtime string conversion behavior.
+func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 || len(overloads) == 0 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	stringOverload := -1
+	for i, ov := range overloads {
+		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
+			if stringOverload == -1 {
+				stringOverload = i
+			}
+		}
+	}
+	if stringOverload == -1 {
+		return fixedTypeMatch(overloads, inputs)
+	}
+	if inputs[0].Oid == types.T_any {
+		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
+	}
+	if inputs[0].Oid.IsMySQLString() {
+		return newCheckResultWithSuccess(stringOverload)
+	}
+
+	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
+}
+
+// stringDomainFixedTypeMatch keeps every MySQL string input in its original
+// OID/width/charset while applying the ordinary fixed matcher to control
+// arguments. Varlena string executors can consume every string family; casting
+// them through VARCHAR would truncate BLOB and erase the binary domain before
+// return-type derivation.
+func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
+}
+
+// sha2TypeMatch defers an unknown hash-length operand to SHA2's string
+// overload. A parameter marker is represented as T_any during prepare, but a
+// later execution may bind a character value such as "256tail". Resolving it
+// to the BIGINT overload at prepare time would perform a strict cast before
+// SHA2 can apply MySQL's prefix conversion.
+func sha2TypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 2 && inputs[1].Oid == types.T_any {
+		for i, ov := range overloads {
+			if len(ov.args) == 2 && ov.args[0] == types.T_varchar && ov.args[1] == types.T_varchar {
+				return stringDomainMatchSingleOverload(overloads, inputs, i)
+			}
+		}
+	}
+	return stringDomainFixedTypeMatch(overloads, inputs)
+}
+
+func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
+	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ov := overloads[index]
+	targets := make([]types.Type, len(inputs))
+	needsCast := false
+	for i, expected := range ov.args {
+		if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
+			targets[i] = inputs[i]
+			continue
+		}
+		status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+		if status == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if status == matchByCast {
+			needsCast = true
+			targets[i] = expected.ToType()
+			if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				targets[i] = formattedScalarStringType(inputs[i])
+			}
+			SetTargetScaleFromSource(&inputs[i], &targets[i])
+		} else {
+			targets[i] = inputs[i]
+		}
+	}
+	if needsCast {
+		return newCheckResultWithCast(index, targets)
+	}
+	return newCheckResultWithSuccess(index)
+}
+
+// crc32TypeMatch retains CRC32's historical acceptance of every varlen type
+// while extending the function to scalar values through the normal formatted
+// string cast. The executor hashes the resulting bytes, so changing the
+// matcher must not make JSON/vector inputs (which are also varlen internally)
+// stop binding.
+func crc32TypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
+		return newCheckResultWithSuccess(0)
+	}
+	return stringDomainFixedTypeMatch(overloads, inputs)
+}
+
+const (
+	// RegexpMatchStringOperandCount is the subject-pattern pair that owns
+	// matching and any string result domain for every REGEXP function.
+	RegexpMatchStringOperandCount = 2
+	// RegexpReplaceCompatibilityStringOperandCount additionally includes the
+	// replacement in REGEXP_REPLACE's charset compatibility check.
+	RegexpReplaceCompatibilityStringOperandCount = 3
+)
+
+// regexpStringDomainFixedTypeMatch applies the MySQL REGEXP two-stage
+// contract. Statically known binary and nonbinary strings cannot participate
+// in one regexp call, while T_any parameter markers and ordinary NULL remain
+// unresolved until execution. The normal string-domain matcher then preserves
+// every accepted operand instead of erasing its domain through VARCHAR casts.
+func regexpStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, nil)
+}
+
+func regexpStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, modes)
+}
+
+// regexpReplaceStringDomainFixedTypeMatch includes the replacement string in
+// the same compatibility domain as the subject and pattern.
+func regexpReplaceStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, nil)
+}
+
+func regexpReplaceStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, modes)
+}
+
+func regexpStringDomainFixedTypeMatchN(
+	overloads []overload, inputs []types.Type, stringOperands int, modes []StringDomainCheckMode,
+) checkResult {
+	matched := stringDomainFixedTypeMatch(overloads, inputs)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+
+	var firstText, firstBinaryTrigger types.Type
+	hasText, hasBinaryTrigger := false, false
+	if stringOperands > len(inputs) {
+		stringOperands = len(inputs)
+	}
+	for i := 0; i < stringOperands; i++ {
+		mode := StringDomainCheckKnown
+		if i < len(modes) {
+			mode = modes[i]
+		}
+		if mode == StringDomainCheckDeferred || mode == StringDomainCheckDomainless {
+			continue
+		}
+		domain := types.StaticStringDomain(inputs[i])
+		if domain == types.StringDomainNone {
+			// T_any is the binder-visible representation of both an ordinary
+			// untyped NULL and a parameter marker. Non-string scalars are also
+			// regexp-compatible through the ordinary string conversion path.
+			continue
+		}
+		switch domain {
+		case types.StringDomainText:
+			if hasBinaryTrigger {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(inputs[i]))
+			}
+			if !hasText {
+				firstText, hasText = inputs[i], true
+			}
+		case types.StringDomainBinary:
+			// MySQL's is_binary_string() is narrower than its binary-compatible
+			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
+			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
+			// values remain byte-domain operands without making text peers illegal.
+			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+				continue
+			}
+			if hasText {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstText), regexpCharsetName(inputs[i]))
+			}
+			if !hasBinaryTrigger {
+				firstBinaryTrigger, hasBinaryTrigger = inputs[i], true
+			}
+		default:
+			continue
+		}
+		if hasText && hasBinaryTrigger {
+			return newCheckResultWithCharacterSetMismatch(
+				regexpCharsetName(firstText), regexpCharsetName(firstBinaryTrigger))
+		}
+	}
+	return matched
+}
+
+func regexpCharsetName(typ types.Type) string {
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return "binary"
+	}
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		return "utf8mb4_general_ci"
+	case types.CharsetUTF8MB4Bin, types.CharsetLegacy:
+		return "utf8mb4_bin"
+	default:
+		return "utf8mb4"
+	}
+}
+
+// collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
+// binary families on ordinary overload casts until their rune-based consumers
+// have byte-preserving kernels.
+func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, isCollatedTextType)
+}
+
+func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
+	// Never let an earlier castable overload shadow an exact overload.
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		if status, _ := tryToMatch(inputs, ov.args); status == matchDirectly {
+			return newCheckResultWithSuccess(overloadIndex)
+		}
+	}
+
+	minIndex, minCost := -1, math.MaxInt
+	var minTargets []types.Type
+	minNeedsCast := false
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		targets := make([]types.Type, len(inputs))
+		needsCast, matched, cost := false, true, 0
+		for i, expected := range ov.args {
+			if expected.IsMySQLString() && preserve(inputs[i].Oid) {
+				targets[i] = inputs[i]
+				continue
+			}
+			status, castCost := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+			if status == matchFailed {
+				matched = false
+				break
+			}
+			cost += castCost
+			if status == matchByCast {
+				needsCast = true
+				targets[i] = expected.ToType()
+				if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+					targets[i] = formattedScalarStringType(inputs[i])
+				}
+				SetTargetScaleFromSource(&inputs[i], &targets[i])
+			} else {
+				targets[i] = inputs[i]
+			}
+		}
+		if matched && cost < minCost {
+			minIndex, minCost = overloadIndex, cost
+			minTargets, minNeedsCast = targets, needsCast
+		}
+	}
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if minNeedsCast {
+		return newCheckResultWithCast(minIndex, minTargets)
+	}
+	return newCheckResultWithSuccess(minIndex)
 }
 
 func isCollatedTextType(oid types.T) bool {

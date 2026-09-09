@@ -104,7 +104,9 @@ type service struct {
 		// remoteBindRefs is a source-local index of exact remote binds that a
 		// transaction may still depend on. A bind enters before its first remote
 		// Lock RPC and leaves only after transaction cleanup succeeds. Route-cache
-		// membership alone must not keep an owner-side lock lease alive.
+		// membership alone must not keep an owner-side lock lease alive. Once a
+		// bind is invalidated, its ref-counted tombstone remains for cleanup but no
+		// longer participates in owner-side heartbeats.
 		remoteBindRefs map[remoteBindKey]remoteBindRef
 		allocating     map[uint32]map[uint64]chan struct{}
 	}
@@ -353,8 +355,9 @@ type remoteBindKey struct {
 }
 
 type remoteBindRef struct {
-	bind pb.LockTable
-	refs uint64
+	bind        pb.LockTable
+	refs        uint64
+	invalidated bool
 }
 
 func makeRemoteBindKey(bind pb.LockTable) remoteBindKey {
@@ -558,7 +561,11 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, err
+	}
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	if _, local := l.(*localLockTable); !local {
@@ -1441,39 +1448,80 @@ func (s *service) acquireTxnBindRef(
 	txn *activeTxn,
 	bind pb.LockTable,
 	admission *lockAdmission,
-) {
-	if !txn.lockTableBindTouched(bind) {
-		return
-	}
+) error {
 	if bind.ServiceID != s.serviceID {
-		s.acquireRemoteBindRef(bind)
-		return
+		if !s.acquireRemoteTxnBindRef(txn, bind) {
+			return ErrLockTableBindChanged
+		}
+		return nil
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return nil
 	}
 	if !admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
 	}
+	return nil
 }
 
-func (s *service) acquireRemoteBindRef(bind pb.LockTable) {
+// acquireRemoteTxnBindRef atomically couples transaction admission to the
+// heartbeat eligibility of an exact remote bind. The caller holds txn's mutex
+// and bindChangeMu for reading, so an invalidation cannot fence existing users
+// between this check and publication of the new intent/ref pair.
+func (s *service) acquireRemoteTxnBindRef(txn *activeTxn, bind pb.LockTable) bool {
+	key := makeRemoteBindKey(bind)
+	if holder := txn.lockHolders[bind.Group]; holder != nil {
+		if recorded, ok := holder.tableBindIntents[bind.Table]; ok {
+			if makeRemoteBindKey(recorded) != key {
+				return false
+			}
+			s.mu.RLock()
+			ref, exists := s.mu.remoteBindRefs[key]
+			s.mu.RUnlock()
+			return exists && !ref.invalidated
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if ref, ok := s.mu.remoteBindRefs[key]; ok && ref.invalidated {
+		return false
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return false
+	}
+	if s.mu.remoteBindRefs == nil {
+		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
+	}
+	return s.acquireRemoteBindRefLocked(key, bind)
+}
+
+func (s *service) acquireRemoteBindRef(bind pb.LockTable) bool {
 	if bind.ServiceID == s.serviceID {
-		return
+		return true
 	}
 	key := makeRemoteBindKey(bind)
 	s.mu.Lock()
 	if s.mu.remoteBindRefs == nil {
 		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
 	}
-	s.acquireRemoteBindRefLocked(key, bind)
+	acquired := s.acquireRemoteBindRefLocked(key, bind)
 	s.mu.Unlock()
+	return acquired
 }
 
-func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) {
+func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) bool {
 	ref := s.mu.remoteBindRefs[key]
+	if ref.invalidated {
+		return false
+	}
 	if ref.refs == 0 {
 		ref.bind = bind
 	}
 	ref.refs++
 	s.mu.remoteBindRefs[key] = ref
+	return true
 }
 
 func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {
@@ -1490,11 +1538,44 @@ func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {
 	delete(s.mu.remoteBindRefs, key)
 }
 
+// invalidateRemoteBindRef stops owner-side lease heartbeats for an exact bind
+// which is known to be unusable or superseded. Keep the ref-counted tombstone
+// until transaction cleanup releases every consumer: deleting it here would
+// let a late release decrement a newly acquired ref for the same exact key.
+func (s *service) invalidateRemoteBindRef(bind pb.LockTable) {
+	key := makeRemoteBindKey(bind)
+	s.mu.Lock()
+	ref, ok := s.mu.remoteBindRefs[key]
+	if ok && !ref.invalidated {
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
+func (s *service) invalidateRemoteBindRefsChangedBy(bind pb.LockTable) {
+	s.mu.Lock()
+	for key, ref := range s.mu.remoteBindRefs {
+		if ref.bind.Group != bind.Group ||
+			ref.bind.Table != bind.Table ||
+			!ref.bind.Changed(bind) ||
+			ref.invalidated {
+			continue
+		}
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
 func (s *service) collectRemoteLockBinds(scratch []pb.LockTable) []pb.LockTable {
 	oldLen := len(scratch)
 	binds := scratch[:0]
 	s.mu.RLock()
 	for _, ref := range s.mu.remoteBindRefs {
+		if ref.invalidated {
+			continue
+		}
 		binds = append(binds, ref.bind)
 	}
 	s.mu.RUnlock()
@@ -2230,10 +2311,19 @@ func (s *service) beginLockTablePublication() bool {
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
+	s.invalidateRemoteBindRefsChangedBy(bind)
 	if s.activeTxnHolder == nil {
 		return
 	}
 	s.activeTxnHolder.fenceByBindChanged(bind)
+}
+
+func (s *service) fenceByExactBind(bind pb.LockTable) {
+	s.invalidateRemoteBindRef(bind)
+	if s.activeTxnHolder == nil {
+		return
+	}
+	s.activeTxnHolder.fenceByExactBind(bind)
 }
 
 func (s *service) checkBindChangedBeforeLockSuccess(
@@ -2642,6 +2732,7 @@ type activeTxnHolder interface {
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
+	fenceByExactBind(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
@@ -2894,6 +2985,14 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	return h.fenceByBind(bind, false)
+}
+
+func (h *mapBasedTxnHolder) fenceByExactBind(bind pb.LockTable) int {
+	return h.fenceByBind(bind, true)
+}
+
+func (h *mapBasedTxnHolder) fenceByBind(bind pb.LockTable, exact bool) int {
 	n := 0
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
@@ -2935,7 +3034,13 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 					time.Sleep(time.Millisecond)
 					continue
 				}
-				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+				var fenced bool
+				if exact {
+					fenced = entry.txn.fenceByExactBindLocked(bind, h.logger)
+				} else {
+					fenced = entry.txn.fenceByBindChangedLocked(bind, h.logger)
+				}
+				if fenced {
 					n++
 				}
 				entry.txn.Unlock()

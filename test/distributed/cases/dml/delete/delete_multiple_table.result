@@ -215,6 +215,40 @@ select count(*) from tj_c;
 1
 drop table tj_c;
 drop table tj_d;
+create table tj_ft (
+id int primary key,
+body text,
+fulltext ft_body(body)
+);
+create table tj_ft_src (id int);
+insert into tj_ft values
+(1, 'join survivor alpha'),
+(2, 'join match beta'),
+(3, 'join survivor gamma');
+set delete_opt_to_truncate = 0;
+delete d from tj_ft d join tj_ft_src s on d.id = s.id;
+select id from tj_ft order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from tj_ft where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1
+set delete_opt_to_truncate = 1;
+insert into tj_ft_src values (2), (2);
+delete d from tj_ft d join tj_ft_src s on d.id = s.id;
+select id from tj_ft order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from tj_ft where match(body) against('beta') order by id;
+➤ id[4,32,0]
+select id from tj_ft where match(body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+3
+drop table tj_ft;
+drop table tj_ft_src;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;

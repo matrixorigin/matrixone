@@ -204,14 +204,16 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 
 	needCast := false
 	if l >= 2 {
-		// X should be bool or Int.
+		// Each searched CASE condition is a boolean context. Accept every type
+		// that the type system can implicitly convert to BOOL, including the
+		// untyped NULL literal, whose cast remains NULL and therefore does not
+		// select its branch.
 		for i := 0; i < l-1; i += 2 {
 			if inputs[i].Oid != types.T_bool {
-				if inputs[i].IsIntOrUint() {
-					needCast = true
-				} else {
+				if canCast, _ := fixedImplicitTypeCast(inputs[i], types.T_bool); !canCast {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
+				needCast = true
 			}
 		}
 

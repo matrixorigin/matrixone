@@ -45,24 +45,37 @@ import (
 
 type mockStatsKeyRouter struct {
 	target string
+	key    statsinfo.StatsInfoKey
 }
 
-func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
-func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
+func (r *mockStatsKeyRouter) Target(key statsinfo.StatsInfoKey) string {
+	r.key = key
+	return r.target
+}
+func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem) {}
 
 type mockStatsQueryClient struct {
 	response    *querypb.Response
 	sendStarted chan struct{}
 	allowReturn chan struct{}
+	target      string
+	request     *querypb.Request
+	releases    atomic.Int32
 }
 
 func (m *mockStatsQueryClient) ServiceID() string {
 	return "mock-stats-query-client"
 }
 
-func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
-	close(m.sendStarted)
-	<-m.allowReturn
+func (m *mockStatsQueryClient) SendMessage(_ context.Context, target string, req *querypb.Request) (*querypb.Response, error) {
+	m.target = target
+	m.request = req
+	if m.sendStarted != nil {
+		close(m.sendStarted)
+	}
+	if m.allowReturn != nil {
+		<-m.allowReturn
+	}
 	return m.response, nil
 }
 
@@ -70,10 +83,52 @@ func (m *mockStatsQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Req
 	return &querypb.Request{CmdMethod: method}
 }
 
-func (m *mockStatsQueryClient) Release(*querypb.Response) {}
+func (m *mockStatsQueryClient) Release(*querypb.Response) {
+	m.releases.Add(1)
+}
 
 func (m *mockStatsQueryClient) Close() error {
 	return nil
+}
+
+func installRemoteStatsTestTable(
+	t *testing.T,
+	ctx context.Context,
+	e *Engine,
+	dbID uint64,
+	tblID uint64,
+) (statsinfo.StatsInfoKey, *subEntry) {
+	t.Helper()
+	e.pClient.eng = e
+	e.pClient.subscribed.eng = e
+
+	ent := &subEntry{dbID: dbID, state: Subscribed}
+	ent.lastTs.Store(time.Now().UnixNano())
+	if e.pClient.subscribed.m == nil {
+		e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	}
+	e.pClient.subscribed.m[tblID] = ent
+
+	key := statsinfo.StatsInfoKey{
+		AccId:      0,
+		DatabaseID: dbID,
+		TableID:    tblID,
+		TableName:  "t",
+		DbName:     "d",
+	}
+	part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+	state, done := part.MutateState()
+	defer done()
+	oid := types.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+	}, false))
+	return key, ent
 }
 
 func runTest(
@@ -1739,6 +1794,9 @@ func TestRemoveTid(t *testing.T) {
 			gs.mu.statsInfoMap[k1] = plan2.NewStatsInfo()
 			gs.mu.statsInfoMap[k2] = nil // simulate failed update
 			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
+			gs.mu.tableDefVersions[k1] = 7
+			gs.mu.tableDefVersions[k2] = 7
+			gs.mu.tableDefVersions[k3] = 9
 			gs.mu.Unlock()
 			generation := gs.currentOrCreateUpdateRecord(k1)
 			gs.currentOrCreateUpdateRecord(k2)
@@ -1765,10 +1823,17 @@ func TestRemoveTid(t *testing.T) {
 			_, ok1 := gs.mu.statsInfoMap[k1]
 			_, ok2 := gs.mu.statsInfoMap[k2]
 			_, ok3 := gs.mu.statsInfoMap[k3]
+			_, version1 := gs.mu.tableDefVersions[k1]
+			_, version2 := gs.mu.tableDefVersions[k2]
+			version3 := gs.mu.tableDefVersions[k3]
 			gs.mu.Unlock()
 			assert.False(t, ok1, "k1 should be removed")
 			assert.False(t, ok2, "k2 should be removed")
 			assert.True(t, ok3, "k3 should not be removed")
+			assert.False(t, version1, "k1 schema metadata should be removed")
+			assert.False(t, version2, "k2 schema metadata should be removed")
+			assert.Equal(t, uint32(9), version3,
+				"unrelated schema metadata should remain")
 
 			gs.updatingMu.Lock()
 			_, updating1 := gs.updatingMu.updating[k1]
@@ -1826,8 +1891,10 @@ func TestRemoveTid(t *testing.T) {
 		gs.RemoveTid(key.TableID)
 		gs.coordinateStatsUpdateJob(job)
 		gs.markAutomaticUpdateComplete(key, job.expectedRecord, true, 1, 1)
-		assert.False(t, gs.publishStatsForGeneration(
-			key, job.expectedRecord, plan2.NewStatsInfo()))
+		published, err := gs.publishStatsForGeneration(
+			context.Background(), key, job.expectedRecord, plan2.NewStatsInfo())
+		require.NoError(t, err)
+		assert.False(t, published)
 
 		gs.mu.Lock()
 		_, cached := gs.mu.statsInfoMap[key]
@@ -1839,12 +1906,17 @@ func TestRemoveTid(t *testing.T) {
 		assert.False(t, scheduled, "old work must not recreate scheduling metadata")
 
 		replacement := gs.currentOrCreateUpdateRecord(key)
-		assert.False(t, gs.publishStatsForGeneration(
-			key, job.expectedRecord, plan2.NewStatsInfo()),
+		published, err = gs.publishStatsForGeneration(
+			context.Background(), key, job.expectedRecord, plan2.NewStatsInfo())
+		require.NoError(t, err)
+		assert.False(t, published,
 			"old explicit work must not publish into a replacement lifetime")
 		fresh := plan2.NewStatsInfo()
 		fresh.TableCnt = 42
-		require.True(t, gs.publishStatsForGeneration(key, replacement, fresh))
+		published, err = gs.publishStatsForGeneration(
+			context.Background(), key, replacement, fresh)
+		require.NoError(t, err)
+		require.True(t, published)
 		gs.mu.Lock()
 		assert.Same(t, fresh, gs.mu.statsInfoMap[key])
 		gs.mu.Unlock()
@@ -1911,7 +1983,10 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 	releases := 0
 	gs.completeAutomaticStatsRefresh(
 		key, generation, fresh, true, 42, 1, func() { releases++ })
-	require.False(t, gs.publishStatsForGeneration(key, generation, fresh))
+	published, err := gs.publishStatsForGeneration(
+		context.Background(), key, generation, fresh)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, published)
 	require.Equal(t, 1, releases)
 
 	gs.mu.Lock()
@@ -1924,6 +1999,68 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 		"failed publication must not advance the object-count baseline")
 	require.Equal(t, 0.25, generation.samplingRatio)
 	gs.updatingMu.Unlock()
+}
+
+func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	old := plan2.NewStatsInfo()
+	fresh := plan2.NewStatsInfo()
+	generation := &updateRecord{inProgress: true}
+	gs := &GlobalStats{}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+	require.True(t, gs.completeAutomaticStatsCacheUpdate(
+		key, generation, fresh, true))
+	gs.mu.Lock()
+	require.Same(t, fresh, gs.mu.statsInfoMap[key])
+	require.NotContains(t, gs.mu.tableDefVersions, key,
+		"metadata-only statistics are not bound to the ANALYZE schema observation")
+	gs.mu.Unlock()
+	require.Same(t, fresh, gs.GetForRemote(context.Background(), key),
+		"unbound metadata statistics remain safe for remote export")
+}
+
+func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	old := plan2.NewStatsInfo()
+	old.TableCnt = 7
+	fresh := plan2.NewStatsInfo()
+	fresh.TableCnt = 8
+	generation := &updateRecord{inProgress: true}
+	gs := &GlobalStats{}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+	waiting := make(chan struct{})
+	var once sync.Once
+	gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+		once.Do(func() { close(waiting) })
+	}
+	version := uint32(8)
+	done := make(chan *statsinfo.StatsInfo, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		done <- gs.waitForStatsUpdate(
+			ctx, key, generation, &version, false)
+	}()
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal("version-mismatched waiter did not reach the wait boundary")
+	}
+
+	gs.mu.Lock()
+	gs.mu.statsInfoMap[key] = fresh
+	delete(gs.mu.tableDefVersions, key)
+	gs.mu.cond.Broadcast()
+	gs.mu.Unlock()
+	require.Same(t, fresh, <-done)
 }
 
 func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
@@ -2527,7 +2664,7 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 			}
 		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
 
-		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo)
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo, nil, false)
 		require.NotNil(t, info)
 		require.Equal(t, remoteInfo, info)
 
@@ -2539,6 +2676,23 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 				return false
 			}
 		}, time.Second, 10*time.Millisecond, "waiter was not awakened by remote cache broadcast")
+
+		// Model a local ANALYZE publication winning while a remote lookup is in
+		// flight. The response path must neither export nor overwrite the newer
+		// schema-bound observation.
+		boundInfo := plan2.NewStatsInfo()
+		boundInfo.TableCnt = 84
+		gs.mu.Lock()
+		gs.mu.statsInfoMap[key] = boundInfo
+		gs.mu.tableDefVersions[key] = 7
+		gs.mu.Unlock()
+		rejected := gs.cacheRemoteInfoIfSubscribed(
+			key, ent, remoteInfo, nil, true)
+		require.Nil(t, rejected)
+		gs.mu.Lock()
+		require.Same(t, boundInfo, gs.mu.statsInfoMap[key])
+		require.Equal(t, uint32(7), gs.mu.tableDefVersions[key])
+		gs.mu.Unlock()
 	})
 }
 
@@ -2547,38 +2701,7 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		gs := e.globalStats
 		const dbID uint64 = 100
 		const tblID uint64 = 10001
-
-		e.pClient.eng = e
-		e.pClient.subscribed.eng = e
-
-		ent := &subEntry{dbID: dbID, state: Subscribed}
-		ent.lastTs.Store(time.Now().UnixNano())
-
-		if e.pClient.subscribed.m == nil {
-			e.pClient.subscribed.m = make(map[uint64]*subEntry)
-		}
-		e.pClient.subscribed.m[tblID] = ent
-
-		key := statsinfo.StatsInfoKey{
-			AccId:      0,
-			DatabaseID: dbID,
-			TableID:    tblID,
-			TableName:  "t",
-			DbName:     "d",
-		}
-
-		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
-		state, done := part.MutateState()
-		oid := types.NewObjectid()
-		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
-		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
-		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
-		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
-		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
-			ObjectStats: *stats,
-			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
-		}, false))
-		done()
+		key, _ := installRemoteStatsTestTable(t, ctx, e, dbID, tblID)
 
 		remoteInfo := plan2.NewStatsInfo()
 		remoteInfo.TableCnt = 42
@@ -2593,8 +2716,9 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		oldQC := e.qc
 		oldRouter := gs.KeyRouter
 		oldHook := gs.beforeCacheRemoteInfo
+		router := &mockStatsKeyRouter{target: "cn1"}
 		e.qc = qc
-		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		gs.KeyRouter = router
 		defer func() {
 			e.qc = oldQC
 			gs.KeyRouter = oldRouter
@@ -2621,6 +2745,16 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not request remote stats")
 		}
+		require.Equal(t, "cn1", qc.target)
+		require.Equal(t, statsinfo.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}, router.key)
+		require.NotNil(t, qc.request)
+		require.Equal(t, querypb.CmdMethod_GetStatsInfo, qc.request.CmdMethod)
+		require.NotNil(t, qc.request.GetStatsInfoRequest)
+		require.NotNil(t, qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
 
 		close(qc.allowReturn)
 
@@ -2644,5 +2778,38 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		_, ok := gs.mu.statsInfoMap[key]
 		gs.mu.Unlock()
 		assert.False(t, ok)
+		require.Equal(t, int32(1), qc.releases.Load())
+	})
+}
+
+func TestGlobalStatsGetReleasesRemoteResponseWithoutStatsPayload(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		key, _ := installRemoteStatsTestTable(t, ctx, e, 101, 10002)
+		qc := &mockStatsQueryClient{response: &querypb.Response{}}
+
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		router := &mockStatsKeyRouter{target: "cn-empty"}
+		e.qc = qc
+		gs.KeyRouter = router
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		require.Nil(t, gs.Get(getCtx, key, false))
+		require.Equal(t, "cn-empty", qc.target)
+		require.Equal(t, statsinfo.StatsInfoKey{
+			DatabaseID: key.DatabaseID,
+			TableID:    key.TableID,
+		}, router.key)
+		require.NotNil(t, qc.request)
+		require.NotNil(t, qc.request.GetStatsInfoRequest)
+		require.NotNil(t, qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
+		require.Equal(t, int32(1), qc.releases.Load())
 	})
 }

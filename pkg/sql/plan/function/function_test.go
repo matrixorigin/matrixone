@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -409,7 +410,7 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: UUID_TO_BIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireRet: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
 		},
 		{
 			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
@@ -459,6 +460,30 @@ func Test_GetFunctionByName(t *testing.T) {
 			require.Equal(t, c.requireRet, get.retType, msg)
 		}
 	}
+}
+
+func TestGetFunctionByNameWithoutError(t *testing.T) {
+	args := []types.Type{types.T_int8.ToType(), types.T_int16.ToType()}
+
+	want, err := GetFunctionByName(context.Background(), "+", args)
+	require.NoError(t, err)
+
+	got, ok := GetFunctionByNameWithoutError("+", args)
+	require.True(t, ok)
+	require.Equal(t, want.fid, got.fid)
+	require.Equal(t, want.overloadId, got.overloadId)
+	require.Equal(t, want.retType, got.retType)
+	require.Equal(t, want.needCast, got.needCast)
+	require.Equal(t, want.targetTypes, got.targetTypes)
+
+	_, ok = GetFunctionByNameWithoutError("date_trunc", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.False(t, ok)
+
+	_, ok = GetFunctionByNameWithoutError("function_does_not_exist", nil)
+	require.False(t, ok)
 }
 
 func TestMakeTimeReturnScale(t *testing.T) {
@@ -672,28 +697,28 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 			name:        "concat keeps legacy byte ordering",
 			function:    "concat",
 			inputs:      []types.Type{general, legacy},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetLegacy,
 		},
 		{
 			name:        "concat keeps utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{general, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "concat ws keeps utf8mb4 bin",
 			function:    "concat_ws",
 			inputs:      []types.Type{general, utf8mb4Bin, utf8mb4Bin},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_text,
 			wantCharset: types.CharsetUTF8MB4Bin,
 		},
 		{
 			name:        "opaque binary dominates utf8mb4 bin",
 			function:    "concat",
 			inputs:      []types.Type{utf8mb4Bin, opaqueBinary},
-			wantOID:     types.T_varchar,
+			wantOID:     types.T_varbinary,
 			wantCharset: types.CharsetBinary,
 		},
 		{
@@ -1110,6 +1135,15 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
+func TestGetFunctionIgnoresWindowFrameByName(t *testing.T) {
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lag"))
+	assert.True(t, GetFunctionIgnoresWindowFrameByName("lead"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("first_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("last_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("nth_value"))
+	assert.False(t, GetFunctionIgnoresWindowFrameByName("not_a_function"))
+}
+
 func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
@@ -1117,6 +1151,12 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	for _, name := range []string{
+		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
+		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
+	} {
+		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
+	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
@@ -1153,14 +1193,27 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "power domain or overflow", fid: POW, argCount: 2},
+		{name: "exponential overflow", fid: EXP, argCount: 1},
+		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "invalid IPv4 address", fid: INET_ATON, argCount: 1},
+		{name: "invalid binary IP length", fid: INET6_NTOA, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid conversion base", fid: CONV, argCount: 3},
+		{name: "invalid SHA2 variant", fid: SHA2, argCount: 2},
+		{name: "AES encryption failure", fid: AES_ENCRYPT, argCount: 2},
+		{name: "AES decryption failure", fid: AES_DECRYPT, argCount: 2},
+		{name: "compression failure", fid: COMPRESS, argCount: 1},
+		{name: "decompression failure", fid: UNCOMPRESS, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
+		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},
 		{name: "invalid interval string", fid: TO_INTERVAL, argCount: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

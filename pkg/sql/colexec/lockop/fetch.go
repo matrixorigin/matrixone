@@ -103,9 +103,7 @@ func getFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 }
 
 // SupportsTotalLockTableRange reports whether lockop's table range covers the
-// complete physical keyspace for the primary-key type. FLOAT/DOUBLE have a
-// fetcher, but their current finite min/max endpoints do not cover infinities or
-// every NaN payload and therefore cannot prove full-domain exclusion.
+// complete physical keyspace for the primary-key type.
 func SupportsTotalLockTableRange(t types.Type) bool {
 	return colexec.SupportsTotalLockTableRange(t)
 }
@@ -397,15 +395,20 @@ func fetchFloat32Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(-math.MaxFloat32)
-		max := fn(math.MaxFloat32)
+		// Packer's physical total order covers every IEEE-754 bit pattern,
+		// including infinities, signed zeroes, and every NaN payload. The raw
+		// MaxUint32 and MaxInt32 bit patterns encode to the all-zero and all-one
+		// payload endpoints respectively.
+		min := fn(math.Float32frombits(math.MaxUint32))
+		max := fn(math.Float32frombits(math.MaxInt32))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float32TupleAscCompare,
 		filter,
 		filterCols)
 }
@@ -424,15 +427,16 @@ func fetchFloat64Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(-math.MaxFloat64)
-		max := fn(math.MaxFloat64)
+		min := fn(math.Float64frombits(math.MaxUint64))
+		max := fn(math.Float64frombits(math.MaxInt64))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float64TupleAscCompare,
 		filter,
 		filterCols)
 }

@@ -27,12 +27,12 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"go.uber.org/zap"
@@ -499,63 +499,18 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "floor"), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
@@ -915,6 +870,44 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+// coalesceSignedUnsignedIntegerResult handles the integer domain that cannot
+// be represented by either signed or unsigned BIGINT. The ordinary overload
+// cost ranking prefers uint64 -> int64, so it must not be used when a uint64
+// branch and a signed integer branch are both present. Decimal128 with a
+// zero scale and twenty integral digits exactly covers that combined domain.
+func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasSigned := false
+	hasUint64 := false
+	for _, typ := range inputs {
+		switch {
+		case typ.Oid == types.T_any:
+			// An untyped NULL has no numeric domain and does not affect the
+			// common type selected from value-bearing branches.
+		case typ.Oid.IsSignedInt():
+			hasSigned = true
+		case typ.Oid.IsInteger():
+			if typ.Oid == types.T_uint64 {
+				hasUint64 = true
+			}
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasSigned || !hasUint64 {
+		return checkResult{}, false
+	}
+
+	target, overloadIndex, ok := coalesceDecimalResult(overloads, types.T_decimal128, inputs)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
+	castTypes := make([]types.Type, len(inputs))
+	for i := range castTypes {
+		castTypes[i] = target
+	}
+	return newCheckResultWithCast(overloadIndex, castTypes), true
+}
+
 func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	target, aligned, ok := textStringCommonType(inputs)
 	if !ok {
@@ -1005,6 +998,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
+		if result, ok := coalesceSignedUnsignedIntegerResult(overloads, inputs); ok {
 			return result
 		}
 
@@ -1161,7 +1157,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if can, _ := fixedImplicitTypeCast(t, types.T_varchar); can {
 				shouldConvert = true
-				ret[i] = types.T_varchar.ToType()
+				ret[i] = formattedScalarStringType(t)
 			} else {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -3259,8 +3255,7 @@ func absInt64(v int64) int64 {
 func formatUnsignedToBase(val uint64, toBase int64) string {
 	base := absInt64(toBase)
 	if toBase < 0 {
-		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
-		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+		return strings.ToUpper(strconv.FormatInt(int64(val), int(base)))
 	}
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
@@ -3283,14 +3278,17 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-		if len(strings.TrimSpace(string(nStr))) == 0 {
+		// MySQL returns NULL for the empty string, but a non-empty string with
+		// no usable numeric prefix (including whitespace-only input) converts
+		// to zero.
+		if len(nStr) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
 		if err != nil {
 			return err
 		}
@@ -3318,71 +3316,105 @@ func formatSignedToBase(val int64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatInt(val, int(base)))
 }
 
-func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
-	s := strings.TrimSpace(n)
-	if len(s) == 0 {
+func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, error) {
+	// Numeric conversion accepts ASCII whitespace before the prefix. Do not
+	// use strings.TrimSpace here: binary operands are byte-oriented and a
+	// UTF-8 Unicode whitespace sequence is data, not padding. There is no need
+	// to scan the suffix or allocate a string: the first non-digit terminates
+	// the prefix, and the bounded accumulator can decide overflow in one pass.
+	pos := 0
+	for pos < len(n) && isConvWhitespace(n[pos]) {
+		pos++
+	}
+
+	negative := false
+	if pos < len(n) {
+		switch n[pos] {
+		case '+':
+			pos++
+		case '-':
+			negative = true
+			pos++
+		}
+	}
+
+	base := absInt64(fromBase)
+	if base < 2 || base > 36 || pos >= len(n) {
 		return 0, 0, false, nil
 	}
 
-	base := int(absInt64(fromBase))
-	signOffset := 0
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		signOffset = 1
+	firstDigit, ok := convDigitValue(n[pos])
+	if !ok || int64(firstDigit) >= base {
+		return 0, 0, false, nil
 	}
-	if signOffset == len(s) {
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-	}
-	for _, ch := range s[signOffset:] {
-		var digit int
-		switch {
-		case ch >= '0' && ch <= '9':
-			digit = int(ch - '0')
-		case ch >= 'A' && ch <= 'Z':
-			digit = int(ch-'A') + 10
-		case ch >= 'a' && ch <= 'z':
-			digit = int(ch-'a') + 10
-		default:
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		if digit >= base {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+
+	limit := uint64(math.MaxUint64)
+	if fromBase < 0 {
+		limit = uint64(math.MaxInt64)
+		if negative {
+			limit++ // abs(math.MinInt64)
 		}
 	}
 
-	if fromBase < 0 {
-		val, err := strconv.ParseInt(s, base, 64)
-		if err != nil {
-			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				if strings.HasPrefix(s, "-") {
+	value := uint64(0)
+	for pos < len(n) {
+		digit, ok := convDigitValue(n[pos])
+		if !ok || int64(digit) >= base {
+			break
+		}
+		if value > (limit-uint64(digit))/uint64(base) {
+			if fromBase < 0 {
+				if negative {
 					return math.MinInt64, 0, true, nil
 				}
 				return math.MaxInt64, 0, true, nil
 			}
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		return val, 0, true, nil
-	}
-
-	if strings.HasPrefix(s, "-") {
-		magnitudeStr := s[1:]
-		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
-		if !ok {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
-		return 0, uint64(0) - reduced.Uint64(), false, nil
-	}
-
-	s = strings.TrimPrefix(s, "+")
-
-	uval, err := strconv.ParseUint(s, base, 64)
-	if err != nil {
-		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			if negative {
+				// A negative unsigned value whose magnitude is larger than
+				// UINT64_MAX converts to zero in MySQL.
+				return 0, 0, false, nil
+			}
 			return 0, math.MaxUint64, false, nil
 		}
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		value = value*uint64(base) + uint64(digit)
+		pos++
 	}
-	return 0, uval, false, nil
+
+	if fromBase < 0 {
+		if negative {
+			if value == uint64(math.MaxInt64)+1 {
+				return math.MinInt64, 0, true, nil
+			}
+			return -int64(value), 0, true, nil
+		}
+		return int64(value), 0, true, nil
+	}
+	if negative {
+		return 0, uint64(0) - value, false, nil
+	}
+	return 0, value, false, nil
+}
+
+func convDigitValue(ch byte) (uint8, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'A' && ch <= 'Z':
+		return ch - 'A' + 10, true
+	case ch >= 'a' && ch <= 'z':
+		return ch - 'a' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isConvWhitespace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -5330,11 +5362,60 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
+			if r == types.T_bit {
+				return newCheckResultWithSuccess(8)
+			}
 			if i < 2 {
 				return newCheckResultWithSuccess(0)
 			} else {
 				return newCheckResultWithSuccess(i - 1)
 			}
+		}
+	}
+	allIntegers := true
+	for _, input := range inputs {
+		if !input.IsIntOrUint() && input.Oid != types.T_any {
+			allIntegers = false
+			break
+		}
+	}
+	if allIntegers {
+		// MySQL's integer comparison uses the 64-bit representation, including
+		// signed/unsigned combinations. An SQL cast to INT64 would reject UINT64_MAX.
+		return newCheckResultWithSuccess(13)
+	}
+	// DECIMAL comparisons must remain exact. Choose a common decimal storage
+	// family, but retain each operand's scale so no value is rounded during
+	// overload resolution.
+	hasDecimal := false
+	decimalInputs := true
+	for _, input := range inputs {
+		if input.Oid.IsDecimal() {
+			hasDecimal = true
+		} else if !input.Oid.IsInteger() && input.Oid != types.T_any {
+			decimalInputs = false
+		}
+	}
+	if hasDecimal && decimalInputs {
+		target := types.New(types.T_decimal128, 38, 0)
+		for _, input := range inputs {
+			if input.Oid == types.T_decimal256 {
+				target = types.New(types.T_decimal256, 65, 0)
+				break
+			}
+		}
+		castTypes := make([]types.T, len(inputs))
+		targetTypes := make([]types.Type, len(inputs))
+		for i, input := range inputs {
+			castTypes[i] = target.Oid
+			targetTypes[i] = target
+			targetTypes[i].Scale = input.Scale
+		}
+		if c, _ := tryToMatch(inputs, castTypes); c != matchFailed {
+			if target.Oid == types.T_decimal256 {
+				return newCheckResultWithCast(12, targetTypes)
+			}
+			return newCheckResultWithCast(11, targetTypes)
 		}
 	}
 	castTypes := make([]types.T, len(inputs))
@@ -5351,6 +5432,120 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(10, targetTypes)
 	}
 	return newCheckResultWithSuccess(10)
+}
+
+func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	getters := make([]func(uint64) (uint64, bool), len(ivecs))
+	for i, vec := range ivecs {
+		getters[i] = fieldIntegerGetter(vec)
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(getters); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := getters[0](i)
+			v2, null2 := getters[j](i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](vec)
+		return func(i uint64) (uint64, bool) { return p.GetValue(i) }
+	default:
+		panic("FIELD integer overload received non-integer vector")
+	}
+}
+
+func FieldDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal128](ivecs, result, length, func(x, y types.Decimal128, sx, sy int32) bool {
+		return types.CompareDecimal128WithScale(x, y, sx, sy) == 0
+	})
+}
+
+func FieldDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal256](ivecs, result, length, decimal256Equal)
+}
+
+type fieldDecimalType interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func fieldDecimalValues[T fieldDecimalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, equal func(T, T, int32, int32) bool) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(ivecs); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if equal(v1, v2, fs[0].GetType().Scale, fs[j].GetType().Scale) {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256Equal(x, y types.Decimal256, scaleX, scaleY int32) bool {
+	if scaleX == scaleY {
+		return x == y
+	}
+	if scaleX < scaleY {
+		x, err := x.Scale(scaleY - scaleX)
+		return err == nil && x == y
+	}
+	y, err := y.Scale(scaleX - scaleY)
+	return err == nil && x == y
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -5461,7 +5656,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5584,7 +5779,7 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5792,7 +5987,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
+				castTypes[i] = formattedScalarStringType(inputs[i])
 			} else {
 				castTypes[i] = inputs[i]
 			}
@@ -5810,7 +6005,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			if c == matchByCast {
 				shouldCast = true
-				castTypes[3] = types.T_varchar.ToType()
+				castTypes[3] = formattedScalarStringType(inputs[3])
 			} else {
 				castTypes[3] = inputs[3]
 			}
@@ -5841,6 +6036,46 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, castTypes)
 	}
 	return newCheckResultWithSuccess(0)
+}
+
+func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	size := int64(0)
+	add := func(count int64, width int) bool {
+		if count == 0 || width == 0 {
+			return true
+		}
+		if int64(width) > (maxResultLen-size)/count {
+			return false
+		}
+		size += count * int64(width)
+		return true
+	}
+
+	onCount := int64(0)
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if (bitsValue>>uint(bit))&1 == 1 {
+			onCount++
+		}
+	}
+	if !add(onCount, len(on)) || !add(numberOfBits-onCount, len(off)) ||
+		!add(numberOfBits-1, len(separator)) {
+		return 0, false
+	}
+	return int(size), true
+}
+
+func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byte, numberOfBits int64) {
+	offset := 0
+	for bit := int64(0); bit < numberOfBits; bit++ {
+		if bit > 0 {
+			offset += copy(dst[offset:], separator)
+		}
+		value := off
+		if (bitsValue>>uint(bit))&1 == 1 {
+			value = on
+		}
+		offset += copy(dst[offset:], value)
+	}
 }
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
@@ -6028,18 +6263,19 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 		}
 
-		// Build the result string
-		var parts []string
-		for j := int64(0); j < numberOfBits; j++ {
-			if (bitsUint>>uint(j))&1 == 1 {
-				parts = append(parts, functionUtil.QuickBytesToStr(on))
-			} else {
-				parts = append(parts, functionUtil.QuickBytesToStr(off))
+		separatorBytes := functionUtil.QuickStrToBytes(separator)
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+			maxStringFunctionResultLength(result))
+		if !ok {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
 			}
+			continue
 		}
-
-		resultStr := strings.Join(parts, separator)
-		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
+			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -6625,6 +6861,97 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
+// Binary SUBSTRING uses byte offsets. Routing binary values through the text
+// implementation would decode invalid bytes as RuneError and could expand a
+// nominal 511-byte result beyond the planner's bound.
+func binarySubstringStartOffset(length int, start int64) (int, bool) {
+	if start > 0 {
+		offset := start - 1
+		if offset >= int64(length) {
+			return 0, false
+		}
+		return int(offset), true
+	}
+	if start < 0 {
+		if start < -int64(length) {
+			return 0, false
+		}
+		return length + int(start), true
+	}
+	return 0, false
+}
+
+func SubStringBinaryWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(v[offset:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if l <= 0 {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int64(len(v) - offset)
+		end := len(v)
+		if l < remaining {
+			end = offset + int(l)
+		}
+		if err = rs.AppendBytes(v[offset:end], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6762,36 +7089,31 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		str, isnull1 := strs.GetStrValue(i)
-		shaType, isnull2 := shaTypes.GetValue(i)
-
-		if isnull1 || isnull2 || !isSha2Family(shaType) {
+		if sha2RowMasked(selectList, i) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var checksum []byte
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
 
-			switch shaType {
-			case 0, 256:
-				sum256 := sha256.Sum256(str)
-				checksum = sum256[:]
-			case 224:
-				sum224 := sha256.Sum224(str)
-				checksum = sum224[:]
-			case 384:
-				sum384 := sha512.Sum384(str)
-				checksum = sum384[:]
-			case 512:
-				sum512 := sha512.Sum512(str)
-				checksum = sum512[:]
-			default:
-				panic("unexpected err happened in sha2 function")
-			}
-			checksum = []byte(hex.EncodeToString(checksum))
-			if err = res.AppendBytes(checksum, false); err != nil {
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
 		}
 
 	}
@@ -6799,9 +7121,92 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-// any one of 224 256 384 512 0 is valid
-func isSha2Family(len int64) bool {
-	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+// SHA2StringLengthFunc is the character-operand variant of SHA2. MySQL
+// converts the hash length as an integer at execution time, so a value such
+// as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
+// string wrapper preserves binary bytes and avoids the lossy implicit cast to
+// VARCHAR that would otherwise happen before execution.
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaLengths := vector.GenerateFunctionStrParameter(args[1])
+	lengthIsConst := args[1].IsConst()
+	var constLength int64
+	var constLengthNull bool
+	if lengthIsConst {
+		lengthValue, isnull := shaLengths.GetStrValue(0)
+		constLengthNull = isnull
+		if !isnull {
+			constLength = parseMySQLIntegerPrefix(lengthValue)
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if sha2RowMasked(selectList, i) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		var isnull2 bool
+		var shaType int64
+		if lengthIsConst {
+			isnull2 = constLengthNull
+			shaType = constLength
+		} else {
+			lengthValue, isnull := shaLengths.GetStrValue(i)
+			isnull2 = isnull
+			if !isnull {
+				shaType = parseMySQLIntegerPrefix(lengthValue)
+			}
+		}
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sha2Checksum(value []byte, length int64) ([]byte, bool) {
+	var checksum []byte
+	switch length {
+	case 0, 256:
+		sum256 := sha256.Sum256(value)
+		checksum = sum256[:]
+	case 224:
+		sum224 := sha256.Sum224(value)
+		checksum = sum224[:]
+	case 384:
+		sum384 := sha512.Sum384(value)
+		checksum = sum384[:]
+	case 512:
+		sum512 := sha512.Sum512(value)
+		checksum = sum512[:]
+	default:
+		return nil, false
+	}
+	encoded := make([]byte, hex.EncodedLen(len(checksum)))
+	hex.Encode(encoded, checksum)
+	return encoded, true
+}
+
+func sha2RowMasked(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row))
 }
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -7384,6 +7789,44 @@ func extractUnitPrefersTime(unit string) bool {
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if len(ivecs) == 3 {
+		var (
+			cachedDefinition string
+			memberPositions  map[string]uint64
+		)
+		findSetMember := func(target string, bitmap uint64, definition string) uint64 {
+			// The definition is a hidden constant for planner-generated SET
+			// calls. Keep the fallback for direct executor tests and defensive
+			// callers that provide a row-wise metadata vector.
+			if memberPositions == nil || cachedDefinition != definition {
+				cachedDefinition = definition
+				memberPositions = make(map[string]uint64)
+				for i, member := range strings.Split(definition, ",") {
+					// Match types.ParseSet: SET definitions are normalized by
+					// trimming trailing ASCII spaces and folding case.
+					key := strings.ToLower(strings.TrimRight(member, " "))
+					memberPositions[key] = uint64(i + 1)
+				}
+			}
+			// Most SET labels are already normalized at the SQL boundary. Try
+			// the allocation-free exact key first and fold only on a miss for
+			// mixed-case or padded needles.
+			targetKey := strings.TrimRight(target, " ")
+			position, ok := memberPositions[targetKey]
+			if !ok {
+				position, ok = memberPositions[strings.ToLower(targetKey)]
+			}
+			if !ok || position == 0 || position > types.MaxSetMembers {
+				return 0
+			}
+			if bitmap&(uint64(1)<<uint(position-1)) == 0 {
+				return 0
+			}
+			return position
+		}
+		return opTernaryStrFixedStrToFixed[uint64, uint64](ivecs, result, proc, length, findSetMember, selectList)
+	}
+
 	findInStrList := func(str, strlist string) uint64 {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
@@ -7471,37 +7914,16 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
-func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	rs := vector.MustFunctionResult[float64](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && (selectList.IgnoreAllRow() ||
-			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
+func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		res := math.Pow(v1, v2)
+		if math.IsNaN(res) || math.IsInf(res, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf(
+				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
 		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := math.Pow(v1, v2)
-			if math.IsNaN(res) || math.IsInf(res, 0) {
-				return moerr.NewOutOfRangeNoCtxf(
-					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
-			}
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+		return res, nil
+	}, selectList)
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -9103,98 +9525,130 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		v3, null3 := p3.GetStrValue(i)
-
-		if null1 || null2 || null3 {
+		v1, n1 := p1.GetStrValue(i)
+		v2, n2 := p2.GetStrValue(i)
+		v3, n3 := p3.GetStrValue(i)
+		if n1 || n2 || n3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			v1Str := functionUtil.QuickBytesToStr(v1)
-			v2Str := functionUtil.QuickBytesToStr(v2)
-			var res string
-			if v2Str == "" {
-				res = v1Str
-			} else {
-				res = strings.ReplaceAll(v1Str, v2Str, functionUtil.QuickBytesToStr(v3))
-			}
-
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+			continue
+		}
+		size, ok := replaceResultByteLength(v1, v2, v3, maxStringFunctionResultLength(result))
+		if !ok {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		if err = rs.AppendBytesWithWriter(size, func(dst []byte) error { writeReplaceBytes(dst, v1, v2, v3); return nil }); err != nil {
+			return err
 		}
 	}
 	return nil
 }
-
+func writeReplaceBytes(dst, src, needle, replacement []byte) {
+	if len(needle) == 0 {
+		copy(dst, src)
+		return
+	}
+	at := 0
+	for {
+		idx := bytes.Index(src, needle)
+		if idx < 0 {
+			copy(dst[at:], src)
+			return
+		}
+		at += copy(dst[at:], src[:idx])
+		at += copy(dst[at:], replacement)
+		src = src[idx+len(needle):]
+	}
+}
+func replaceResultByteLength(src, needle, replacement []byte, maxBytes int64) (int, bool) {
+	if len(needle) == 0 {
+		return len(src), int64(len(src)) <= maxBytes
+	}
+	matches := bytes.Count(src, needle)
+	n := int64(len(src)) + int64(matches)*(int64(len(replacement))-int64(len(needle)))
+	if n < 0 || n > maxBytes {
+		return 0, false
+	}
+	return int(n), true
+}
+func insertResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
+	count := utf8.RuneCount(source)
+	if pos <= 0 || pos > int64(count) {
+		return len(source), 0, 0, true
+	}
+	start = int(pos - 1)
+	end = count
+	remain := int64(count - start)
+	if remove == 0 {
+		end = start
+	} else if remove > 0 && remove < remain {
+		end = start + int(remove)
+	}
+	size = encodedRuneRangeBytes(source, 0, start) + len(replacement) + encodedRuneRangeBytes(source, end, math.MaxInt)
+	return
+}
+func encodedRuneRangeBytes(v []byte, start, end int) int {
+	n := 0
+	for off, idx := 0, 0; off < len(v); idx++ {
+		r, size := utf8.DecodeRune(v[off:])
+		if idx >= start && idx < end {
+			n += utf8.RuneLen(r)
+		}
+		off += size
+	}
+	return n
+}
+func writeEncodedRuneRange(dst, v []byte, start, end int) int {
+	n := 0
+	for off, idx := 0, 0; off < len(v); idx++ {
+		r, size := utf8.DecodeRune(v[off:])
+		if idx >= start && idx < end {
+			n += utf8.EncodeRune(dst[n:], r)
+		}
+		off += size
+	}
+	return n
+}
 func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
-	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
-	p4 := vector.GenerateFunctionStrParameter(ivecs[3])              // newstr
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
-		v4, null4 := p4.GetStrValue(i)
-
-		if null1 || null2 || null3 || null4 {
+		v1, n1 := p1.GetStrValue(i)
+		pos, n2 := p2.GetValue(i)
+		remove, n3 := p3.GetValue(i)
+		v4, n4 := p4.GetStrValue(i)
+		if n1 || n2 || n3 || n4 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			str := functionUtil.QuickBytesToStr(v1)
-			pos := v2
-			replaceLen := v3
-			newstr := functionUtil.QuickBytesToStr(v4)
-
-			// Convert to runes for proper character handling
-			runes := []rune(str)
-			strLen := int64(len(runes))
-
-			// MySQL INSERT behavior:
-			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen = 0, insert newstr at position pos without removing anything
-			// - If replaceLen < 0, replace from pos to the end of the string
-			// - Otherwise, replace replaceLen characters starting at pos with newstr
-			// - Position is 1-based
-
-			var result string
-			if pos <= 0 || pos > strLen {
-				// Invalid position, return original string
-				result = str
-			} else if replaceLen == 0 {
-				// Insert without removing
-				posIdx := int(pos - 1) // Convert to 0-based index
-				if posIdx >= len(runes) {
-					result = str + newstr
-				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
-				}
-			} else {
-				// Replace replaceLen characters starting at pos
-				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := len(runes)
-				remaining := int64(len(runes) - posIdx)
-				if replaceLen > 0 && replaceLen < remaining {
-					endIdx = posIdx + int(replaceLen)
-				}
-				if posIdx >= len(runes) {
-					result = str + newstr
-				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
-				}
-			}
-
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(result), false); err != nil {
+			continue
+		}
+		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
+		if int64(size) > maxStringFunctionResultLength(result) {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		if err = rs.AppendBytesWithWriter(size, func(dst []byte) error {
+			if raw {
+				copy(dst, v1)
+				return nil
+			}
+			at := writeEncodedRuneRange(dst, v1, 0, start)
+			at += copy(dst[at:], v4)
+			writeEncodedRuneRange(dst[at:], v1, end, math.MaxInt)
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -9572,7 +10026,8 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if berr != nil {
 			return "", berr
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
+		out, err := geoEncodeWKB(b, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9584,6 +10039,13 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := source.GetStrValue(i)
 		dist, null2 := dists.GetValue(i)
 		qs, null3 := quads.GetValue(i)
@@ -9601,7 +10063,11 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if berr != nil {
 			return berr
 		}
-		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
+		out, err := geoEncodeWKB(b, f32)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -9626,7 +10092,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if oerr != nil {
 				return nil, oerr
 			}
-			return geoEncodeWKB(g, f32), nil
+			return geoEncodeWKB(g, f32)
 		}, selectList)
 	}
 }
@@ -9734,7 +10200,8 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9750,7 +10217,8 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
+		out, err := geoEncodeWKB(g, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9766,7 +10234,8 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+		out, err := geoEncodeWKB(p, f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9779,7 +10248,8 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
+		out, err := geoEncodeWKB(geo.Simplify(g, tol), f32)
+		return functionUtil.QuickBytesToStr(out), err
 	}, selectList)
 }
 
@@ -9796,7 +10266,7 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return nil, err
 		}
-		return geoEncodeWKB(geo.Collect(a, b), f32), nil
+		return geoEncodeWKB(geo.Collect(a, b), f32)
 	}, selectList)
 }
 
@@ -13182,6 +13652,19 @@ type aesModeInfo struct {
 	useCBC  bool
 }
 
+func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
+	if !modeInfo.needsIV {
+		return nil
+	}
+	if !hasIV {
+		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
+	}
+	if nullIV || len(iv) < aes.BlockSize {
+		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
+	}
+	return nil
+}
+
 func getAESMode(proc *process.Process) (aesModeInfo, error) {
 	mode := "aes-128-ecb"
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -13237,11 +13720,8 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13310,11 +13790,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13387,7 +13864,11 @@ func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, le
 		pt := geo.Point{X: x, Y: y}
 		var wkb []byte
 		if f32 {
-			wkb = geo.WriteWKBFloat32(pt)
+			var err error
+			wkb, err = geo.WriteWKBFloat32(pt)
+			if err != nil {
+				return err
+			}
 		} else {
 			wkb = geo.WriteWKB(pt)
 		}

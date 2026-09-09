@@ -725,6 +725,62 @@ func internalTextMetadataLength(typ types.Type) int64 {
 	return int64(types.MaxStringSize)
 }
 
+// internalNumericPrecision returns the number of significant decimal digits
+// that MySQL exposes in INFORMATION_SCHEMA.COLUMNS.NUMERIC_PRECISION. The
+// width stored in a MatrixOne Type is a bit width for integer columns, so it
+// cannot be used directly for this metadata field.
+func internalNumericPrecision(typ types.Type) (int64, bool) {
+	switch typ.Oid {
+	case types.T_bool, types.T_int8, types.T_uint8:
+		return 3, true
+	case types.T_int16, types.T_uint16:
+		return 5, true
+	case types.T_int32:
+		// MEDIUMINT is represented as T_int32 with a 24-bit width.
+		if typ.Width == 24 {
+			return 7, true
+		}
+		return 10, true
+	case types.T_uint32:
+		// MEDIUMINT UNSIGNED is represented as T_uint32 with a 24-bit width.
+		if typ.Width == 24 {
+			return 7, true
+		}
+		return 10, true
+	case types.T_int64:
+		return 19, true
+	case types.T_uint64:
+		return 20, true
+	case types.T_bit:
+		// BIT defaults to BIT(1) when no length is supplied.
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 1, true
+	case types.T_float32:
+		// FLOAT(p) uses p only to select FLOAT versus DOUBLE; it does not
+		// define the INFORMATION_SCHEMA precision.  Only FLOAT(M,D) carries
+		// an explicit decimal precision, which is represented by a non-negative
+		// scale together with the display width.
+		if typ.Scale >= 0 && typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 12, true
+	case types.T_float64:
+		// DOUBLE(p) likewise uses p only as a storage-type selector.  Preserve
+		// the width only for an explicit DOUBLE(M,D) declaration.
+		if typ.Scale >= 0 && typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+		return 22, true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if typ.Width > 0 {
+			return int64(typ.Width), true
+		}
+	}
+	return 0, false
+}
+
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
@@ -739,8 +795,8 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsDecimal() {
-				if err := rs.Append(int64(typ.Width), false); err != nil {
+			if precision, ok := internalNumericPrecision(typ); ok {
+				if err := rs.Append(precision, false); err != nil {
 					return err
 				}
 				continue
@@ -767,8 +823,8 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsDecimal() {
-				if err := rs.Append(int64(typ.Scale), false); err != nil {
+			if scale, ok := internalNumericScale(typ); ok {
+				if err := rs.Append(scale, false); err != nil {
 					return err
 				}
 				continue
@@ -779,6 +835,33 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 		}
 	}
 	return nil
+}
+
+func internalNumericScale(typ types.Type) (int64, bool) {
+	switch typ.Oid {
+	case types.T_bool,
+		types.T_int8, types.T_uint8,
+		types.T_int16, types.T_uint16,
+		types.T_int32, types.T_uint32,
+		types.T_int64, types.T_uint64:
+		return 0, true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		scale := typ.Scale
+		if scale < 0 {
+			scale = 0
+		}
+		return int64(scale), true
+	case types.T_float32, types.T_float64:
+		// MySQL exposes scale for the non-standard FLOAT(M,D)/DOUBLE(M,D)
+		// forms, but leaves it NULL when D is omitted.
+		// Ordinary expression types use Scale=0 as an internal default. A
+		// positive display width is the evidence that the type came from an
+		// explicit FLOAT(M,D)/DOUBLE(M,D) declaration.
+		if typ.Width > 0 && typ.Scale >= 0 {
+			return int64(typ.Scale), true
+		}
+	}
+	return 0, false
 }
 
 func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -795,8 +878,13 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid == types.T_datetime {
-				if err := rs.Append(int64(typ.Scale), false); err != nil {
+			switch typ.Oid {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				scale := typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				if err := rs.Append(int64(scale), false); err != nil {
 					return err
 				}
 				continue
@@ -823,8 +911,13 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
+			switch typ.Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				if err := rs.Append(2, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}
@@ -851,7 +944,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 				}
 				if c == matchByCast {
 					shouldCast = true
-					ret[i] = types.T_varchar.ToType()
+					ret[i] = formattedScalarStringType(source)
 				}
 			} else {
 				ret[i] = source
@@ -1596,63 +1689,105 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func doLpad(src string, tgtLen int64, pad string) (string, bool) {
-	srcRune, padRune := []rune(src), []rune(pad)
-	srcLen, padLen := len(srcRune), len(padRune)
+func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
+	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) {
+		return 0, true
+	}
+	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
+	target := int(tgtLen)
+	var bytes int64
+	switch {
+	case target < srcRunes:
+		bytes = encodedRunePrefixBytes(src, target)
+	case target == srcRunes:
+		bytes = int64(len(src))
+	case padRunes == 0:
+		bytes = 0
+	default:
+		srcBytes := int64(len(src))
+		padBytes := int64(len(pad))
+		if srcBytes > maxBytes {
+			return 0, true
+		}
+		missing := target - srcRunes
+		full, partial := missing/padRunes, missing%padRunes
+		if padBytes != 0 && int64(full) > (maxBytes-srcBytes)/padBytes {
+			return 0, true
+		}
+		bytes = srcBytes + int64(full)*padBytes + encodedRunePrefixBytes(pad, partial)
+	}
+	if bytes > maxBytes {
+		return 0, true
+	}
+	return int(bytes), false
+}
 
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
-		return "", true
-	} else if int(tgtLen) < srcLen {
-		return string(srcRune[:tgtLen]), false
-	} else if int(tgtLen) == srcLen {
-		return src, false
-	} else if padLen == 0 {
-		return "", false
+func encodedRunePrefixBytes(value string, runes int) int64 {
+	var bytes int64
+	for offset, seen := 0, 0; offset < len(value) && seen < runes; seen++ {
+		r, size := utf8.DecodeRuneInString(value[offset:])
+		bytes += int64(utf8.RuneLen(r))
+		offset += size
+	}
+	return bytes
+}
+
+func writeRunePrefix(dst []byte, value string, count int) int {
+	written := 0
+	for offset, seen := 0, 0; offset < len(value) && seen < count; seen++ {
+		r, size := utf8.DecodeRuneInString(value[offset:])
+		written += utf8.EncodeRune(dst[written:], r)
+		offset += size
+	}
+	return written
+}
+
+func writePadResult(dst []byte, src string, target int, pad string, left bool) {
+	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
+	if target < srcRunes {
+		writeRunePrefix(dst, src, target)
+		return
+	}
+	if target == srcRunes {
+		copy(dst, src)
+		return
+	}
+	if padRunes == 0 {
+		return
+	}
+	missing := target - srcRunes
+	full, partial := missing/padRunes, missing%padRunes
+	writePad := func(out []byte) int {
+		at := 0
+		for i := 0; i < full; i++ {
+			at += copy(out[at:], pad)
+		}
+		at += writeRunePrefix(out[at:], pad, partial)
+		return at
+	}
+	if left {
+		at := writePad(dst)
+		copy(dst[at:], src)
 	} else {
-		r := int(tgtLen) - srcLen
-		p, m := r/padLen, r%padLen
-		return strings.Repeat(pad, p) + string(padRune[:m]) + src, false
+		at := copy(dst, src)
+		writePad(dst[at:])
 	}
 }
 
-func doRpad(src string, tgtLen int64, pad string) (string, bool) {
-	srcRune, padRune := []rune(src), []rune(pad)
-	srcLen, padLen := len(srcRune), len(padRune)
-
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
-		return "", true
-	} else if int(tgtLen) < srcLen {
-		return string(srcRune[:tgtLen]), false
-	} else if int(tgtLen) == srcLen {
-		return src, false
-	} else if padLen == 0 {
-		return "", false
-	} else {
-		r := int(tgtLen) - srcLen
-		p, m := r/padLen, r%padLen
-		return src + strings.Repeat(pad, p) + string(padRune[:m]), false
+func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
+	switch result.GetResultVector().GetType().Oid {
+	case types.T_blob, types.T_text:
+		return int64(types.MaxBlobLen)
+	case types.T_char, types.T_varchar:
+		// CHAR/VARCHAR width is a character contract, not a byte contract.
+		return int64(types.MaxVarcharLen * utf8.UTFMax)
+	default:
+		return int64(types.MaxVarcharLen)
 	}
 }
 
-func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// repeat the string n times.
-	repeatNTimes := func(base string, n int64) (r string, null bool) {
-		if n <= 0 {
-			return "", false
-		}
-
-		// return null if result is too long.
-		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
-		// and there is no documentation about the limit of the result length.
-		sourceLen := int64(len(base))
-		if sourceLen == 0 {
-			return "", false
-		}
-		if n > types.MaxVarcharLen/sourceLen {
-			return "", true
-		}
-		return strings.Repeat(base, int(n)), false
-	}
+func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	maxResultLen := maxStringFunctionResultLength(result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
@@ -1665,13 +1800,18 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			err = rs.AppendMustNullForBytesResult()
+		} else if v2 <= 0 || len(v1) == 0 {
+			err = rs.AppendBytes(nil, false)
+		} else if v2 > maxResultLen/int64(len(v1)) {
+			err = rs.AppendMustNullForBytesResult()
 		} else {
-			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
-			if null {
-				err = rs.AppendMustNullForBytesResult()
-			} else {
-				err = rs.AppendBytes([]byte(r), false)
-			}
+			resultBytes := int64(len(v1)) * v2
+			err = rs.AppendBytesWithWriter(int(resultBytes), func(dst []byte) error {
+				for at := 0; at < len(dst); at += len(v1) {
+					copy(dst[at:], v1)
+				}
+				return nil
+			})
 		}
 		if err != nil {
 			return err
@@ -1686,14 +1826,18 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doLpad(string(v1), v2, string(v3))
+			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytesWithWriter(resultBytes, func(dst []byte) error {
+					writePadResult(dst, string(v1), int(v2), string(v3), true)
+					return nil
+				}); err != nil {
 					return err
 				}
 				continue
@@ -1712,14 +1856,18 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doRpad(string(v1), v2, string(v3))
+			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytesWithWriter(resultBytes, func(dst []byte) error {
+					writePadResult(dst, string(v1), int(v2), string(v3), false)
+					return nil
+				}); err != nil {
 					return err
 				}
 				continue
@@ -3945,7 +4093,7 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		if v == 0 {
 			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cot(0)'")
 		}
@@ -3976,25 +4124,9 @@ func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Exp(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Exp(v)
+	}, selectList)
 }
 
 func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,6 +70,20 @@ type ExParamConst struct {
 	Idx                    int
 	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
 	CreateSql              string
+	// ArrowExecutionScope is positive authorization emitted only by compile.
+	// The zero value must fail closed before Arrow I/O.
+	ArrowExecutionScope        pipeline.ArrowExecutionScope
+	ArrowObjectIdentities      []*pipeline.ArrowObjectIdentity
+	ArrowRecordBatchShards     []*pipeline.ArrowRecordBatchShard
+	ArrowSchemaFingerprint     []byte
+	ArrowConversionPlanVersion uint32
+	// ArrowForceMaterialize is the compile-time rollout snapshot propagated to
+	// every local or remote External scope. It is not a per-batch heuristic.
+	ArrowForceMaterialize bool
+	// ArrowDistributedExecution records that this scope was created by Arrow
+	// fanout. It intentionally differs from Extern.Parallel: shard scopes clear
+	// the user request after planning but still require worker-side opt-in.
+	ArrowDistributedExecution bool
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr
@@ -78,7 +93,11 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
+	// ParquetWholeFileFanout is set only on an admitted Parquet LOAD scope
+	// created by the compiler's whole-file fanout path. It is distinct from a
+	// requested-but-serial LOAD, which must retain the regular S3 prefetch path.
+	ParquetWholeFileFanout      bool
 	IcebergDataTasks            []*pipeline.IcebergDataFileTask
 	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
 	IcebergColumns              []*pipeline.IcebergColumnMapping
@@ -199,10 +218,11 @@ type container struct {
 }
 
 type External struct {
-	ctr        container
-	Es         *ExternalParam
-	reader     ExternalFileReader // unified file reader
-	fileOpened bool               // whether a file is currently active
+	ctr               container
+	Es                *ExternalParam
+	reader            ExternalFileReader // unified file reader
+	fileOpened        bool               // whether a file is currently active
+	allocationAccount *mpool.AllocationAccount
 
 	vm.OperatorBase
 	colexec.Projection
@@ -231,6 +251,36 @@ func (external External) TypeName() string {
 
 func NewArgument() *External {
 	return reuse.Alloc[External](nil)
+}
+
+func (external *External) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if external.allocationAccount != nil && external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	external.allocationAccount = account
+	return nil
+}
+
+func (external *External) ActivatesAllocationAccountLifecycle() bool {
+	return external != nil && external.Es != nil &&
+		external.Es.ArrowExecutionScope == pipeline.ArrowExecutionScope_ArrowLoadData
+}
+
+func (external *External) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if external.allocationAccount == nil {
+		return nil
+	}
+	if external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if external.reader != nil || external.fileOpened || external.ctr.buf != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	external.allocationAccount = nil
+	return nil
 }
 
 func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {

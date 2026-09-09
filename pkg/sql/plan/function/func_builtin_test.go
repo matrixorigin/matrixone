@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -171,6 +172,11 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 			fn:     builtInInternalCharSize,
 			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
 		},
+		{
+			name:   "character set domain",
+			fn:     builtInInternalCharacterSet,
+			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tc := NewFunctionTestCase(
@@ -190,6 +196,135 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.T_int8.ToType(),
+		types.T_uint8.ToType(),
+		types.T_int16.ToType(),
+		types.T_uint16.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint32.ToType(),
+		types.New(types.T_int32, 24, -1),
+		types.New(types.T_uint32, 24, -1),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+		types.New(types.T_bit, 5, 0),
+		types.New(types.T_bit, 0, 0),
+		types.New(types.T_float32, -1, -1),
+		types.New(types.T_float32, 8, -1),
+		types.New(types.T_float32, 8, 2),
+		types.New(types.T_float64, -1, -1),
+		types.New(types.T_float64, 25, -1),
+		types.New(types.T_float64, 18, 6),
+		types.New(types.T_decimal128, 20, 6),
+		types.T_year.ToType(),
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
+		),
+		builtInInternalNumericPrecision,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBuiltInInternalNumericScaleUsesMySQLSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.T_bool.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+		types.New(types.T_decimal128, 20, -1),
+		types.T_float32.ToType(),
+		types.New(types.T_float32, -1, -1),
+		types.New(types.T_float32, 8, 0),
+		types.New(types.T_float32, 8, 2),
+		types.T_float64.ToType(),
+		types.New(types.T_float64, -1, -1),
+		types.New(types.T_float64, 18, 6),
+		types.New(types.T_bit, 5, 0),
+		types.T_year.ToType(),
+		types.T_date.ToType(),
+		types.T_varchar.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{0, 0, 0, 6, 0, 0, 0, 0, 2, 0, 0, 6, 6, 0, 0, 0, 0},
+			[]bool{false, false, false, false, false, true, true, false, false, true, true, false, true, true, true, true, true},
+		),
+		builtInInternalNumericScale,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBuiltInInternalDatetimeScaleIncludesAllTemporalTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.New(types.T_time, 6, 6),
+		types.New(types.T_datetime, 3, 3),
+		types.New(types.T_timestamp, 6, 6),
+		types.New(types.T_datetime, 0, -1),
+		types.T_date.ToType(),
+		types.T_year.ToType(),
+		types.T_int32.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{6, 3, 6, 0, 0, 0, 0},
+			[]bool{false, false, false, false, true, true, true},
+		),
+		builtInInternalDatetimeScale,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestBuiltInNameConst(t *testing.T) {
@@ -510,15 +645,34 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
-func TestToIntervalCharRegistered(t *testing.T) {
+func TestToIntervalStringTypesRegistered(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
-		types.T_char.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, int32(TO_INTERVAL), fn.fid)
-	require.Equal(t, types.T_int64, fn.retType.Oid)
+	for _, stringType := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(stringType.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+				stringType.ToType(),
+				types.T_int64.ToType(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(TO_INTERVAL), fn.fid)
+			require.Equal(t, types.T_int64, fn.retType.Oid)
+		})
+	}
+
+	// GetFunctionByName validates the resolver result. Instantiate the TEXT
+	// overload too, so the registration's runtime factory cannot silently
+	// diverge from the CHAR/VARCHAR factories.
+	var textOverload *overload
+	for i := range allSupportedFunctions[TO_INTERVAL].Overloads {
+		candidate := &allSupportedFunctions[TO_INTERVAL].Overloads[i]
+		if len(candidate.args) == 2 && candidate.args[0] == types.T_text &&
+			candidate.args[1] == types.T_int64 {
+			textOverload = candidate
+			break
+		}
+	}
+	require.NotNil(t, textOverload)
+	require.NotNil(t, textOverload.newOp())
 }
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
@@ -1076,6 +1230,22 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 	}
 
 	{
+		const resultLength = 70000
+		tc := tcTemp{
+			info: "repeat permits a result above the VARBINARY limit after BLOB promotion",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{resultLength}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{strings.Repeat("x", resultLength)}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
 		tc := tcTemp{
 			info: "test repeat(null, num) with num = -1, 0, 1, 3, null, 1000000000000",
 			inputs: []FunctionTestInput{
@@ -1091,6 +1261,157 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"lpad": builtInLpad, "rpad": builtInRpad} {
+		t.Run(name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("pad-allocation-rejection", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
+	invalid := string([]byte{0xff})
+	size, null := padResultByteLength(invalid, 1, invalid, int64(types.MaxBlobLen))
+	require.False(t, null)
+	require.Equal(t, 1, size, "the exact-source path preserves invalid UTF-8 bytes")
+
+	source := []byte("source")
+	size, _, _, raw := insertResultLayout(source, 0, 100, []byte("x"))
+	require.True(t, raw)
+	require.Equal(t, len(source), size)
+	size, start, end, raw := insertResultLayout(source, 1, math.MaxInt64, []byte("x"))
+	require.False(t, raw)
+	require.Equal(t, 1, size)
+	require.Equal(t, 0, start)
+	require.Equal(t, len(source), end)
+}
+
+func TestTextReplaceAndInsertKeepLargeLegalResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := strings.Repeat("a", 40000)
+
+	replaceCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	ok, info := replaceCase.Run()
+	require.True(t, ok, info)
+
+	insertCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{strings.Repeat("b", 30000)}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 30000) + source}, nil), fEvalFn(Insert))
+	ok, info = insertCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestTextResultCapacityUsesResultDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	repeatCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"b"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{65536}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 65536)}, nil), fEvalFn(builtInRepeat))
+	ok, info := repeatCase.Run()
+	require.True(t, ok, info)
+
+	source := strings.Repeat("a", 40000)
+	replaceCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 40000, 0), []string{source}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 2, 0), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	ok, info = replaceCase.Run()
+	require.True(t, ok, info)
+
+	multibyteRepeat := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"😀"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{20000}, nil),
+	}, NewFunctionTestResult(types.New(types.T_varchar, 20000, 0), false, []string{strings.Repeat("😀", 20000)}, nil),
+		fEvalFn(builtInRepeat))
+	ok, info = multibyteRepeat.Run()
+	require.True(t, ok, info)
+
+	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error{
+		"lower": builtInToLower,
+		"upper": builtInToUpper,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input, expected := strings.Repeat("A", 70000), strings.Repeat("a", 70000)
+			if name == "upper" {
+				input, expected = expected, input
+			}
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{input}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), false, []string{expected}, nil), fEvalFn(fn))
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+
+			inputRune, expectedRune := "Ⱥ", "ⱥ"
+			if name == "upper" {
+				inputRune, expectedRune = "ȿ", "Ȿ"
+			}
+			boundedText := types.T_text.ToType()
+			boundedText.Width = 255
+			boundedResult := types.New(types.T_varchar, 255, 0)
+			fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(boundedText, []string{strings.Repeat(inputRune, 127)}, nil),
+			}, NewFunctionTestResult(boundedResult, false, []string{strings.Repeat(expectedRune, 127)}, nil), fEvalFn(fn))
+			ok, info = fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
+	size, ok := exportSetResultByteLength(^uint64(0), []byte("x"), nil, nil, 64, types.MaxBlobLen)
+	require.True(t, ok)
+	require.Equal(t, 64, size)
+
+	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 2000)}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("b", 2000)}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(Replace))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{strings.Repeat("x", 64)}, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 20000)}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_blob.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{64}, nil),
+	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(ExportSet))
+	ok, info = tc.Run()
+	require.True(t, ok, info)
 }
 
 func Test_BuiltIn_Serial(t *testing.T) {
@@ -2030,28 +2351,6 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test cot(0) returns out-of-range error",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{
-						0,
-					},
-					nil),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				[]float64{0}, nil),
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCot)
-		succeed, info := tcc.Run()
-		require.True(t, succeed, tc.info, info)
-
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-		_, err := tcc.DebugRun()
-		require.ErrorContains(t, err, "DOUBLE value is out of range in 'cot(0)'")
-	}
-
-	{
-		tc := tcTemp{
 			info: "test atan",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -2255,6 +2554,156 @@ func Test_BuiltIn_Math(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name   string
+		input  FunctionTestInput
+		fn     fEvalFn
+		values []float64
+		nulls  []bool
+	}{
+		{
+			name:   "exp continues after overflow and preserves underflow",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 709, 710, -1000, 1}, nil),
+			fn:     builtInExp,
+			values: []float64{1, 8.218407461554972e307, 0, 0, math.E},
+			nulls:  []bool{false, false, true, false, false},
+		},
+		{
+			name:   "constant exp overflow",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
+			fn:     builtInExp,
+			values: []float64{0, 0},
+			nulls:  []bool{true, true},
+		},
+		{
+			name:   "cot negative and positive zero with valid neighbors",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{-math.Pi / 4, math.Copysign(0, -1), 0, math.Pi / 4}, nil),
+			fn:     builtInCot,
+			values: []float64{-1, 0, 0, 1},
+			nulls:  []bool{false, true, true, false},
+		},
+		{
+			name:   "constant cot zero",
+			input:  NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+			fn:     builtInCot,
+			values: []float64{0, 0},
+			nulls:  []bool{true, true},
+		},
+		{
+			name:   "exp input null and overflow",
+			input:  NewFunctionTestInput(types.T_float64.ToType(), []float64{710, 710, 0}, []bool{true, false, false}),
+			fn:     builtInExp,
+			values: []float64{0, 0, 1},
+			nulls:  []bool{true, true, false},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_float64.ToType(), false, tc.values, tc.nulls),
+				tc.fn,
+			)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.NoError(t, err)
+			param := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
+			for i, want := range tc.values {
+				value, isNull := param.GetValue(uint64(i))
+				require.Equal(t, tc.nulls[i], isNull)
+				if !isNull {
+					if want == 0 {
+						require.Zero(t, value)
+					} else {
+						require.InEpsilon(t, want, value, 1e-14)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name  string
+		input []float64
+		value float64
+		fn    fEvalFn
+	}{
+		{
+			name:  "exp skips masked overflow",
+			input: []float64{710, 1},
+			value: math.E,
+			fn:    builtInExp,
+		},
+		{
+			name:  "cot skips masked zero",
+			input: []float64{0, 1},
+			value: math.Tan(math.Pi/2 - 1),
+			fn:    builtInCot,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), tc.input, nil)},
+				NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+				tc.fn,
+			)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+
+			selectList := &FunctionSelectList{
+				AnyNull:    true,
+				SelectList: []bool{false, true},
+			}
+			require.NoError(t, tc.fn(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList))
+
+			resultVec := tcc.result.GetResultVector()
+			require.True(t, resultVec.GetNulls().Contains(0))
+			resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
+			value, isNull := resultParam.GetValue(1)
+			require.False(t, isNull)
+			require.InDelta(t, tc.value, value, 1e-15)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    fEvalFn
+	}{
+		{
+			name:  "exp skips constant overflow when all rows are masked",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
+			fn:    builtInExp,
+		},
+		{
+			name:  "cot skips constant zero when all rows are masked",
+			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+			fn:    builtInCot,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+				tc.fn,
+			)
+			tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
 	}
 }
 

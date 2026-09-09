@@ -102,19 +102,22 @@ type dmlPlanCtx struct {
 	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
 	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
 	// the aggregation is skipped; the NULL-row filter must stay.
-	needAggFilter          bool
-	dedupByRowNumber       bool
-	updateColLength        int
-	rowIdPos               int
-	insertColPos           []int
-	updateColPosMap        map[string]int
-	allDelTableIDs         map[uint64]struct{}
-	allDelTables           map[FkReferKey]struct{}
-	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
-	lockTable              bool //we need lock table in stmt: delete from tbl
-	updatePkCol            bool //if update stmt will update the primary key or one of pks
-	pkFilterExprs          []*Expr
-	isDeleteWithoutFilters bool
+	needAggFilter         bool
+	dedupByRowNumber      bool
+	updateColLength       int
+	rowIdPos              int
+	insertColPos          []int
+	updateColPosMap       map[string]int
+	allDelTableIDs        map[uint64]struct{}
+	skipForeignKeyActions map[*ForeignKeyDef]struct{}
+	allDelTables          map[FkReferKey]struct{}
+	isFkRecursionCall     bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
+	lockTable             bool //we need lock table in stmt: delete from tbl
+	updatePkCol           bool //if update stmt will update the primary key or one of pks
+	pkFilterExprs         []*Expr
+	// isUnrestrictedDelete means the statement semantically selects the entire
+	// target table. Physical truncate eligibility is decided separately.
+	isUnrestrictedDelete bool
 	// skipTargetDelete reuses the parent-reference action planner for a row set
 	// whose base-table delete is owned by another operator (modern REPLACE).
 	// Recursive child actions still build their normal delete/update branches.
@@ -129,7 +132,28 @@ type dmlPlanCtx struct {
 	// stream only preserves existing non-NULL keys; it cannot introduce a new
 	// non-NULL key that needs a duplicate-key check.
 	isConditionalFkSetNullAction bool
-	ignoreCheckConstraint        bool
+	// isPostCreateQueryFkSetNullAction marks the direct-DELETE action stream
+	// appended after the root plan's createQuery pass. Its hidden-index joins
+	// must use the local positional ABI; REPLACE keeps the shared tagged ABI.
+	isPostCreateQueryFkSetNullAction bool
+	ignoreCheckConstraint            bool
+}
+
+func cloneSkippedForeignKeyActions(
+	src map[*ForeignKeyDef]struct{},
+	additional ...*ForeignKeyDef,
+) map[*ForeignKeyDef]struct{} {
+	if len(src) == 0 && len(additional) == 0 {
+		return nil
+	}
+	dst := make(map[*ForeignKeyDef]struct{}, len(src)+len(additional))
+	for fk := range src {
+		dst[fk] = struct{}{}
+	}
+	for _, fk := range additional {
+		dst[fk] = struct{}{}
+	}
+	return dst
 }
 
 // information of deleteNode, which is about the deleted table
@@ -1027,7 +1051,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
 	// we have build SK using UK code path. So we might see UK in function signature even thought it could be for
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
-	canTruncate := delCtx.isDeleteWithoutFilters
+	canTruncate := delCtx.isUnrestrictedDelete
 
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
@@ -1062,7 +1086,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 		// delete origin table
 		pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
-		delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, true, pkPos, pkTyp, delCtx.lockTable)
+		// Rows deleted by a referential action are implicit side effects of the
+		// statement's direct delete. They must not contribute to ROW_COUNT() or
+		// the client OK packet; only the root statement owns affected rows.
+		addAffectedRows := !delCtx.isFkRecursionCall
+		delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, addAffectedRows, pkPos, pkTyp, delCtx.lockTable)
 		delNodeInfo.preserveProjection = delCtx.sourceTag != 0
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 		putDeleteNodeInfo(delNodeInfo)
@@ -1110,6 +1138,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 			if err := validateTableIndexDefinitions(childTableDef); err != nil {
 				return err
+			}
+			resetReferentialDeleteSource := func() {
+				if delCtx.skipTargetDelete || childTableDef.TblId == delCtx.tableDef.TblId {
+					// Keep a referential-action rewrite or a REPLACE source
+					// separate from the direct DELETE source. Its physical delete
+					// must not inherit the direct statement's affected-row owner.
+					delete(builder.deleteNode, childTableDef.TblId)
+				}
 			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
@@ -1254,31 +1290,65 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						combinedSetNull[fk] = struct{}{}
 					}
 
-					childTag := builder.genNewBindTag()
-					parentTag := builder.genNewBindTag()
+					// DELETE plans are appended after createQuery has remapped the
+					// statement graph.  The legacy path therefore uses the executor's
+					// local JOIN/PROJECT ABI (left=0, right=1); only REPLACE and
+					// already-tagged recursive plans may keep planner bind tags.
+					localCombined := !delCtx.skipTargetDelete && delCtx.sourceTag == 0
+					childTag := int32(1)
+					parentTag := int32(0)
+					combinedTag := int32(0)
+					groupTag := int32(0)
+					aggTag := int32(0)
+					actionTag := int32(0)
+					if !localCombined {
+						childTag = builder.genNewBindTag()
+						parentTag = builder.genNewBindTag()
+						combinedTag = builder.genNewBindTag()
+						groupTag = builder.genNewBindTag()
+						aggTag = builder.genNewBindTag()
+						actionTag = builder.genNewBindTag()
+					}
 					childNodeID := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{},
 						ObjRef: childObjRef, TableDef: CloneTableDefForPlan(childTableDef, true),
-						ProjectList: childProjectList, BindingTags: []int32{childTag},
+						ProjectList: childProjectList,
+						BindingTags: func() []int32 {
+							if localCombined {
+								return nil
+							}
+							return []int32{childTag}
+						}(),
 					}, bindCtx)
 					if builder.preserveScanProjection == nil {
 						builder.preserveScanProjection = make(map[int32]struct{})
 					}
 					builder.preserveScanProjection[childNodeID] = struct{}{}
 					parentNodeID := appendDeleteSourceScan()
-					parentNodeID = builder.appendNode(&plan.Node{
-						NodeType: plan.Node_PROJECT, Children: []int32{parentNodeID},
-						ProjectList: DeepCopyExprList(builder.qry.Nodes[parentNodeID].ProjectList),
-						BindingTags: []int32{parentTag},
-					}, bindCtx)
+					if !localCombined {
+						parentNodeID = builder.appendNode(&plan.Node{
+							NodeType: plan.Node_PROJECT, Children: []int32{parentNodeID},
+							ProjectList: DeepCopyExprList(builder.qry.Nodes[parentNodeID].ProjectList),
+							BindingTags: []int32{parentTag},
+						}, bindCtx)
+					}
 
 					fkMatches := make([]*Expr, len(setNullFks))
+					localParentValuePos := make([][]int32, len(setNullFks))
+					localParentValueOffset := int32(len(childTableDef.Cols))
 					markerByColumn := make(map[string][]int)
 					var anyMatch *Expr
 					for fkIdx, fk := range setNullFks {
 						for i, childColID := range fk.Cols {
 							childName := childId2name[childColID]
 							parentName := idNameMap[fk.ForeignCols[i]]
+							if localCombined {
+								// JOIN projects all referenced parent columns in FK order;
+								// retain the cumulative position across FKs so each marker
+								// reads the parent value belonging to its own constraint.
+								localParentValuePos[fkIdx] = append(localParentValuePos[fkIdx], localParentValueOffset)
+								localParentValueOffset++
+							}
 							leftExpr := &Expr{Typ: *childTypMap[childName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
 								RelPos: childTag, ColPos: childPosMap[childName], Name: childName,
 							}}}
@@ -1312,15 +1382,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 					}
 
-					joinProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
-					for i, col := range childTableDef.Cols {
-						joinProjection = append(joinProjection, &Expr{
-							Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: childTag, ColPos: int32(i), Name: col.Name,
-							}},
-						})
-					}
-					joinProjection = append(joinProjection, DeepCopyExprList(fkMatches)...)
 					joinMatch := anyMatch
 					if childTableDef.TblId == delCtx.tableDef.TblId && delCtx.skipTargetDelete {
 						parentRowIDPos, ok := nameIdxMap[catalog.Row_ID]
@@ -1345,94 +1406,274 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							return err
 						}
 					}
-					combinedTag := builder.genNewBindTag()
+					joinChildren := []int32{childNodeID, parentNodeID}
+					if localCombined {
+						// The local executor ABI assigns JOIN relpos 0 to the left
+						// input and relpos 1 to the right input.  Keep the parent on
+						// the left so the child/parent predicate above remains
+						// child-column = parent-column.
+						joinChildren = []int32{parentNodeID, childNodeID}
+					}
 					combinedNodeID := builder.appendNode(&plan.Node{
-						NodeType: plan.Node_JOIN, Children: []int32{childNodeID, parentNodeID},
+						NodeType: plan.Node_JOIN, Children: joinChildren,
 						JoinType: plan.Node_INNER, OnList: []*Expr{joinMatch},
 					}, bindCtx)
-					combinedNodeID = builder.appendNode(&plan.Node{
-						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
-						ProjectList: joinProjection, BindingTags: []int32{combinedTag},
-					}, bindCtx)
+					if localCombined {
+						// JOIN expressions may reference both inputs, but the following
+						// update plan must consume a single, positional row.  Project
+						// the child columns and the parent key values first, then build
+						// the per-FK markers from those one-input columns.
+						localJoinProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(localParentValuePos))
+						for i, col := range childTableDef.Cols {
+							localJoinProjection = append(localJoinProjection, &Expr{
+								Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: 1, ColPos: int32(i), Name: col.Name,
+								}},
+							})
+						}
+						for _, fk := range setNullFks {
+							for i := range fk.Cols {
+								parentName := idNameMap[fk.ForeignCols[i]]
+								localJoinProjection = append(localJoinProjection, &Expr{
+									Typ: *nameTypMap[parentName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+										RelPos: 0, ColPos: nameIdxMap[parentName], Name: parentName,
+									}},
+								})
+							}
+						}
+						builder.qry.Nodes[combinedNodeID].ProjectList = localJoinProjection
+						localMarkerProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							localMarkerProjection = append(localMarkerProjection, &Expr{
+								Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: 0, ColPos: int32(i), Name: col.Name,
+								}},
+							})
+						}
+						for fkIdx, fk := range setNullFks {
+							var marker *Expr
+							for partIdx, childColID := range fk.Cols {
+								childName := childId2name[childColID]
+								childExpr := &Expr{Typ: *childTypMap[childName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: 0, ColPos: childPosMap[childName], Name: childName,
+								}}}
+								parentName := idNameMap[fk.ForeignCols[partIdx]]
+								parentExpr := &Expr{Typ: *nameTypMap[parentName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: 0, ColPos: localParentValuePos[fkIdx][partIdx], Name: parentName,
+								}}}
+								partMatch, bindErr := BindFuncExprImplByPlanExpr(
+									builder.GetContext(), "=", []*Expr{childExpr, parentExpr})
+								if bindErr != nil {
+									return bindErr
+								}
+								if marker == nil {
+									marker = partMatch
+								} else {
+									marker, bindErr = BindFuncExprImplByPlanExpr(
+										builder.GetContext(), "and", []*Expr{marker, partMatch})
+									if bindErr != nil {
+										return bindErr
+									}
+								}
+							}
+							localMarkerProjection = append(localMarkerProjection, marker)
+						}
+						combinedNodeID = builder.appendNode(&plan.Node{
+							NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
+							ProjectList: localMarkerProjection,
+						}, bindCtx)
+					} else {
+						joinProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							joinProjection = append(joinProjection, &Expr{
+								Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: childTag, ColPos: int32(i), Name: col.Name,
+								}},
+							})
+						}
+						joinProjection = append(joinProjection, DeepCopyExprList(fkMatches)...)
+						combinedNodeID = builder.appendNode(&plan.Node{
+							NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
+							ProjectList: joinProjection, BindingTags: []int32{combinedTag},
+						}, bindCtx)
+					}
 					combinedNodeID, err = appendExcludeCascadeOwnedRows(combinedNodeID, combinedTag)
 					if err != nil {
 						return err
 					}
-					groupTag := builder.genNewBindTag()
-					aggTag := builder.genNewBindTag()
-					groupBy := make([]*Expr, 0, 2)
-					childGroupPos := make([]int32, len(childTableDef.Cols))
-					childAggPos := make([]int32, len(childTableDef.Cols))
-					aggList := make([]*Expr, 0, len(childTableDef.Cols)-2+len(fkMatches))
-					for i, col := range childTableDef.Cols {
-						colExpr := &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: combinedTag, ColPos: int32(i), Name: col.Name,
-						}}}
-						if col.Name == catalog.Row_ID || col.Name == catalog.FakePrimaryKeyColName {
-							childGroupPos[i] = int32(len(groupBy))
-							childAggPos[i] = -1
-							groupBy = append(groupBy, colExpr)
-							continue
+					var actionProjection []*Expr
+					if localCombined {
+						// The OR join can emit one row for each matching parent. Group by
+						// the child row id and take MAX for every FK marker so a child
+						// matched through two different parents has all matching columns
+						// nulled in one update image.
+						groupBy := make([]*Expr, 0, 2)
+						childGroupPos := make([]int32, len(childTableDef.Cols))
+						childAggPos := make([]int32, len(childTableDef.Cols))
+						aggList := make([]*Expr, 0, len(childTableDef.Cols)-2+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							colExpr := &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: 0, ColPos: int32(i), Name: col.Name,
+							}}}
+							if col.Name == catalog.Row_ID || col.Name == catalog.FakePrimaryKeyColName {
+								childGroupPos[i] = int32(len(groupBy))
+								childAggPos[i] = -1
+								groupBy = append(groupBy, colExpr)
+								continue
+							}
+							childAggPos[i] = int32(len(aggList))
+							colAgg, bindErr := BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "any_value", []*Expr{colExpr})
+							if bindErr != nil {
+								return bindErr
+							}
+							aggList = append(aggList, colAgg)
 						}
-						childAggPos[i] = int32(len(aggList))
-						colAgg, bindErr := BindFuncExprImplByPlanExpr(
-							builder.GetContext(), "any_value", []*Expr{colExpr})
-						if bindErr != nil {
-							return bindErr
+						markerAggOffset := len(aggList)
+						for i := range setNullFks {
+							marker := &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: 0, ColPos: int32(len(childTableDef.Cols) + i),
+							}}}
+							markerAgg, bindErr := BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "max", []*Expr{marker})
+							if bindErr != nil {
+								return bindErr
+							}
+							aggList = append(aggList, markerAgg)
 						}
-						aggList = append(aggList, colAgg)
-					}
-					markerAggOffset := len(aggList)
-					for i := range fkMatches {
-						marker := &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: combinedTag, ColPos: int32(len(childTableDef.Cols) + i),
-						}}}
-						markerAgg, bindErr := BindFuncExprImplByPlanExpr(
-							builder.GetContext(), "max", []*Expr{marker})
-						if bindErr != nil {
-							return bindErr
+						aggNode := &plan.Node{
+							NodeType: plan.Node_AGG, Children: []int32{combinedNodeID},
+							GroupBy: groupBy, AggList: aggList,
+							SpillMem: builder.aggSpillMem,
 						}
-						aggList = append(aggList, markerAgg)
-					}
-					combinedNodeID = builder.appendNode(&plan.Node{
-						NodeType: plan.Node_AGG, Children: []int32{combinedNodeID},
-						GroupBy: groupBy, AggList: aggList, BindingTags: []int32{groupTag, aggTag},
-						SpillMem: builder.aggSpillMem,
-					}, bindCtx)
-					actionTag := builder.genNewBindTag()
-					actionProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
-					for i, col := range childTableDef.Cols {
-						relPos := aggTag
-						colPos := childAggPos[i]
-						if childAggPos[i] < 0 {
-							relPos = groupTag
-							colPos = childGroupPos[i]
+						if !localCombined {
+							aggNode.BindingTags = []int32{groupTag, aggTag}
 						}
-						actionProjection = append(actionProjection, &Expr{
-							Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: relPos, ColPos: colPos, Name: col.Name,
-							}},
-						})
+						combinedNodeID = builder.appendNode(aggNode, bindCtx)
+						actionProjection = make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							colPos := childAggPos[i]
+							colRelPos := aggTag
+							if colPos < 0 {
+								if localCombined {
+									colRelPos = 0
+								} else {
+									colRelPos = groupTag
+								}
+								colPos = childGroupPos[i]
+							} else if localCombined {
+								// The local Group operator emits all group keys before
+								// aggregate vectors. Tagged aggregate references are only
+								// remapped by createQuery, which does not run for this
+								// post-createQuery action branch.
+								colRelPos = 0
+								colPos += int32(len(groupBy))
+							}
+							actionProjection = append(actionProjection, &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: colRelPos, ColPos: colPos, Name: col.Name,
+							}}})
+						}
+						for i := range setNullFks {
+							markerRelPos := aggTag
+							markerPos := int32(markerAggOffset + i)
+							if localCombined {
+								markerRelPos = 0
+								markerPos += int32(len(groupBy))
+							}
+							actionProjection = append(actionProjection, &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: markerRelPos, ColPos: markerPos,
+							}}})
+						}
+					} else {
+						groupBy := make([]*Expr, 0, 2)
+						childGroupPos := make([]int32, len(childTableDef.Cols))
+						childAggPos := make([]int32, len(childTableDef.Cols))
+						aggList := make([]*Expr, 0, len(childTableDef.Cols)-2+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							colExpr := &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: combinedTag, ColPos: int32(i), Name: col.Name,
+							}}}
+							if col.Name == catalog.Row_ID || col.Name == catalog.FakePrimaryKeyColName {
+								childGroupPos[i] = int32(len(groupBy))
+								childAggPos[i] = -1
+								groupBy = append(groupBy, colExpr)
+								continue
+							}
+							childAggPos[i] = int32(len(aggList))
+							colAgg, bindErr := BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "any_value", []*Expr{colExpr})
+							if bindErr != nil {
+								return bindErr
+							}
+							aggList = append(aggList, colAgg)
+						}
+						markerAggOffset := len(aggList)
+						for i := range fkMatches {
+							marker := &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: combinedTag, ColPos: int32(len(childTableDef.Cols) + i),
+							}}}
+							markerAgg, bindErr := BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "max", []*Expr{marker})
+							if bindErr != nil {
+								return bindErr
+							}
+							aggList = append(aggList, markerAgg)
+						}
+						combinedNodeID = builder.appendNode(&plan.Node{
+							NodeType: plan.Node_AGG, Children: []int32{combinedNodeID},
+							GroupBy: groupBy, AggList: aggList,
+							BindingTags: []int32{groupTag, aggTag},
+							SpillMem:    builder.aggSpillMem,
+						}, bindCtx)
+						actionProjection = make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
+						for i, col := range childTableDef.Cols {
+							relPos := aggTag
+							colPos := childAggPos[i]
+							if childAggPos[i] < 0 {
+								relPos = groupTag
+								colPos = childGroupPos[i]
+							}
+							actionProjection = append(actionProjection, &Expr{
+								Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: relPos, ColPos: colPos, Name: col.Name,
+								}},
+							})
+						}
+						for i := range fkMatches {
+							expr := aggList[markerAggOffset+i]
+							markerPos := int32(markerAggOffset + i)
+							actionProjection = append(actionProjection, &Expr{
+								Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: aggTag, ColPos: markerPos,
+								}},
+							})
+						}
 					}
-					for i := range fkMatches {
-						expr := aggList[markerAggOffset+i]
-						actionProjection = append(actionProjection, &Expr{
-							Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: aggTag, ColPos: int32(markerAggOffset + i),
-							}},
-						})
+					actionNode := &plan.Node{
+						NodeType:    plan.Node_PROJECT,
+						Children:    []int32{combinedNodeID},
+						ProjectList: actionProjection,
 					}
-					combinedNodeID = builder.appendNode(&plan.Node{
-						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
-						ProjectList: actionProjection, BindingTags: []int32{actionTag},
-					}, bindCtx)
-					actionSinkID := appendSinkNodeWithTag(builder, bindCtx, combinedNodeID, actionTag)
+					if !localCombined {
+						actionNode.BindingTags = []int32{actionTag}
+					}
+					combinedNodeID = builder.appendNode(actionNode, bindCtx)
+					var actionSinkID int32
+					if localCombined {
+						actionSinkID = appendSinkNode(builder, bindCtx, combinedNodeID)
+					} else {
+						actionSinkID = appendSinkNodeWithTag(builder, bindCtx, combinedNodeID, actionTag)
+					}
 					if builder.preserveSinkProjection == nil {
 						builder.preserveSinkProjection = make(map[int32]struct{})
 					}
 					builder.preserveSinkProjection[actionSinkID] = struct{}{}
 					actionStep := builder.appendStep(actionSinkID)
-					combinedNodeID = builder.appendTaggedSinkScan(bindCtx, actionStep, actionTag)
+					if localCombined {
+						combinedNodeID = appendSinkScanNode(builder, bindCtx, actionStep)
+					} else {
+						combinedNodeID = builder.appendTaggedSinkScan(bindCtx, actionStep, actionTag)
+					}
 					if builder.preserveScanProjection == nil {
 						builder.preserveScanProjection = make(map[int32]struct{})
 					}
@@ -1442,15 +1683,23 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					insertColPos := make([]int, 0, len(childTableDef.Cols)-1)
 					projectList := make([]*Expr, len(childTableDef.Cols))
 					for i, col := range childTableDef.Cols {
+						projectRelPos := actionTag
+						if localCombined {
+							projectRelPos = 0
+						}
 						projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: actionTag, ColPos: int32(i), Name: col.Name,
+							RelPos: projectRelPos, ColPos: int32(i), Name: col.Name,
 						}}}
 					}
 					for columnName, markers := range markerByColumn {
 						var matched *Expr
 						for _, markerIdx := range markers {
+							markerRelPos := actionTag
+							if localCombined {
+								markerRelPos = 0
+							}
 							marker := &Expr{Typ: fkMatches[markerIdx].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: actionTag, ColPos: int32(len(childTableDef.Cols) + markerIdx),
+								RelPos: markerRelPos, ColPos: int32(len(childTableDef.Cols) + markerIdx),
 							}}}
 							if matched == nil {
 								matched = marker
@@ -1486,6 +1735,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID}, ProjectList: projectList,
 					}, bindCtx)
 					combinedNodeID = appendSinkNode(builder, bindCtx, combinedNodeID)
+					if builder.preserveSinkProjection == nil {
+						builder.preserveSinkProjection = make(map[int32]struct{})
+					}
 					builder.preserveSinkProjection[combinedNodeID] = struct{}{}
 					combinedStep := builder.appendStep(combinedNodeID)
 					upPlanCtx := getDmlPlanCtx()
@@ -1498,11 +1750,25 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.sourceStep = combinedStep
 					upPlanCtx.updateColPosMap = updateMap
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+					upPlanCtx.skipForeignKeyActions = delCtx.skipForeignKeyActions
+					if childTableDef.TblId == delCtx.tableDef.TblId {
+						upPlanCtx.skipForeignKeyActions = cloneSkippedForeignKeyActions(
+							delCtx.skipForeignKeyActions, setNullFks...)
+					}
 					upPlanCtx.insertColPos = insertColPos
 					upPlanCtx.isFkRecursionCall = true
 					upPlanCtx.updatePkCol = false
+					// Lock and pre-insert consume the action image by fixed column
+					// positions (including the hidden rowid). Preserve that positional
+					// layout after the sink, regardless of whether this is the local
+					// or tagged action path.
 					upPlanCtx.preserveUpdateSourceProjection = true
+					// A direct DELETE builds this action stream after createQuery and
+					// therefore needs the local positional index ABI. REPLACE owns a
+					// shared tagged action stream; keep its existing tagged layout.
 					upPlanCtx.isConditionalFkSetNullAction = true
+					upPlanCtx.isPostCreateQueryFkSetNullAction = localCombined
+					resetReferentialDeleteSource()
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
@@ -1559,7 +1825,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.sourceStep = newSourceStep
 					upPlanCtx.allDelTableIDs = allDelTableIDs
 					upPlanCtx.isFkRecursionCall = true
-
+					// The root self-referential DELETE already registered its direct
+					// source for this table. Keep the descendant source separate so
+					// its physical DELETE can carry AddAffectedRows=false; merging it
+					// back into the root stream would count descendants in ROW_COUNT().
+					delete(builder.deleteNode, childTableDef.TblId)
 					err = buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
@@ -1569,6 +1839,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
+				if _, ok := delCtx.skipForeignKeyActions[fk]; ok {
+					// This exact FK action was already materialized by the parent
+					// recursive update. Other FKs on the same self-referencing table
+					// must still be checked and applied.
+					continue
+				}
 				if _, ok := combinedSetNull[fk]; ok {
 					continue
 				}
@@ -1756,7 +2032,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						var filterExpr, tmpExpr *Expr
 						for updateName, newIdx := range updateRefColumn {
 							oldIdx := nameIdxMap[updateName]
-							tmpExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
+							equalExpr, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*Expr{{
 								Typ: *nameTypMap[updateName],
 								Expr: &plan.Expr_Col{
 									Col: &ColRef{
@@ -1773,15 +2049,19 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									},
 								},
 							}})
-							if err != nil {
-								return nil
+							if buildErr != nil {
+								return buildErr
+							}
+							tmpExpr, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{equalExpr})
+							if buildErr != nil {
+								return buildErr
 							}
 							if filterExpr == nil {
 								filterExpr = tmpExpr
 							} else {
-								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
-								if err != nil {
-									return nil
+								filterExpr, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
+								if buildErr != nil {
+									return buildErr
 								}
 							}
 						}
@@ -1980,6 +2260,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.beginIdx = 0
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+						upPlanCtx.skipForeignKeyActions = delCtx.skipForeignKeyActions
+						if childTableDef.TblId == delCtx.tableDef.TblId {
+							upPlanCtx.skipForeignKeyActions = cloneSkippedForeignKeyActions(
+								delCtx.skipForeignKeyActions, fk)
+						}
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
@@ -1988,11 +2273,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
 						}
-						if delCtx.skipTargetDelete {
-							// Do not merge a preceding CASCADE source with this wider
-							// update stream; appendExcludeCascadeOwnedRows made them disjoint.
-							delete(builder.deleteNode, childTableDef.TblId)
-						}
+						resetReferentialDeleteSource()
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -3486,10 +3767,12 @@ func makeCompPkeyExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) *
 		}
 	}
 
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial() produces the opaque byte representation stored in the hidden
+		// composite-primary-key column.  Keep its binary string domain here as
+		// well; labelling it as legacy/text VARCHAR makes the generated input PK
+		// incompatible with the same bytes read back from a base or index table.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -3524,10 +3807,9 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 			},
 		}
 	}
-	typ := types.T_varchar.ToType()
-	varcharTyp := MakePlan2Type(&typ)
 	return &plan.Expr{
-		Typ: varcharTyp,
+		// serial_full() is also an opaque serialized key, not user text.
+		Typ: makeHiddenColTyp(),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -4145,6 +4427,7 @@ func appendDeleteIndexTablePlan(
 	preserveProjection bool,
 	preserveActionRows bool,
 	matchedDeleteOnly bool,
+	disableRuntimeFilter bool,
 ) (int32, error) {
 	/********
 	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
@@ -4322,8 +4605,8 @@ func appendDeleteIndexTablePlan(
 	)
 	// FK actions can consume this index-maintenance step through a sink scan.
 	// A runtime filter from that consumer back to the scan creates a wait-for
-	// cycle, so disable it only for this internal join when FK actions exist.
-	if preserveProjection {
+	// cycle, so disable it for internal FK maintenance joins.
+	if preserveProjection || disableRuntimeFilter {
 		hasRuntimeFilter = false
 	}
 	if hasRuntimeFilter {
@@ -5973,7 +6256,7 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 			var entriesTblPkPos int
 			var entriesTblPkTyp Type
 
-			if delCtx.isDeleteWithoutFilters {
+			if delCtx.isUnrestrictedDelete {
 				lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
 				entriesDeleteIdx = getRowIdPos(entriesTableDef)
 				entriesTblPkPos, entriesTblPkTyp = getPkPos(entriesTableDef, false)
@@ -6256,7 +6539,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
 		uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
 		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
@@ -6278,9 +6561,18 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			preserveIndexProjection = false
 			preserveActionRows = false
 		}
+		if delCtx.isPostCreateQueryFkSetNullAction {
+			// The combined SET NULL source is a post-createQuery maintenance
+			// stream. It may retain non-NULL keys for rows matched by a sibling
+			// FK, so it still needs the full delete/reinsert index flow, but that
+			// flow must use the local two-input JOIN ABI rather than planner tags.
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
 			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
+			delCtx.isPostCreateQueryFkSetNullAction,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -6293,6 +6585,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		if skipIndexInsert {
 			delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 			delNodeInfo.preserveProjection = !usePositionalIndexDelete &&
+				!delCtx.isPostCreateQueryFkSetNullAction &&
 				(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
@@ -6337,7 +6630,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				delNodeInfo.deleteIndex = 0
 				delNodeInfo.pkPos = 1
 			} else {
-				delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+				delNodeInfo.preserveProjection = !delCtx.isPostCreateQueryFkSetNullAction &&
+					(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 			}
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
@@ -6462,7 +6756,7 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	var masterTblPkPos int
 	var masterTblPkTyp Type
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
 		masterDeleteIdx = getRowIdPos(masterTableDef)
 		masterTblPkPos, masterTblPkTyp = getPkPos(masterTableDef, false)
@@ -6646,7 +6940,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	canTruncate := delCtx.isDeleteWithoutFilters
+	canTruncate := delCtx.isUnrestrictedDelete
 
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
@@ -6987,7 +7281,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexObjRef *ObjectRef, indexTableDef *TableDef, indexdef *plan.IndexDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
 
-	if delCtx.isDeleteWithoutFilters {
+	if delCtx.isUnrestrictedDelete {
 		// truncate and create a table scan of index table
 
 		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
@@ -7323,7 +7617,7 @@ func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 	}
 
 	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, delCtx.tableDef,
-		delCtx.sourceStep, indexdef, idx, isDelete, isInsert, delCtx.isDeleteWithoutFilters)
+		delCtx.sourceStep, indexdef, idx, isDelete, isInsert, delCtx.isUnrestrictedDelete)
 }
 
 // Post Insert FullText Index to use PostDml node to save INSERT SQL and execute after the pipelines

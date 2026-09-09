@@ -16,12 +16,15 @@ package compile
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -388,48 +392,80 @@ func TestScopeSerialization(t *testing.T) {
 
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
-	scope := generateScopeCases(t, []string{
-		"select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
-	})[0]
+	tests := []struct {
+		name                 string
+		sql                  string
+		candidateLimit       uint64
+		offset               uint64
+		expectResidentGather bool
+	}{
+		{
+			name:                 "resident candidate prefix",
+			sql:                  "select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
+			name:           "candidate prefix above resident threshold",
+			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+	}
 
-	var topLimits []uint64
-	var offsets []uint64
-	var opTypes []vm.OpType
-	var visitOperator func(vm.Operator)
-	visitOperator = func(operator vm.Operator) {
-		if operator == nil {
-			return
-		}
-		base := operator.GetOperatorBase()
-		for i := 0; i < base.NumChildren(); i++ {
-			visitOperator(base.GetChildren(i))
-		}
-		opTypes = append(opTypes, operator.OpType())
-		switch op := operator.(type) {
-		case *top.Top:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *mergetop.MergeTop:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *offset.Offset:
-			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
-		}
-	}
-	var visitScope func(*Scope)
-	visitScope = func(current *Scope) {
-		visitOperator(current.RootOp)
-		for _, preScope := range current.PreScopes {
-			visitScope(preScope)
-		}
-	}
-	visitScope(scope)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scope := generateScopeCases(t, []string{test.sql})[0]
+			var topLimits []uint64
+			var offsets []uint64
+			var opTypes []vm.OpType
+			var visitOperator func(vm.Operator)
+			visitOperator = func(operator vm.Operator) {
+				if operator == nil {
+					return
+				}
+				base := operator.GetOperatorBase()
+				for i := 0; i < base.NumChildren(); i++ {
+					visitOperator(base.GetChildren(i))
+				}
+				opTypes = append(opTypes, operator.OpType())
+				switch op := operator.(type) {
+				case *top.Top:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *mergetop.MergeTop:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *offset.Offset:
+					offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+				}
+			}
+			var visitScope func(*Scope)
+			visitScope = func(current *Scope) {
+				visitOperator(current.RootOp)
+				for _, preScope := range current.PreScopes {
+					visitScope(preScope)
+				}
+			}
+			visitScope(scope)
 
-	require.NotEmpty(t, topLimits)
-	for _, candidateLimit := range topLimits {
-		require.Equal(t, uint64(7), candidateLimit)
+			if !test.expectResidentGather {
+				require.Empty(t, topLimits)
+				require.Contains(t, opTypes, vm.Order)
+				require.Contains(t, opTypes, vm.MergeOrder)
+				require.Contains(t, offsets, test.offset)
+				return
+			}
+			require.NotEmpty(t, topLimits)
+			for _, candidateLimit := range topLimits {
+				require.Equal(t, test.candidateLimit, candidateLimit)
+			}
+			require.Contains(t, offsets, test.offset)
+			require.NotContains(t, opTypes, vm.Order)
+			if test.expectResidentGather {
+				require.NotContains(t, opTypes, vm.MergeOrder)
+			}
+		})
 	}
-	require.Contains(t, offsets, uint64(2))
-	require.NotContains(t, opTypes, vm.Order)
-	require.NotContains(t, opTypes, vm.MergeOrder)
 }
 
 func checkScopeRoot(t *testing.T, s *Scope) {
@@ -771,6 +807,57 @@ func TestNewParallelScope(t *testing.T) {
 		require.NotSame(t, firstPool, nextPool)
 		require.Nil(t, templateShuffle.GetShufflePool())
 	}
+}
+
+func TestNewParallelScopeConsolidatesOrderedTopStreams(t *testing.T) {
+	c := NewMockCompile(t)
+	external := process.NewPipelineEdge(1, 1)
+	external.OrderedStream = true
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(100000)
+	orderBy := []*plan.OrderBySpec{{
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		},
+	}}
+	localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy).WithOrderedOutput()
+	localTop.AppendChild(table_scan.NewArgument())
+	out := connector.NewArgument().WithReg(external)
+	out.AppendChild(localTop)
+	s := &Scope{
+		Magic:    Normal,
+		NodeInfo: engine.Node{Mcpu: 4},
+		Proc:     c.proc,
+		RootOp:   out,
+	}
+
+	ordered, workers := newParallelScope(s)
+	require.Equal(t, Merge, ordered.Magic)
+	require.True(t, ordered.ConcurrentPreScopes)
+	require.Equal(t, 1, ordered.NodeInfo.Mcpu)
+	require.Len(t, workers, 4)
+	require.Len(t, ordered.PreScopes, 4)
+	require.Len(t, ordered.Proc.Reg.MergeReceivers, 4)
+
+	orderedOut, ok := ordered.RootOp.(*connector.Connector)
+	require.True(t, ok)
+	require.Same(t, external, orderedOut.Reg)
+	globalTop, ok := orderedOut.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, globalTop.OrderedStreams)
+	require.Same(t, limitExpr, globalTop.Limit)
+	for i, worker := range workers {
+		workerOut, ok := worker.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		require.Same(t, ordered.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+		require.Equal(t, 1, workerOut.Reg.NilBatchCnt)
+		require.True(t, workerOut.Reg.OrderedStream)
+		_, ok = workerOut.GetOperatorBase().GetChildren(0).(*top.Top)
+		require.True(t, ok)
+	}
+
+	s.release()
+	c.proc.Free()
 }
 
 func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
@@ -1309,6 +1396,182 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the post-bind form of an omitted PARALLEL clause that crossed the
+	// admission threshold. The files are deliberately not Parquet: successful
+	// compilation proves the file-fanout branch does not open a footer before it
+	// creates the independently executable scopes.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.Extern.ParallelLoadRequested)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
+		require.Empty(t, ext.Es.ParquetRowGroupShards)
+		require.Len(t, ext.Es.FileList, 1)
+	}
+}
+
+// parquetFanoutCancellationProbe models an admitted file shard that has begun
+// execution and will only finish when the statement context is canceled.  The
+// test uses it after compileExternScan has constructed the real bounded
+// whole-file fanout shape; it deliberately has no timing dependency.
+type parquetFanoutCancellationProbe struct {
+	*colexec.MockOperator
+	started    chan<- struct{}
+	terminated *atomic.Int32
+}
+
+func (op *parquetFanoutCancellationProbe) Call(proc *process.Process) (vm.CallResult, error) {
+	op.started <- struct{}{}
+	<-proc.Ctx.Done()
+	op.terminated.Add(1)
+	return vm.CancelResult, proc.Ctx.Err()
+}
+
+func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the admitted post-bind form of an omitted PARALLEL clause. The
+	// plan package owns the parser/binder/default transition; its focused tests
+	// prove that transition. Here two files fill DOP, so compilation must create
+	// two independently executable whole-file scopes without footer reads.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	scopes, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+
+	queryCtx, cancelQuery := context.WithCancel(context.Background())
+	t.Cleanup(cancelQuery)
+	testCompile.proc.BuildPipelineContext(queryCtx)
+	started := make(chan struct{}, len(scopes))
+	var terminated atomic.Int32
+	for _, scope := range scopes {
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.Len(t, ext.Es.FileList, 1)
+		scope.Proc = testCompile.proc.NewContextChildProc(0)
+		scope.RootOp = &parquetFanoutCancellationProbe{
+			MockOperator: colexec.NewMockOperator(),
+			started:      started,
+			terminated:   &terminated,
+		}
+	}
+	testCompile.scopes = scopes
+	testCompile.pn = &plan.Plan{}
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.affectRows = &atomic.Uint64{}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- testCompile.runOnce() }()
+	for range scopes {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("admitted parquet fanout shard did not begin execution")
+		}
+	}
+
+	// The client/query context is canceled only after every shard is in flight.
+	// runOnce must return, and each independently admitted scope must observe
+	// that cancellation. Transactional zero-partial-row visibility remains
+	// asserted through the real LOAD rollback BVT.
+	cancelQuery()
+	select {
+	case err := <-runDone:
+		// Scope cancellation is normalized at this execution boundary; the
+		// frontend request context reports the client-visible cancellation.
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not terminate admitted parquet fanout")
+	}
+	require.Equal(t, int32(len(scopes)), terminated.Load())
+	for _, scope := range scopes {
+		require.ErrorIs(t, scope.Proc.Ctx.Err(), context.Canceled)
+	}
+}
+
 func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
 	tasks := []*pipeline.IcebergDataFileTask{
 		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
@@ -1517,6 +1780,7 @@ func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
 		[]int64{128},
 		makeWholeFileOffsets(1),
 		true,
+		pipeline.ArrowExecutionScope_UnknownArrowExecutionScope,
 	)
 
 	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)
@@ -1570,6 +1834,39 @@ func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	}, seen)
 	require.Equal(t, int64(110), loads["cn1:6001"])
 	require.Equal(t, int64(110), loads["cn2:6001"])
+}
+
+func TestSplitParquetRowGroupShardsKeepsEachFileContiguous(t *testing.T) {
+	fileList := []string{"warehouse/load/many-groups.parquet"}
+	fileSize := []int64{800}
+	rowGroups := make([]parquetRowGroupMeta, 8)
+	for i := range rowGroups {
+		rowGroups[i] = parquetRowGroupMeta{
+			fileIndex:     0,
+			rowGroupIndex: int32(i),
+			numRows:       10,
+			bytes:         100,
+		}
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	require.NoError(t, err)
+	require.Len(t, shards, 2)
+
+	ranges := make([][2]int32, 0, 2)
+	for _, shard := range shards {
+		require.Equal(t, fileList, shard.fileList)
+		require.Len(t, shard.rowGroupShards, 1)
+		ranges = append(ranges, [2]int32{
+			shard.rowGroupShards[0].RowGroupStart,
+			shard.rowGroupShards[0].RowGroupEnd,
+		})
+	}
+	slices.SortFunc(ranges, func(left, right [2]int32) int {
+		return cmp.Compare(left[0], right[0])
+	})
+	require.Equal(t, [][2]int32{{0, 4}, {4, 8}}, ranges)
 }
 
 func TestCompileExternScanParquetRowGroupFanout(t *testing.T) {
@@ -1680,6 +1977,62 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 }
 
+type parquetMetadataIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetMetadataReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetMetadataTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetMetadataReadRange
+}
+
+func (r *parquetMetadataTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetMetadataReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetMetadataTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetMetadataIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetMetadataIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	reader := &parquetMetadataTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	file, err := openParquetLoadMetadataFile(reader, int64(data.Len()))
+	require.NoError(t, err)
+	require.Len(t, file.RowGroups(), 3)
+	require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+	require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+	require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+}
+
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "cn1:6001"
@@ -1704,8 +2057,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 			Tail:     &tree.TailParameter{},
 		},
 		ExParam: tree.ExParam{
-			ExternType: int32(plan.ExternType_LOAD),
-			Parallel:   true,
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
 		},
 	}
 	createSQL, err := json.Marshal(param)
@@ -1922,6 +2276,7 @@ func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
 		ext := scope.RootOp.(*external.External)
 		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
 		require.Len(t, ext.Es.FileOffsetTotal, 1)
@@ -2552,18 +2907,24 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	board := message.NewMessageBoard()
 	defer board.Reset()
 	proc.SetMessageBoard(board)
-	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true,
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
 			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
 		},
 	}
-	payload := []byte{1, 3, 5, 7}
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Data: payload,
+		Card: 1,
 	}, board)
 
 	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
@@ -2575,9 +2936,103 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.Equal(t, payload, filters[0].data)
 }
 
+func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 110, UseMembershipFilter: true, MustApply: true}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required runtime filter 110 is unavailable")
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
+func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		null    bool
+		card    int32
+		corrupt bool
+	}{
+		{"valid", types.T_int64, false, 1, false},
+		{"wrong_type", types.T_int32, false, 1, false},
+		{"null", types.T_int64, true, 1, false},
+		{"overclaimed", types.T_int64, false, 2, false},
+		{"zero_card", types.T_int64, false, 0, false},
+		{"corrupt", types.T_int64, false, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.oid.ToType())
+			defer v.Free(proc.Mp())
+			if tc.oid == types.T_int64 {
+				require.NoError(t, vector.AppendFixed(v, int64(9), tc.null, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixed(v, int32(9), tc.null, proc.Mp()))
+			}
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			if tc.corrupt {
+				data = data[:3]
+			}
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
+				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
+			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			require.False(t, empty)
+			if tc.name == "valid" {
+				require.NoError(t, err)
+				require.Len(t, filters, 1)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, filters)
+			}
+		})
+	}
+}
+
+func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	const tag int32 = 111
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{
+			Tag: tag, UseMembershipFilter: true, MustApply: true,
+		}}},
+	}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
 func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	payload := []byte{2, 4, 6, 8}
-	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
 	filter := receivedRuntimeFilter{
 		spec: spec,
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
@@ -2586,9 +3041,10 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 		}}}},
 	}
 
-	membership, hasMembership := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
 
 	require.True(t, hasMembership)
+	require.True(t, required)
 	require.Equal(t, payload, membership)
 }
 
@@ -2663,27 +3119,31 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "is not registered")
 
-	membership, hasMembership := vectorScanMembershipFilter(nil)
+	membership, hasMembership, required := vectorScanMembershipFilter(nil)
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
-		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true},
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true},
 		expr: &plan.Expr{},
 	}})
 	require.Nil(t, membership)
 	require.True(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.True(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
 	}})
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
 			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
 		}}}},
 	}})
 	require.Equal(t, []byte{9, 8, 7}, membership)
 	require.False(t, hasMembership)
+	require.False(t, required)
 }
 
 func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {

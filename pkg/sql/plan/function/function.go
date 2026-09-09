@@ -95,6 +95,13 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIgnoresWindowFrameByName reports whether a window function
+// operates on partition-relative row positions instead of the current frame.
+func GetFunctionIgnoresWindowFrameByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && (fid == LAG || fid == LEAD)
+}
+
 func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
 	if !exists {
@@ -150,6 +157,47 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	return getFunctionByName(ctx, name, args, nil)
+}
+
+// StringDomainCheckMode separates an operand's current string domain from the
+// provenance rules that decide whether it participates in regexp charset
+// compatibility. A single boolean cannot represent both PREPARE-time
+// uncertainty and MySQL's execute-time parameter-marker exception.
+type StringDomainCheckMode uint8
+
+const (
+	// StringDomainCheckKnown applies the operand's current text/binary domain.
+	StringDomainCheckKnown StringDomainCheckMode = iota
+	// StringDomainCheckDeferred omits a PREPARE-time runtime-owned domain. The
+	// concrete execution must bind the operand again with a non-deferred mode.
+	StringDomainCheckDeferred
+	// StringDomainCheckParamMarker keeps the marker's current domain for
+	// compatibility with a fixed binary operand, but a binary marker does not
+	// itself trigger MySQL's static-binary restriction.
+	StringDomainCheckParamMarker
+	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
+	StringDomainCheckDomainless
+)
+
+// GetFunctionByNameWithStringDomainCheckModes resolves a function while
+// preserving the provenance needed by regexp charset checks. Ordinary argument
+// types remain authoritative for overload selection, casts, result metadata,
+// and the executor's effective text/binary domain.
+func GetFunctionByNameWithStringDomainCheckModes(
+	ctx context.Context, name string, args []types.Type, modes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
+	if len(modes) != len(args) {
+		return r, moerr.NewInternalErrorf(
+			ctx, "string domain check mode count %d does not match argument count %d",
+			len(modes), len(args))
+	}
+	return getFunctionByName(ctx, name, args, modes)
+}
+
+func getFunctionByName(
+	ctx context.Context, name string, args []types.Type, stringDomainModes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
@@ -160,6 +208,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	check := f.checkFn(f.Overloads, args)
+	if f.stringDomainCheckFn != nil && len(stringDomainModes) > 0 {
+		check = f.stringDomainCheckFn(f.Overloads, args, stringDomainModes)
+	}
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -174,7 +225,10 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if check.invalidJSONArgumentIndex != 0 {
+		if check.characterSetMismatch[0] != "" {
+			err = moerr.NewCharacterSetMismatch(
+				ctx, check.characterSetMismatch[0], check.characterSetMismatch[1], name)
+		} else if check.invalidJSONArgumentIndex != 0 {
 			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
 		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
@@ -185,11 +239,50 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	case failedAggParametersWrong:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("aggregate function %s", name), args)
 
+	case failedBitwiseAggregateOperandsSize:
+		err = moerr.NewInvalidBitwiseAggregateOperandsSize(ctx)
+
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
 
 	return r, err
+}
+
+// GetFunctionByNameWithoutError tries to resolve a function overload without
+// constructing an error for an expected mismatch. It is intended for
+// speculative planner checks where unsupported candidate types are normal and
+// the caller only needs the successful resolution metadata.
+func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetResult, ok bool) {
+	r.fid, ok = getFunctionIdByNameWithoutErr(name)
+	if !ok || r.fid < 0 || int(r.fid) >= len(allSupportedFunctions) {
+		return FuncGetResult{}, false
+	}
+
+	f := allSupportedFunctions[r.fid]
+	if len(f.Overloads) == 0 || f.checkFn == nil {
+		return FuncGetResult{}, false
+	}
+
+	check := f.checkFn(f.Overloads, args)
+	switch check.status {
+	case succeedMatched:
+		r.overloadId = int32(check.idx)
+		r.retType = f.Overloads[r.overloadId].retType(args)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		return r, true
+
+	case succeedWithCast:
+		r.overloadId = int32(check.idx)
+		r.needCast = true
+		r.targetTypes = check.finalType
+		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		return r, true
+
+	default:
+		return FuncGetResult{}, false
+	}
 }
 
 // GetFunctionByNameWithOverload validates the arguments using the function's
@@ -336,9 +429,12 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
+		POW, EXP, COT,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
-		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,
+		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS,
+		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
 		TO_INTERVAL:
 		return false
@@ -487,6 +583,11 @@ type FuncNew struct {
 	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
 
+	// stringDomainCheckFn is the optional second-stage checker for functions
+	// whose string compatibility depends on operand provenance as well as the
+	// current text/binary type.
+	stringDomainCheckFn func(overloads []overload, inputs []types.Type, modes []StringDomainCheckMode) checkResult
+
 	// layout was used for `explain SQL`.
 	layout FuncExplainLayout
 }
@@ -629,11 +730,12 @@ func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
 type overloadCheckSituation int
 
 const (
-	succeedMatched                overloadCheckSituation = 0
-	succeedWithCast               overloadCheckSituation = -1
-	failedFunctionParametersWrong overloadCheckSituation = -2
-	failedAggParametersWrong      overloadCheckSituation = -3
-	failedTooManyFunctionMatched  overloadCheckSituation = -4
+	succeedMatched                     overloadCheckSituation = 0
+	succeedWithCast                    overloadCheckSituation = -1
+	failedFunctionParametersWrong      overloadCheckSituation = -2
+	failedAggParametersWrong           overloadCheckSituation = -3
+	failedTooManyFunctionMatched       overloadCheckSituation = -4
+	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
 
 type checkResult struct {
@@ -643,6 +745,7 @@ type checkResult struct {
 	idx                      int
 	finalType                []types.Type
 	invalidJSONArgumentIndex int
+	characterSetMismatch     [2]string
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -657,6 +760,13 @@ func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
 	return checkResult{
 		status:                   failedFunctionParametersWrong,
 		invalidJSONArgumentIndex: argumentIndex,
+	}
+}
+
+func newCheckResultWithCharacterSetMismatch(left, right string) checkResult {
+	return checkResult{
+		status:               failedFunctionParametersWrong,
+		characterSetMismatch: [2]string{left, right},
 	}
 }
 

@@ -18,6 +18,7 @@
 *.py
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
+!optools/summarize_ut_setup.py
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel.py
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel_test.py
 !optools/mongodb_changed_files.py
@@ -84,6 +85,14 @@ thirdparties/usearch-*/*
 # Staged at the repo root by `make jieba-dict`, alongside `lib/` from thirdparties.
 # Source-of-truth dict lives at pkg/monlp/tokenizer/dict and stays tracked.
 /dict
+
+# Stable CI-only Go module cache. Its absolute path participates in
+# golangci-lint package cache keys, so producer and consumer jobs must not move
+# it into per-job random directories.
+/.sca-go-module-cache/
+
+# Small CI-only fallback staged by the trusted SCA cache producer.
+/.sca-onnx-runtime/
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv

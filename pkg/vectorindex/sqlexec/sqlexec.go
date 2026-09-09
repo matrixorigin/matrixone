@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -79,6 +80,8 @@ type SqlProcess struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the ivf entries scan.
 	IvfMembershipFilter []byte
+	// Borrowed generation-owned exact domain; each relation request takes a share.
+	IvfMembershipFilterObject docfilter.MembershipFilter
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
 
@@ -90,6 +93,9 @@ type SqlProcess struct {
 	// separate from the payload because an empty set is semantically different
 	// from no filter (RF PASS).
 	IvfHasMembershipFilter bool
+	// True when IVF candidate limiting is only valid after applying the exact
+	// membership set. This path must not use filter-after-storage-TopK.
+	IvfMembershipFilterRequired bool
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, the legacy SQL search adapter uses it to build "pk IN (...)".
 	ExactPkFilter string

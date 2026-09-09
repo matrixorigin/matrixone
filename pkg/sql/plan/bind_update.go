@@ -2299,6 +2299,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if builder.fullTableUpdateLockTargets == nil {
 			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
 		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
 		for _, target := range lockTargets {
 			if target.Mode == lockpb.LockMode_Exclusive {
 				builder.fullTableUpdateLockTargets[target] = struct{}{}
@@ -2380,9 +2382,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
 			nil,
 			-1,
+			nil,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2392,15 +2396,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:           builder.irregularMaintSourceStep,
-				deleteStep:           builder.irregularMaintDeleteStep,
-				deletePkPos:          builder.irregularMaintDeletePkPos,
-				deletePkTyp:          builder.irregularMaintDeletePkTyp,
-				indexes:              builder.irregularMaintIndexes,
-				insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
-				insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
-				tableDef:             builder.irregularMaintTableDef,
-				objRef:               builder.irregularMaintObjRef,
+				sourceStep:              builder.irregularMaintSourceStep,
+				deleteStep:              builder.irregularMaintDeleteStep,
+				deletePkPos:             builder.irregularMaintDeletePkPos,
+				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				indexes:                 builder.irregularMaintIndexes,
+				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+				tableDef:                builder.irregularMaintTableDef,
+				objRef:                  builder.irregularMaintObjRef,
 			},
 		)
 	}
@@ -4665,8 +4670,7 @@ func (builder *QueryBuilder) hasExistingLockTargets() bool {
 
 // lockTargetsCoverCompleteKeyspaces keeps table-lock admission atomic across
 // every namespace written by the UPDATE. A partial admission can invert lock
-// order against a bounded UPDATE, and FLOAT/DOUBLE table ranges do not cover
-// infinities or every NaN payload even though their ordinary row locks work.
+// order against a bounded UPDATE.
 func lockTargetsCoverCompleteKeyspaces(lockTargets []*plan.LockTarget) bool {
 	foundExclusive := false
 	for _, target := range lockTargets {

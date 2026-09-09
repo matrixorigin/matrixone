@@ -95,8 +95,8 @@ var (
 
 	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
 	// restore semantics. Most catalog tables are either rebuilt by normal DDL or
-	// can be copied verbatim. Tables containing object IDs must opt into a
-	// post-copy transform instead of relying on incidental physical-ID equality.
+	// can be copied verbatim. Tables containing object IDs must opt into an
+	// owner rebuild instead of relying on incidental physical-ID equality.
 	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
 		"mo_database":         systemCatalogRestoreSkip,
 		"mo_tables":           systemCatalogRestoreSkip,
@@ -117,7 +117,7 @@ var (
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
 		"mo_role_grant":                 systemCatalogRestoreCopy,
-		"mo_role_privs":                 systemCatalogRestoreCopyThenTransform,
+		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
 		"mo_stored_procedure":           systemCatalogRestoreCopy,
@@ -129,6 +129,7 @@ var (
 		catalog.MOShardsMetadata:        systemCatalogRestoreCopy,
 		catalog.MO_CDC_TASK:             systemCatalogRestoreCopy,
 		catalog.MO_CDC_WATERMARK:        systemCatalogRestoreCopy,
+		catalog.MO_CDC_SNAPSHOT:         systemCatalogRestoreCopy,
 		catalog.MO_TABLE_STATS:          systemCatalogRestoreCopy,
 		catalog.MO_ACCOUNT_LOCK:         systemCatalogRestoreCopy,
 		catalog.MO_MERGE_SETTINGS:       systemCatalogRestoreCopy,
@@ -686,7 +687,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				return err
 			}
 			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+			if err = lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 				return err
 			}
 			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
@@ -773,7 +774,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	// Serialize catalog restore with View metadata recovery before either path
 	// locks a target View. The gate row belongs to a preserved catalog table, so
 	// it remains stable while relation identities are rebuilt.
-	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
 		return stats, err
 	}
 
@@ -1955,11 +1956,11 @@ func needSkipDb(dbName string) bool {
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblName]
-		return dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		if dbName == moCatalog {
 			if policy, ok := systemCatalogRestorePolicies[tblName]; ok {
-				return policy == systemCatalogRestoreSkip
+				return policy.skipsBulkRestore()
 			} else {
 				return true
 			}
@@ -1971,10 +1972,10 @@ func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return tblinfo.dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy == systemCatalogRestoreSkip)
+		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy.skipsBulkRestore())
 	}
 }
 
@@ -1983,6 +1984,7 @@ func isExternalTable(tblInfo *tableInfo) bool {
 }
 
 func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
+	// Database clone follows the same bulk-restore policy as snapshot and PITR.
 	return isExternalTable(tblInfo)
 }
 
@@ -3308,7 +3310,7 @@ func invalidateAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx),
@@ -3334,7 +3336,7 @@ func reconcileAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
@@ -3343,6 +3345,22 @@ func reconcileAccountViewMetadataEnabled(
 		}
 	}
 	return nil
+}
+
+func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The gates are global catalog rows; mo_feature_registry exists only in sys.
+	// Change resolution for these reads without changing the caller's transaction.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return catalog.LockViewMetadataLifecycle(func(sql string) error {
+		return bh.Exec(systemCtx, sql)
+	})
+}
+
+func lockSnapshotLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
+	// Keep the caller's transaction; only account resolution changes for this SQL.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.SnapshotLifecycleGateSQL)
 }
 
 func prepareViewMetadataMutation(

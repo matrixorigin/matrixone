@@ -24,6 +24,256 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// rewriteLeftJoinNullFiltersToAnti recognizes the relational anti-join idiom
+//
+//	left LEFT JOIN right ON match
+//	WHERE right.proven_not_null_column IS NULL
+//
+// when the null-extended side is otherwise unobservable.  A matched right row
+// can never pass the predicate, while an unmatched row always does, so the
+// result is exactly a left ANTI join.  The marker must trace through pure column
+// projections to a NOT NULL scan column.  A general non-NULL expression is not
+// sufficient: it may reject the NULL-extended row (for example COALESCE), or its
+// evaluation may raise an error that the rewrite would otherwise suppress.
+// Keep the proof independent of stats and fail closed for computed or nullable
+// markers, volatile predicates, non-equi joins, or any other consumer of the
+// right-side bindings.
+//
+// tagCnt contains references from ancestors only.  This lets the rewrite
+// distinguish the anti marker in the current FILTER from a right-side value
+// that must still be produced above it.
+func (builder *QueryBuilder) rewriteLeftJoinNullFiltersToAnti(
+	nodeID int32,
+	tagCnt map[int32]int,
+) (int32, bool) {
+	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nodeID, false
+	}
+	if builder.outerAntiPlanningDisabled() {
+		return nodeID, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nodeID, false
+	}
+
+	changed := false
+	if rewrittenID, ok := builder.tryRewriteLeftJoinNullFilter(nodeID, tagCnt); ok {
+		nodeID = rewrittenID
+		node = builder.qry.Nodes[nodeID]
+		changed = true
+	}
+
+	increaseNodeTagCnt(node, 1, tagCnt)
+	for i, childID := range node.Children {
+		var childChanged bool
+		node.Children[i], childChanged = builder.rewriteLeftJoinNullFiltersToAnti(childID, tagCnt)
+		changed = changed || childChanged
+	}
+	increaseNodeTagCnt(node, -1, tagCnt)
+	return nodeID, changed
+}
+
+func (builder *QueryBuilder) tryRewriteLeftJoinNullFilter(
+	nodeID int32,
+	ancestorTagCnt map[int32]int,
+) (int32, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 || len(node.FilterList) == 0 {
+		return nodeID, false
+	}
+	joinID := node.Children[0]
+	if joinID < 0 || int(joinID) >= len(builder.qry.Nodes) {
+		return nodeID, false
+	}
+	join := builder.qry.Nodes[joinID]
+	if join == nil || join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_LEFT ||
+		join.IsRightJoin || !builder.IsEquiJoin(join) {
+		return nodeID, false
+	}
+	for _, expr := range join.OnList {
+		if ContainsVolatileFunction(expr) {
+			return nodeID, false
+		}
+	}
+
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(join.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(join.Children[1]) {
+		rightTags[tag] = true
+		if ancestorTagCnt[tag] > 0 {
+			return nodeID, false
+		}
+	}
+	if nodeExprListsReferenceTagsExceptFilters(node, rightTags) {
+		return nodeID, false
+	}
+
+	kept := make([]*plan.Expr, 0, len(node.FilterList))
+	found := false
+	for _, filter := range node.FilterList {
+		if builder.isLeftJoinAntiNullMarker(filter, join.Children[1], leftTags, rightTags) {
+			found = true
+			continue
+		}
+		if exprRefsAnyTag(filter, rightTags) {
+			return nodeID, false
+		}
+		kept = append(kept, filter)
+	}
+	if !found {
+		return nodeID, false
+	}
+
+	join.JoinType = plan.Node_ANTI
+	node.FilterList = kept
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("left-null-to-anti: filter=%d join=%d", node.NodeId, join.NodeId))
+	if len(kept) == 0 && len(node.ProjectList) == 0 && len(node.OrderBy) == 0 &&
+		node.Limit == nil && node.Offset == nil {
+		return joinID, true
+	}
+	return nodeID, true
+}
+
+// outerAntiPlanningDisabled is the operational rollback boundary for the
+// outer/anti planning rules.  The default keeps the rules enabled; setting
+// optimizer_hints to outerAntiPlanning=1 restores the legacy behavior.
+func (builder *QueryBuilder) outerAntiPlanningDisabled() bool {
+	return builder != nil && builder.optimizerHints != nil &&
+		builder.optimizerHints.outerAntiPlanning != 0
+}
+
+func (builder *QueryBuilder) isLeftJoinAntiNullMarker(
+	expr *plan.Expr,
+	rightChildID int32,
+	leftTags, rightTags map[int32]bool,
+) bool {
+	if expr == nil || ContainsVolatileFunction(expr) {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil ||
+		(fn.Func.ObjName != "isnull" && fn.Func.ObjName != "is_null") || len(fn.Args) != 1 {
+		return false
+	}
+	arg := fn.Args[0]
+	if getJoinSide(arg, leftTags, rightTags, 0) != JoinSideRight {
+		return false
+	}
+	return builder.isLeftJoinAntiMarkerColumn(arg, rightChildID)
+}
+
+func (builder *QueryBuilder) isLeftJoinAntiMarkerColumn(
+	expr *plan.Expr,
+	nodeID int32,
+) bool {
+	if expr == nil || !expr.Typ.NotNullable || expr.GetCol() == nil {
+		return false
+	}
+	return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+		expr.GetCol(),
+		nodeID,
+	)
+}
+
+func (builder *QueryBuilder) leftJoinAntiMarkerOriginatesFromNotNullScan(
+	col *plan.ColRef,
+	nodeID int32,
+) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	if sourceExpr, childID, materialized := materializedOutputExprBeforeRemap(node, col); materialized {
+		if sourceExpr == nil || !sourceExpr.Typ.NotNullable || sourceExpr.GetCol() == nil {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+			sourceExpr.GetCol(),
+			childID,
+		)
+	}
+
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag != col.RelPos {
+			continue
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
+			col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) ||
+			node.TableDef.Cols[col.ColPos] == nil {
+			return false
+		}
+		return node.TableDef.Cols[col.ColPos].Typ.NotNullable
+	}
+
+	for childIdx, childID := range node.Children {
+		if !builder.nodeContainsBindingTag(childID, col.RelPos) {
+			continue
+		}
+		if nodeNullExtendsChild(node, childIdx) {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(col, childID)
+	}
+	return false
+}
+
+func nodeExprListsReferenceTagsExceptFilters(node *plan.Node, tags map[int32]bool) bool {
+	if node == nil {
+		return false
+	}
+	for _, exprs := range [][]*plan.Expr{
+		node.ProjectList,
+		node.OnList,
+		node.GroupBy,
+		node.AggList,
+		node.WinSpecList,
+		node.TimeWindowPartitionBy,
+		node.TblFuncExprList,
+		node.BlockFilterList,
+		node.FillVal,
+		node.OnUpdateExprs,
+	} {
+		for _, expr := range exprs {
+			if exprRefsAnyTag(expr, tags) {
+				return true
+			}
+		}
+	}
+	for _, order := range node.OrderBy {
+		if order != nil && exprRefsAnyTag(order.Expr, tags) {
+			return true
+		}
+	}
+	return false
+}
+
+func increaseNodeTagCnt(node *plan.Node, inc int, tagCnt map[int32]int) {
+	if node == nil {
+		return
+	}
+	increaseTagCntForExprList(node.ProjectList, inc, tagCnt)
+	increaseTagCntForExprList(node.OnList, inc, tagCnt)
+	increaseTagCntForExprList(node.FilterList, inc, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, inc, tagCnt)
+	increaseTagCntForExprList(node.AggList, inc, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, inc, tagCnt)
+	for _, order := range node.OrderBy {
+		if order != nil {
+			increaseTagCnt(order.Expr, inc, tagCnt)
+		}
+	}
+}
+
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {

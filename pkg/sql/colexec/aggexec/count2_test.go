@@ -17,10 +17,12 @@ package aggexec
 import (
 	"bytes"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -171,6 +173,56 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 		count(t, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, []*vector.Vector{values, partner})
 	})
 
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	values := []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		math.Copysign(0, -1),
+		0,
+	}
+
+	count := func(t *testing.T, groupCapacity int) int64 {
+		t.Helper()
+		vec := testutil.NewFloat64Vector(
+			len(values), types.T_float64.ToType(), mp, false, nil, values)
+		defer vec.Free(mp)
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_float64.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, exec.GroupGrow(groupCapacity))
+		if groupCapacity >= distinctFixedIndexMinGroups {
+			require.True(t, exec.state[0].distinctFixedDeferred)
+		}
+		defer exec.Free()
+		groups := make([]uint64, len(values))
+		for i := range groups {
+			groups[i] = 1
+		}
+		require.NoError(t, exec.PreflightBatchFill(
+			0, groups, []*vector.Vector{vec}))
+		require.NoError(t, exec.BatchFill(
+			0, groups, []*vector.Vector{vec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		got := vector.GetFixedAtNoTypeCheck[int64](result[0], 0)
+		result[0].Free(mp)
+		return got
+	}
+
+	// The fixed index must preserve the pre-existing byte-exact aggregate key
+	// contract: equal NaN payloads remain one key, distinct payloads remain
+	// distinct, and signed zeroes remain one key.
+	legacy := count(t, 1)
+	fixed := count(t, distinctFixedIndexMinGroups)
+	require.Equal(t, int64(3), legacy)
+	require.Equal(t, legacy, fixed)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -455,6 +507,177 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
+}
+
+func TestCountDistinctBatchDeduplicatesWithinUnit(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	const rows = hashmap.UnitLimit
+	values := make([]int64, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int64(i % 17)
+		groups[i] = uint64(i%2 + 1)
+	}
+	vec := testutil.NewInt64Vector(rows, types.T_int64.ToType(), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+	require.NoError(t, exec.GroupGrow(2))
+	defer exec.Free()
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+	require.Equal(t, []int64{17, 17}, vals)
+	results[0].Free(mp)
+}
+
+func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const rows = AggBatchSize + 17
+	values := make([]int32, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int32(i % (hashmap.UnitLimit*2 + 1))
+		groups[i] = 1
+	}
+	vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int32.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+	require.True(t, exec.state[0].distinctFixedDeferred)
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t,
+		int64(hashmap.UnitLimit*2+1),
+		vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+	for _, result := range results {
+		result.Free(mp)
+	}
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctFixedIndexBatchAndMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeExec := func() *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		concrete := exec.(*countColumnExec)
+		require.NoError(t, concrete.GroupGrow(1024))
+		require.True(t, concrete.state[0].distinctFixedDeferred)
+		return concrete
+	}
+	fill := func(exec *countColumnExec, values []int64) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp)
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		}
+		groups := make([]uint64, len(values))
+		for i := range groups {
+			groups[i] = 1
+		}
+		require.NoError(t, exec.PreflightBatchFill(0, groups, []*vector.Vector{vec}))
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+	}
+
+	source := makeExec()
+	target := makeExec()
+	fill(source, []int64{1, 2, 2})
+	fill(target, []int64{2, 3})
+	require.NoError(t, target.PreflightBatchMerge(source, 0, []uint64{1}))
+	require.NoError(t, target.BatchMerge(source, 0, []uint64{1}))
+	// A fixed-index chunk has many valid-but-empty group rows.  Draining the
+	// whole chunk must skip those rows without requiring an index allocation for
+	// each one.
+	drain, err := target.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var drained int
+	require.NoError(t, drain.ForEach(func(int, []byte) error {
+		drained++
+		return nil
+	}))
+	require.Equal(t, 3, drained)
+	drain.Abort()
+	var encoded bytes.Buffer
+	require.NoError(t, target.SaveIntermediateResultOfChunk(0, &encoded))
+	restored := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_int64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	require.True(t, restored.state[0].distinctFixedDeferred)
+	restoredResult, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](restoredResult[0], 0))
+	for _, vec := range restoredResult {
+		vec.Free(mp)
+	}
+	restored.Free()
+
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	for _, vec := range result {
+		vec.Free(mp)
+	}
+	source.Free()
+	target.Free()
+
+	// The batch-local admission key must include the state chunk as well as the
+	// row within that chunk. Otherwise group 1 and group AggBatchSize+1 would
+	// alias when they receive the same value.
+	crossChunk := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()}).(*countColumnExec)
+	require.NoError(t, crossChunk.GroupGrow(AggBatchSize+1))
+	require.True(t, crossChunk.state[0].distinctFixedDeferred)
+	require.True(t, crossChunk.state[1].distinctFixedDeferred)
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	groups := []uint64{1, AggBatchSize + 1}
+	require.NoError(t, crossChunk.PreflightBatchFill(0, groups, []*vector.Vector{vec}))
+	require.NoError(t, crossChunk.BatchFill(0, groups, []*vector.Vector{vec}))
+	vec.Free(mp)
+	crossResult, err := crossChunk.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](crossResult[0], 0))
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](crossResult[1], 0))
+	for _, vec := range crossResult {
+		vec.Free(mp)
+	}
+	crossChunk.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctFixedIndexRejectsMismatchedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1024))
+	defer exec.Free()
+
+	// Replayed exact-distinct spill payloads must retain the fixed-width
+	// contract.  A malformed/retyped payload cannot be put in the compatibility
+	// skiplist because deferred iteration reads only the fixed index.
+	err := exec.InsertDistinctArgument(0, []byte{1})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Zero(t, exec.state[0].argCnt[0])
+	keys, _, err := exec.DistinctArgumentStats()
+	require.NoError(t, err)
+	require.Zero(t, keys)
 }
 
 func testAggExec(t *testing.T,
@@ -833,4 +1056,120 @@ func testAggExec(t *testing.T,
 		}
 	})
 
+}
+
+func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
+	varlenPrefix := strings.Repeat("x", 512)
+	tests := []struct {
+		name         string
+		typ          types.Type
+		distinctRows int
+		appendValue  func(*vector.Vector, int, *mpool.MPool) error
+	}{
+		{
+			name:         "fixed-width",
+			typ:          types.T_int64.ToType(),
+			distinctRows: 20_000,
+			appendValue: func(vec *vector.Vector, value int, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, int64(value), false, mp)
+			},
+		},
+		{
+			name:         "opaque-varlen",
+			typ:          types.T_varchar.ToType(),
+			distinctRows: 1_100,
+			appendValue: func(vec *vector.Vector, value int, mp *mpool.MPool) error {
+				key := varlenPrefix + strconv.Itoa(value)
+				return vector.AppendBytes(vec, []byte(key), false, mp)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			makeExec := func() AggFuncExec {
+				exec := newCountColumnExec(
+					mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
+				require.NoError(t,
+					exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+				return exec
+			}
+			source := makeExec()
+			target := makeExec()
+			defer func() {
+				source.Free()
+				target.Free()
+				require.NoError(t,
+					source.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+				require.NoError(t,
+					target.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+				finishTestAggregateAllocation(t, registry, account)
+				require.Zero(t, mp.CurrNB())
+			}()
+			require.NoError(t, source.GroupGrow(2))
+
+			input := vector.NewVec(tc.typ)
+			defer func() {
+				if input != nil {
+					input.Free(mp)
+				}
+			}()
+			for row := 0; row < 2*tc.distinctRows; row++ {
+				require.NoError(t,
+					tc.appendValue(input, row%tc.distinctRows, mp))
+			}
+			groups := make([]uint64, hashmap.UnitLimit)
+			for row := range groups {
+				groups[row] = uint64(row%2 + 1)
+			}
+			for offset := 0; offset < input.Length(); offset += hashmap.UnitLimit {
+				workGroups := groups[:min(hashmap.UnitLimit, input.Length()-offset)]
+				require.NoError(t,
+					source.(BatchCapacityPreflight).PreflightBatchFill(
+						offset, workGroups, []*vector.Vector{input}))
+				require.NoError(t, source.BatchFill(
+					offset, workGroups, []*vector.Vector{input}))
+			}
+			input.Free(mp)
+			input = nil
+
+			var encoded bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(
+				2, [][]uint8{{1, 1}}, &encoded))
+			require.NoError(t, target.UnmarshalFromReader(
+				bytes.NewReader(encoded.Bytes()), mp))
+			targetBase := target.(aggregateBaseCarrier).aggregateBase()
+			require.Greater(t, len(targetBase.state[0].argbuf), kAggArgArenaSize,
+				"the round trip must cross the initial arena and exercise relocation")
+
+			// Growth while restoring the second group relocates the first group's
+			// nodes too. Both ranges must still deduplicate existing values, and both
+			// insertion cursors must accept a new boundary key afterwards.
+			followup := vector.NewVec(tc.typ)
+			defer followup.Free(mp)
+			for _, value := range []int{
+				0, tc.distinctRows - 1, tc.distinctRows, tc.distinctRows + 1,
+			} {
+				require.NoError(t, tc.appendValue(followup, value, mp))
+			}
+			followupGroups := []uint64{1, 2, 1, 2}
+			require.NoError(t,
+				target.(BatchCapacityPreflight).PreflightBatchFill(
+					0, followupGroups, []*vector.Vector{followup}))
+			require.NoError(t, target.BatchFill(
+				0, followupGroups, []*vector.Vector{followup}))
+
+			results, err := target.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, 2, results[0].Length())
+			for group := range 2 {
+				require.Equal(t, int64(tc.distinctRows/2+1),
+					vector.GetFixedAtNoTypeCheck[int64](results[0], group))
+			}
+		})
+	}
 }

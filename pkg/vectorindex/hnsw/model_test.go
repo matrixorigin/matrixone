@@ -16,6 +16,7 @@ package hnsw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -200,6 +201,58 @@ func TestModelStreamError(t *testing.T) {
 	after = hnswTempFiles()
 	require.Equal(t, len(before), len(after),
 		"temp file leaked after LoadIndexFromBuffer streaming error")
+}
+
+func TestHnswWaitsPreserveCancellationCause(t *testing.T) {
+	newSQLProcess := func(t *testing.T) *sqlexec.SqlProcess {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc.BuildPipelineContext(context.Background())
+		t.Cleanup(func() {
+			proc.Cancel(nil)
+		})
+		return sqlexec.NewSqlProcess(proc)
+	}
+
+	t.Run("load chunk observes pipeline cancellation", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		sqlproc.Proc.Cancel(context.Canceled)
+
+		model := new(HnswModel[float32])
+		_, err := model.loadChunk(
+			context.Background(),
+			sqlproc,
+			make(chan executor.Result),
+			make(chan error),
+			nil,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("load chunk preserves nested stream cause", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		streamCause := errors.New("stream stopped")
+		streamCtx, cancel := context.WithCancelCause(context.Background())
+		cancel(streamCause)
+
+		model := new(HnswModel[float32])
+		_, err := model.loadChunk(
+			streamCtx,
+			sqlproc,
+			make(chan executor.Result),
+			make(chan error),
+			nil,
+		)
+		require.ErrorIs(t, err, streamCause)
+	})
+
+	t.Run("build worker observes pipeline cancellation", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		sqlproc.Proc.Cancel(context.Canceled)
+
+		build := &HnswBuild[float32]{add_chan: make(chan AddItem[float32])}
+		_, err := build.addFromChannel(sqlproc)
+		require.ErrorIs(t, err, context.Canceled)
+	})
 }
 
 func doModelSearchTest[T types.RealNumbers](t *testing.T, idx *HnswModel[T], key uint64, v []T) {

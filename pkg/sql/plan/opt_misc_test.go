@@ -453,6 +453,24 @@ func TestRemapWindowClause(t *testing.T) {
 	})
 }
 
+func TestSharedComputationOptimizerHint(t *testing.T) {
+	builder := &QueryBuilder{}
+	require.False(t, builder.sharedComputationDisabled())
+	handleOptimizerHints("sharedComputation=1", builder)
+	require.True(t, builder.sharedComputationDisabled())
+	handleOptimizerHints("sharedComputation=0", builder)
+	require.False(t, builder.sharedComputationDisabled())
+}
+
+func TestOuterAntiPlanningOptimizerHint(t *testing.T) {
+	builder := &QueryBuilder{}
+	handleOptimizerHints("outerAntiPlanning=1", builder)
+	require.True(t, builder.outerAntiPlanningDisabled())
+
+	handleOptimizerHints("outerAntiPlanning=0", builder)
+	require.False(t, builder.outerAntiPlanningDisabled())
+}
+
 func TestRemapHavingClause(t *testing.T) {
 	b := &QueryBuilder{
 		compCtx: &MockCompilerContext{ctx: context.Background()},

@@ -35,6 +35,29 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 	})
 }
 
+func TestSystemVariableSetTypeBits2String(t *testing.T) {
+	svst := InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ONLY_FULL_GROUP_BY")
+
+	tests := []struct {
+		name string
+		bits uint64
+		want string
+	}{
+		{name: "first member", bits: 1, want: "ANSI"},
+		{name: "first and second members", bits: 3, want: "ANSI,TRADITIONAL"},
+		{name: "non-first member", bits: 2, want: "TRADITIONAL"},
+		{name: "non-adjacent members", bits: 5, want: "ANSI,ONLY_FULL_GROUP_BY"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := svst.bits2string(tt.bits)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	convey.Convey("lock_wait_timeout default should fail fast", t, func() {
 		sv, ok := gSysVarsDefs["lock_wait_timeout"]
@@ -76,6 +99,26 @@ func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	_, err = sv.Type.Convert(int64(-1))
 	assert.Error(t, err)
 	_, err = sv.Type.Convert(int64(1099511627777))
+	assert.Error(t, err)
+}
+
+func TestExperimentalParquetLoadParallelVariables(t *testing.T) {
+	gate, ok := gSysVarsDefs["experimental_parquet_load_parallel"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, gate.Scope)
+	assert.True(t, gate.Dynamic)
+	assert.Equal(t, int8(0), gate.Default)
+
+	minSize, ok := gSysVarsDefs["experimental_parquet_load_parallel_min_size"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, minSize.Scope)
+	assert.True(t, minSize.Dynamic)
+	assert.Equal(t, int64(128*1024*1024), minSize.Default)
+
+	converted, err := minSize.Type.Convert(int64(1))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), converted)
+	_, err = minSize.Type.Convert(int64(128*1024*1024 + 1))
 	assert.Error(t, err)
 }
 

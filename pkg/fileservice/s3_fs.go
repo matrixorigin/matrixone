@@ -54,7 +54,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioMerger *IOMerger
+	ioMerger     *IOMerger
+	decodedReads *decodedReadRegistry
 
 	parallelMode ParallelMode
 }
@@ -63,6 +64,7 @@ type S3FS struct {
 // <KeyPrefix>/<file path> -> file content
 
 var _ FileService = new(S3FS)
+var _ ObjectIdentityFileService = new(S3FS)
 
 func NewS3FS(
 	ctx context.Context,
@@ -246,6 +248,19 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 	}
 }
 
+// IsS3BackedFileService reports whether filePath resolves to an S3FS through
+// the supplied FileService. Callers that enforce storage-specific policy must
+// resolve FileServices and SubPath wrappers instead of relying on the visible
+// service name: deployments may give an S3-backed service an arbitrary name.
+// Resolution is metadata-only and never opens the object store.
+func IsS3BackedFileService(fs FileService, filePath string) bool {
+	if fs == nil {
+		return false
+	}
+	s3, _, err := resolveS3CopySource(fs, filePath)
+	return err == nil && s3 != nil
+}
+
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
 		return s.memCache.AllocateCacheData(ctx, size)
@@ -275,13 +290,16 @@ func (s *S3FS) BackingSize(size int) int {
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true, s)
+	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true)
 	if err != nil {
 		return err
 	}
 	s.remoteCache = caches.remote
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
+	if s.memCache != nil {
+		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
+	}
 	return nil
 }
 
@@ -379,6 +397,58 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 		IsDir: false,
 		Size:  size,
 	}, nil
+}
+
+func (s *S3FS) StatFileIdentity(ctx context.Context, filePath string) (ObjectIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return ObjectIdentity{}, err
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	storage, ok := s.storage.(objectStorageIdentityReader)
+	if !ok {
+		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
+	}
+	identity, err := storage.StatObjectIdentity(ctx, s.pathToKey(path.File))
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	if err := identity.Validate(); err != nil {
+		return ObjectIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (s *S3FS) OpenReadWithIdentity(
+	ctx context.Context,
+	filePath string,
+	offset, size int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	if offset < 0 || size == 0 || size < -1 || offset > expected.Size ||
+		(size > 0 && size > expected.Size-offset) {
+		return nil, moerr.NewInvalidInput(ctx, "conditional read is outside the fixed object identity")
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	storage, ok := s.storage.(objectStorageIdentityReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
+	}
+	min := offset
+	var max *int64
+	if size > 0 {
+		end := offset + size
+		max = &end
+	}
+	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
@@ -575,6 +645,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	var finishDecode func()
+	var decodePrepared bool
+	defer func() {
+		if finishDecode != nil {
+			finishDecode()
+		}
+	}()
 	// A merge leader must not wake its waiters until caller-visible cache work
 	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
@@ -672,6 +749,13 @@ read_memory_cache:
 	}
 
 read_disk_cache:
+	if !decodePrepared {
+		decodePrepared = true
+		finishDecode, err = s.prepareSharedDecode(vector)
+		if err != nil {
+			return err
+		}
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -1497,7 +1581,11 @@ var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
-	caches.close(ctx)
+	if s.decodedReads != nil {
+		s.decodedReads.close(func() { caches.close(ctx) })
+	} else {
+		caches.close(ctx)
+	}
 }
 
 func (s *S3FS) FlushCache(ctx context.Context) {

@@ -419,6 +419,160 @@ func TestAuthenticateUserWaitsForLogtailBarrierBeforeBackgroundTransaction(t *te
 	require.True(t, gotCancellable)
 }
 
+func TestAuthenticateUserMarksCanonicalCatalogRejection(t *testing.T) {
+	service := "auth-rejection-" + t.Name()
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(
+			func() int64 { return 100 },
+			0,
+		)),
+	)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+	InitServerLevelVars(service)
+
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).
+		Return(timestamp.Timestamp{PhysicalTime: 100}, nil)
+	setPu(service, &mo_config.ParameterUnit{
+		TxnClient: txnClient,
+		StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+			timestamp.Timestamp, error,
+		) {
+			return timestamp.Timestamp{PhysicalTime: 100}, nil
+		}},
+	})
+
+	ses := &Session{
+		feSessionImpl: feSessionImpl{service: service},
+		rt:            &Routine{},
+		timestampMap:  make(map[TS]time.Time),
+	}
+	bh := &backgroundExecTest{}
+	bh.init()
+	tenantSQL, err := getSqlForCheckTenant(t.Context(), "tenant")
+	require.NoError(t, err)
+	tenantResult := mock_frontend.NewMockExecResult(ctrl)
+	tenantResult.EXPECT().GetRowCount().Return(uint64(1))
+	tenantResult.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(42), nil)
+	tenantResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil)
+	tenantResult.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil)
+	tenantResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("1.0.0", nil)
+	bh.sql2result[tenantSQL] = tenantResult
+	userSQL, err := getSqlForPasswordOfUser(t.Context(), "dump")
+	require.NoError(t, err)
+	bh.sql2result[userSQL] = newMrsForPasswordOfUser(nil)
+
+	previous := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = previous })
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return bh
+	}
+
+	_, err = ses.AuthenticateUser(
+		t.Context(),
+		"tenant:dump",
+		"",
+		nil,
+		nil,
+		func([]byte, []byte, []byte) bool { return false },
+	)
+	require.ErrorContains(t, err, "there is no user dump")
+	require.True(t, isAuthenticationRejected(err))
+	code, state, message := RewriteError(err, "tenant:dump")
+	require.Equal(t, moerr.ER_ACCESS_DENIED_ERROR, code)
+	require.Equal(t, "28000", state)
+	require.Equal(t, "Access denied for user tenant:dump. "+err.Error(), message)
+}
+
+func TestAuthenticationRequestRejectedClassifier(t *testing.T) {
+	require.True(t, isAuthenticationRequestRejected(
+		moerr.NewBadDBNoCtx("missing_db")))
+	require.False(t, isAuthenticationRequestRejected(
+		moerr.NewInternalErrorNoCtx("catalog temporarily unavailable")))
+}
+
+func TestAuthenticateSpecialUserSnapshotBoundary(t *testing.T) {
+	const userName = "issue27743-special-user"
+	SetSpecialUser(userName, []byte("Issue27743Pass01"))
+	t.Cleanup(func() {
+		specialUsers.Lock()
+		delete(specialUsers.users, userName)
+		specialUsers.Unlock()
+	})
+
+	t.Run("external special user waits for barrier", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		barrierFrontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 7}
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		barrierCompleted := false
+		txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), barrierFrontier).
+			DoAndReturn(func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+				require.True(t, barrierCompleted)
+				return barrierFrontier, nil
+			})
+		setPu(ses.GetService(), &mo_config.ParameterUnit{
+			TxnClient: txnClient,
+			StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				barrierCompleted = true
+				return barrierFrontier, nil
+			}},
+		})
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.NoError(t, err)
+		require.True(t, barrierCompleted)
+		require.Equal(t, barrierFrontier, ses.getLastCommitTS())
+	})
+
+	t.Run("external special user fails closed", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		wantErr := moerr.NewInternalErrorNoCtx("barrier unavailable")
+		setPu(ses.GetService(), &mo_config.ParameterUnit{
+			TxnClient: mock_frontend.NewMockTxnClient(gomock.NewController(t)),
+			StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return timestamp.Timestamp{}, wantErr
+			}},
+		})
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("internal special user keeps bootstrap path", func(t *testing.T) {
+		ses := &Session{
+			feSessionImpl: feSessionImpl{service: "issue27743-internal-special-user"},
+			isInternal:    true,
+		}
+
+		_, err := ses.AuthenticateUser(
+			t.Context(), userName, "", nil, nil,
+			func([]byte, []byte, []byte) bool { return false },
+		)
+		require.NoError(t, err)
+		require.True(t, ses.getLastCommitTS().IsEmpty())
+	})
+}
+
 func TestResolveImplicitDefaultRole(t *testing.T) {
 	const (
 		userID   = int64(42)
@@ -535,6 +689,7 @@ func TestResolveImplicitDefaultRole(t *testing.T) {
 
 		_, _, err := resolveImplicitDefaultRole(ctx, bh, userID, readerID, true)
 		require.ErrorIs(t, err, wantErr)
+		require.False(t, isAuthenticationRejected(err))
 	})
 
 	t.Run("public fallback query error is returned", func(t *testing.T) {
@@ -546,6 +701,7 @@ func TestResolveImplicitDefaultRole(t *testing.T) {
 
 		_, _, err := resolveImplicitDefaultRole(ctx, bh, userID, readerID, true)
 		require.ErrorIs(t, err, wantErr)
+		require.False(t, isAuthenticationRejected(err))
 		require.Equal(t, []string{readerSQL, publicSQL}, bh.executedSQLs)
 	})
 
@@ -571,6 +727,7 @@ func TestResolveImplicitDefaultRole(t *testing.T) {
 
 		_, _, err := resolveImplicitDefaultRole(ctx, bh, userID, readerID, true)
 		require.ErrorIs(t, err, wantErr)
+		require.False(t, isAuthenticationRejected(err))
 	})
 }
 

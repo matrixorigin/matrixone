@@ -19,16 +19,20 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -37,6 +41,141 @@ const (
 	JsonOrderingParamFunctionName   = "__mo_json_ordering_param"
 	JsonComparisonParamFunctionName = "__mo_json_comparison_param"
 )
+
+// PreparedJSONScalarValue converts the text transport used by a prepared
+// parameter into the JSON scalar represented by its runtime SQL type.  The
+// concrete type is deliberately kept separate from PrepareParamKind: the
+// latter describes a broad conversion category, while (for example) FLOAT
+// and DOUBLE have different wire precision.
+func PreparedJSONScalarValue(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+	protocolVersion int64,
+) (any, error) {
+	if paramType == types.T_binary || paramType == types.T_varbinary ||
+		paramType == types.T_blob {
+		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, value)
+	}
+	if binaryString {
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(value)), nil
+	}
+	if paramType != types.T_any {
+		scalar, err := preparedTextToJSONValueWithType(
+			ctx, string(value), paramType, protocolVersion)
+		if err != nil {
+			return nil, err
+		}
+		return scalar, nil
+	}
+	if kind != vector.PrepareParamNone {
+		return preparedTextToJSONValue(ctx, string(value), kind)
+	}
+	return string(value), nil
+}
+
+// preparedTextToJSONValueWithType decodes the textual representation retained
+// by the binary prepared-parameter vector using the concrete protocol type.
+// In particular, parsing FLOAT with a 32-bit target and widening the resulting
+// float32 preserves the value that was actually carried on the wire.
+func preparedTextToJSONValueWithType(
+	ctx context.Context,
+	value string,
+	paramType types.T,
+	protocolVersion int64,
+) (any, error) {
+	parseSigned := func(bitSize int) (int64, error) {
+		parsed, err := strconv.ParseInt(value, 10, bitSize)
+		if err != nil {
+			return 0, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	}
+	parseUnsigned := func(bitSize int) (uint64, error) {
+		parsed, err := strconv.ParseUint(value, 10, bitSize)
+		if err != nil {
+			return 0, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	}
+	parseFloat := func(bitSize int) (bytejson.ByteJson, error) {
+		parsed, err := strconv.ParseFloat(value, bitSize)
+		if err != nil {
+			return bytejson.ByteJson{}, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		if bitSize == 32 {
+			parsed = float64(float32(parsed))
+		}
+		return finiteFloatToJSON(parsed, ctx)
+	}
+
+	switch paramType {
+	case types.T_json:
+		parsed, err := types.ParseSliceToByteJson([]byte(value))
+		if err != nil {
+			return nil, err
+		}
+		return parsed, nil
+	case types.T_int8:
+		return parseSigned(8)
+	case types.T_int16:
+		return parseSigned(16)
+	case types.T_int32:
+		return parseSigned(32)
+	case types.T_int64:
+		return parseSigned(64)
+	case types.T_uint8:
+		return parseUnsigned(8)
+	case types.T_uint16:
+		return parseUnsigned(16)
+	case types.T_uint32:
+		return parseUnsigned(32)
+	case types.T_uint64:
+		return parseUnsigned(64)
+	case types.T_float32:
+		return parseFloat(32)
+	case types.T_float64:
+		return parseFloat(64)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if len(value) == 0 || !json.Valid([]byte(value)) ||
+			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
+			return nil, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
+	case types.T_bool:
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(
+				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
+		}
+		return parsed, nil
+	case types.T_year:
+		// A prepared YEAR is a numeric MEMBER OF scalar, even though the
+		// ordinary JSON constructor path formats YEAR as a temporal string.
+		return parseUnsigned(16)
+	case types.T_bit:
+		return parseUnsigned(64)
+	case types.T_date:
+		return newTypedByteJson(bytejson.TpCodeDate, value), nil
+	case types.T_time:
+		return newTypedByteJson(bytejson.TpCodeTime, value), nil
+	case types.T_datetime, types.T_timestamp:
+		return newTypedByteJson(bytejson.TpCodeDatetime, value), nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_enum, types.T_geometry:
+		return value, nil
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, []byte(value))
+	default:
+		return nil, moerr.NewInternalErrorf(
+			ctx, "unsupported prepared parameter type %s", paramType.String())
+	}
+}
 
 // normalizeJsonComparisonParam preserves the runtime scalar category of a
 // prepared parameter before a JSON equality comparison. Prepared parameters
@@ -75,7 +214,9 @@ func normalizeJsonComparisonParam(
 				return err
 			}
 		} else {
-			encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+			encoded, err := encodeJsonComparisonParamWithMetadata(
+				proc.Ctx, value, kind, paramType,
+				parameters[0].GetIsBinaryStringAt(0), jsonSessionProtocolVersion(proc))
 			if err != nil {
 				return err
 			}
@@ -122,7 +263,9 @@ func normalizeJsonComparisonParam(
 			kinds[i] = kind
 		}
 
-		encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+		encoded, err := encodeJsonComparisonParamWithMetadata(
+			proc.Ctx, value, kind, paramType,
+			parameters[0].GetIsBinaryStringAt(int(i)), jsonSessionProtocolVersion(proc))
 		if err != nil {
 			return err
 		}
@@ -149,13 +292,22 @@ func encodeJsonComparisonParam(
 	value []byte,
 	kind vector.PrepareParamKind,
 ) ([]byte, error) {
-	var scalar any = string(value)
-	if kind != vector.PrepareParamNone {
-		var err error
-		scalar, err = preparedTextToJSONValue(ctx, string(value), kind)
-		if err != nil {
-			return nil, err
-		}
+	return encodeJsonComparisonParamWithMetadata(
+		ctx, value, kind, types.T_any, false, bytejson.MySQLOpaqueProtocolVersion)
+}
+
+func encodeJsonComparisonParamWithMetadata(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+	protocolVersion int64,
+) ([]byte, error) {
+	scalar, err := PreparedJSONScalarValue(
+		ctx, value, kind, paramType, binaryString, protocolVersion)
+	if err != nil {
+		return nil, err
 	}
 	jsonValue, err := bytejson.CreateByteJSON(scalar)
 	if err != nil {
@@ -1893,6 +2045,7 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	switch jsonFuncType {
 	case bytejson.JsonModifySet:
@@ -1975,7 +2128,7 @@ rowLoop:
 				}
 				continue rowLoop
 			}
-			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
+			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i), protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2014,8 +2167,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 	}
 }
 
-func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int) (bytejson.ByteJson, error) {
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row)
+func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (bytejson.ByteJson, error) {
+	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row, protocolVersion)
 	if err != nil {
 		return bytejson.Null, err
 	}
@@ -2040,6 +2193,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
@@ -2050,7 +2204,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc, params[i], j)
+			elem, err := op.convertToAny(proc, params[i], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2072,229 +2226,33 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int) (any, error) {
+func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (any, error) {
 	ctx := context.Background()
 	if proc != nil {
 		ctx = proc.Ctx
 	}
-	fromType := v.GetType()
-	switch fromType.Oid {
-	case types.T_bool:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
+	if !v.IsNull(uint64(row)) {
+		switch v.GetType().Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			kind := v.GetPrepareParamKindAt(row)
+			paramType := v.GetPrepareParamType()
+			binaryString := v.GetIsBinaryStringAt(row)
+			if kind != vector.PrepareParamNone || paramType != types.T_any || binaryString {
+				return PreparedJSONScalarValue(ctx, v.GetBytesAt(row), kind,
+					paramType, binaryString, protocolVersion)
+			}
 		}
-		return vector.GetFixedAtNoTypeCheck[bool](v, row), nil
-	case types.T_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int8](v, row)), nil
-	case types.T_int16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), nil
-	case types.T_int32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int32](v, row)), nil
-	case types.T_int64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[int64](v, row), nil
-	case types.T_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)), nil
-	case types.T_uint16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)), nil
-	case types.T_uint32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)), nil
-	case types.T_uint64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
-	case types.T_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), nil
-	case types.T_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[float64](v, row), nil
-	case types.T_char, types.T_varchar, types.T_text:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		value := string(v.GetBytesAt(row))
-		kind := v.GetPrepareParamKindAt(row)
-		if kind == vector.PrepareParamNone {
-			return value, nil
-		}
-		return preparedTextToJSONValue(ctx, value, kind)
-	case types.T_json:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		data := v.GetBytesAt(row)
-		if len(data) == 0 {
-			return nil, nil
-		}
-		bj := types.DecodeJson(data)
-		return bj, nil
-	case types.T_date:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDate, vector.GetFixedAtNoTypeCheck[types.Date](v, row).String()), nil
-	case types.T_time:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale)), nil
-	case types.T_datetime:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale)), nil
-	case types.T_timestamp:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), fromType.Scale)), nil
-	case types.T_decimal64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_decimal128:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
-	case types.T_decimal256:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_year:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[int16](v, row)
-		return strconv.FormatInt(int64(val), 10), nil
-	case types.T_bit:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		ctx := context.Background()
-		if proc != nil && proc.Ctx != nil {
-			ctx = proc.Ctx
-		}
-		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
-	case types.T_enum:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Enum](v, row)
-		return val.String(), nil
-	case types.T_geometry:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		data := v.GetBytesAt(row)
-		return string(data), nil
-	case types.T_uuid:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String(), nil
-	case types.T_array_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float32](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float64](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = x
-		}
-		return out, nil
-	case types.T_array_bf16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_float16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[int8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	default:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
 	}
+	return jsonvalue.FromVector(
+		ctx,
+		v,
+		row,
+		jsonSessionTimeZone(proc),
+		protocolVersion,
+		func(payload []byte) (bytejson.ByteJson, error) {
+			return geometryToByteJSON(ctx, payload)
+		},
+	)
 }
 
 func preparedTextToJSONValue(
@@ -2341,6 +2299,48 @@ func jsonSessionTimeZone(proc *process.Process) *time.Location {
 	return proc.GetSessionInfo().TimeZone
 }
 
+func jsonSessionProtocolVersion(proc *process.Process) int64 {
+	service := ""
+	if proc != nil {
+		service = proc.GetService()
+	}
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	switch version := value.(type) {
+	case int64:
+		return version
+	case int:
+		return int64(version)
+	case uint64:
+		return int64(version)
+	case uint32:
+		return int64(version)
+	default:
+		return defines.MORPCMinVersion
+	}
+}
+
+func geometryToByteJSON(ctx context.Context, payload []byte) (bytejson.ByteJson, error) {
+	geoJSON, err := geometryToGeoJSONBytes(payload)
+	if err != nil {
+		return bytejson.ByteJson{}, err
+	}
+	value, err := types.ParseSliceToByteJson(geoJSON)
+	if err != nil {
+		return bytejson.ByteJson{}, err
+	}
+	if value.Type != bytejson.TpCodeObject {
+		return bytejson.ByteJson{}, moerr.NewInvalidInputf(ctx, "geometry GeoJSON must be an object")
+	}
+	return value, nil
+}
+
 type opBuiltInJsonObject struct{}
 
 func newOpBuiltInJsonObject() *opBuiltInJsonObject {
@@ -2360,6 +2360,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		}
 		return nil
 	}
+	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
@@ -2376,7 +2377,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			}
 			// key may be any type, convert to string representation.
-			keyAny, err := arrayOp.convertToAny(proc, params[i], j)
+			keyAny, err := op.convertKeyToAny(proc, arrayOp, params[i], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2415,7 +2416,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				key = fmt.Sprint(v)
 			}
 
-			elem, err := arrayOp.convertToAny(proc, params[i+1], j)
+			elem, err := arrayOp.convertToAny(proc, params[i+1], j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2435,6 +2436,54 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		}
 	}
 	return nil
+}
+
+// convertKeyToAny retains the existing JSON_OBJECT member-name conversion for
+// SQL types whose value representation intentionally changes in constructors.
+func (op *opBuiltInJsonObject) convertKeyToAny(
+	proc *process.Process,
+	arrayOp *opBuiltInJsonArray,
+	v *vector.Vector,
+	row int,
+	protocolVersion int64,
+) (any, error) {
+	typ := v.GetType()
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		// Prepared key text keeps the previous kind-only conversion. Concrete
+		// scalar and binary sidecars belong to values, not member names.
+		if kind := v.GetPrepareParamKindAt(row); kind != vector.PrepareParamNone {
+			ctx := context.Background()
+			if proc != nil {
+				ctx = proc.Ctx
+			}
+			return preparedTextToJSONValue(ctx, string(v.GetBytesAt(row)), kind)
+		}
+		return string(v.GetBytesAt(row)), nil
+	case types.T_time:
+		return newTypedByteJson(bytejson.TpCodeTime,
+			vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(typ.Scale)), nil
+	case types.T_datetime:
+		return newTypedByteJson(bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(typ.Scale)), nil
+	case types.T_timestamp:
+		return newTypedByteJson(bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), typ.Scale)), nil
+	case types.T_year:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[types.MoYear](v, row)), 10), nil
+	case types.T_bit:
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), typ.Width, ctx)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
+	case types.T_geometry:
+		return string(v.GetBytesAt(row)), nil
+	default:
+		return arrayOp.convertToAny(proc, v, row, protocolVersion)
+	}
 }
 
 type opBuiltInJsonType struct{}
@@ -2859,6 +2908,9 @@ func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
 
 // JSON_SCHEMA_VALID
 func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2894,22 +2946,18 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_valid", err, "invalid schema JSON")
 		}
-		if err := validateSchemaObject(proc.Ctx, "json_schema_valid", schemaBJ); err != nil {
-			return err
-		}
-		if schemaHasRefKeyword(schemaBJ) {
-			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
-		}
-		schemaJSON, _ := schemaBJ.MarshalJSON()
-		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_valid", schemaBJ)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", err.Error())
+			return err
 		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNull()
 			continue
@@ -2939,6 +2987,9 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // JSON_SCHEMA_VALIDATION_REPORT
 func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2972,22 +3023,18 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", "invalid schema JSON")
+			return jsonSchemaParseError(proc.Ctx, "json_schema_validation_report", err, "invalid schema JSON")
 		}
-		if err := validateSchemaObject(proc.Ctx, "json_schema_validation_report", schemaBJ); err != nil {
-			return err
-		}
-		if schemaHasRefKeyword(schemaBJ) {
-			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_validation_report: $ref is not supported")
-		}
-		schemaJSON, _ := schemaBJ.MarshalJSON()
-		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		compiled, err = compileMySQLDraft4Schema(proc.Ctx, "json_schema_validation_report", schemaBJ)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", err.Error())
+			return err
 		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if selectList.Contains(i) {
 			rs.AppendMustNullForBytesResult()
 			continue
@@ -3036,9 +3083,23 @@ func buildSchemaValidationReport(result *gojsonschema.Result) (bytejson.ByteJson
 // parseSchemaJSON parses the schema bytes into a ByteJson.
 func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
 	if isStr {
-		return types.ParseSliceToByteJson(raw)
+		return types.ParseSliceToByteJsonWithDepthLimit(raw, bytejson.JSONDocumentMaxNestingDepth)
 	}
-	return types.DecodeJson(raw), nil
+	document := types.DecodeJson(raw)
+	if err := bytejson.ValidateJSONDocumentDepth(document); err != nil {
+		return document, err
+	}
+	return document, nil
+}
+
+func jsonSchemaParseError(ctx context.Context, fnName string, err error, invalidReason string) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if bytejson.IsJSONDocumentDepthError(err) {
+		return moerr.NewInvalidArg(ctx, fnName, mysqlJSONSchemaDepthReason)
+	}
+	return moerr.NewInvalidArg(ctx, fnName, invalidReason)
 }
 
 func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) error {
@@ -3046,6 +3107,180 @@ func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.
 		return moerr.NewInvalidArg(ctx, fnName, "schema must be a JSON object")
 	}
 	return nil
+}
+
+func compileMySQLDraft4Schema(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) (*gojsonschema.Schema, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := validateSchemaObject(ctx, fnName, schemaBJ); err != nil {
+		return nil, err
+	}
+
+	schemaJSON, err := schemaBJ.MarshalJSON()
+	if err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+	decoder := json.NewDecoder(bytes.NewReader(schemaJSON))
+	decoder.UseNumber()
+	var schema any
+	if err := decoder.Decode(&schema); err != nil {
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+
+	if err := mysqlAnalyzeDraft4Schema(ctx, fnName, schema); err != nil {
+		return nil, err
+	}
+	normalizeMySQLDraft4Schema(schema)
+
+	loader := gojsonschema.NewSchemaLoader()
+	loader.AutoDetect = false
+	loader.Validate = false
+	loader.Draft = gojsonschema.Draft4
+	rootLoader := &mysqlDraft4RootLoader{
+		JSONLoader: gojsonschema.NewRawLoader(schema),
+		factory:    &mysqlDraft4DenyFactory{},
+	}
+	compiled, err := loader.Compile(rootLoader)
+	if err != nil {
+		if errors.Is(err, errMySQLJSONSchemaExternalLoad) {
+			return nil, moerr.NewNotSupportedf(ctx, "%s: %s", fnName, mysqlJSONSchemaExternalRefReason)
+		}
+		return nil, moerr.NewInvalidArg(ctx, fnName, err.Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return compiled, nil
+}
+
+func normalizeMySQLDraft4Schema(schema any) {
+	normalizeMySQLDraft4SchemaAliases(schema)
+	normalizeMySQLDraft4SchemaKeywords(schema)
+}
+
+// normalizeMySQLDraft4SchemaAliases mirrors gojsonschema's schema-pool walk.
+// The loader registers id/$id in arbitrary schema-valued maps and arrays, not
+// only in recognized Draft 4 keyword positions. Keep literal const/enum data
+// and property/dependency names out of that walk. For definitions/$defs,
+// preserve named schema containers while removing string members that the
+// loader would interpret as aliases.
+func normalizeMySQLDraft4SchemaAliases(value any) {
+	switch value := value.(type) {
+	case []any:
+		for _, child := range value {
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	case map[string]any:
+		delete(value, "id")
+		delete(value, "$id")
+		for key, child := range value {
+			switch key {
+			case "const", "enum":
+				continue
+			case "properties", "patternProperties", "dependencies":
+				named, ok := child.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, schema := range named {
+					normalizeMySQLDraft4SchemaAliases(schema)
+				}
+				continue
+			case "definitions", "$defs":
+				normalizeMySQLDraft4NamedSchemaAliases(child)
+				continue
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4NamedSchemaAliases(value any) {
+	switch named := value.(type) {
+	case []any:
+		normalizeMySQLDraft4SchemaAliases(named)
+	case map[string]any:
+		for key, child := range named {
+			if key == "id" || key == "$id" {
+				if _, ok := child.(string); ok {
+					delete(named, key)
+					continue
+				}
+			}
+			normalizeMySQLDraft4SchemaAliases(child)
+		}
+	}
+}
+
+func normalizeMySQLDraft4SchemaKeywords(schema any) {
+	obj, ok := schema.(map[string]any)
+	if !ok {
+		return
+	}
+
+	if ref, ok := obj["$ref"]; ok {
+		if _, ok := ref.(string); !ok {
+			delete(obj, "$ref")
+		}
+	}
+
+	// MySQL's Draft 4 implementation treats format as an annotation.
+	delete(obj, "format")
+	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMinimum", "minimum")
+	normalizeMySQLDraft4ExclusiveBound(obj, "exclusiveMaximum", "maximum")
+
+	for _, key := range []string{"properties", "patternProperties", "definitions", "$defs"} {
+		normalizeMySQLDraft4NamedSchemaKeywords(obj[key])
+	}
+	if dependencies, ok := obj["dependencies"].(map[string]any); ok {
+		for _, dependency := range dependencies {
+			normalizeMySQLDraft4SchemaKeywords(dependency)
+		}
+	}
+	for _, key := range []string{"additionalItems", "additionalProperties", "not"} {
+		normalizeMySQLDraft4SchemaKeywords(obj[key])
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "items"} {
+		normalizeMySQLDraft4SchemaKeywordsOrArray(obj[key])
+	}
+}
+
+func normalizeMySQLDraft4NamedSchemaKeywords(value any) {
+	named, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, schema := range named {
+		normalizeMySQLDraft4SchemaKeywords(schema)
+	}
+}
+
+func normalizeMySQLDraft4SchemaKeywordsOrArray(value any) {
+	if schemas, ok := value.([]any); ok {
+		for _, schema := range schemas {
+			normalizeMySQLDraft4SchemaKeywords(schema)
+		}
+		return
+	}
+	normalizeMySQLDraft4SchemaKeywords(value)
+}
+
+func normalizeMySQLDraft4ExclusiveBound(obj map[string]any, exclusiveKey, boundKey string) {
+	value, ok := obj[exclusiveKey]
+	if !ok {
+		return
+	}
+	if _, ok := value.(bool); !ok {
+		// Numeric exclusive bounds belong to later drafts. Other invalid values
+		// are ignored by MySQL instead of being rejected by the Draft 4 loader.
+		delete(obj, exclusiveKey)
+		return
+	}
+	if _, ok := obj[boundKey].(json.Number); !ok {
+		// Draft 4 only gives the boolean form meaning when its bound is valid.
+		delete(obj, exclusiveKey)
+	}
 }
 
 func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int, selectList *FunctionSelectList) bool {
@@ -3065,24 +3300,39 @@ func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena],
 // If compiled is non-nil, the pre-compiled schema is reused; otherwise the
 // schema is parsed and validated per-row.
 func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema, fnName string) (interface{}, error) {
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
+	}
 	docBytes, _ := p2.GetStrValue(row)
 
 	var docJSON []byte
 	if docIsStr {
-		docBJ, err := types.ParseSliceToByteJson(docBytes)
+		docBJ, err := types.ParseSliceToByteJsonWithDepthLimit(docBytes, bytejson.JSONDocumentMaxNestingDepth)
 		if err != nil {
-			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid document JSON")
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
 		}
 		docJSON, _ = docBJ.MarshalJSON()
 	} else {
 		docBJ := types.DecodeJson(docBytes)
+		if err := bytejson.ValidateJSONDocumentDepth(docBJ); err != nil {
+			return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid document JSON")
+		}
 		docJSON, _ = docBJ.MarshalJSON()
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	if compiled != nil {
 		result, err := compiled.Validate(gojsonschema.NewBytesLoader(docJSON))
 		if err != nil {
+			if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+		}
+		if err := proc.Ctx.Err(); err != nil {
+			return nil, err
 		}
 		if boolResult {
 			return result.Valid(), nil
@@ -3097,21 +3347,22 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	schemaBytes, _ := p1.GetStrValue(row)
 	schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid schema JSON")
+		return nil, jsonSchemaParseError(proc.Ctx, fnName, err, "invalid schema JSON")
 	}
-	if err := validateSchemaObject(proc.Ctx, fnName, schemaBJ); err != nil {
+	compiled, err = compileMySQLDraft4Schema(proc.Ctx, fnName, schemaBJ)
+	if err != nil {
 		return nil, err
 	}
-	if schemaHasRefKeyword(schemaBJ) {
-		return nil, moerr.NewNotSupportedf(proc.Ctx, "%s: $ref is not supported", fnName)
-	}
-	schemaJSON, _ := schemaBJ.MarshalJSON()
-
-	sl := gojsonschema.NewBytesLoader(schemaJSON)
 	dl := gojsonschema.NewBytesLoader(docJSON)
-	validationResult, err := gojsonschema.Validate(sl, dl)
+	validationResult, err := compiled.Validate(dl)
 	if err != nil {
+		if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
+	}
+	if err := proc.Ctx.Err(); err != nil {
+		return nil, err
 	}
 	if boolResult {
 		return validationResult.Valid(), nil
@@ -3174,97 +3425,6 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 	return "#/" + keyword
 }
 
-func schemaHasRefKeyword(bj bytejson.ByteJson) bool {
-	return schemaHasRefKeywordInSchema(bj)
-}
-
-func schemaHasRefKeywordInSchema(bj bytejson.ByteJson) bool {
-	if bj.Type != bytejson.TpCodeObject {
-		return false
-	}
-	cnt := bj.GetElemCnt()
-	for i := 0; i < cnt; i++ {
-		key := string(bj.GetObjectKey(i))
-		val := bj.GetObjectVal(i)
-		if key == "$ref" {
-			return true
-		}
-		if schemaKeywordContainsNamedSchemas(key) {
-			if schemaHasRefKeywordInNamedSchemas(val) {
-				return true
-			}
-			continue
-		}
-		if schemaKeywordContainsSchema(key) {
-			if schemaHasRefKeywordInSchema(val) {
-				return true
-			}
-			continue
-		}
-		if schemaKeywordContainsSchemaOrSchemaArray(key) {
-			if schemaHasRefKeywordInSchemaOrSchemaArray(val) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func schemaKeywordContainsNamedSchemas(key string) bool {
-	switch key {
-	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaKeywordContainsSchema(key string) bool {
-	switch key {
-	case "additionalItems", "additionalProperties", "contains", "else", "if", "not", "propertyNames", "then", "unevaluatedItems", "unevaluatedProperties":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaKeywordContainsSchemaOrSchemaArray(key string) bool {
-	switch key {
-	case "allOf", "anyOf", "items", "oneOf", "prefixItems":
-		return true
-	default:
-		return false
-	}
-}
-
-func schemaHasRefKeywordInNamedSchemas(bj bytejson.ByteJson) bool {
-	if bj.Type != bytejson.TpCodeObject {
-		return false
-	}
-	cnt := bj.GetElemCnt()
-	for i := 0; i < cnt; i++ {
-		if schemaHasRefKeywordInSchema(bj.GetObjectVal(i)) {
-			return true
-		}
-	}
-	return false
-}
-
-func schemaHasRefKeywordInSchemaOrSchemaArray(bj bytejson.ByteJson) bool {
-	switch bj.Type {
-	case bytejson.TpCodeObject:
-		return schemaHasRefKeywordInSchema(bj)
-	case bytejson.TpCodeArray:
-		cnt := bj.GetElemCnt()
-		for i := 0; i < cnt; i++ {
-			if schemaHasRefKeywordInSchema(bj.GetArrayElem(i)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // JSON_VALUE(json_doc, path) → VARCHAR
 // Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
 func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3325,10 +3485,6 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			val = val.GetArrayElem(0)
 		}
 		if val.IsNull() {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
-		if val.Type == bytejson.TpCodeObject || val.Type == bytejson.TpCodeArray {
 			rs.AppendMustNullForBytesResult()
 			continue
 		}

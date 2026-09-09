@@ -376,6 +376,77 @@ func TestLocalFSFallsBackAfterInvalidRemoteCacheHit(t *testing.T) {
 	require.Equal(t, 1, qt.releaseCount)
 }
 
+func TestFileServiceCachesUseMemoryCacheAllocator(t *testing.T) {
+	ctx := context.Background()
+	queryClient := new(remoteCacheTestQueryClient)
+	caches, err := newFileServiceCaches(ctx, CacheConfig{
+		MemoryCapacity:     ptrTo[toml.ByteSize](1 << 20),
+		DiskPath:           ptrTo(t.TempDir()),
+		DiskCapacity:       ptrTo[toml.ByteSize](1 << 20),
+		RemoteCacheEnabled: true,
+		QueryClient:        queryClient,
+	}, nil, "test", true)
+	require.NoError(t, err)
+	t.Cleanup(func() { caches.close(ctx) })
+
+	require.Same(t, caches.memory, caches.disk.cacheDataAllocator)
+	require.Same(t, caches.memory, caches.remote.allocator)
+}
+
+func TestRemoteCacheReadUsesMemoryCacheReservation(t *testing.T) {
+	ctx := context.Background()
+	const request = 2
+	queryClient := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{
+			"target": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{
+						Index: 0,
+						Hit:   true,
+						Data:  []byte{1, 2},
+					}},
+				},
+			},
+		},
+	}
+	caches, err := newFileServiceCaches(ctx, CacheConfig{
+		MemoryCapacity:     ptrTo[toml.ByteSize](1 << 20),
+		RemoteCacheEnabled: true,
+		QueryClient:        queryClient,
+		KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
+			return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+		},
+	}, nil, "test", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { caches.close(ctx) })
+
+	seed := NewBytes(make([]byte, 1, 1<<20))
+	_, err = caches.memory.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed)
+	require.NoError(t, err)
+	seed.Release()
+	require.Equal(t, int64(1<<20), caches.memory.cache.Used())
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Size: request,
+			ValidateCacheData: func(data fscache.Data) (fscache.Data, error) {
+				return data, nil
+			},
+		}},
+	}
+	require.NoError(t, caches.remote.Read(ctx, vector))
+	require.True(t, vector.Entries[0].done)
+	data := vector.Entries[0].CachedData.(*Bytes)
+	require.Same(t, caches.memory.allocator.owner, data.CacheDataOwner())
+	require.Zero(t, caches.memory.cache.Used())
+	require.Equal(t, int64(caches.memory.BackingSize(request)), caches.memory.reservedBytes)
+	vector.Release()
+	caches.memory.Flush(ctx)
+	require.Zero(t, caches.memory.reservedBytes)
+	require.Equal(t, 1, queryClient.releaseCount)
+}
+
 type cacheFs struct {
 	qs queryservice.QueryService
 	qt client.QueryClient

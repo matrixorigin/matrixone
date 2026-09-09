@@ -145,6 +145,14 @@ message Group {
   int64 spill_mem = 11;
   // Positions in exprs used for physical hash/equality. Empty means all exprs.
   repeated int32 group_by_hash_key = 12;
+  // Grouping sentinels are supplied by input vectors and may change between
+  // batches, rather than being described by one static grouping_flag.
+  bool dynamic_grouping = 13;
+  // MERGE_GROUP only: dynamic grouping-set ids that own an empty aggregate
+  // row when the distributed input produces no partial pipeline.
+  repeated int64 empty_grouping_set_ids = 14;
+  // MERGE_GROUP only: the legacy/static all-rolled branch owns one empty row.
+  bool empty_grouping_set = 15;
 }
 
 message Insert {
@@ -221,6 +229,8 @@ message PreInsert {
   int32 target_row_number_col = 14;
   int32 target_active_col = 15;
   int32 target_row_id_col = 16;
+  bool track_auto_increment_generated = 17;
+  int32 auto_increment_generated_column = 18;
 }
 
 message PostDml {
@@ -334,6 +344,14 @@ message DedupJoin {
   bool dedup_build_keep_last = 19;
   repeated int32 dedup_delete_keep_col_idx_list = 20;
   int32 dedup_delete_marker_col_idx = 21;
+  bool has_odku_affected_rows = 22;
+  int32 affected_rows_result_pos = 23;
+  int32 physical_changed_rows_result_pos = 24;
+  repeated int32 update_check_col_idx_list = 25;
+  bool count_found_rows = 26;
+  bool emit_action_rows = 27;
+  int32 action_final_result_pos = 28;
+  repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
 }
 
 message RightDedupJoin {
@@ -472,6 +490,13 @@ message IcebergPlanningStats {
   int64 planning_cache_miss = 11;
 }
 
+// ArrowExecutionScope is compile-produced positive authorization for Arrow
+// ingestion. Its zero value is deliberately fail-closed on every CN.
+enum ArrowExecutionScope {
+  UnknownArrowExecutionScope = 0;
+  ArrowLoadData = 1;
+}
+
 message ExternalScan {
   option (gogoproto.goproto_stringer) = false;
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
@@ -500,6 +525,19 @@ message ExternalScan {
   plan.DataStreamScan datastream_scan = 24;
   plan.ForeignScan foreign_scan = 25;
   plan.KafkaScan kafka_scan = 26;
+  bool parquet_whole_file_fanout = 27;
+  ArrowExecutionScope arrow_execution_scope = 28;
+  repeated ArrowObjectIdentity arrow_object_identities = 29;
+  repeated ArrowRecordBatchShard arrow_record_batch_shards = 30;
+  bytes arrow_schema_fingerprint = 31;
+  uint32 arrow_conversion_plan_version = 32;
+  // Compile-time policy snapshot. Older CNs ignore this additive field and
+  // still reject Arrow format before execution, so mixed versions fail closed.
+  bool arrow_force_materialize = 33;
+  // This records actual fanout placement independently of the SQL PARALLEL
+  // request. Fanout scopes clear that request after splitting, but every
+  // receiving CN must still enforce its own distributed Arrow rollout gate.
+  bool arrow_distributed_execution = 34;
 }
 
 message TableScan {
@@ -620,6 +658,19 @@ message Instruction {
   // PARTITION Top-N only: emit local candidates in dense batches for the
   // global hash reduction rather than as one logical partition per batch.
   bool partition_top_n_pre_reduce = 58;
+  // PARTITION only: planner-selected ordinary window partition algorithm.
+  plan.Node.PartitionAlgorithm partition_algorithm = 59;
+  // PROJECTION only: vector-level expansion metadata for planner-generated
+  // ROLLUP/CUBE grouping sets. Older CNs ignore these fields, so planning is
+  // gated by MORPCVersion49 until every participant understands them.
+  repeated bool projection_grouping_flags = 60;
+  int32 projection_grouping_set_count = 61;
+  // TOP only: every runtime worker must be consolidated into one stream that
+  // remains ordered across batch boundaries before leaving its CN.
+  bool top_ordered_output = 62;
+  // MERGE_TOP only: consume one independently ordered stream from every
+  // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
+  bool merge_top_ordered_streams = 63;
 }
 
 message AnalysisList {
@@ -723,6 +774,11 @@ message SessionInfo {
   bool matrixone_native_mode = 12;
   bool explicit_zero_temporal_cast_returns_null = 13;
   string sql_mode = 14;
+  // Statement-scoped AUTO_INCREMENT controls captured on the initiating CN.
+  // Zero preserves compatibility with older payloads and means the default
+  // value of one on the receiving CN.
+  uint64 auto_increment_increment = 15;
+  uint64 auto_increment_offset = 16;
 }
 
 message SessionLoggerInfo {
@@ -766,6 +822,9 @@ message Pipeline {
   repeated int32 nil_batch_cnt = 13;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 14;
+  // Per receiver, preserve the single-producer ordered-stream contract across
+  // RemoteRun. Empty means the legacy unordered default.
+  repeated bool ordered_stream = 15;
 }
 
 message WrapNode {
@@ -787,4 +846,26 @@ message Apply {
   plan.VectorIndexScan vector_index_scan = 5;
   repeated string vector_attrs = 6;
   int64 txn_offset = 7;
+}
+
+message ODKUForeignKeyCheck {
+  repeated int32 col_idx_list = 1;
+  int32 eligibility_result_pos = 2;
+}
+
+message ArrowObjectIdentity {
+  int32 file_index = 1;
+  string version_id = 2;
+  string etag = 3;
+  int64 size = 4;
+  int64 last_modified_unix_nano = 5;
+}
+
+message ArrowRecordBatchShard {
+  int32 file_index = 1;
+  int32 record_batch_start = 2;
+  int32 record_batch_end = 3;
+  repeated int32 required_dictionary_block_indices = 4;
+  int64 estimated_rows = 5;
+  int64 estimated_wire_bytes = 6;
 }

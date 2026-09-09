@@ -217,8 +217,14 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	return csvReader.Pos(), nil
 }
 
-func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
-	if param == nil || !isLoadParquetFormat(param) {
+func validateLoadColumnarOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil {
+		return nil
+	}
+	if isLoadArrowFormat(param) {
+		return validateLoadArrowOptions(param, ctx)
+	}
+	if !isLoadParquetFormat(param) {
 		return nil
 	}
 	if param.Local {
@@ -253,6 +259,76 @@ func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) er
 		return moerr.NewNYI(ctx.GetContext(), "parquet load with SET clause")
 	}
 	return nil
+}
+
+// validateLoadParquetOptions is kept as the focused Parquet test seam. LOAD's
+// production path uses validateLoadColumnarOptions so new columnar formats do
+// not accidentally inherit the CSV option surface.
+func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil || !isLoadParquetFormat(param) {
+		return nil
+	}
+	return validateLoadColumnarOptions(param, ctx)
+}
+
+func validateLoadArrowOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param.Local {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by non-LOCAL LOAD DATA")
+	}
+	if param.ScanType == tree.INLINE {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by file-backed LOAD DATA")
+	}
+	if loadOptionExists(param, "compression") || hasExplicitLoadCompression(param.CompressType) {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support external compression")
+	}
+	if loadOptionExists(param, "jsondata") || param.JsonData != "" {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support jsondata option")
+	}
+	if loadOptionExists(param, "hive_partitioning") || loadOptionExists(param, "hive_partition_columns") ||
+		param.HivePartitioning || len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support hive partitioning options")
+	}
+	container := param.ArrowContainer
+	if container == "" {
+		container = tree.ARROW_CONTAINER_AUTO
+	}
+	switch strings.ToLower(container) {
+	case tree.ARROW_CONTAINER_AUTO, tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM:
+		param.ArrowContainer = strings.ToLower(container)
+	default:
+		return moerr.NewBadConfigf(ctx.GetContext(), "the arrow_container '%s' is not supported", container)
+	}
+	if param.Tail == nil {
+		return nil
+	}
+	if param.Tail.Fields != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support FIELDS option")
+	}
+	if param.Tail.Lines != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support LINES option")
+	}
+	if param.Tail.IgnoredLines > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support IGNORE LINES")
+	}
+	if hasLoadUserVariable(param.Tail.ColumnList) {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow LOAD DATA does not support @variables in column list")
+	}
+	if len(param.Tail.Assignments) > 0 {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow LOAD DATA does not support SET clause")
+	}
+	return nil
+}
+
+func isLoadArrowFormat(param *tree.ExternParam) bool {
+	if param.Format == tree.ARROW {
+		return true
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], "format") && strings.EqualFold(param.Option[i+1], tree.ARROW) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoadParquetFormat(param *tree.ExternParam) bool {
@@ -368,7 +444,7 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 	if param == nil ||
 		param.ScanType == tree.INLINE ||
 		param.Local ||
-		param.Format == tree.PARQUET ||
+		param.Format == tree.PARQUET || param.Format == tree.ARROW ||
 		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
 		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
 		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
@@ -456,10 +532,14 @@ func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
 	return rowSize
 }
 
-func loadParquetMayListFiles(param *tree.ExternParam) bool {
+func loadColumnarMayListFiles(param *tree.ExternParam) bool {
 	return param != nil &&
-		param.Format == tree.PARQUET &&
+		(param.Format == tree.PARQUET || param.Format == tree.ARROW) &&
 		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+func loadParquetMayListFiles(param *tree.ExternParam) bool {
+	return param != nil && param.Format == tree.PARQUET && loadColumnarMayListFiles(param)
 }
 
 func totalLoadFileSize(fileSize []int64) int64 {
@@ -499,9 +579,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
-	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+	if err := validateLoadColumnarOptions(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
+	defaultParquetLoadParallel(stmt.Param, ctx)
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
@@ -537,11 +618,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
-	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
-
-	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
-		stmt.Param.Parallel = false
-	}
+	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
+		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
+	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
@@ -613,7 +692,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder.qry.LoadWriteS3 = false
 	}
 
-	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
+	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
@@ -683,7 +762,79 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	return pn, nil
 }
 
+const (
+	experimentalParquetLoadParallel        = "experimental_parquet_load_parallel"
+	experimentalParquetLoadParallelMinSize = "experimental_parquet_load_parallel_min_size"
+)
+
+// defaultParquetLoadParallel enables the row-group fanout path only when the
+// LOAD statement omitted PARALLEL and the session explicitly joins the
+// experimental rollout. An explicit PARALLEL 'false' remains a serial opt-out,
+// and external-table scans never call this LOAD-only helper.
+func defaultParquetLoadParallel(param *tree.ExternParam, ctx CompilerContext) {
+	if param == nil || !strings.EqualFold(param.Format, tree.PARQUET) || param.ParallelSpecified {
+		return
+	}
+	enabled, err := ctx.ResolveVariable(experimentalParquetLoadParallel, true, false)
+	if err != nil || !systemVariableEnabled(enabled) {
+		return
+	}
+
+	param.Parallel = true
+	param.ParallelLoadMinSize = int64(LoadParallelMinSize)
+	if minSize, err := ctx.ResolveVariable(experimentalParquetLoadParallelMinSize, true, false); err == nil {
+		if minSize, ok := systemVariableInt64(minSize); ok && minSize > 0 {
+			param.ParallelLoadMinSize = minSize
+		}
+	}
+}
+
+func systemVariableEnabled(value any) bool {
+	switch value := value.(type) {
+	case bool:
+		return value
+	case int8:
+		return value != 0
+	case int64:
+		return value != 0
+	default:
+		return false
+	}
+}
+
+func systemVariableInt64(value any) (int64, bool) {
+	switch value := value.(type) {
+	case int:
+		return int64(value), true
+	case int8:
+		return int64(value), true
+	case int32:
+		return int64(value), true
+	case int64:
+		return value, true
+	default:
+		return 0, false
+	}
+}
+
+func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
+	if param == nil {
+		return
+	}
+	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
+	minSize := int64(LoadParallelMinSize)
+	if param.ParallelLoadMinSize > 0 {
+		minSize = param.ParallelLoadMinSize
+	}
+	if param.FileSize-offset < minSize {
+		param.Parallel = false
+	}
+}
+
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
+	}
 	if param.ScanType == tree.INLINE {
 		return "", nil
 	}
@@ -697,6 +848,11 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
+	// before ReadDir or StatFile can perform object-store I/O.
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
+	}
 	if param.Local {
 		return param.Filepath, nil
 	}
@@ -705,7 +861,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
-	if loadParquetMayListFiles(param) {
+	if loadColumnarMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
 		if err != nil {

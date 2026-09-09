@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -399,13 +400,26 @@ func restartCloneDatabaseTargetLockTxn(ctx context.Context, bh BackgroundExec) (
 	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); locked {
 		return false, nil
 	}
-	if err := bh.Exec(ctx, "rollback;"); err != nil {
-		return false, err
-	}
-	if err := bh.Exec(ctx, "begin;"); err != nil {
+	if err := restartOwnedCloneDatabaseTargetLockTxn(ctx, bh); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func restartOwnedCloneDatabaseTargetLockTxn(ctx context.Context, bh BackgroundExec) error {
+	if err := bh.Exec(ctx, "rollback;"); err != nil {
+		return err
+	}
+	if err := bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	// The caller entered the lineage lifecycle before taking the target key.
+	// Re-enter it after replacing the owned transaction so the retry cannot
+	// continue with target/catalog locks but without the leading gate.
+	if err := lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
+	return nil
 }
 
 func newDataBranchCloneLockProcess(
@@ -501,7 +515,7 @@ func lockDataBranchCloneDatabaseSources(
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
 	}
-	tables := append([]*tableInfo(nil), source.srcTblInfos...)
+	tables := append([]*tableInfo(nil), source.sourceTableInfosForLifecycle()...)
 	sort.Slice(tables, func(i, j int) bool {
 		if tables[i].dbName != tables[j].dbName {
 			return tables[i].dbName < tables[j].dbName
@@ -509,9 +523,6 @@ func lockDataBranchCloneDatabaseSources(
 		return tables[i].tblName < tables[j].tblName
 	})
 	for _, table := range tables {
-		if table.typ == view {
-			continue
-		}
 		if err := lockDataBranchCloneSource(
 			ctx, ses, bh, fromAccountID, table.dbName, table.tblName,
 		); err != nil {
@@ -549,10 +560,7 @@ func forEachCloneDatabaseSourceTable(
 	source cloneDatabaseSource,
 	fn func(*tableInfo) error,
 ) error {
-	for _, table := range source.srcTblInfos {
-		if table.typ == view {
-			continue
-		}
+	for _, table := range source.sourceTableInfosForLifecycle() {
 		if err := fn(table); err != nil {
 			return err
 		}
@@ -651,6 +659,8 @@ func resolveSnapshot(
 	return snapshot, nil
 }
 
+var resolveSnapshotForClone = resolveSnapshot
+
 func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
 	origin := strconv.FormatInt(snapshotTS, 10)
 	return &tree.AtTimeStamp{
@@ -721,7 +731,13 @@ func getOpAndToAccountId(
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
-	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+	if snapshot, err = resolveSnapshotForClone(ses, atTsExpr); err != nil {
+		if atTsExpr != nil && plan.IsSnapshotNotFound(err) {
+			return 0, 0, nil, plan.NewSnapshotNotFoundError(
+				reqCtx,
+				atTsExpr.SnapshotName,
+			)
+		}
 		return 0, 0, nil, err
 	}
 
@@ -809,10 +825,11 @@ func handleCloneTable(
 	}
 
 	if bh == nil {
-		// do not open another transaction,
-		// if the clone already executed within a transaction.
-		if bh, deferred, err = getBackExecutor(
-			reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+		// Public clone owns this transaction. Admit it before source/target
+		// resolution because nested restore DDL can cross both lineage and
+		// view-metadata lifecycle gates.
+		if bh, deferred, err = getCloneMutationExecutor(
+			reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
 		); err != nil {
 			return
 		}
@@ -1044,7 +1061,9 @@ func handleCloneDatabaseWithSource(
 
 		ctx1 context.Context
 
-		sortedViews []string
+		sortedViews      []string
+		rewrittenViewMap map[string]*tableInfo
+		rewrittenViews   []string
 
 		snapshotTS int64
 		source     cloneDatabaseSource
@@ -1069,7 +1088,7 @@ func handleCloneDatabaseWithSource(
 			// re-checks the target with that fresh snapshot.
 			options[0].cloneSnapshotUsesBackgroundTxn = true
 		}
-		if bh, deferred, err = getBackExecutorWithTxnHandler(reqCtx, ses, options...); err != nil {
+		if bh, deferred, err = getCloneMutationExecutor(reqCtx, ses, true, options...); err != nil {
 			return
 		}
 
@@ -1133,25 +1152,6 @@ func handleCloneDatabaseWithSource(
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
 		return
 	}
-	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
-		reqCtx,
-		source.userDefinedFuncs,
-		source.srcResolveDBName,
-		stmt.DstDatabase.String(),
-		parserLowerCaseTableNames(ses),
-	); err != nil {
-		return
-	}
-	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
-		reqCtx,
-		source.storedProcedures,
-		source.srcResolveDBName,
-		stmt.DstDatabase.String(),
-		parserLowerCaseTableNames(ses),
-	); err != nil {
-		return
-	}
-
 	if source.hasFkCycle {
 		oldForeignKeyChecksReplayable, hadForeignKeyChecksReplayability :=
 			ses.getMigrationSystemVarReplayability("foreign_key_checks")
@@ -1274,7 +1274,7 @@ func handleCloneDatabaseWithSource(
 		return nil
 	}
 
-	for _, srcTbl := range source.srcTblInfos {
+	for _, srcTbl := range source.cloneableTableInfos() {
 		if isSequence(srcTbl) {
 			if err = cloneSequence(srcTbl); err != nil {
 				return
@@ -1282,7 +1282,7 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	for _, srcTbl := range source.srcTblInfos {
+	for _, srcTbl := range source.cloneableTableInfos() {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
@@ -1304,6 +1304,9 @@ func handleCloneDatabaseWithSource(
 	// clone foreign key related table
 	for _, key := range source.sortedFkTbls {
 		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
+			if !isCloneableCloneDatabaseTable(tblInfo) {
+				continue
+			}
 			if err = cloneTable(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,
@@ -1311,6 +1314,54 @@ func handleCloneDatabaseWithSource(
 				return
 			}
 		}
+	}
+
+	lowerCaseTableNames := parserLowerCaseTableNames(ses)
+	// Build one omission closure before sorting views. Views and routines can
+	// depend on each other, so filtering routines after view planning would
+	// allow a view to bind an omitted UDF and fail during restoration.
+	omissions, err := collectCloneDatabaseOmissionSet(
+		reqCtx, source, lowerCaseTableNames,
+	)
+	if err != nil {
+		return
+	}
+	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
+
+	if len(source.viewMap) != 0 {
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
+		fromAccount := source.opAccountId
+		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
+			fromAccount = viewSnapshot.Tenant.TenantID
+		}
+
+		if sortedViews, err = sortedViewInfos(
+			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
+		); err != nil {
+			return
+		}
+	}
+
+	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+		return
+	}
+	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
+		reqCtx,
+		source.userDefinedFuncs,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		lowerCaseTableNames,
+	); err != nil {
+		return
+	}
+	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
+		reqCtx,
+		source.storedProcedures,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		lowerCaseTableNames,
+	); err != nil {
+		return
 	}
 
 	// Routines are catalog metadata rather than mo_tables. Restore functions
@@ -1337,20 +1388,6 @@ func handleCloneDatabaseWithSource(
 
 	// clone view table
 	if len(source.viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
-		fromAccount := source.opAccountId
-		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
-			fromAccount = viewSnapshot.Tenant.TenantID
-		}
-
-		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
-		); err != nil {
-			return
-		}
-
-		var rewrittenViewMap map[string]*tableInfo
-		var rewrittenViews []string
 		rewrittenViewMap, rewrittenViews, err = rewriteCloneViewInfos(
 			source.viewMap,
 			sortedViews,
@@ -1451,6 +1488,33 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+
+	// Subscription metadata functions are private to the canonical
+	// information_schema views. A cloned information_schema remains useful as
+	// a local catalog snapshot, but must not turn a user-owned view into a new
+	// cross-account execution boundary. Restore TABLES and COLUMNS from their
+	// local-only definitions before remapping the clone target.
+	if strings.EqualFold(srcDBName, sysview.InformationDBConst) {
+		var localDDL string
+		switch {
+		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
+			localDDL = sysview.InformationSchemaTablesV41DDL
+		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
+			localDDL = sysview.InformationSchemaColumnsV41DDL
+		}
+		if localDDL != "" {
+			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)
+			if parseErr != nil {
+				return "", parseErr
+			}
+			localCreateView, localOK := localStmt.(*tree.CreateView)
+			if !localOK {
+				return "", moerr.NewInternalErrorNoCtxf(
+					"local information_schema view SQL is %T, expected *tree.CreateView", localStmt)
+			}
+			createView = localCreateView
+		}
+	}
 	cloneTargetDatabase := dstDBName
 	if lowerCaseTableNames == 1 {
 		cloneTargetDatabase = tree.NewCStr(dstDBName, lowerCaseTableNames).Compare()

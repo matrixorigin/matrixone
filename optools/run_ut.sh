@@ -818,10 +818,24 @@ function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
   local failed_output=""
+  local setup_summary=""
+  local setup_status=0
 
   # Keep the workflow's always-run report steps well-defined even when the
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
+
+  if [[ -s "${UT_REPORT}" ]]; then
+    setup_summary=$(python3 "${BUILD_WKSP}/optools/summarize_ut_setup.py" "${UT_REPORT}" 2>&1)
+    setup_status=$?
+    if (( setup_status == 0 )); then
+      while IFS= read -r line; do
+        [[ -n "${line}" ]] && logger "INF" "${line}"
+      done <<< "${setup_summary}"
+    else
+      logger "WRN" "failed to summarize fixture setup timings: ${setup_summary}"
+    fi
+  fi
 
   if ! install_go_ut_analysis; then
     analysis_status=1

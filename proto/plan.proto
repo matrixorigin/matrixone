@@ -269,6 +269,11 @@ message PreparedNumericMetadata {
   int32 provisional_result_peer_type_id = 8;
   int32 provisional_result_peer_width = 9;
   int32 provisional_result_peer_scale = 10;
+  // This field shares the already sparse prepared-expression allocation but
+  // is semantically independent of numeric fallback. It preserves the source
+  // expression needed to recompute a runtime string domain after scalar-
+  // subquery flattening without adding another pointer to every Expr.
+  Expr string_domain_source = 11;
 }
 
 message Expr {
@@ -729,6 +734,16 @@ message DedupJoinCtx {
   // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
   // keys on the DEDUP JOIN build side and keeps the last source row.
   bool dedup_build_keep_last = 5;
+  ColRef affected_rows_col = 6;
+  ColRef physical_changed_rows_col = 7;
+  repeated int32 update_check_col_idx_list = 8;
+  bool count_found_rows = 9;
+  // emit_action_rows keeps every ordered ODKU action visible until immediate
+  // CHECK/FK validation has completed.  action_final_col marks the one row per
+  // conflict group that may continue to unique-index and physical-write paths.
+  bool emit_action_rows = 10;
+  ColRef action_final_col = 11;
+  repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
 }
 
 message UpdateCtx {
@@ -746,6 +761,8 @@ message UpdateCtx {
   int32 target_update_ctx_idx = 15;
   repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
   ColRef changed_rows_col = 17;
+  ColRef affected_rows_weight_col = 18;
+  ColRef physical_changed_rows_col = 19;
 }
 
 message InsertCtx {
@@ -887,6 +904,8 @@ message VectorIndexScan {
   // The execution binder expands candidate_limit after prepared parameters are
   // available; readers receive both k and the bound candidate budget.
   bool post_filter_over_fetch = 17;
+  // Advisory local scan work. Absent when local DOP is not opted in.
+  VectorIndexScanWork scan_work = 18;
 }
 
 message Node {
@@ -1009,6 +1028,14 @@ message Node {
     FUZZY_BUILD_SIDE_UNSPECIFIED = 0;
     FUZZY_BUILD_SIDE_TABLE = 1;
     FUZZY_BUILD_SIDE_SINK = 2;
+  }
+
+  // Physical implementation for ordinary window PARTITION nodes. SORT is the
+  // zero value so plans produced before this field existed retain the legacy
+  // execution path.
+  enum PartitionAlgorithm {
+    PARTITION_ALGORITHM_SORT = 0;
+    PARTITION_ALGORITHM_HASH = 1;
   }
 
   NodeType node_type = 1;
@@ -1196,6 +1223,10 @@ message Node {
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
   int32 asof_right_col = 86;
+
+  // PARTITION only: optimizer-selected implementation for ordinary window
+  // partitioning. Partition Top-N ignores this field.
+  PartitionAlgorithm partition_algorithm = 90;
 }
 
 message SnapshotExtraInfo {
@@ -1351,6 +1382,24 @@ message MongoScan {
   // during compilation. It remains distinct from the catalog mapping_id so a
   // cached logical plan can be compiled more than once without identity drift.
   uint64 table_id = 15;
+  // user_query_* is the validated, credential-free BSON representation selected
+  // by an explicit __mo_query predicate. kind is 1 for filter and 2 for pipeline;
+  // zero keeps the ordinary Find path unchanged.
+  int32 user_query_kind = 16;
+  bytes user_filter_bson = 17;
+  repeated bytes user_pipeline_stage_bson = 18;
+  // Only the digest and validated BSON cross the plan/pipeline boundary. The
+  // original query text can contain sensitive literals and must not appear in
+  // protobuf diagnostics. Execution reconstructs canonical Extended JSON from
+  // BSON only when __mo_query is explicitly projected.
+  string user_query_digest = 19;
+  // include_query_column asks MongoScan to append the synthetic __mo_query
+  // value to its converted batch. It is set only when a residual or projection
+  // still consumes that hidden column.
+  bool include_query_column = 20;
+  // empty_result records that query-level pruning rejected the only derived
+  // user query. Execution validates catalog identity but opens no source cursor.
+  bool empty_result = 21;
 }
 
 message MongoColumnMapping {
@@ -1432,6 +1481,24 @@ message PreInsertUkCtx {
   repeated int32 key_columns = 6;
   repeated int32 conflict_columns = 7;
   int32 output_columns = 8;
+  // ODKU target arbitration resolves every input row against both the
+  // pre-statement table snapshot and rows inserted earlier by this statement.
+  // key_columns and target_columns are parallel arrays in constraint priority
+  // order. A non-NULL target column names a pre-existing conflicting row;
+  // otherwise the operator consults its statement-local accepted-key state.
+  // Only a row that remains an INSERT publishes all of its keys.
+  bool odku_target_arbitration = 9;
+  repeated int32 target_columns = 10;
+  // INSERT IGNORE may reject a row after the allocator has already produced
+  // its auto-increment candidate.  When enabled, the arbiter reuses those
+  // candidates in accepted-row order.  The two positions are physical child
+  // positions after plan remapping; the key index identifies the primary-key
+  // entry in key_columns/conflict_columns.
+  bool auto_increment_reorder = 11;
+  int32 auto_increment_column = 12;
+  int32 auto_increment_generated_column = 13;
+  int32 auto_increment_key_index = 14;
+  int32 auto_increment_output_column = 15;
 }
 
 message PreInsertCtx {
@@ -1447,6 +1514,10 @@ message PreInsertCtx {
   int32 target_row_number_col = 10;
   int32 target_active_col = 11;
   int32 target_row_id_col = 12;
+  // PRE_INSERT emits a transient bool provenance vector when an ordered
+  // INSERT IGNORE arbiter must distinguish generated from explicit values.
+  bool track_auto_increment_generated = 13;
+  int32 auto_increment_generated_column = 14;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1496,6 +1567,10 @@ message RuntimeFilterSpec {
   // exactly one row; multiple rows must fail open so the SINGLE operator can
   // enforce cardinality at its original logical scope.
   bool scalar_predicate = 11;
+  // A required runtime filter is part of query semantics, not an optional
+  // probe-side acceleration. Consumers must reject PASS instead of executing
+  // a bounded operation without this input.
+  bool must_apply = 12;
 }
 
 message IdList {
@@ -2246,4 +2321,21 @@ message RankOption {
 
 message AlterTableAutoIncrement {
   uint64 new_offset = 1;
+}
+
+message ODKUForeignKeyCheck {
+  // Target-table column positions forming one child FK tuple.
+  repeated int32 col_idx_list = 1;
+  // Boolean output column set by DEDUP JOIN for each logical action. It is
+  // true for a new INSERT action or when this action changed the FK tuple.
+  ColRef eligibility_col = 2;
+}
+
+// Physical input work is separate from the scan's narrow output cardinality.
+// These estimates affect scheduling only, never filtering or authorization.
+message VectorIndexScanWork {
+  double rows = 1;
+  int32 blocks = 2;
+  double vector_bytes_per_row = 3;
+  int32 objects = 4;
 }

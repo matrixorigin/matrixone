@@ -1,0 +1,46 @@
+-- @suite
+
+-- @case
+-- @desc: lossless binary-string return domains and CTAS materialization
+-- @label:bvt
+
+--- @metacmp(true)
+
+drop database if exists binary_string_result_domain;
+create database binary_string_result_domain;
+use binary_string_result_domain;
+
+-- Direct text-protocol metadata must agree with the binary expression domain.
+select char(65, 66) as default_binary_char;
+select char(65 using utf8mb4) as explicit_text_char;
+select convert(cast(-9223372036854775808 as signed) using binary) as converted_integer;
+select repeat(X'61', 2) as bounded_repeat;
+select lpad(X'61', 2, X'62') as bounded_lpad;
+select lpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_lpad;
+select rpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_rpad;
+select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
+select make_set(7, 'a', 'b', 'c') as bounded_make_set;
+select export_set(7, 'a', 'b', ',', 3) as bounded_export_set;
+select quote('') as bounded_quote;
+
+-- Real BLOB/VARBINARY inputs must not be narrowed through VARCHAR before execution.
+create table binary_sources(payload blob, needle varbinary(1), replacement varbinary(2));
+insert into binary_sources values(repeat(X'61', 70000), X'61', X'6262');
+select length(convert(payload using binary)), length(repeat(payload, 1)),
+       length(replace(payload, needle, replacement)) from binary_sources;
+create table converted_blob_ctas as select convert(payload using binary) as converted from binary_sources;
+select length(converted) from converted_blob_ctas;
+desc converted_blob_ctas;
+
+-- Materialization must retain all 70,000 bytes and the promoted BLOB type.
+create table binary_result_ctas as
+select repeat(X'61', 70000) as repeated,
+       concat(cast(X'61' as binary(65535)), repeat(X'62', 4465)) as concatenated;
+select length(repeated), length(concatenated) from binary_result_ctas;
+desc binary_result_ctas;
+select column_name, data_type, character_maximum_length, character_set_name, collation_name
+from information_schema.columns
+where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'
+order by ordinal_position;
+
+drop database binary_string_result_domain;

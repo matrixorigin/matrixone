@@ -36,6 +36,7 @@ type container struct {
 	cursor       mongodb.Cursor
 	lease        *mongodb.ClientLease
 	converter    *mongodb.Converter
+	userQuery    *mongodb.UserQuery
 	buf          *batch.Batch
 	done         bool
 	rows         int64
@@ -43,11 +44,14 @@ type container struct {
 	generation   uint64
 	pendingRaw   []byte
 	releaseLimit func()
+	queryCtx     context.Context
+	cancelQuery  context.CancelFunc
 }
 
-// MongoScan only performs source I/O and BSON-to-vector conversion. All SQL
-// filtering, grouping, time-window aggregation, and writes remain ordinary MO
-// operators downstream.
+// MongoScan performs source I/O and BSON-to-vector conversion. Ordinary SQL
+// filtering, grouping, time-window aggregation, and writes remain MO operators;
+// an explicit, validated __mo_query may opt into MongoDB filter or aggregation
+// semantics before conversion.
 type MongoScan struct {
 	Scan *plan.MongoScan
 
@@ -91,6 +95,7 @@ func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil
+	scan.ctr.userQuery = nil
 	scan.ctr.done = false
 	scan.ctr.rows = 0
 	scan.ctr.rawBytes = 0
@@ -110,6 +115,7 @@ func (scan *MongoScan) Free(proc *process.Process, _ bool, _ error) {
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil
+	scan.ctr.userQuery = nil
 	scan.ctr.pendingRaw = nil
 	scan.FreeProjection(proc)
 }
@@ -122,6 +128,11 @@ func (scan *MongoScan) closeResources(_ context.Context) {
 	// background context could stall pipeline teardown indefinitely.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), mongoCleanupTimeout)
 	defer cancel()
+	if scan.ctr.cancelQuery != nil {
+		scan.ctr.cancelQuery()
+		scan.ctr.cancelQuery = nil
+	}
+	scan.ctr.queryCtx = nil
 	if scan.ctr.cursor != nil {
 		_ = scan.ctr.cursor.Close(cleanupCtx)
 		metric.MongoDBCursorEventCounter.WithLabelValues("close").Inc()

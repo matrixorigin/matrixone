@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -60,23 +61,61 @@ func applyLockTableFallback(builder *QueryBuilder) {
 	if maxRows <= 0 {
 		return
 	}
+	fullUpdateRows := estimateFullTableUpdateRows(builder)
 
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType != plan.Node_LOCK_OP ||
-			node.Stats == nil ||
-			node.Stats.Outcnt <= maxRows {
+			node.Stats == nil {
 			continue
 		}
 		for _, target := range node.LockTargets {
+			_, fullUpdateTarget := builder.fullTableUpdateLockTargets[target]
+			estimatedRows := node.Stats.Outcnt
+			if fullUpdateTarget && fullUpdateRows > estimatedRows {
+				estimatedRows = fullUpdateRows
+			}
+			if estimatedRows <= maxRows {
+				continue
+			}
 			if target.Mode == lockpb.LockMode_Shared {
 				target.LockTable = true
 				continue
 			}
-			if _, ok := builder.fullTableUpdateLockTargets[target]; ok {
+			if fullUpdateTarget {
 				target.LockTable = true
 			}
 		}
 	}
+}
+
+// estimateFullTableUpdateRows returns the unfiltered cardinality of the target
+// scan for an UPDATE already proven to cover its complete keyspace. Join and
+// projection estimates can undercount the final LOCK_OP, especially with stale
+// hidden-index statistics. TableCnt is safe only under that semantic proof: a
+// bounded UPDATE must never acquire a table lock just because its source table
+// is large.
+func estimateFullTableUpdateRows(builder *QueryBuilder) float64 {
+	if !builder.hasFullTableUpdateSourceTableID {
+		return 0
+	}
+
+	var rows float64
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN ||
+			node.TableDef == nil ||
+			node.TableDef.TblId != builder.fullTableUpdateSourceTableID ||
+			node.Stats == nil {
+			continue
+		}
+		candidate := node.Stats.TableCnt
+		if candidate <= 0 || math.IsNaN(candidate) || math.IsInf(candidate, 0) {
+			continue
+		}
+		if candidate > rows {
+			rows = candidate
+		}
+	}
+	return rows
 }
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
@@ -929,6 +968,62 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	case *plan.Expr_List:
 		for _, item := range e.List.List {
 			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
+		}
+	}
+}
+
+// remapGeneratedColExprsToTableOrder normalizes generated-column references
+// after CTAS merges explicit target definitions with source columns. The
+// generated-column binder resolves references against declaration order, while
+// CTAS intentionally stores target-only columns before source-only columns.
+// DML generated-column expansion uses the final TableDef order, so leave the
+// catalog with one stable coordinate system.
+func remapGeneratedColExprsToTableOrder(tableCols, declarationCols []*ColDef) {
+	if len(tableCols) == 0 || len(declarationCols) == 0 {
+		return
+	}
+	tablePosByName := make(map[string]int, len(tableCols))
+	for pos, col := range tableCols {
+		if col != nil {
+			tablePosByName[col.Name] = pos
+		}
+	}
+	declarationToTablePos := make(map[int32]int32, len(declarationCols))
+	for declarationPos, col := range declarationCols {
+		if col == nil {
+			continue
+		}
+		if tablePos, ok := tablePosByName[col.Name]; ok {
+			declarationToTablePos[int32(declarationPos)] = int32(tablePos)
+		}
+	}
+
+	for _, col := range tableCols {
+		if col == nil || col.GeneratedCol == nil {
+			continue
+		}
+		remapGeneratedColExprPositions(col.GeneratedCol.Expr, declarationToTablePos)
+	}
+}
+
+func remapGeneratedColExprPositions(expr *plan.Expr, positions map[int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if pos, ok := positions[e.Col.ColPos]; ok {
+				e.Col.ColPos = pos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			remapGeneratedColExprPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			remapGeneratedColExprPositions(item, positions)
 		}
 	}
 }

@@ -365,10 +365,11 @@ func newExpressionExecutorWithAllocation(
 			// init function information for evaluation.
 			executor.overloadID = overloadID
 			// String-to-numeric casts can emit one warning for every logical
-			// output row.  Do not constant-fold them: a folded vector has only
-			// one physical value, so warning generation would depend on the
-			// physical batch layout rather than the rows evaluated by the query.
-			executor.volatile = overload.CannotFold() || isStringToNumericCast(planExpr)
+			// output row. Do not fold ordinary text parameters, but retain the
+			// cast information so doFold can safely fold parameters whose
+			// protocol metadata proves that they originated as integers.
+			executor.stringToNumericCast = !overload.CannotFold() && isStringToNumericCast(planExpr)
+			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
@@ -719,6 +720,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	isBinaryString := false
+	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
+		isBinaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
@@ -735,6 +743,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetIsBinaryString(isBinaryString)
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -769,6 +778,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetIsBinaryString(isBinaryString)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
@@ -1673,7 +1683,10 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	if vec.IsConstNull() {
+	// A grouping-set sentinel has no value payload and therefore also satisfies
+	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
+	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
+	if vec.IsConstNull() && !vec.IsGrouping() {
 		var err error
 		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {
@@ -1820,9 +1833,10 @@ func generateConstExpressionExecutor(
 			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
-			// Distinguish binary with non-binary string.
+			// A folded CAST keeps its resolved SQL binary subtype so downstream
+			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_geometry {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {

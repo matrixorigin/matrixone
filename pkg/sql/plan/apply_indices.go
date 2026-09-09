@@ -707,7 +707,7 @@ func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
 	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
 	for _, multi := range indexes {
 		p, ok := indexplugin.Get(multi.IndexAlgo)
-		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
@@ -948,6 +948,9 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, bool, error) {
+	if vecCtx == nil {
+		return nodeID, false, nil
+	}
 	if vecCtx.projNode == nil && idxColMap == nil {
 		// A sort-anchored rewrite publishes its column remap through idxColMap — that is
 		// the only way ancestors learn the CTE's distance column became the index score.
@@ -995,7 +998,8 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 		// plugin-registered algo) through the vector ANN rewrite
 		// path. indexplugin.Get alone is not sufficient — fulltext
 		// is plugin-registered too.
-		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
+			!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
@@ -1683,6 +1687,42 @@ func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRe
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
+// canPushCompositePrimaryKeyOrderedLimit recognizes the narrow base-table
+// shape where an ordered reader may cap each physical source before the Sort:
+// the SQL order is the table's hidden serialized composite primary key, and
+// every scan predicate is a folded literal bound on that same key. Literal PK
+// ranges are evaluated by the reader before ordered truncation. A merely
+// column-independent runtime expression may remain an upper-layer residual;
+// admitting it (or any column residual) could therefore under-fetch valid rows.
+func canPushCompositePrimaryKeyOrderedLimit(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
+	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || orderByCol == nil ||
+		scanNode.IndexScanInfo.IsIndexScan || len(scanNode.BindingTags) == 0 ||
+		scanNode.TableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return false
+	}
+	pkPos, ok := scanNode.TableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok || orderByCol.RelPos != scanNode.BindingTags[0] || orderByCol.ColPos != pkPos ||
+		pkPos < 0 || int(pkPos) >= len(scanNode.TableDef.Cols) {
+		return false
+	}
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		filterCol, _ := classifyRangeBound(fn)
+		bound := rangeFilterConstValue(fn)
+		literalBound := false
+		if bound != nil {
+			_, _, literalBound = unwrapConstLiteral(bound)
+		}
+		if filterCol == nil || bound == nil || !literalBound ||
+			filterCol.RelPos != orderByCol.RelPos || filterCol.ColPos != pkPos ||
+			!regularIndexCursorTypeMatches(bound.Typ, pkType) {
+			return false
+		}
+	}
+	return true
+}
+
 func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	if scanNode == nil || len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) != 1 {
 		return false
@@ -1945,6 +1985,10 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 	return builder.detectVectorGuardForContext(builder.buildVectorSortContextFromSort(sortNode))
 }
 
+func vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
+	return vecCtx == nil || !vecCtx.hasMembership || algo == catalog.MoIndexIvfFlatAlgo.ToString()
+}
+
 func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return nil
@@ -1970,7 +2014,7 @@ func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortConte
 	// explicit predicate keeps that boundary even if the upstream
 	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multi.IndexAlgo)
@@ -2686,6 +2730,19 @@ func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef
 	if len(leadingPos) == 0 || !usesPrefixComparison {
 		return residualPos
 	}
+	if rangePairFilterPositions(filterList, leadingPos) {
+		// A serialized range pair is widened for byte-string keys when needed.
+		// Keep both SQL bounds as exact rechecks because either encoded endpoint
+		// can share a prefix with a distinct stored value.
+		for _, pos := range leadingPos {
+			if pos >= 0 && int(pos) < len(filterList) &&
+				indexFilterUsesPrefixAmbiguousStringColumn(tableDef, filterList[pos]) &&
+				!slices.Contains(residualPos, pos) {
+				residualPos = append(residualPos, pos)
+			}
+		}
+		return residualPos
+	}
 	lastPos := leadingPos[len(leadingPos)-1]
 	if lastPos < 0 || int(lastPos) >= len(filterList) {
 		return residualPos
@@ -2701,12 +2758,31 @@ func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef
 	return append(residualPos, lastPos)
 }
 
+func rangePairFilterPositions(filterList []*plan.Expr, filterPos []int32) bool {
+	if len(filterPos) != 2 {
+		return false
+	}
+	var firstCol, secondCol *plan.ColRef
+	var firstLower, secondLower bool
+	if filterPos[0] >= 0 && int(filterPos[0]) < len(filterList) {
+		firstCol, firstLower = classifyRangeBound(filterList[filterPos[0]].GetF())
+	}
+	if filterPos[1] >= 0 && int(filterPos[1]) < len(filterList) {
+		secondCol, secondLower = classifyRangeBound(filterList[filterPos[1]].GetF())
+	}
+	return firstCol != nil && secondCol != nil && firstLower != secondLower &&
+		firstCol.RelPos == secondCol.RelPos && firstCol.ColPos == secondCol.ColPos
+}
+
 // indexOnlyLookupWillUsePrefixComparison predicts the lookup shape before an
 // index-table binding tag is allocated. Candidate costing must account for the
 // same exact residuals that applyRegularIndexOnlyScan will later materialize.
-func indexOnlyLookupWillUsePrefixComparison(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32, leadingEqual bool) bool {
+func indexOnlyLookupWillUsePrefixComparison(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32, filterType int, leadingEqual bool) bool {
 	if idxDef == nil || len(idxDef.Parts) <= 1 || len(leadingPos) == 0 {
 		return false
+	}
+	if filterType == RangeIndexCondition {
+		return true
 	}
 	if leadingEqual {
 		return len(leadingPos) < len(idxDef.Parts)
@@ -3762,7 +3838,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	}
 	leadingEqual := costCtx.filterTypes[firstFilter] == EqualIndexCondition
 	leadingPos := []int32{firstFilter}
+	filterType := NonEqualIndexCondition
 	if leadingEqual {
+		filterType = EqualIndexCondition
 		for partPos := 1; partPos < len(idxDef.Parts); partPos++ {
 			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
 			if !ok || colPos < 0 || int(colPos) >= len(costCtx.firstEquals) {
@@ -3773,6 +3851,18 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 				break
 			}
 			leadingPos = append(leadingPos, filterPos)
+		}
+	} else {
+		lowerPos := costCtx.lowerFilters[leadingColPos]
+		upperPos := costCtx.upperFilters[leadingColPos]
+		if lowerPos >= 0 && upperPos >= 0 &&
+			(firstFilter == lowerPos || firstFilter == upperPos) &&
+			regularIndexRangeFunctionsUsable(
+				idxDef, node.TableDef,
+				node.FilterList[lowerPos].GetF(), node.FilterList[upperPos].GetF(), true,
+			) {
+			leadingPos = []int32{lowerPos, upperPos}
+			filterType = RangeIndexCondition
 		}
 	}
 	if !leadingEqual && node.Stats != nil && node.Stats.TableCnt >= 50000 {
@@ -3793,8 +3883,14 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	}
 
 	if !leadingEqual {
-		fn := node.FilterList[leadingPos[0]].GetF()
-		if !regularIndexRangeFunctionsUsable(idxDef, node.TableDef, fn, nil, false) {
+		firstFn := node.FilterList[leadingPos[0]].GetF()
+		var secondFn *plan.Function
+		allowUnsafeRange := false
+		if filterType == RangeIndexCondition {
+			secondFn = node.FilterList[leadingPos[1]].GetF()
+			allowUnsafeRange = true
+		}
+		if !regularIndexRangeFunctionsUsable(idxDef, node.TableDef, firstFn, secondFn, allowUnsafeRange) {
 			return nil, false
 		}
 	}
@@ -3805,13 +3901,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	if numKeyParts == 0 {
 		return nil, false
 	}
-	filterType := NonEqualIndexCondition
-	if leadingEqual {
-		filterType = EqualIndexCondition
-	}
 	residualLeadingPos := indexOnlyResidualLeadingFilterPositionsForPrefix(
 		idxDef, node.TableDef, node.FilterList, leadingPos,
-		indexOnlyLookupWillUsePrefixComparison(idxDef, node.FilterList, leadingPos, leadingEqual),
+		indexOnlyLookupWillUsePrefixComparison(idxDef, node.FilterList, leadingPos, filterType, leadingEqual),
 	)
 	return &regularIndexOnlyMatch{
 		filterIdx: leadingPos, filterType: filterType, leadingEqual: leadingEqual,
@@ -3860,7 +3952,13 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		panic(e)
 	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	newLeadingFilter, err := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
+	var newLeadingFilter *plan.Expr
+	var err error
+	if match.filterType == RangeIndexCondition {
+		newLeadingFilter, err = builder.replaceRangePairCondition(idxDef, node.FilterList, leadingPos, idxTag, idxTableDef)
+	} else {
+		newLeadingFilter, err = builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
+	}
 	if err != nil {
 		return -1
 	}

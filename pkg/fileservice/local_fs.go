@@ -276,7 +276,6 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		l.perfCounterSets,
 		l.name,
 		config.enableDiskCacheForLocalFS,
-		l,
 	)
 	if err != nil {
 		return err

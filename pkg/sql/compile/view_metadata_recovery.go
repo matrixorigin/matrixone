@@ -61,6 +61,7 @@ type viewMetadataRecoveryCommand struct {
 
 func viewMetadataRequireRevalidationSQL() []string {
 	return []string{
+		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		fmt.Sprintf(
 			"insert into %s.%s (%s) select 0,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,1 "+
@@ -102,11 +103,24 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 			return err
 		}
 		result.Close()
+		result, err = txn.Exec(statements[1], executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		gatePresent := false
+		result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			gatePresent = rows > 0
+			return !gatePresent
+		})
+		result.Close()
+		if !gatePresent {
+			return moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH)
+		}
 		if _, active, seedErr := seedViewMetadataRevalidationPage(txn); seedErr != nil || active {
 			return seedErr
 		}
 
-		for _, statement := range statements[1:] {
+		for _, statement := range statements[2:] {
 			result, err := txn.Exec(statement, executor.StatementOption{})
 			if err != nil {
 				return err
@@ -257,11 +271,15 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
-		gate, err := txn.Exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
-		if err != nil {
+		if err := catalog.LockViewMetadataLifecycle(func(sql string) error {
+			gate, err := txn.Exec(sql, executor.StatementOption{})
+			if err == nil {
+				gate.Close()
+			}
+			return err
+		}); err != nil {
 			return err
 		}
-		gate.Close()
 
 		complete, active, err := seedViewMetadataRevalidationPage(txn)
 		if err != nil || !active || !complete {
@@ -517,16 +535,17 @@ func lockViewMetadataLifecycleGate(proc *process.Process) error {
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
 	}
-	result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, catalog.ViewMetadataLifecycleGateSQL,
-		executor.Options{}.
-			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
-			WithAccountID(catalog.System_Account))
-	if err != nil {
+	return catalog.LockViewMetadataLifecycle(func(sql string) error {
+		result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, sql,
+			executor.Options{}.
+				WithDisableIncrStatement().
+				WithTxn(proc.GetTxnOperator()).
+				WithAccountID(catalog.System_Account))
+		if err == nil {
+			result.Close()
+		}
 		return err
-	}
-	result.Close()
-	return nil
+	})
 }
 
 func discoverLegacyViewMetadata(proc *process.Process) (int, error) {

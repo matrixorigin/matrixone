@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -56,6 +57,37 @@ func Test_runSql(t *testing.T) {
 
 	_, err := runSql(compilerContext, "")
 	require.Error(t, err, "internal error: no account id in context")
+}
+
+func TestGeneratedCompositeKeysUseBinaryStringDomain(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}},
+			MakeHiddenColDefByName(catalog.CPrimaryKeyColName),
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+		},
+	}
+	tableDef.Pkey.CompPkeyCol = tableDef.Cols[2]
+
+	expr := makeCompPkeyExpr(tableDef, map[string]int32{"a": 0, "b": 1})
+	require.NotNil(t, expr)
+	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+	require.Equal(t, int32(types.MaxVarcharLen), expr.Typ.Width)
+	require.Equal(t, uint32(types.CharsetBinary), expr.Typ.Charset)
+	require.Equal(t, tableDef.Pkey.CompPkeyCol.Typ, expr.Typ,
+		"generated and stored composite identities must have one canonical type")
+
+	tableDef.ClusterBy = &plan.ClusterByDef{
+		Name: planutil.BuildCompositeClusterByColumnName([]string{"a", "b"}),
+	}
+	clusterExpr := makeClusterByExpr(tableDef, map[string]int32{"a": 0, "b": 1})
+	require.NotNil(t, clusterExpr)
+	require.Equal(t, makeHiddenColTyp(), clusterExpr.Typ,
+		"generated composite cluster keys are opaque serialized bytes too")
 }
 
 func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
@@ -683,7 +715,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -712,7 +744,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, true, false,
+			false, true, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -721,6 +753,32 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.False(t, joinNode.IsRightJoin)
 		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("post-createQuery FK action uses local ABI without runtime filter", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			true, false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, indexScan.BindingTags)
+		require.Empty(t, builder.qry.Nodes[joinNode.Children[1]].BindingTags)
+		require.Len(t, joinNode.OnList, 1)
 	})
 
 	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
@@ -735,7 +793,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, false, false, true,
+			false, false, false, true, false,
 		)
 
 		require.NoError(t, err)
@@ -762,7 +820,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, false, false,
+			false, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -792,7 +850,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)

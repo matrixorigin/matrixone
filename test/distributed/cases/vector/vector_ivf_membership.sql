@@ -103,6 +103,44 @@ where category = 'cat1' and score > 2.0
 order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
 
+-- ============================================================================
+-- section 4: IN-subquery SEMI JOIN membership is applied before candidate limit
+-- The globally nearest rows are all ineligible; the eligible nearest row ranks
+-- later globally and must still be returned.
+-- ============================================================================
+create table ivf_semi_chunks (
+    id int primary key,
+    category varchar(64) not null,
+    document_id varchar(64) not null,
+    embedding vecf32(2)
+);
+insert into ivf_semi_chunks values
+(1, 'cat1', 'ineligible', '[0.0,0.0]'),
+(2, 'cat1', 'ineligible', '[0.1,0.1]'),
+(3, 'cat1', 'ineligible', '[0.2,0.2]'),
+(4, 'cat1', 'eligible',   '[1.0,1.0]'),
+(5, 'cat1', 'eligible',   '[2.0,2.0]');
+create table ivf_semi_filters (document_id varchar(64));
+insert into ivf_semi_filters values ('eligible'), ('eligible'), (null);
+create index idx_semi_category on ivf_semi_chunks(category);
+create index idx_semi using ivfflat on ivf_semi_chunks(embedding) lists=1 op_type 'vector_l2_ops';
+
+-- @regex("Vector Index Scan", true)
+-- @regex("Index Table Scan.*idx_semi_category", true)
+explain select c.id from ivf_semi_chunks c
+where c.category = 'cat1'
+  and c.document_id in (select f.document_id from ivf_semi_filters f)
+  and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+
+select c.id from ivf_semi_chunks c
+where c.category = 'cat1'
+  and c.document_id in (select f.document_id from ivf_semi_filters f)
+  and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;

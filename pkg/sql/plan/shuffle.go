@@ -418,6 +418,9 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	child := builder.qry.Nodes[childID]
+	if reusableJoinShuffleChild(col, node, child, builder, afterRemap) {
+		return child, true
+	}
 	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
 		child.Stats.HashmapStats == nil || !child.Stats.HashmapStats.Shuffle ||
 		child.Stats.HashmapStats.ShuffleColIdx < 0 ||
@@ -449,6 +452,89 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	return child, true
+}
+
+// reusableJoinShuffleChild proves both distribution lineage through a join and
+// that the resulting ownership scope satisfies the consumer. A shuffled join
+// remains partitioned by its logical-left equality key. Hybrid shuffle owns
+// that key only within each CN: another join can reuse it because its build side
+// is sent to every CN's matching bucket, but an aggregate needs one owner for
+// the key across the whole cluster.
+//
+// Keep this deliberately narrower than general equivalence propagation:
+// right/full preserving joins, expressions, and keys projected from the build
+// side fail closed because unmatched rows do not preserve those properties.
+func reusableJoinShuffleChild(
+	col *plan.ColRef,
+	consumer *plan.Node,
+	child *plan.Node,
+	builder *QueryBuilder,
+	afterRemap bool,
+) bool {
+	if col == nil || consumer == nil || child == nil || builder == nil || builder.qry == nil ||
+		child.NodeType != plan.Node_JOIN || child.IsRightJoin ||
+		child.Stats == nil || child.Stats.HashmapStats == nil ||
+		!child.Stats.HashmapStats.Shuffle {
+		return false
+	}
+	// Join-chain lineage reuse belongs to the outer/ANTI rollout cohort.
+	// Aggregate reuse predates that cohort and keeps its established rollback
+	// behavior, subject to the stricter ownership check below.
+	if consumer.NodeType == plan.Node_JOIN && builder.outerAntiPlanningDisabled() {
+		return false
+	}
+	if consumer.NodeType == plan.Node_AGG &&
+		child.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+		return false
+	}
+	switch child.JoinType {
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+	default:
+		return false
+	}
+
+	shuffleIdx := child.Stats.HashmapStats.ShuffleColIdx
+	if shuffleIdx < 0 || int(shuffleIdx) >= len(child.OnList) {
+		return false
+	}
+	fn := child.OnList[shuffleIdx].GetF()
+	if fn == nil || len(fn.Args) != 2 {
+		return false
+	}
+
+	if afterRemap {
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		outputCol := child.ProjectList[col.ColPos].GetCol()
+		if outputCol == nil {
+			return false
+		}
+		for _, arg := range fn.Args {
+			keyCol := arg.GetCol()
+			if keyCol != nil && keyCol.RelPos == 0 &&
+				outputCol.RelPos == keyCol.RelPos && outputCol.ColPos == keyCol.ColPos {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(child.Children) != 2 {
+		return false
+	}
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(child.Children[0]) {
+		leftTags[tag] = true
+	}
+	for _, arg := range fn.Args {
+		keyCol := arg.GetCol()
+		if keyCol != nil && leftTags[keyCol.RelPos] &&
+			col.RelPos == keyCol.RelPos && col.ColPos == keyCol.ColPos {
+			return true
+		}
+	}
+	return false
 }
 
 func resetShuffleStrategy(hashmapStats *plan.HashMapStats) {
@@ -589,9 +675,14 @@ func determineNonReusableShuffleType(
 			return
 		}
 	}
+	minVal, hasMin := s.MinValMap[colName]
+	maxVal, hasMax := s.MaxValMap[colName]
+	if !hasMin || !hasMax {
+		return
+	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+	node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
 	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
@@ -687,11 +778,9 @@ func planShuffleJoinCandidate(
 	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
 }
 
-// selectShuffleJoinCondition keeps the first condition that the current plan
-// can actually shuffle on after the existing range/hash recheck. It only scans
-// later conditions when an earlier condition is unsupported or rejected by
-// those rules. This removes predicate-order-dependent eligibility without
-// changing established valid plans.
+// selectShuffleJoinCondition prefers a condition that can reuse the probe's
+// existing partitioning. Among conditions that require a new shuffle, it keeps
+// the first eligible condition so predicate order remains the stable tie-break.
 func selectShuffleJoinCondition(
 	node *plan.Node,
 	builder *QueryBuilder,
@@ -700,8 +789,11 @@ func selectShuffleJoinCondition(
 	afterRemap bool,
 	previousHashmapStats *plan.HashMapStats,
 ) (int, plan.HashMapStats) {
+	preferReuse := !builder.outerAntiPlanningDisabled()
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
+	firstEligibleIdx := -1
+	var firstEligibleStats plan.HashMapStats
 
 	for i, condition := range onList {
 		fn := condition.GetF()
@@ -734,10 +826,19 @@ func selectShuffleJoinCondition(
 			firstSupportedStats = candidateStats
 		}
 		if eligible {
-			return i, candidateStats
+			if !preferReuse || candidateStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+				return i, candidateStats
+			}
+			if firstEligibleIdx == -1 {
+				firstEligibleIdx = i
+				firstEligibleStats = candidateStats
+			}
 		}
 	}
 
+	if firstEligibleIdx != -1 {
+		return firstEligibleIdx, firstEligibleStats
+	}
 	return firstSupportedIdx, firstSupportedStats
 }
 
@@ -1281,26 +1382,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
-	if child.NodeType == plan.Node_JOIN {
-		if node.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can reuse shuffle join
-			if node.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && node.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
-				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
-				case *plan.Expr_F:
-					for _, arg := range exprImpl.F.Args {
-						joinHashCol, _ := GetHashColumn(arg)
-						if joinHashCol != nil && groupHashCol != nil && groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
-							node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-							return
-						}
-					}
-				}
-			}
-		}
-	}
-
 }
 
 func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
@@ -1434,6 +1515,11 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
+	minVal, hasMin := s.MinValMap[firstSortColName]
+	maxVal, hasMax := s.MaxValMap[firstSortColName]
+	if !hasMin || !hasMax {
+		return
+	}
 	firstSortColID, ok := node.TableDef.Name2ColIndex[firstSortColName]
 	if !ok {
 		return
@@ -1443,8 +1529,8 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		node.Stats.HashmapStats.ShuffleColIdx = node.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
+		node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+		node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
 		node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}
@@ -1497,7 +1583,11 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 
 	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			return
+			// Hybrid keeps the probe key local to each CN. It can feed another
+			// hybrid join, but a grouped aggregate needs one cluster-global owner
+			// for every key. Normalize stale or future invalid reuse decisions.
+			parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			parent.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false

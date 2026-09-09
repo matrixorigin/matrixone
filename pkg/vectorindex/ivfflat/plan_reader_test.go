@@ -18,7 +18,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -43,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +57,9 @@ type scriptedRelationScanner struct {
 }
 
 func (s *scriptedRelationScanner) ScanRelation(req sqlexec.RelationScanRequest) (executor.Result, error) {
+	if req.FilterHint.BF != nil {
+		defer req.FilterHint.BF.Free()
+	}
 	s.requests = append(s.requests, req)
 	res := s.run(req)
 	if req.BatchTransform != nil {
@@ -213,18 +220,20 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 		require.Nil(t, req.IndexParam.OrderBy[0].Expr)
 		require.Equal(t, plan.OrderBySpec_DESC, req.IndexParam.OrderBy[0].Flag)
 		require.NotNil(t, req.Filter)
-		require.Empty(t, req.BlockFilters)
-		require.NotContains(t, req.Columns, catalog.CPrimaryKeyColName)
+		require.Len(t, req.BlockFilters, 1)
+		require.Contains(t, req.Columns, catalog.CPrimaryKeyColName)
 
-		bat := batch.NewWithSize(4)
+		bat := batch.NewWithSize(5)
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
 		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
 	}
@@ -250,6 +259,48 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 	require.Equal(t, float64(5), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[1], 0))
 }
 
+func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
+	require.NoError(t, err)
+	scanner := &scriptedRelationScanner{t: t}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.False(t, req.PostFilterTopOnly)
+		require.True(t, req.FilterBeforeTopK)
+		require.NotNil(t, req.IndexParam.OrderBy[0].Expr)
+		require.Contains(t, req.Columns, catalog.CPrimaryKeyColName)
+		require.Len(t, req.BlockFilters, 1)
+		prefix := req.BlockFilters[0].GetF()
+		require.NotNil(t, prefix)
+		require.Equal(t, function.PrefixInFunctionName, prefix.Func.ObjName)
+		require.Equal(t, catalog.CPrimaryKeyColName, prefix.Args[0].GetCol().Name)
+		return executor.Result{Mp: mp}
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+	}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+
+	res, err := (&IvfflatSearchIndex[float32]{QuantMul: 1}).scanEntries(
+		sqlproc,
+		idxcfg,
+		vectorindex.IndexTableConfig{DbName: "db", EntriesTable: "entries"},
+		[]float32{0, 0},
+		4,
+		[]int64{2, 3},
+		nil,
+		[]*plan.Expr{residual},
+		3,
+	)
+	require.NoError(t, err)
+	res.Close()
+}
+
 func TestStorageTopKEligibility(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -260,11 +311,23 @@ func TestStorageTopKEligibility(t *testing.T) {
 	require.False(t, canUseStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 0, true))
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, false))
+	require.True(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
+	require.False(t, canUseFilteredStorageTopK(nil, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
+	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, nil, 1, true))
+	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 0, true))
+	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, false))
 
 	sqlproc.IvfHasMembershipFilter = true
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
 	sqlproc.IvfMembershipFilter = []byte{1}
 	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	sqlproc.IvfMembershipFilterRequired = true
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true),
+		"required membership must be applied before bounded Top-K")
+	sqlproc.IvfMembershipFilterRequired = false
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true),
+		"optional membership retains the storage Top-K path")
 	sqlproc.IvfHasMembershipFilter = false
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_INCLUSIVE,
@@ -285,6 +348,7 @@ func TestStorageTopKEligibility(t *testing.T) {
 	sqlproc.IndexReaderParam.OrderBy = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
 	require.Equal(t, plan.OrderBySpec_DESC, ivfOrderFlag(sqlproc.IndexReaderParam))
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
+	require.False(t, canUseFilteredStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1, true))
 }
 
 func TestStorageDistanceRangeAdmission(t *testing.T) {
@@ -466,17 +530,19 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.True(t, req.PostFilterTopOnly)
 				require.Nil(t, req.IndexParam.DistRange)
-				require.Empty(t, req.BlockFilters)
+				require.Len(t, req.BlockFilters, 1)
 
-				bat := batch.NewWithSize(4)
+				bat := batch.NewWithSize(5)
 				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 				bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_int8, 3, 0))
+				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(test.raw), false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[3], test.entry, false, mp))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
 				bat.SetRowCount(1)
 				return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
 			}
@@ -513,16 +579,18 @@ func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.DistRange)
 
-		bat := batch.NewWithSize(4)
+		bat := batch.NewWithSize(5)
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 		for row, value := range []float32{1, 2} {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(row+1), false, mp))
 			require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{value}, false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
 		}
 		bat.SetRowCount(2)
 		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
@@ -601,15 +669,17 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 		require.NoError(t, err)
 		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
-			bat := batch.NewWithSize(4)
+			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(3), false, mp))
 			require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
 			bat.SetRowCount(1)
 			return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
 		}}
@@ -1059,6 +1129,8 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 	}
 	require.Equal(t, []int{1}, relationFilterEarlyColumns(
 		wideDef, []string{"entry", "bucket"}, ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})))
+	require.Equal(t, []int{1}, relationPredicateColumns(
+		[]string{"entry", "bucket"}, ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})))
 	require.Nil(t, relationFilterEarlyColumns(
 		wideDef, []string{"entry", "bucket"}, ivfColExpr(0, plan.Type{Id: int32(types.T_array_float64)})))
 	require.Nil(t, relationFilterEarlyColumns(wideDef, []string{"entry", "bucket"},
@@ -1255,6 +1327,75 @@ func (*lateFilterRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
 func (*lateFilterRelationReader) SetIndexParam(*plan.IndexReaderParam) {
 }
 func (*lateFilterRelationReader) SetFilterZM(objectio.ZoneMap) {}
+
+type filteredTopKRelationReader struct {
+	emitted      bool
+	closed       int
+	topKReads    int
+	earlyColumns []int
+}
+
+var _ engine.Reader = (*filteredTopKRelationReader)(nil)
+var _ engine.FilteredTopKReader = (*filteredTopKRelationReader)(nil)
+
+func (*filteredTopKRelationReader) Read(
+	context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch,
+) (bool, error) {
+	return false, errors.New("filtered Top-K scan used the eager reader")
+}
+
+func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
+	_ context.Context,
+	_ []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	out *batch.Batch,
+) (bool, bool, error) {
+	if r.emitted {
+		return true, true, nil
+	}
+	if indexParam == nil || indexParam.OrderBy[0].Expr == nil {
+		return false, false, errors.New("missing filtered Top-K parameter")
+	}
+	r.topKReads++
+	r.earlyColumns = append([]int(nil), earlyColumns...)
+	for _, row := range []struct {
+		pk     int64
+		bucket int64
+	}{{pk: 1, bucket: 0}, {pk: 2, bucket: 1}} {
+		if err := vector.AppendFixed(out.Vecs[2], row.bucket, false, mp); err != nil {
+			return false, false, err
+		}
+	}
+	out.SetRowCount(2)
+	filtered, err := filter(out, earlyColumns)
+	if err != nil {
+		return false, false, err
+	}
+	if !slices.Equal(filtered.Sels, []int64{1}) {
+		return false, false, errors.New("exact filter did not run before Top-K")
+	}
+	if err = vector.AppendFixed(out.Vecs[0], int64(2), false, mp); err != nil {
+		return false, false, err
+	}
+	distances := vector.NewVec(types.T_float64.ToType())
+	if err = vector.AppendFixed(distances, float64(4), false, mp); err != nil {
+		distances.Free(mp)
+		return false, false, err
+	}
+	out.Vecs = append(out.Vecs, distances)
+	r.emitted = true
+	return false, true, nil
+}
+
+func (r *filteredTopKRelationReader) Close() error                  { r.closed++; return nil }
+func (*filteredTopKRelationReader) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*filteredTopKRelationReader) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*filteredTopKRelationReader) SetIndexParam(*plan.IndexReaderParam) {
+}
+func (*filteredTopKRelationReader) SetFilterZM(objectio.ZoneMap) {}
 
 func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -1589,6 +1730,67 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 	require.Equal(t, 1, reader.closed)
 }
 
+func TestRelationScannerUsesFilterBeforeStorageTopKCapability(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	tableDef := &plan.TableDef{
+		Name: "filtered_topk_entries",
+		Cols: []*plan.ColDef{
+			{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "entry", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
+			{Name: "bucket", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{"pk": 0, "entry": 1, "bucket": 2},
+	}
+	reader := &filteredTopKRelationReader{}
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "filtered_topk_entries", proc).Return(rel, nil)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+	rel.EXPECT().BuildReaders(
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, true,
+		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
+
+	filter, err := ivfFuncExpr(proc.Ctx, "=",
+		ivfColExpr(2, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(1))
+	require.NoError(t, err)
+	vectorType := plan.Type{Id: int32(types.T_array_float32), Width: 2}
+	orderExpr, err := ivfFuncExpr(proc.Ctx, metric.DistFn_L2sqDistance,
+		ivfColExpr(1, vectorType), &plan.Expr{
+			Typ: vectorType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{0, 0}))},
+			}},
+		})
+	require.NoError(t, err)
+	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
+		Schema:           "db",
+		Table:            "filtered_topk_entries",
+		Columns:          []string{"pk", "entry", "bucket"},
+		Filter:           filter,
+		FilterBeforeTopK: true,
+		IndexParam: &plan.IndexReaderParam{
+			Limit:   ivfUint64Expr(1),
+			OrderBy: []*plan.OrderBySpec{{Expr: orderExpr}},
+		},
+	})
+	require.NoError(t, err)
+	defer res.Close()
+	require.Equal(t, 1, reader.topKReads)
+	require.Equal(t, []int{2}, reader.earlyColumns)
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, 1, res.Batches[0].RowCount())
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Zero(t, res.Batches[0].Vecs[1].Length())
+	require.Equal(t, float64(4), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[3], 0))
+	require.Equal(t, 1, reader.closed)
+}
+
 func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
@@ -1628,25 +1830,50 @@ func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 	rel.EXPECT().BuildReaders(
-		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, false,
+		gomock.Any(), proc, gomock.Any(), gomock.Nil(), 1, 0, true,
 		gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil)
 
 	filter, err := ivfFuncExpr(proc.Ctx, "=",
-		ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(10))
+		ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(70))
+	require.NoError(t, err)
+	vectorType := plan.Type{Id: int32(types.T_array_float64), Width: 2}
+	orderExpr, err := ivfFuncExpr(proc.Ctx, metric.DistFn_L2sqDistance,
+		ivfColExpr(0, vectorType), &plan.Expr{
+			Typ: vectorType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float64{0, 0}))},
+			}},
+		})
 	require.NoError(t, err)
 	res, err := (&relationScanner{proc: proc}).ScanRelation(sqlexec.RelationScanRequest{
-		Schema:            "db",
-		Table:             "fallback_entries",
-		Columns:           []string{"entry", "filter_bucket"},
-		Filter:            filter,
-		PostFilterTopOnly: true,
+		Schema:           "db",
+		Table:            "fallback_entries",
+		Columns:          []string{"entry", "filter_bucket"},
+		Filter:           filter,
+		FilterBeforeTopK: true,
+		IndexParam: &plan.IndexReaderParam{
+			Limit:   ivfUint64Expr(1),
+			OrderBy: []*plan.OrderBySpec{{Expr: orderExpr}},
+		},
+		BatchTransform: func(bat *batch.Batch) error {
+			require.Len(t, bat.Vecs, 2, "unsupported readers must leave distance calculation to the caller")
+			distances := vector.NewVec(types.T_float64.ToType())
+			entry := types.BytesToArray[float64](bat.Vecs[0].GetBytesAt(0))
+			if err := vector.AppendFixed(distances, entry[0]*entry[0], false, proc.Mp()); err != nil {
+				distances.Free(proc.Mp())
+				return err
+			}
+			bat.Vecs = append(bat.Vecs, distances)
+			return nil
+		},
 	})
 	require.NoError(t, err)
 	defer res.Close()
 	require.Len(t, res.Batches, 1)
 	require.Equal(t, 1, res.Batches[0].RowCount())
-	require.Equal(t, []float64{1, 0}, types.BytesToArray[float64](res.Batches[0].Vecs[0].GetBytesAt(0)))
-	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[1], 0))
+	require.Equal(t, []float64{2, 0}, types.BytesToArray[float64](res.Batches[0].Vecs[0].GetBytesAt(0)))
+	require.Equal(t, int64(70), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[1], 0))
+	require.Equal(t, float64(4), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[2], 0))
 	require.Equal(t, 1, reader.closed)
 }
 
@@ -1660,7 +1887,7 @@ func TestPlanReaderShortCircuitsEmptySearches(t *testing.T) {
 	require.Error(t, r.initialize())
 
 	r = &planReader{req: searchplugin.Request{CandidateBudget: 0}, spec: &plan.VectorIndexScan{}}
-	require.NoError(t, searchPlanReader(r, nil, vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{}, []float32{1}))
+	require.NoError(t, searchPlanReader(r, nil, vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{}, []float32{1}, false))
 	require.Empty(t, r.keys)
 }
 
@@ -1764,7 +1991,7 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 			FirstRoundLimit: math.MaxUint64,
 		},
 	}
-	err := searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0})
+	err := searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}, false)
 	require.ErrorContains(t, err, "first-round limit is not a platform uint")
 
 	reader = &planReader{
@@ -1774,7 +2001,7 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 			PartitionIndex: 1,
 		}},
 	}
-	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}))
+	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}, false))
 }
 
 func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
@@ -1904,7 +2131,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}))
+	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
 	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
 	require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
 	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
@@ -1912,12 +2139,33 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 }
 
 func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
+	testTypedPlanReaders(t, 0)
+}
+
+func TestPlanReadersSharePreparedGeneration(t *testing.T) {
+	for _, dop := range []int{1, 2} {
+		t.Run(fmt.Sprint(dop), func(t *testing.T) { testTypedPlanReaders(t, dop) })
+	}
+}
+
+func testTypedPlanReaders(t *testing.T, parallelism int) {
+	cache.Cache.Once()
+	cache.Cache.Remove("centroids_init:991")
+	t.Cleanup(func() { cache.Cache.Remove("centroids_init:991") })
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = txnOp
+	readTxn := txnOp
+	if parallelism > 1 {
+		readTxn = mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 20}}).Times(1)
+		txnOp.EXPECT().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: 10}).Return(readTxn).Times(1)
+	}
 
 	metadataDef := &plan.TableDef{
 		Name: "metadata_init",
@@ -1993,40 +2241,46 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 		out.SetRowCount(1)
 		return nil
 	}}
-	entryPacker := types.NewPacker()
-	defer entryPacker.Close()
-	entriesReader := &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
-		out.Vecs = append(out.Vecs, vector.NewVec(types.T_float64.ToType()))
-		for _, row := range []struct {
-			pk  int64
-			vec []float32
-		}{{1, []float32{0, 0}}, {2, []float32{1, 0}}} {
-			if err := vector.AppendFixed(out.Vecs[0], int64(991), false, mp); err != nil {
-				return err
+	entriesReaders := make([]*fillRelationReader, max(1, parallelism))
+	for shard := range entriesReaders {
+		entriesReaders[shard] = &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
+			entryPacker := types.NewPacker()
+			defer entryPacker.Close()
+			out.Vecs = append(out.Vecs, vector.NewVec(types.T_float64.ToType()))
+			for _, row := range []struct {
+				pk  int64
+				vec []float32
+			}{{1, []float32{0, 0}}, {2, []float32{1, 0}}} {
+				if parallelism > 1 && int(row.pk-1) != shard {
+					continue
+				}
+				if err := vector.AppendFixed(out.Vecs[0], int64(991), false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendFixed(out.Vecs[1], int64(0), false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendFixed(out.Vecs[2], row.pk, false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendArray(out.Vecs[3], row.vec, false, mp); err != nil {
+					return err
+				}
+				entryPacker.Reset()
+				entryPacker.EncodeInt64(991)
+				entryPacker.EncodeInt64(0)
+				entryPacker.EncodeInt64(row.pk)
+				if err := vector.AppendBytes(out.Vecs[4], entryPacker.Bytes(), false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendFixed(out.Vecs[5], float64((row.pk-1)*(row.pk-1)), false, mp); err != nil {
+					return err
+				}
 			}
-			if err := vector.AppendFixed(out.Vecs[1], int64(0), false, mp); err != nil {
-				return err
-			}
-			if err := vector.AppendFixed(out.Vecs[2], row.pk, false, mp); err != nil {
-				return err
-			}
-			if err := vector.AppendArray(out.Vecs[3], row.vec, false, mp); err != nil {
-				return err
-			}
-			entryPacker.Reset()
-			entryPacker.EncodeInt64(991)
-			entryPacker.EncodeInt64(0)
-			entryPacker.EncodeInt64(row.pk)
-			if err := vector.AppendBytes(out.Vecs[4], entryPacker.Bytes(), false, mp); err != nil {
-				return err
-			}
-			if err := vector.AppendFixed(out.Vecs[5], float64((row.pk-1)*(row.pk-1)), false, mp); err != nil {
-				return err
-			}
-		}
-		out.SetRowCount(2)
-		return nil
-	}}
+			out.SetRowCount(out.Vecs[0].Length())
+			return nil
+		}}
+	}
 
 	metadataRel := mock_frontend.NewMockRelation(ctrl)
 	centroidRel := mock_frontend.NewMockRelation(ctrl)
@@ -2040,9 +2294,26 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 	}
 	configureRelation(metadataRel, metadataDef, metadataReader)
 	configureRelation(centroidRel, centroidDef, centroidReader)
-	configureRelation(entriesRel, entriesDef, entriesReader)
-	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), gomock.Any(), proc).DoAndReturn(
+	shards := make(map[*process.Process]int)
+	ranges := make(chan int32, max(1, parallelism))
+	entriesRel.EXPECT().GetTableDef(gomock.Any()).Return(entriesDef).AnyTimes()
+	entriesRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
+		require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
+		require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
+		ranges <- param.Rsp.CNIDX
+		return nil, nil
+	}).Times(max(1, parallelism))
+	entriesRel.EXPECT().BuildReaders(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+		gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, p *process.Process, _ *plan.Expr,
+		_ engine.RelData, _ int, _ int, _ bool, _ engine.TombstoneApplyPolicy, hint engine.FilterHint) ([]engine.Reader, error) {
+		if parallelism > 0 {
+			require.NotNil(t, hint.BF)
+			require.True(t, hint.BF.Exact())
+		}
+		return []engine.Reader{entriesReaders[shards[p]]}, nil
+	}).Times(max(1, parallelism))
+	eng.EXPECT().Database(gomock.Any(), "db", readTxn).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, name string, _ any) (engine.Relation, error) {
 			switch name {
 			case "metadata_init":
@@ -2089,20 +2360,98 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 			ResultLimit:     2,
 			CandidateBudget: 2,
 		},
-		scanner: &relationScanner{proc: proc},
+		scanner: &relationScanner{proc: proc, ownsInMemory: true},
 	}
-	out := batch.NewWithSize(2)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-	defer out.Clean(proc.Mp())
-	end, err := r.Read(context.Background(), []string{"pkid", "score"}, nil, proc.Mp(), out)
-	require.NoError(t, err)
-	require.False(t, end)
-	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
-	require.Equal(t, []float64{0, 1}, vector.MustFixedColWithTypeCheck[float64](out.Vecs[1]))
+	readers := []engine.Reader{r}
+	var generation *planSearchGeneration
+	if parallelism > 0 {
+		keys := vector.NewVec(types.T_int64.ToType())
+		defer keys.Free(proc.Mp())
+		require.NoError(t, vector.AppendFixedList(keys, []int64{1, 2}, nil, proc.Mp()))
+		payload, err := keys.MarshalBinary()
+		require.NoError(t, err)
+		r.req.MembershipFilter, r.req.HasMembershipFilter, r.req.MembershipFilterRequired = payload, true, true
+		r.req.CollectExplainDiagnostics = true
+		if parallelism > 1 {
+			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
+		}
+		spec.ScanWork = &plan.VectorIndexScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
+		readers, err = NewPlanReaders(proc, spec, r.req, parallelism)
+		require.NoError(t, err)
+		require.Len(t, readers, parallelism)
+		require.Equal(t, 1, metadataReader.closed)
+		require.Equal(t, 1, centroidReader.closed)
+		require.Empty(t, ranges, "preparation must not open entries")
+		generation = readers[0].(*planReader).generation
+		for i, reader := range readers {
+			rr := reader.(*planReader)
+			shards[rr.proc] = i
+			require.Same(t, generation, rr.generation)
+			require.Equal(t, int32(i), rr.scanner.partitionIndex)
+			require.Equal(t, i == 0, rr.scanner.ownsInMemory)
+			require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
+			require.Same(t, &payload[0], &rr.req.MembershipFilter[0])
+			require.Same(t, generation.membership, rr.newSearchProcess().IvfMembershipFilterObject)
+		}
+	}
+	defer func() {
+		for _, reader := range readers {
+			require.NoError(t, reader.Close())
+		}
+	}()
+	results := make(chan []int64, len(readers))
+	diagnostics := make(chan []*plan.Query, len(readers))
+	var workers sync.WaitGroup
+	for _, reader := range readers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			out := batch.NewWithSize(2)
+			out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			defer out.Clean(proc.Mp())
+			end, err := reader.Read(context.Background(), []string{"pkid", "score"}, nil, proc.Mp(), out)
+			require.NoError(t, err)
+			require.False(t, end)
+			results <- append([]int64(nil), vector.MustFixedColWithTypeCheck[int64](out.Vecs[0])...)
+			diagnostics <- reader.(*planReader).TakeExplainDiagnostics()
+		}()
+	}
+	workers.Wait()
+	close(results)
+	close(diagnostics)
+	var keys []int64
+	for result := range results {
+		keys = append(keys, result...)
+	}
+	slices.Sort(keys)
+	require.Equal(t, []int64{1, 2}, keys)
 	require.Equal(t, 1, metadataReader.closed)
 	require.Equal(t, 1, centroidReader.closed)
-	require.Equal(t, 1, entriesReader.closed)
+	for _, reader := range entriesReaders {
+		require.Equal(t, 1, reader.closed)
+	}
+	if generation != nil {
+		var roundCount int
+		for ds := range diagnostics {
+			roundCount += len(ds)
+		}
+		require.Equal(t, 1, roundCount)
+		first := readers[0].(*planReader)
+		childCtx, sharedCtx := first.proc.Ctx, generation.proc.Ctx
+		require.NoError(t, first.Close())
+		require.ErrorIs(t, childCtx.Err(), context.Canceled)
+		if len(readers) > 1 {
+			require.NoError(t, sharedCtx.Err())
+			require.True(t, generation.membership.Valid())
+		}
+		for _, reader := range readers {
+			require.NoError(t, reader.Close())
+		}
+		require.ErrorIs(t, sharedCtx.Err(), context.Canceled)
+		require.NoError(t, proc.Ctx.Err())
+		require.Nil(t, generation.membership)
+	}
 }
 
 func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
@@ -2118,6 +2467,11 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
 	require.ErrorContains(t, err, "missing source or index metadata")
+	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{},
+	}, searchplugin.Request{MembershipFilterRequired: true})
+	require.ErrorContains(t, err, "required membership filter is unavailable")
 	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},

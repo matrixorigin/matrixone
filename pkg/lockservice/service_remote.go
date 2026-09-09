@@ -460,7 +460,12 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -621,7 +626,12 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -1017,11 +1027,16 @@ func (s *service) getLocalLockTableWithContext(
 			return nil, ErrLockTableBindChanged
 		}
 
-		s.logger.Fatal("get local lock table, but found remote lock table, ip reused between two cns.",
+		// The request was routed to a replacement CN which reused another CN's
+		// endpoint while discovery still advertised the old UUID. This is a stale
+		// routing observation, not a local invariant violation: reject the request
+		// so the sender can refresh/fence its bind without terminating this CN.
+		s.logger.Warn("reject lock request routed to a different cn uuid",
 			zap.String("request", req.DebugString()),
 			zap.String("serviceID", s.serviceID),
 			zap.String("request-lock-table", req.LockTable.DebugString()),
 			zap.String("current-bind", bind.DebugString()))
+		return nil, ErrLockTableBindChanged
 	}
 
 	return l, nil

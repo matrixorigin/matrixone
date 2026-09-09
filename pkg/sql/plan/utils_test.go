@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,6 +38,87 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReadDirHiddenPaths(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	contents := map[string]string{
+		".data/part-1.csv":     "1\n",
+		".data/part-2.csv":     "22\n",
+		".data/.part-3.csv":    "333\n",
+		"visible/part-1.csv":   "4\n",
+		"visible/.inner/a.csv": "55\n",
+		".top.csv":             "6\n",
+	}
+	for name, data := range contents {
+		file := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(file), 0700))
+		require.NoError(t, os.WriteFile(file, []byte(data), 0600))
+	}
+	require.NoError(t, os.Symlink(filepath.Join(root, ".data"), filepath.Join(root, ".link")))
+	fs, err := fileservice.NewLocalETLFS("etl", root)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	for _, pathType := range []struct{ name, prefix string }{{"absolute", root}, {"named ETL", "etl:"}} {
+		t.Run(pathType.name, func(t *testing.T) {
+			prefix := pathType.prefix
+			for _, tc := range []struct {
+				name, pattern string
+				want          []string
+			}{
+				{"literal hidden directory", ".data/part-1.csv", []string{".data/part-1.csv"}},
+				{"glob below hidden directory", ".data/part-*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"explicit hidden glob", ".data/.part-*.csv", []string{".data/.part-3.csv"}},
+				{"literal hidden file", ".top.csv", []string{".top.csv"}},
+				{"ordinary glob omits hidden directories", "*/part-*.csv", []string{"visible/part-1.csv"}},
+				{"ordinary glob omits hidden files", ".data/*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"hidden directory after glob", "*/.inner/*.csv", []string{"visible/.inner/a.csv"}},
+				{"dot glob traverses hidden directories", ".d*/part-1.csv", []string{".data/part-1.csv"}},
+				{"missing literal directory", ".missing/part-*.csv", nil},
+				{"missing literal file", ".data/.missing.csv", nil},
+				{"directory is not a file", ".data", nil},
+				{"file is not a directory", ".top.csv/*", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+						Filepath: filepath.Join(prefix, tc.pattern),
+					}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+					files, sizes, err := ReadDir(param)
+					require.NoError(t, err)
+					require.Len(t, files, len(tc.want))
+					require.Len(t, sizes, len(files))
+					got := make(map[string]int64)
+					for i, file := range files {
+						got[file] = sizes[i]
+					}
+					want := make(map[string]int64)
+					for _, file := range tc.want {
+						want[filepath.Join(prefix, file)] = int64(len(contents[file]))
+					}
+					require.Equal(t, want, got)
+				})
+			}
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: filepath.Join(prefix, ".link", "part-1.csv"),
+			}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+			files, sizes, err := ReadDir(param)
+			require.NoError(t, err)
+			require.Equal(t, []string{param.Filepath}, files)
+			require.Equal(t, []int64{2}, sizes)
+			param.Filepath = filepath.Join(prefix, ".data", "[")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, path.ErrBadPattern)
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			param.Ctx = cancelled
+			param.Filepath = filepath.Join(prefix, ".data", "part-*.csv")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+	_, err = os.Stat(filepath.Join(root, ".missing"))
+	require.True(t, os.IsNotExist(err), "read-only discovery must not create a missing directory")
+}
 
 func TestSplitPlanConjunctionKeepsSharedVolatileMemoRoot(t *testing.T) {
 	memo := func(id int32) *plan.Expr {
@@ -77,6 +159,55 @@ func TestExprIsZonemappableRejectsVolatileRuntimeConstant(t *testing.T) {
 
 	require.False(t, ExprIsZonemappable(context.Background(), volatile))
 	require.True(t, ExprIsZonemappable(context.Background(), MakePlan2Int64ConstExprWithType(1)))
+}
+
+func TestPreparedJSONComparisonParamPositionsIncludesMemberOfLeftParam(t *testing.T) {
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 3}},
+	}
+	right := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 7}},
+	}
+	memberOf := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: function.JsonMemberOfFunctionName},
+			Args: []*plan.Expr{param, right},
+		}},
+	}
+	preparePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{memberOf}}},
+	}}}
+	require.Equal(t, []int32{3, 7}, PreparedJSONComparisonParamPositions(preparePlan))
+	require.Equal(t, []int32{3, 7}, PreparedJSONMemberOfParamPositions(preparePlan))
+}
+
+func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want []int32
+	}{
+		{"json_array", []int32{0, 1, 2, 3, 4}},
+		{"json_object", []int32{1, 3}},
+		{"json_set", []int32{2, 4}},
+		{"json_insert", []int32{2, 4}},
+		{"json_replace", []int32{2, 4}},
+		{"json_array_append", []int32{2, 4}},
+		{"concat", []int32{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := make([]*plan.Expr, 5)
+			for i := range args {
+				args[i] = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}}}
+			}
+			expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: tc.name}, Args: args}}}
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}}}
+			require.Equal(t, tc.want, PreparedJSONComparisonParamPositions(p))
+			require.Empty(t, PreparedJSONMemberOfParamPositions(p))
+		})
+	}
 }
 
 func TestHasTrailingZeros(t *testing.T) {
@@ -470,6 +601,39 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 			require.Equal(t, test.ok, ok)
 			if test.ok {
 				require.Equal(t, test.want, got.Oid)
+			}
+		})
+	}
+}
+
+func TestPreparedParamValueNumericReprepareType(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 5, 1)
+	wideDecimalType := types.New(types.T_decimal256, 65, 30)
+	for _, test := range []struct {
+		name  string
+		value any
+		want  types.Type
+		ok    bool
+	}{
+		{name: "runtime integer widens", value: ParamValue{Value: "64", RuntimeType: types.T_int32.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
+		{name: "unsigned integer preserves sign domain", value: ParamValue{Value: "64", RuntimeType: types.T_uint8.ToType(), HasRuntimeType: true}, want: types.T_uint64.ToType(), ok: true},
+		{name: "source decimal gets parameter envelope", value: ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true}, want: wideDecimalType, ok: true},
+		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamFloat}, want: types.T_float64.ToType(), ok: true},
+		{name: "float32 widens", value: ParamValue{Value: "1.5", RuntimeType: types.T_float32.ToType(), HasRuntimeType: true}, want: types.T_float64.ToType(), ok: true},
+		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: vector.PrepareParamBoolean}, want: types.T_int64.ToType(), ok: true},
+		{name: "null has no type", value: ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}},
+		{name: "untyped text stays text", value: ParamValue{Value: "64"}},
+		{name: "primitive unsigned widens", value: uint16(64), want: types.T_uint64.ToType(), ok: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedParamValueNumericReprepareType(test.value)
+			require.Equal(t, test.ok, ok)
+			if test.ok {
+				require.Equal(t, test.want, got)
 			}
 		})
 	}
@@ -1825,6 +1989,19 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
 	assert.Equal(t, "REM", GetCSVComment(param))
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "ArRoW", "arrow_container", "FiLe",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW, param.Format)
+	assert.Equal(t, tree.ARROW_CONTAINER_FILE, param.ArrowContainer)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "arrow",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_AUTO, param.ArrowContainer)
 }
 
 // TestGetCSVComment covers the COMMENT option accessor.
@@ -1944,6 +2121,12 @@ func TestInitS3Param_Plain(t *testing.T) {
 	param.Option = []string{"bucket", "b", "jsondata", "array"}
 	require.NoError(t, InitS3Param(param))
 	assert.Equal(t, "jsonline", param.Format)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"bucket", "b", "filepath", "data.arrow", "format", "arrow", "arrow_container", "stream",
+	}}}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_STREAM, param.ArrowContainer)
 }
 
 func TestInitS3Param_HiveLegacyOption(t *testing.T) {

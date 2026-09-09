@@ -24,6 +24,11 @@ type UnionClause struct {
 	Left, Right SelectStatement
 	All         bool
 	Distinct    bool
+
+	// GeneratedByGroupingSet marks the internal UNION ALL produced while
+	// lowering ROLLUP/CUBE/GROUPING SETS. It is planner-only metadata and is
+	// deliberately not formatted as SQL.
+	GeneratedByGroupingSet bool
 }
 
 func (node *UnionClause) Format(ctx *FmtCtx) {

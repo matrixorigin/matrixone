@@ -51,10 +51,16 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table build_a (id int)")
 		execSQLRequire(t, ctx, db, "create table build_b (id int)")
 		execSQLRequire(t, ctx, db, "create table invalid_hll (payload varchar(20))")
+		execSQLRequire(t, ctx, db, "create table char_dnf_probe (id int primary key, shipmode char(10), shipinstruct char(25))")
+		execSQLRequire(t, ctx, db, "create table char_dnf_build (id int primary key, kind int)")
 		execSQLRequire(t, ctx, db, "insert into probe values (null), (1), (2), (3)")
 		execSQLRequire(t, ctx, db, "insert into build_a values (null), (2)")
 		execSQLRequire(t, ctx, db, "insert into build_b values (null), (3)")
 		execSQLRequire(t, ctx, db, "insert into invalid_hll values ('bad')")
+		execSQLRequire(t, ctx, db, `insert into char_dnf_probe values
+			(1, 'AIR', 'DELIVER IN PERSON'), (2, 'AIR REG', 'DELIVER IN PERSON'),
+			(3, 'SHIP', 'DELIVER IN PERSON'), (4, 'AIR', 'OTHER')`)
+		execSQLRequire(t, ctx, db, "insert into char_dnf_build values (1, 1), (2, 2), (3, 3), (4, 1)")
 
 		const query = `select p.id,
 			exists(select 1 from build_a a where a.id = p.id) as in_a,
@@ -133,6 +139,19 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 			order by p.id`
 		require.Equal(t, readIDs(`select distinct p.id from probe p join build_a a
 			on a.id = p.id and (p.id = 2 or p.id = 3) order by p.id`), readIDs(dnfQuery))
+
+		const charDNFQuery = `select distinct p.id from char_dnf_probe p join char_dnf_build b on
+			(b.id = p.id and p.shipmode in ('AIR', 'AIR REG') and p.shipinstruct = 'DELIVER IN PERSON' and b.kind = 1) or
+			(b.id = p.id and p.shipmode in ('AIR', 'AIR REG') and p.shipinstruct = 'DELIVER IN PERSON' and b.kind = 2) or
+			(b.id = p.id and p.shipmode in ('AIR', 'AIR REG') and p.shipinstruct = 'DELIVER IN PERSON' and b.kind = 3)
+			order by p.id`
+		charDNFPlan := explainSQL(t, ctx, db, "explain "+charDNFQuery)
+		require.Contains(t, charDNFPlan, "Join Type: INNER   hashOnPK")
+		require.Contains(t, charDNFPlan, "Join Cond: (b.id = p.id)")
+		require.Equal(t, readIDs(`select p.id from char_dnf_probe p join char_dnf_build b
+			on b.id = p.id and p.shipmode in ('AIR', 'AIR REG')
+			and p.shipinstruct = 'DELIVER IN PERSON' and b.kind in (1, 2, 3) order by p.id`),
+			readIDs(charDNFQuery))
 
 		// Keep fallible predicates on the legacy plan shapes. These inputs make
 		// the errors observable in the historical plans; the new hash-key and

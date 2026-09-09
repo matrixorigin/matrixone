@@ -362,20 +362,37 @@ type PrepareStmt struct {
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
 	paramMetadata              []bool
+	// paramBinaryStrings is statement-owned backing storage for the optional
+	// per-execution BLOB domain sidecar. It remains available across executions
+	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
+	paramBinaryStrings []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation for generic JSON comparison adapters and EXECUTE USING
+	// metadata. jsonMemberOfParamPositions is the narrower set that may use
+	// exact binary-protocol SQL domains; paramConcreteTypes is a reusable
+	// execution buffer.
 	jsonComparisonParamPositions []int32
+	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
+	// contract. Each marker starts with the binary-string default; after an
+	// actual numeric value reparses the statement, later text/BLOB values keep
+	// that marker's canonical numeric parameter category, matching MySQL's
+	// one-way parameter-type evolution without retaining source-width limits.
+	bitCountOverloadParamPositions []int32
+	// bitCountNumericParamTypes is bounded by the statement parameter count and
+	// belongs to the current prepared-plan generation. A zero entry means that
+	// the corresponding BIT_COUNT marker has not observed a numeric value.
+	bitCountNumericParamTypes []types.Type
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
-	// ParamRefs, so equivalent values reuse the compile without embedding the
-	// preceding execution's literal.
+	// ParamRefs rather than the preceding execution's literals. Only TP plans
+	// retain a compile; AP plans rebuild statement-owned scan state and topology.
 	runtimeSpecializationKey string
 	runtimePlan              *plan.Plan
 	runtimeCompile           *compile.Compile
@@ -798,7 +815,16 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	runtimeCompile.SetIsPrepare(true)
+	// Match compileQuery's prepare-time eligibility: AP scopes contain
+	// execution-specific placement and scan state that Reset cannot rebuild.
+	// Keep the specialized logical plan, but leave the AP compile with its
+	// ordinary statement owner for execution and release.
+	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
+		runtimeCompile = nil
+	}
+	if runtimeCompile != nil {
+		runtimeCompile.SetIsPrepare(true)
+	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
@@ -849,6 +875,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.paramBinaryStrings = nil
 	prepareStmt.remapDb = nil
 }
 
@@ -1087,6 +1114,13 @@ type ExecCtx struct {
 	// prepared statement. Direct statements leave it empty and resolve against
 	// the current session database.
 	effectiveTxnDefaultDatabase string
+	// effectiveTxnStatement is resolved once per statement generation so
+	// transaction-boundary policy and later execution use the same prepared AST.
+	// The statement is borrowed from the computation wrapper or prepare cache.
+	effectiveTxnStatement tree.Statement
+	// implicitCommitBefore is the generation-level policy for a top-level
+	// implicit-commit statement. It is copied into txnOpt after admission.
+	implicitCommitBefore bool
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1136,6 +1170,8 @@ type ExecCtx struct {
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	if input != nil {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
@@ -1166,6 +1202,8 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
