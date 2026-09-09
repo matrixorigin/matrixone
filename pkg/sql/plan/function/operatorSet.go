@@ -884,6 +884,9 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetValue(i)
 		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := r.Append(0, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if !null {
@@ -904,6 +907,9 @@ func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionR
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
 		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := r.Append(0, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := r.Append(-int64(v), n); err != nil {
@@ -918,6 +924,9 @@ func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.Function
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
 		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := r.Append(0, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := r.Append(-int64(v), n); err != nil {
@@ -932,6 +941,9 @@ func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.Function
 	for i := uint64(0); i < uint64(length); i++ {
 		v, n := p.GetValue(i)
 		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := r.Append(0, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := r.Append(-int64(v), n); err != nil {
