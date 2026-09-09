@@ -42,9 +42,10 @@ func (s *frontendJSONMergeWarningSink) AppendWarningDiagnostic(code uint16, msg 
 
 func TestContainsJSONMergeCall(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		sql  string
-		want bool
+		name    string
+		sql     string
+		sqlMode string
+		want    bool
 	}{
 		{name: "direct", sql: "select json_merge('[1]', '[2]')", want: true},
 		{name: "case and whitespace", sql: "select JSON_MERGE\n /* gap */ ( '[1]', '[2]' )", want: true},
@@ -54,9 +55,11 @@ func TestContainsJSONMergeCall(t *testing.T) {
 		{name: "block comment", sql: "select /* json_merge('[1]','[2]') */ 1", want: false},
 		{name: "line comment", sql: "select 1 -- json_merge('[1]','[2]')\n", want: false},
 		{name: "longer identifier", sql: "select json_merge_patch('[1]', '[2]')", want: false},
+		{name: "no backslash escapes closes quote", sql: "select 'a\\' , json_merge('[1]', '[2]')", sqlMode: "NO_BACKSLASH_ESCAPES", want: true},
+		{name: "backslash escapes quote", sql: "select 'a\\' , json_merge('[1]', '[2]')", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, containsJSONMergeCall(tc.sql))
+			require.Equal(t, tc.want, containsJSONMergeCall(tc.sql, tc.sqlMode))
 		})
 	}
 }

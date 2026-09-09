@@ -3264,7 +3264,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString("insert into ")
+		if stmt.CTASConflict == "ignore" {
+			insertSqlBuilder.WriteString("insert ignore into ")
+		} else if stmt.CTASConflict == "replace" {
+			insertSqlBuilder.WriteString("replace into ")
+		} else {
+			insertSqlBuilder.WriteString("insert into ")
+		}
 		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
 		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
 		targetFmtCtx.WriteByte('.')

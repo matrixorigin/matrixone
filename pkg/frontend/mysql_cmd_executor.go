@@ -4012,7 +4012,7 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
-	if containsJSONMergeCall(input.getSql()) {
+	if containsJSONMergeCall(input.getSql(), sessionSQLModeForParser(ses)) {
 		// A pre-existing entry may have been created before this compatibility
 		// guard was reached. Remove it so a later request cannot bypass binding
 		// and silently lose warning 1287.
@@ -5704,7 +5704,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	canCache := !stagedSQLMode && input.canUsePlanCache() &&
-		!containsJSONMergeCall(input.getSql()) &&
+		!containsJSONMergeCall(input.getSql(), sessionSQLModeForParser(ses)) &&
 		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {

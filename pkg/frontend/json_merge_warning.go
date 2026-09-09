@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -27,11 +28,12 @@ import (
 // text and comments must not disable caching for an unrelated statement. A
 // statement containing the deprecated function is not cacheable because its
 // warning is a bind-time diagnostic and must be recreated for every COM_QUERY.
-func containsJSONMergeCall(sql string) bool {
+func containsJSONMergeCall(sql string, sqlMode string) bool {
+	noBackslashEscapes := mysql.HasSQLMode(sqlMode, "NO_BACKSLASH_ESCAPES")
 	for i := 0; i < len(sql); {
 		switch sql[i] {
 		case '\'', '"', '`':
-			i = skipJSONMergeQuoted(sql, i, sql[i])
+			i = skipJSONMergeQuoted(sql, i, sql[i], noBackslashEscapes)
 			continue
 		case '#':
 			i = skipJSONMergeLineComment(sql, i+1)
@@ -113,9 +115,9 @@ func isJSONMergeSpace(ch byte) bool {
 	}
 }
 
-func skipJSONMergeQuoted(sql string, start int, quote byte) int {
+func skipJSONMergeQuoted(sql string, start int, quote byte, noBackslashEscapes bool) int {
 	for i := start + 1; i < len(sql); i++ {
-		if sql[i] == '\\' && quote != '`' {
+		if sql[i] == '\\' && quote != '`' && !noBackslashEscapes {
 			i++
 			continue
 		}
@@ -161,7 +163,8 @@ func beginJSONMergeWarningStatement(
 		return
 	}
 	isPrepare := IsPrepareStatement(stmt)
-	if !isPrepare && (input == nil || !containsJSONMergeCall(input.getSql())) {
+	if !isPrepare && (input == nil || !containsJSONMergeCall(
+		input.getSql(), sessionSQLModeForParser(ses))) {
 		return
 	}
 	ctx := execCtx.reqCtx

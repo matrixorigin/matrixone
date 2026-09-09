@@ -71,6 +71,28 @@ func TestJSONMergeWarningLifecycle(t *testing.T) {
 	require.Len(t, sink.codes, 4)
 }
 
+func TestJSONMergeWarningLifecycleDedupesReboundAST(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	sink := new(jsonMergeWarningTestSink)
+	const sql = "select json_merge('{\"a\":1}', '{\"b\":2}'), json_merge('[1]', '[2]')"
+
+	ctx.SetContext(WithJSONMergeWarningContext(
+		context.Background(), sink, JSONMergeWarningUser))
+	for i := 0; i < 2; i++ {
+		if i > 0 {
+			ctx.SetContext(AttachJSONMergeWarningContext(
+				ctx.GetContext(), sink, JSONMergeWarningUser))
+		}
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+	}
+
+	require.Len(t, sink.codes, 2)
+}
+
 func TestJSONMergeWarningWithoutSinkIsSafe(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	buildJSONMergeWarningTestPlan(t, ctx, JSONMergeWarningUser, nil)

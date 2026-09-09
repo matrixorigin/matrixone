@@ -119,7 +119,7 @@ json_type(json_merge('{"a":1}', null));
 1  ¦  null
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
-Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
+Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead  𝄀
 Warning  ¦  1287  ¦  'JSON_MERGE' is deprecated and will be removed in a future release. Please use JSON_MERGE_PRESERVE/JSON_MERGE_PATCH instead
 drop table if exists json_merge_prepare_docs;
 create table json_merge_prepare_docs (doc json);

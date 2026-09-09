@@ -46,7 +46,10 @@ type jsonMergeWarningContextKey struct{}
 type jsonMergeWarningContext struct {
 	sink   JSONMergeWarningSink
 	origin JSONMergeWarningOrigin
-	seen   map[*tree.FuncExpr]struct{}
+	// seen stores traversal ordinals rather than AST pointers because one
+	// statement may be rebound from a fresh AST during CTAS planning.
+	seen         map[int]struct{}
+	nextCallSite *int
 }
 
 // WithJSONMergeWarningContext installs the diagnostic sink and starts a new
@@ -60,9 +63,10 @@ func WithJSONMergeWarningContext(
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, jsonMergeWarningContextKey{}, &jsonMergeWarningContext{
-		sink:   sink,
-		origin: origin,
-		seen:   make(map[*tree.FuncExpr]struct{}),
+		sink:         sink,
+		origin:       origin,
+		seen:         make(map[int]struct{}),
+		nextCallSite: new(int),
 	})
 }
 
@@ -89,6 +93,13 @@ func AttachJSONMergeWarningContext(
 		copy.sink = sink
 	}
 	copy.origin = origin
+	// A single statement can be rebound from a fresh AST (for example during
+	// CTAS privilege extraction). Keep the emitted call-site set, but restart
+	// the deterministic traversal ordinal for the new bind pass.
+	if copy.seen == nil {
+		copy.seen = make(map[int]struct{})
+	}
+	copy.nextCallSite = new(int)
 	return context.WithValue(ctx, jsonMergeWarningContextKey{}, &copy)
 }
 
@@ -129,11 +140,16 @@ func appendJSONMergeWarning(ctx context.Context, expr *tree.FuncExpr) {
 		return
 	}
 	if current.seen == nil {
-		current.seen = make(map[*tree.FuncExpr]struct{})
+		current.seen = make(map[int]struct{})
 	}
-	if _, exists := current.seen[expr]; exists {
+	if current.nextCallSite == nil {
+		current.nextCallSite = new(int)
+	}
+	callSite := *current.nextCallSite
+	(*current.nextCallSite)++
+	if _, exists := current.seen[callSite]; exists {
 		return
 	}
-	current.seen[expr] = struct{}{}
+	current.seen[callSite] = struct{}{}
 	current.sink.AppendWarningDiagnostic(moerr.ER_WARN_DEPRECATED_SYNTAX, JSONMergeDeprecatedWarning)
 }
