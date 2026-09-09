@@ -5805,8 +5805,22 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
-func makeSetDecimalToBits(v float64) uint64 {
-	return uint64(int64(v))
+func makeSetDecimalToBits(s string) uint64 {
+	s = strings.TrimSpace(s)
+	scale := strings.IndexByte(s, '.')
+	fracDigits := 0
+	if scale >= 0 {
+		fracDigits = len(s) - scale - 1
+		s = s[:scale] + s[scale+1:]
+	}
+	v, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return 0
+	}
+	if fracDigits > 0 {
+		v.Quo(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(fracDigits)), nil))
+	}
+	return v.Uint64()
 }
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
@@ -5917,7 +5931,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(types.Decimal64ToFloat64(val, scale)), false
+			return makeSetDecimalToBits(val.Format(scale)), false
 		}
 	case types.T_decimal128:
 		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
@@ -5927,7 +5941,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(types.Decimal128ToFloat64(val, scale)), false
+			return makeSetDecimalToBits(val.Format(scale)), false
 		}
 	default:
 		// Fallback to int64
