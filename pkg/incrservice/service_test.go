@@ -202,7 +202,7 @@ func (c *countingIncrTableCache) columns() []AutoColumn { return nil }
 func (c *countingIncrTableCache) insertAutoValues(context.Context, uint64, []*vector.Vector, int, int64) (uint64, error) {
 	return 0, nil
 }
-func (c *countingIncrTableCache) currentValue(context.Context, uint64, string) (uint64, error) {
+func (c *countingIncrTableCache) currentValue(context.Context, uint64, string, IncrValueStore) (uint64, error) {
 	return 0, nil
 }
 func (c *countingIncrTableCache) getLastAllocateTS(context.Context, string) (timestamp.Timestamp, error) {

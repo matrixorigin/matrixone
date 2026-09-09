@@ -54,7 +54,7 @@
 - 1：关闭建表、只读 CurrentValue 和 batch 结束时的投机预取，按当前请求真实自动行需求分配；不是全局单 owner 发号，也不承诺全局单调/无间隙。
 - 2～1000000：覆盖基础原始数值跨度 C；大批次可以按需扩大。不是内存容量，也不是保证生成行数。session stride 只决定区间内选值。
 - 负数、非整数、超上限、重复选项拒绝，不静默截断。
-- 非零选项要求普通/临时表有用户可见自增列；无此列时 CACHE=0 可归一为默认。
+- 非零选项要求普通/临时表有用户可见自增列；无此列时 CACHE=0 可归一为默认。ALTER COPY 在所有条款处理完后，若最终目标已无可见自增列（MODIFY 移除属性或 DROP 移除列），将继承策略归一为 0；仍有可见自增列则保留原策略。直接 CREATE 的非法组合仍拒绝，SHOW 不隐瞒持久属性。
 - 正数 SHOW CREATE 稳定呈现；0 省略。与 AUTO_INCREMENT=N 同时生效，N 是原始下界，实际候选继续由现有会话序列算法选择。
 - 沿用当前 main 的 O>S 归一为 1、零/NULL/sql_mode、显式正数推进、负数不推进的行为，不重新定义它们。
 - session 参数仍不是 catalog 属性；CACHE 才是表级持久策略。内部索引表不无条件继承用户表 CACHE。
@@ -112,7 +112,7 @@
 
 1. 不扩展 InsertValues；有剩余段继续使用上游 oldestAllocateAtLocked，含 terminal/skipped 来源。CACHE=1 有可用段但 TS 未知时 fail closed。
 2. 持列锁观察无可用段时，无投机分配在途；调用事务 SnapshotTS 可作为后续新保留的保守下界。新共享保留在该快照之后提交，私有保留采用 owning snapshot。缺少有效 snapshot 时拒绝，不使用零或 wall clock。
-3. CurrentValue 有本地游标/terminal 则直接读；无段时 SQL 读取当前持久 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。
+3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。
 4. mixed batch 的自动行真实需求在 manual 位移之前同步保留，使 `(NULL,100,NULL)` 的前一自动行仍能沿用上游 skipped-range 顺序。全显式不预留，estimate/low-water 不参与。
 5. cold GetColumns 同 SQL 快照读取 allocator rows 与 SchemaExtra；Reset 的旧 catalog 行可能已被 TRUNCATE 删除，因此该次读取明确指定新物理表为 metadata owner。无新增 public service/store API。
 

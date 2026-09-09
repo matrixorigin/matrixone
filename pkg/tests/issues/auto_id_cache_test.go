@@ -68,7 +68,9 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		defer func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			defer stop()
-			_, err := conns[0].ExecContext(cleanup, "drop database `"+dbName+"`")
+			_, err := conns[0].ExecContext(cleanup, "rollback")
+			require.NoError(t, err)
+			_, err = conns[0].ExecContext(cleanup, "drop database `"+dbName+"`")
 			require.NoError(t, err)
 			_, err = conns[0].ExecContext(cleanup, "drop stage if exists ai_cache_dump_stage")
 			require.NoError(t, err)
@@ -76,6 +78,65 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		for _, conn := range conns {
 			exec(conn, "use `"+dbName+"`")
 		}
+		// Both SHOW and information_schema must observe the CREATE transaction,
+		// without reserving IDs. Include the default policy and both outcomes.
+		for _, policy := range []int{0, 1} {
+			for _, commit := range []bool{false, true} {
+				name := fmt.Sprintf("ai_observe_%d_%t", policy, commit)
+				exec(conns[0], "begin")
+				exec(conns[0], fmt.Sprintf("create table %s(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=%d", name, policy))
+				rows, err := conns[0].QueryContext(ctx, "show table status like '"+name+"'")
+				require.NoError(t, err)
+				func() {
+					defer rows.Close()
+					columns, err := rows.Columns()
+					require.NoError(t, err)
+					var next sql.NullInt64
+					dest := make([]any, len(columns))
+					found := false
+					for i, col := range columns {
+						dest[i] = new(any)
+						if strings.EqualFold(col, "auto_increment") {
+							dest[i] = &next
+							found = true
+						}
+					}
+					require.True(t, found)
+					require.True(t, rows.Next())
+					require.NoError(t, rows.Scan(dest...))
+					require.Equal(t, sql.NullInt64{Int64: 10, Valid: true}, next)
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+				}()
+				query := "select auto_increment from information_schema.tables where table_schema=database() and table_name='" + name + "'"
+				require.Equal(t, int64(10), number(conns[0], query))
+				if commit {
+					exec(conns[0], "commit")
+					require.Equal(t, int64(10), number(conns[0], query))
+				} else {
+					exec(conns[0], "rollback")
+					require.Equal(t, int64(0), number(conns[0], "select count(*) from information_schema.tables where table_schema=database() and table_name='"+name+"'"))
+				}
+			}
+		}
+
+		// Removing the final visible auto column/property must not strand a
+		// nonzero policy in COPY's internal CREATE. Ordinary data survives.
+		for _, policy := range []int{0, 1, 8} {
+			for _, op := range []string{"modify id bigint", "drop column id"} {
+				name := fmt.Sprintf("ai_remove_%d", policy)
+				exec(conns[0], fmt.Sprintf("create table %s(id bigint auto_increment primary key, v int) auto_id_cache=%d", name, policy))
+				exec(conns[0], "insert into "+name+"(v) values(7)")
+				exec(conns[0], "alter table "+name+" "+op)
+				var table, ddl string
+				require.NoError(t, conns[1].QueryRowContext(ctx, "show create table "+name).Scan(&table, &ddl))
+				require.NotContains(t, ddl, "AUTO_ID_CACHE")
+				require.NotContains(t, ddl, "AUTO_INCREMENT")
+				require.Equal(t, int64(7), number(conns[1], "select v from "+name))
+				exec(conns[0], "drop table "+name)
+			}
+		}
+
 		exec(conns[0], "create table ai_cache(id bigint auto_increment primary key, v int) auto_increment=10 auto_id_cache=1")
 		showCache(conns[1], "ai_cache")
 		current := "select internal_auto_increment(database(),'ai_cache')"

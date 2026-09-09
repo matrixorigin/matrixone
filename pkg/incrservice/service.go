@@ -381,25 +381,7 @@ func (s *service) CurrentValue(
 		return 0, err
 	}
 	defer ts.release()
-	value, err := ts.currentValue(ctx, tableID, col)
-	if err != nil || value != 0 || !tableColumnDemandOnly(ts, col) {
-		return value, err
-	}
-	// With no local reservation, observe the persisted high watermark. Do not
-	// reserve an ID just to answer SHOW, or reuse the cache's creation-time offset.
-	cols, err := s.store.GetColumns(ctx, tableID, nil)
-	if err != nil {
-		return 0, err
-	}
-	for _, column := range cols {
-		if column.ColName == col {
-			if column.Step == 0 || column.Offset > math.MaxUint64-column.Step {
-				return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
-			}
-			return column.Offset + column.Step, nil
-		}
-	}
-	return 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", col, tableID)
+	return ts.currentValue(ctx, tableID, col, s.store)
 }
 
 func tableColumnDemandOnly(cache incrTableCache, name string) bool {

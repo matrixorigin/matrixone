@@ -16,7 +16,7 @@ package incrservice
 
 import (
 	"context"
-	"go.uber.org/zap"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 type tableCache struct {
@@ -166,14 +167,34 @@ func (c *tableCache) insertAutoValues(
 func (c *tableCache) currentValue(
 	ctx context.Context,
 	tableID uint64,
-	targetCol string) (uint64, error) {
+	targetCol string,
+	store IncrValueStore) (uint64, error) {
 	for _, col := range c.cols {
 		if col.ColName == targetCol {
 			cc := c.getColumnCache(col.ColName)
 			if cc == nil {
 				panic("column cache should not be nil, " + col.ColName)
 			}
-			return cc.current(ctx)
+			value, err := cc.current(ctx)
+			if err != nil || value != 0 || !cc.cfg.demandOnly {
+				return value, err
+			}
+			// An uncommitted CREATE owns private allocator rows. Observe through
+			// that cache's transaction, not a new committed snapshot. getTxn
+			// releases its lock before I/O and returns nil after cache commit.
+			cols, err := store.GetColumns(ctx, tableID, c.getTxn())
+			if err != nil {
+				return 0, err
+			}
+			for _, column := range cols {
+				if column.ColName == targetCol {
+					if column.Step == 0 || column.Offset > math.MaxUint64-column.Step {
+						return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
+					}
+					return column.Offset + column.Step, nil
+				}
+			}
+			return 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", targetCol, tableID)
 		}
 	}
 	return 0, nil

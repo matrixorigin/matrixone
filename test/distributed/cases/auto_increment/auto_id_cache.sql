@@ -67,6 +67,32 @@ insert into ai_temp values(NULL);
 select id from ai_temp;
 drop temporary table ai_temp;
 
+-- 未提交 CREATE 的观察遵循事务所有权，提交/回滚均不因查询预留号码。
+begin;
+create table ai_observe(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=1;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+rollback;
+select count(*) from information_schema.tables where table_schema=database() and table_name='ai_observe';
+begin;
+create table ai_observe(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=1;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+commit;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+insert into ai_observe values(NULL);
+select id from ai_observe;
+
+-- 移除最后一个可见自增属性/列时归一为默认策略，数据保留。
+create table ai_modify(id bigint auto_increment primary key, v int) auto_id_cache=1;
+insert into ai_modify(v) values(7);
+alter table ai_modify modify id bigint;
+show create table ai_modify;
+select id,v from ai_modify;
+create table ai_drop(id bigint auto_increment primary key, v int) auto_id_cache=2;
+insert into ai_drop(v) values(7);
+alter table ai_drop drop column id;
+show create table ai_drop;
+select v from ai_drop;
+
 -- 非法选项必须拒绝，不能静默截断或忽略。
 create table ai_bad(id bigint auto_increment) auto_id_cache=1000001;
 create table ai_bad(id bigint auto_increment) auto_id_cache=-1;
