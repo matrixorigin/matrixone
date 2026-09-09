@@ -73,3 +73,20 @@ func TestZeroArgumentRecordPreservesRows(t *testing.T) {
 	require.Equal(t, int64(3), decoded.NumRows())
 	require.Equal(t, int64(0), decoded.NumCols())
 }
+
+func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
+	allocator := memory.NewGoAllocator()
+	stringBuilder := array.NewStringBuilder(allocator)
+	stringBuilder.Append("abcd")
+	strings := stringBuilder.NewStringArray()
+	defer strings.Release()
+	stringDescriptor := TypeDescriptor{TypeID: int32(types.T_varchar), Width: 3, OffsetWidth: 32}
+	require.ErrorContains(t, validateArrowValueDomain(stringDescriptor, strings), "exceeds width")
+
+	timeBuilder := array.NewDurationBuilder(allocator, &arrow.DurationType{Unit: arrow.Microsecond})
+	timeBuilder.Append(arrow.Duration(types.MySQLTimeMax + 1))
+	times := timeBuilder.NewDurationArray()
+	defer times.Release()
+	timeDescriptor := TypeDescriptor{TypeID: int32(types.T_time), Scale: 6, OffsetWidth: 32}
+	require.ErrorContains(t, validateArrowValueDomain(timeDescriptor, times), "outside the declared SQL domain")
+}

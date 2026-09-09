@@ -237,7 +237,11 @@ func (s *OutputSnapshot) Validate(expectedLength int, expectedDigest string) err
 	if expectedLength >= 0 && len(s.backing) != expectedLength {
 		return fmt.Errorf("%w: output snapshot length %d, expected %d", ErrProtocol, len(s.backing), expectedLength)
 	}
-	if expectedDigest != "" && !equalFoldHex(expectedDigest, s.Digest()) {
+	currentDigest := sha256.Sum256(s.backing)
+	if currentDigest != s.digest {
+		return fmt.Errorf("%w: output snapshot backing changed", ErrProtocol)
+	}
+	if expectedDigest != "" && !equalFoldHex(expectedDigest, hex.EncodeToString(currentDigest[:])) {
 		return fmt.Errorf("%w: output snapshot digest changed", ErrProtocol)
 	}
 	return nil
@@ -377,7 +381,9 @@ func (t *OpenToken) Commit() error {
 			release := g.canReleaseLocked()
 			g.mu.Unlock()
 			if release {
-				_ = t.group.releaseIfReady()
+				if err := t.group.releaseIfReady(); err != nil {
+					t.result = errors.Join(t.result, err)
+				}
 			}
 			return
 		}

@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -62,7 +61,7 @@ func (s *Supervisor) Start() error {
 	if err != nil {
 		return err
 	}
-	logPath := filepath.Join(filepath.Dir(exePath), "python-runtime-"+strconv.Itoa(int(supervisorNumber.Add(1))+0)+".log")
+	logPath := filepath.Join(filepath.Dir(exePath), fmt.Sprintf("python-udf-worker-%d.log", supervisorNumber.Add(1)))
 	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return err
@@ -75,7 +74,7 @@ func (s *Supervisor) Start() error {
 	}
 	s.cmd, s.log = cmd, logFile
 	go s.wait(cmd, logFile)
-	logutil.Infof("started Python runtime worker: %s", cmd.String())
+	logutil.Infof("started Python UDF worker: %s", cmd.String())
 	return nil
 }
 
@@ -88,7 +87,7 @@ func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser) {
 	}
 	s.mu.Unlock()
 	if err != nil {
-		logutil.Errorf("Python runtime worker exited: %v", err)
+		logutil.Errorf("Python UDF worker exited: %v", err)
 	}
 }
 
@@ -104,7 +103,7 @@ func (s *Supervisor) Close() error {
 		return nil
 	}
 	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("stop Python runtime worker: %w", err)
+		return fmt.Errorf("stop Python UDF worker: %w", err)
 	}
 	if log != nil {
 		return log.Close()

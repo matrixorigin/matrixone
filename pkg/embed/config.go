@@ -94,8 +94,8 @@ type ServiceConfig struct {
 	CN cnservice.Config `toml:"cn"`
 	// ProxyConfig is the config of proxy.
 	ProxyConfig proxy.Config `toml:"proxy"`
-	// PythonUdfServerConfig is the config of python udf server
-	PythonUdfServerConfig python.Config `toml:"python-udf-server"`
+	// PythonUdfWorkerConfig is the config of the Python UDF worker.
+	PythonUdfWorkerConfig python.Config `toml:"python-udf-worker"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 
