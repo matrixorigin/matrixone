@@ -16,6 +16,7 @@ package value_scan
 
 import (
 	"bytes"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -329,6 +330,62 @@ func TestRowsetExprHasLocalColumnRef(t *testing.T) {
 	require.True(t, rowsetExprHasLocalColumnRef(&planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
 		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0}}},
 	}}}}))
+}
+
+func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
+	divide, err := function.GetFunctionByName(proc.Ctx, "/", []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
+	require.NoError(t, err)
+	localCol := &planpb.Expr{Typ: floatType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
+	divideExpr := &planpb.Expr{
+		Typ: floatType,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: divide.GetEncodedOverloadID(), ObjName: "/"},
+			Args: []*planpb.Expr{
+				{Typ: floatType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 10}}}},
+				localCol,
+			},
+		}},
+	}
+	expr, err := colexec.NewExpressionExecutor(proc, divideExpr)
+	require.NoError(t, err)
+	defer func() {
+		if expr != nil {
+			expr.Free()
+		}
+	}()
+
+	// Strict division-by-zero makes an accidental evaluation of row 0 visible.
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+
+	input := batch.NewWithSize(1)
+	input.SetRowCount(2)
+	input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []float64{0, 2}, nil, proc.Mp()))
+	defer input.Clean(proc.Mp())
+
+	result := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(result, []float64{0, 0}, nil, proc.Mp()))
+	defer result.Free(proc.Mp())
+
+	rowsetExpr := []*planpb.RowsetExpr{{
+		RowPos: 1,
+		Expr:   divideExpr,
+	}}
+	beforeEval := proc.Mp().CurrNB()
+	require.NoError(t, evalRowsetData(proc, rowsetExpr, result,
+		[]colexec.ExpressionExecutor{expr}, input))
+	require.Equal(t, []float64{0, 5}, vector.MustFixedColNoTypeCheck[float64](result))
+
+	// The expression owns its reusable result vector. It must release that
+	// vector after the window has been cleaned, leaving only input/result alive.
+	expr.Free()
+	expr = nil
+	require.Equal(t, beforeEval, proc.Mp().CurrNB())
 }
 
 func resetBatchs(arg *ValueScan, m *mpool.MPool) {
