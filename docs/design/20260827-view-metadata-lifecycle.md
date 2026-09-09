@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。当前待审 executable/conformance checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（base `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `28a63bd5b44d04944d0b47d2a9cbc2bdc385612a`（base `93e7a3c631`，新增 clone 测试观测修复，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
@@ -262,4 +262,6 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 
 前台及旧 CN 的 `SNAPSHOT → View` 路径、COMMIT 写屏障、catalog 格式和 authority 协议均不变。后台反向取得第二把锁时没有等待边，故不会与前台/旧 CN 形成两锁等待环；旧 View gate 仍提供 rolling-upgrade 互斥。没有新重试层、后台状态或额外 gate SQL。
 
-当前 checkpoint 的本地证据：完整 compile 普通/race 通过；新锁协议确定性单测 race 100 次通过；原失败 quota 用例 race 3 次通过；完整 DataBranchDiffAsFile 普通/race 通过；双 CN restore commit fence 与 View/SNAPSHOT gate SQL 回归 race 通过；CN admission/recovery 定向回归通过。新 helper、Require/Start 覆盖率各 100%，CTL 87.5%。这些证据不替代当前完整 BVT/CI 或真实新旧 binary sequence；历史序列证据未重新标为当前 checkpoint。
+锁协议 checkpoint `a97f8074d7` 的本地证据：完整 compile 普通/race 通过；新锁协议确定性单测 race 100 次通过；原失败 quota 用例 race 3 次通过；完整 DataBranchDiffAsFile 普通/race 通过；双 CN restore commit fence 与 View/SNAPSHOT gate SQL 回归 race 通过；CN admission/recovery 定向回归通过。新 helper、Require/Start 覆盖率各 100%，CTL 87.5%。这些证据不替代当前完整 BVT/CI 或真实新旧 binary sequence；历史序列证据未重新标为当前 checkpoint。
+
+后续 CI run `34308560098` 暴露 clone 并发测试只接受 SNAPSHOT waiter 的过窄断言。`28a63bd5b4` 改为用目标数据库精确键识别首个 clone 的事务，只接受该事务在 SNAPSHOT 或目标库 catalog 锁上阻塞的 waiter，保留提交前不得返回及提交后唯一数据库/数据断言。该用例普通、race、frontend/compile/lockservice coverage 插桩各三次通过；完整 issues 包通过。本轮未修改生产逻辑；被取消的 UT/BVT 不记作通过。
