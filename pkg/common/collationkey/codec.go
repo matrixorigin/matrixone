@@ -193,9 +193,13 @@ func buildRegistryDigest() [sha256.Size]byte {
 			continue
 		}
 		b.WriteByte(1)
-		b.Write(appendU32(nil, uint32(len(weights))))
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(weights)))
+		b.Write(length[:])
+		var weightBytes [2]byte
 		for _, weight := range weights {
-			b.Write(appendU16(nil, weight))
+			binary.BigEndian.PutUint16(weightBytes[:], weight)
+			b.Write(weightBytes[:])
 		}
 	}
 	// Values outside the table deliberately use their code point, while
