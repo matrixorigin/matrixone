@@ -964,6 +964,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				bat := ctr.batches[i]
 				ap.ctr.buf[i].Attrs = bat.Attrs
 				batSize := bat.RowCount()
+				// HashOnUnique has no duplicate groups in this branch: every
+				// build row survives as an INSERT. Mark from the source batch
+				// before the single-reference vectors below transfer ownership
+				// and nil their source slots.
+				for row := 0; row < batSize; row++ {
+					ctr.markGeneratedBuildRow(ap, int32(i*colexec.DefaultBatchSize+row), proc)
+				}
 				// Flat-index offset of this build batch in capturedVecs space.
 				// hashOnUnique guarantees a 1:1 bucket↔flat-row mapping.
 				capOffset := int64(i) * int64(colexec.DefaultBatchSize)
@@ -1056,6 +1063,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				newSels = sels[i*colexec.DefaultBatchSize : (i+1)*colexec.DefaultBatchSize]
 			} else {
 				newSels = sels[i*colexec.DefaultBatchSize:]
+			}
+			// These are the unmatched rows after the bitmap inversion. Mark
+			// them while their source vectors still belong to ctr.batches;
+			// matched rows must never publish their PRE_INSERT candidates.
+			for _, sel := range newSels {
+				ctr.markGeneratedBuildRow(ap, sel, proc)
 			}
 			ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
 			for j, rp := range ap.Result {

@@ -7856,6 +7856,19 @@ func supportsRemoteAutoIncrementSessionOptions(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion56
 }
 
+func supportsRemoteAutoIncrementGeneratedProvenance(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion58
+}
+
 func supportsRemoteUpdateChangedRows(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {

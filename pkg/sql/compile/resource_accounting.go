@@ -53,9 +53,12 @@ const (
 // appended resource facts from a legacy bare PhyPlan payload.
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
-	TerminalResourceVersion        uint32                           `json:"terminal_resource_version,omitempty"`
-	StatementLastInsertID          uint64                           `json:"statement_last_insert_id,omitempty"`
-	StatementLastInsertIDGenerated bool                             `json:"statement_last_insert_id_generated,omitempty"`
+	TerminalResourceVersion uint32 `json:"terminal_resource_version,omitempty"`
+	StatementLastInsertID   uint64 `json:"statement_last_insert_id,omitempty"`
+	// A pointer distinguishes a new explicit false from a legacy terminal
+	// payload that predates this field. Legacy peers used a non-zero statement
+	// value as their only generated-row signal.
+	StatementLastInsertIDGenerated *bool                            `json:"statement_last_insert_id_generated,omitempty"`
 	WarningCount                   uint64                           `json:"warning_count,omitempty"`
 	WarningDiagnostics             []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
 	Delta                          resource.Delta                   `json:"resource_delta"`

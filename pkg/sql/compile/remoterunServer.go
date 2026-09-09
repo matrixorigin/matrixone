@@ -1258,10 +1258,11 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 }
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
+	generated := receiver.statementLastInsertIDGenerated
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:        remoteTerminalResourceVersion,
 		StatementLastInsertID:          receiver.statementLastInsertID,
-		StatementLastInsertIDGenerated: receiver.statementLastInsertIDGenerated,
+		StatementLastInsertIDGenerated: &generated,
 		WarningCount:                   receiver.warningCount,
 		Delta:                          receiver.resourceDelta,
 		Memory:                         receiver.resourceMemory,

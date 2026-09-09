@@ -949,12 +949,30 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	if sender.proc != nil && envelope.StatementLastInsertIDGenerated {
-		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
-		// The explicit bit is the provenance contract. A numeric value alone is
-		// insufficient because an allocator candidate can be non-zero without a
-		// committed INSERT, and a valid generated value can be zero.
-		sender.proc.MarkStatementLastInsertIDGenerated()
+	if sender.proc != nil {
+		generated := envelope.StatementLastInsertIDGenerated != nil &&
+			*envelope.StatementLastInsertIDGenerated
+		if envelope.StatementLastInsertIDGenerated == nil {
+			// Pre-field peers had no provenance bit. Preserve their established
+			// non-zero terminal behavior while keeping zero explicitly opt-in.
+			generated = envelope.StatementLastInsertID != 0
+		}
+		if generated {
+			if envelope.StatementLastInsertIDGenerated == nil {
+				sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+			} else {
+				if envelope.StatementLastInsertID != 0 {
+					// Preserve the session-visible value for non-zero generated
+					// results. The zero case deliberately skips this coordinator.
+					sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+				}
+				// MarkWithValue also updates the statement field for an explicit
+				// zero; SetStatementLastInsertIDIfEarlier intentionally ignores
+				// that value and is therefore only used above for non-zero values.
+				sender.proc.MarkStatementLastInsertIDGeneratedWithValue(envelope.StatementLastInsertID)
+			}
+			sender.proc.MarkStatementLastInsertIDGenerated()
+		}
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)

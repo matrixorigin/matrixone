@@ -1007,7 +1007,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		if t.AutoIncrementGeneratedResultPos >= 0 {
-			if err := validateRemoteAutoIncrementSessionOptionsProtocol(proc, true); err != nil {
+			if err := validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc, true); err != nil {
 				return ctxId, nil, err
 			}
 		}
@@ -2017,6 +2017,18 @@ func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, re
 	return nil
 }
 
+func validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAutoIncrementGeneratedProvenance(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote DedupJoin generated provenance requires MORPC protocol version 58",
+		)
+	}
+	return nil
+}
+
 func validateRemoteStringProvenancePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2182,7 +2194,7 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 		}
 		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.AutoIncrementGeneratedProvenance {
-			if err := validateRemoteAutoIncrementSessionOptionsProtocol(proc, true); err != nil {
+			if err := validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc, true); err != nil {
 				return err
 			}
 		}

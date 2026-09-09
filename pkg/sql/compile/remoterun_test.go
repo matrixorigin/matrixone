@@ -1064,6 +1064,28 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	require.True(t, instruction.PreInsert.HasAutoCol)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+
+	// DedupJoin's explicit generated-row provenance is a separate wire
+	// capability from the v56 session increment/offset metadata. Both the
+	// sender conversion and receiver pipeline gate must reject a v57 peer.
+	dedupWithProvenance := &dedupjoin.DedupJoin{
+		Conditions:                           [][]*plan.Expr{nil, nil},
+		AutoIncrementGeneratedResultPos:      2,
+		AutoIncrementGeneratedValueResultPos: 3,
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	_, _, err = convertToPipelineInstruction(dedupWithProvenance, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 58")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+	_, dedupInstruction, err := convertToPipelineInstruction(dedupWithProvenance, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, dedupInstruction.DedupJoin.AutoIncrementGeneratedProvenance)
+	dedupPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{dedupInstruction}}
+	require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 58")
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
