@@ -36,6 +36,10 @@ while IFS= read -r script_path; do
     relative_path=${script_path#"${case_root}/"}
     [[ "${relative_path}" == *optimistic* ]] && continue
     top_level=${relative_path%%/*}
+    # Python UDF needs an explicit worker-enabled launch and Python/pyarrow
+    # dependencies.  Keep it out of the ordinary two-group BVT runs; the
+    # dedicated runner executes this suite with the worker enabled.
+    [[ "${top_level}" == "udf_python" ]] && continue
 
     case "${top_level}" in
         array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|function|git4data|hint|join|keyword|load_data|mo_cloud|optimizer|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|snapshot|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
