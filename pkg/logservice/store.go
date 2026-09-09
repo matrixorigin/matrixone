@@ -1543,8 +1543,9 @@ func (l *store) ticker(ctx context.Context) {
 	if initialCheckInterval > bootstrapHAKeeperCheckInterval {
 		initialCheckInterval = bootstrapHAKeeperCheckInterval
 	}
-	haTimer := time.NewTimer(initialCheckInterval)
-	defer haTimer.Stop()
+	haTicker := time.NewTicker(initialCheckInterval)
+	defer haTicker.Stop()
+	checkInterval := initialCheckInterval
 
 	// moving task schedule from the ticker normal routine to a
 	// separate goroutine can avoid the hakeeper's health check and tick update
@@ -1558,9 +1559,9 @@ func (l *store) ticker(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			l.hakeeperTick()
-		case <-haTimer.C:
+		case <-haTicker.C:
 			state := l.hakeeperCheck()
-			haTimer.Reset(l.nextHAKeeperCheckInterval(state))
+			checkInterval = l.updateHAKeeperCheckTicker(haTicker.Reset, checkInterval, state)
 		case <-ctx.Done():
 			return
 		}

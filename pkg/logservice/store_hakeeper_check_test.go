@@ -70,6 +70,32 @@ func TestNextHAKeeperCheckIntervalUsesFastBootstrapInterval(t *testing.T) {
 	}))
 }
 
+func TestHAKeeperCheckTickerPreservesPeriodicSchedule(t *testing.T) {
+	s := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+	}}
+	interval := bootstrapHAKeeperCheckInterval
+	var resets []time.Duration
+	reset := func(next time.Duration) { resets = append(resets, next) }
+	// A ticker retains its next scheduled tick while the synchronous checker
+	// runs. A reset at check completion would discard that tick and charge the
+	// check's execution time again, even when the configured cadence is unchanged.
+	for _, tc := range []struct {
+		state *pb.CheckerState
+		want  []time.Duration
+	}{
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapping}, nil},
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapCommandsReceived}, nil},
+		{&pb.CheckerState{State: pb.HAKeeperRunning}, []time.Duration{3 * time.Second}},
+		{&pb.CheckerState{State: pb.HAKeeperRunning}, []time.Duration{3 * time.Second}},
+		{nil, []time.Duration{3 * time.Second}},
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapping}, []time.Duration{3 * time.Second, bootstrapHAKeeperCheckInterval}},
+	} {
+		interval = s.updateHAKeeperCheckTicker(reset, interval, tc.state)
+		require.Equal(t, tc.want, resets)
+	}
+}
+
 func TestBootstrapCheckWindowUsesConfiguredInterval(t *testing.T) {
 	fast := &store{cfg: Config{
 		HAKeeperCheckInterval: toml.Duration{Duration: bootstrapHAKeeperCheckInterval},

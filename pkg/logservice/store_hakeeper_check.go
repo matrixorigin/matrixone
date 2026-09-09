@@ -253,6 +253,21 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 var debugPrintHAKeeperState atomic.Bool
 
+// Only reset on cadence changes. Resetting after every synchronous check adds
+// the check's execution time to the configured interval, delaying health checks
+// and repair commands on a busy HAKeeper leader.
+func (l *store) updateHAKeeperCheckTicker(
+	reset func(time.Duration),
+	current time.Duration,
+	state *pb.CheckerState,
+) time.Duration {
+	next := l.nextHAKeeperCheckInterval(state)
+	if next != current {
+		reset(next)
+	}
+	return next
+}
+
 func (l *store) nextHAKeeperCheckInterval(state *pb.CheckerState) time.Duration {
 	interval := l.cfg.HAKeeperCheckInterval.Duration
 	if interval <= 0 {
