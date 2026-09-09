@@ -26,7 +26,7 @@ select id, python_bvt_zero_arg() as constant
 from control_values order by id;
 
 -- Multiple arguments preserve row order and NULLs independently.
-select id, python_bvt_add_pair(value, id) as pair_sum
+select id, python_bvt_add_pair(value, case when id = 3 then null else id end) as pair_sum
 from control_values order by id;
 
 -- A CASE branch with no selected rows must not invoke its Python handler.
