@@ -116,6 +116,12 @@ func TestBuiltInCollationKeyV2PreservesNullAndRejectsBadDescriptors(t *testing.T
 	require.Error(t, err)
 }
 
+func TestBuiltInCollationKeyV2RejectsNegativeLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.Error(t, BuiltInCollationKeyV2(nil, nil, proc, -1, nil))
+	require.Error(t, BuiltInCollationCompositeKeyV2(nil, nil, proc, -1, nil))
+}
+
 func TestBuiltInCollationCompositeKeyV2UsesFramedParts(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8)

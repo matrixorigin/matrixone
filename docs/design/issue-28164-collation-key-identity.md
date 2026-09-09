@@ -3,7 +3,7 @@
 - Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline for implementation increment: `53c2aa274e1d7b7b9d073a7a9f1a2879655c224b` (`upstream/main` at the execution freeze)
+- Frozen baseline for implementation increment: `41667f5bd26abd33a00e8114d7b4b034c7d86e87` (`upstream/main` at the current exact-head validation freeze)
 - Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary

@@ -87,14 +87,19 @@ func BuiltInCollationKeyV2(
 	length int,
 	_ *FunctionSelectList,
 ) error {
+	if length < 0 {
+		return moerr.NewInvalidInputf(proc.Ctx, "collation key v2 length %d is negative", length)
+	}
 	if len(parameters) != 3 || parameters[0] == nil || parameters[1] == nil || parameters[2] == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "collation key v2 expects value, prefix, and charset")
 	}
 	valueType := parameters[0].GetType()
-	if valueType == nil || !isCollationKeyTextType(valueType.Oid) {
+	prefixType := parameters[1].GetType()
+	charsetType := parameters[2].GetType()
+	if valueType == nil || prefixType == nil || charsetType == nil || !isCollationKeyTextType(valueType.Oid) {
 		return moerr.NewInvalidInput(proc.Ctx, "collation key v2 expects VARCHAR or TEXT")
 	}
-	if parameters[1].GetType().Oid != types.T_int64 || parameters[2].GetType().Oid != types.T_int64 {
+	if prefixType.Oid != types.T_int64 || charsetType.Oid != types.T_int64 {
 		return moerr.NewInvalidInput(proc.Ctx, "collation key v2 descriptor arguments must be INT64")
 	}
 
@@ -158,6 +163,9 @@ func BuiltInCollationCompositeKeyV2(
 	length int,
 	_ *FunctionSelectList,
 ) error {
+	if length < 0 {
+		return moerr.NewInvalidInputf(proc.Ctx, "collation composite key v2 length %d is negative", length)
+	}
 	if len(parameters) < 6 || len(parameters)%3 != 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "collation composite key v2 expects value, prefix, and charset triplets")
 	}
@@ -169,9 +177,22 @@ func BuiltInCollationCompositeKeyV2(
 		valueVec := parameters[i*3]
 		prefixVec := parameters[i*3+1]
 		charsetVec := parameters[i*3+2]
+		valueType := (*types.Type)(nil)
+		prefixType := (*types.Type)(nil)
+		charsetType := (*types.Type)(nil)
+		if valueVec != nil {
+			valueType = valueVec.GetType()
+		}
+		if prefixVec != nil {
+			prefixType = prefixVec.GetType()
+		}
+		if charsetVec != nil {
+			charsetType = charsetVec.GetType()
+		}
 		if valueVec == nil || prefixVec == nil || charsetVec == nil ||
-			!isCollationKeyTextType(valueVec.GetType().Oid) ||
-			prefixVec.GetType().Oid != types.T_int64 || charsetVec.GetType().Oid != types.T_int64 {
+			valueType == nil || prefixType == nil || charsetType == nil ||
+			!isCollationKeyTextType(valueType.Oid) ||
+			prefixType.Oid != types.T_int64 || charsetType.Oid != types.T_int64 {
 			return moerr.NewInvalidInput(proc.Ctx, "invalid collation composite key v2 parameter")
 		}
 		valueParams[i] = vector.GenerateFunctionStrParameter(valueVec)
