@@ -918,3 +918,22 @@ activation recovery remain unimplemented until the distributed state-machine
 and storage owners provide those consumers. A missing or absent field therefore
 continues to mean legacy behavior; this PR must not be interpreted as a
 production compatibility gate by itself.
+
+### 10.4 Implementation series status (PR4)
+
+PR4 adds the dependency-light row-locator envelope used by the planned
+storage-owned UNIQUE sidecar. `pkg/common/collationkey` now defines
+`RowLocator`, `EncodeLocator`, and `DecodeLocator`. The format is the fixed
+big-endian sequence `MOKL | version(1) | relation_id(u64) |
+partition_id(u64) | primary_key_length(u32) | original_primary_key_bytes`.
+Relation identity is mandatory, the primary-key bytes are copied on decode, and
+truncation, version, length, zero-relation, and the shared 64 MiB allocation
+guard fail closed. Empty primary-key bytes remain valid; the locator never
+stores a compaction-sensitive `__mo_rowid` and is not a replacement for the
+user-visible primary-key value.
+
+This PR is a storage contract and test foundation only. No catalog relation is
+created, no existing hidden index changes type, and no planner, lock owner, TN
+commit path, or migration command consumes the locator yet. Until those paths
+are wired atomically with the base row and capability/activation checks, v2
+remains disabled and all production writes retain their existing behavior.
