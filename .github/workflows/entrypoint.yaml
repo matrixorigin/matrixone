@@ -76,6 +76,11 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
       ut_parallel: 8
+      # The race UT runner already defines a complete, disjoint partition.
+      # Run those partitions concurrently so embedded-cluster admission in one
+      # shard cannot serialize the light/issues/heavy-plan work on one runner.
+      # The reusable workflow keeps the established UT check as an AND gate.
+      ut_sharded: true
     secrets: inherit
 
   matrixone-ut-coverage:
