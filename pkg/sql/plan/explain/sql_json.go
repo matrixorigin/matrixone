@@ -420,7 +420,7 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 			if name := sqlJSONTargetName(update.ObjRef, update.TableDef); name != "" {
 				item.TableNames = append(item.TableNames, name)
 			}
-			assignments, err := b.sqlJSONUpdateAssignments(update)
+			assignments, err := b.sqlJSONUpdateAssignments(node, update)
 			if err != nil {
 				return err
 			}
@@ -680,7 +680,7 @@ func sqlJSONFrameBound(ctx context.Context, bound *plan.FrameBound, options *Exp
 	return value + " " + direction, nil
 }
 
-func (b *sqlJSONPlanBuilder) sqlJSONUpdateAssignments(update *plan.UpdateCtx) ([]sqlJSONAssignment, error) {
+func (b *sqlJSONPlanBuilder) sqlJSONUpdateAssignments(node *plan.Node, update *plan.UpdateCtx) ([]sqlJSONAssignment, error) {
 	if update == nil || update.TableDef == nil || len(update.InsertCols) == 0 {
 		return nil, nil
 	}
@@ -694,7 +694,7 @@ func (b *sqlJSONPlanBuilder) sqlJSONUpdateAssignments(update *plan.UpdateCtx) ([
 		if insertPos >= len(update.InsertCols) {
 			return nil, moerr.NewInvalidInputf(b.ctx, "update target %s is missing row-image expression for column %s", target, col.Name)
 		}
-		expr, ok := b.resolveColumnExpr(&update.InsertCols[insertPos])
+		expr, ok := b.resolveUpdateColumnExpr(node, &update.InsertCols[insertPos])
 		insertPos++
 		if !ok || expr == nil {
 			return nil, moerr.NewInvalidInputf(b.ctx, "update target %s cannot resolve row-image expression for column %s", target, col.Name)
@@ -713,6 +713,25 @@ func (b *sqlJSONPlanBuilder) sqlJSONUpdateAssignments(update *plan.UpdateCtx) ([
 		assignments = append(assignments, sqlJSONAssignment{Target: assignmentTarget, Value: value})
 	}
 	return assignments, nil
+}
+
+// resolveUpdateColumnExpr handles the positional references that survive plan
+// column pruning on a MULTI_UPDATE.  DML consumers read the row image from
+// their immediate child, whose output is a local relation (RelPos == 0), so
+// the final UpdateCtx references no longer carry the binding tag of the
+// projection that originally produced them.  Keep the binding-tag lookup as a
+// fallback for plans that retain that logical relation.
+func (b *sqlJSONPlanBuilder) resolveUpdateColumnExpr(node *plan.Node, ref *plan.ColRef) (*plan.Expr, bool) {
+	if ref == nil || ref.ColPos < 0 {
+		return nil, false
+	}
+	if node != nil && ref.RelPos == 0 && len(node.Children) > 0 {
+		child := b.resolveChild(node.Children[0])
+		if child != nil && int(ref.ColPos) < len(child.ProjectList) {
+			return child.ProjectList[ref.ColPos], true
+		}
+	}
+	return b.resolveColumnExpr(ref)
 }
 
 func (b *sqlJSONPlanBuilder) resolveColumnExpr(ref *plan.ColRef) (*plan.Expr, bool) {
