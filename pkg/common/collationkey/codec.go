@@ -26,7 +26,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -106,10 +105,31 @@ type Part struct {
 }
 
 var (
-	ErrUnsupportedDomain = errors.New("collationkey: unsupported domain")
-	ErrInvalidValue      = errors.New("collationkey: invalid value")
-	ErrMalformedKey      = errors.New("collationkey: malformed encoded key")
+	ErrUnsupportedDomain error = codecSentinel("collationkey: unsupported domain")
+	ErrInvalidValue      error = codecSentinel("collationkey: invalid value")
+	ErrMalformedKey      error = codecSentinel("collationkey: malformed encoded key")
 )
+
+// codecSentinel keeps the exported error identities comparable without
+// pulling a general error-construction policy into this foundation package.
+type codecSentinel string
+
+func (e codecSentinel) Error() string { return string(e) }
+
+type codecWrappedError struct {
+	cause   error
+	message string
+}
+
+func (e codecWrappedError) Error() string { return e.message }
+func (e codecWrappedError) Unwrap() error { return e.cause }
+
+func wrapCodecError(cause error, format string, args ...any) error {
+	return codecWrappedError{
+		cause:   cause,
+		message: cause.Error() + ": " + fmt.Sprintf(format, args...),
+	}
+}
 
 type familySpec struct {
 	id       uint16
@@ -192,13 +212,13 @@ func domainSpec(domain Domain) (familySpec, []byte, error) {
 		return familySpec{}, nil, ErrUnsupportedDomain
 	}
 	if domain.Collation != 0 {
-		return familySpec{}, nil, fmt.Errorf("%w: explicit collation %d is not registered", ErrUnsupportedDomain, domain.Collation)
+		return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "explicit collation %d is not registered", domain.Collation)
 	}
 	var spec familySpec
 	switch domain.Type {
 	case Text:
 		if domain.Unit != PrefixCharacters {
-			return familySpec{}, nil, fmt.Errorf("%w: text prefix unit %d", ErrUnsupportedDomain, domain.Unit)
+			return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "text prefix unit %d", domain.Unit)
 		}
 		switch domain.Charset {
 		case CharsetUTF8:
@@ -206,15 +226,15 @@ func domainSpec(domain Domain) (familySpec, []byte, error) {
 		case CharsetUTF8MB4Bin:
 			spec = familySpecs[1]
 		default:
-			return familySpec{}, nil, fmt.Errorf("%w: text charset %d", ErrUnsupportedDomain, domain.Charset)
+			return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "text charset %d", domain.Charset)
 		}
 		return spec, textParams(domain), nil
 	case Binary:
 		if domain.Charset != CharsetBinary && domain.Charset != CharsetLegacy {
-			return familySpec{}, nil, fmt.Errorf("%w: binary charset %d", ErrUnsupportedDomain, domain.Charset)
+			return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "binary charset %d", domain.Charset)
 		}
 		if domain.Unit != PrefixBytes {
-			return familySpec{}, nil, fmt.Errorf("%w: binary prefix unit %d", ErrUnsupportedDomain, domain.Unit)
+			return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "binary prefix unit %d", domain.Unit)
 		}
 		return familySpecs[2], binaryParams(domain), nil
 	case SignedInteger:
@@ -233,7 +253,7 @@ func domainSpec(domain Domain) (familySpec, []byte, error) {
 		}
 		return familySpecs[5], decimalParams(domain.Width, domain.Scale), nil
 	default:
-		return familySpec{}, nil, fmt.Errorf("%w: family %d", ErrUnsupportedDomain, domain.Type)
+		return familySpec{}, nil, wrapCodecError(ErrUnsupportedDomain, "family %d", domain.Type)
 	}
 }
 
@@ -278,11 +298,11 @@ func EncodePart(dst []byte, part Part) ([]byte, error) {
 // NULL versus an empty non-NULL value.
 func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 	if len(parts) == 0 || len(parts) > MaxParts {
-		return dst, fmt.Errorf("%w: part count %d", ErrMalformedKey, len(parts))
+		return dst, wrapCodecError(ErrMalformedKey, "part count %d", len(parts))
 	}
 	start := len(dst)
 	if start+7 > MaxKeyBytes {
-		return dst, fmt.Errorf("%w: key exceeds %d bytes", ErrMalformedKey, MaxKeyBytes)
+		return dst, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
 	dst = append(dst, magic...)
 	dst = append(dst, CodecVersion)
@@ -297,7 +317,7 @@ func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 			return dst[:start], err
 		}
 		if len(params) > maxParameter || len(payload) > maxPayload {
-			return dst[:start], fmt.Errorf("%w: encoded part is too large", ErrMalformedKey)
+			return dst[:start], wrapCodecError(ErrMalformedKey, "encoded part is too large")
 		}
 		dst = append(dst, boolByte(part.Null), byte(part.Domain.Type))
 		dst = appendU16(dst, spec.id)
@@ -306,7 +326,7 @@ func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 		dst = appendU32(dst, uint32(len(payload)))
 		dst = append(dst, payload...)
 		if len(dst)-start > MaxKeyBytes {
-			return dst[:start], fmt.Errorf("%w: key exceeds %d bytes", ErrMalformedKey, MaxKeyBytes)
+			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 		}
 	}
 	return dst, nil
@@ -350,11 +370,11 @@ func ValidateEncoded(encoded []byte) error {
 		return ErrMalformedKey
 	}
 	if encoded[4] != CodecVersion {
-		return fmt.Errorf("%w: codec version %d", ErrMalformedKey, encoded[4])
+		return wrapCodecError(ErrMalformedKey, "codec version %d", encoded[4])
 	}
 	parts := int(binary.BigEndian.Uint16(encoded[5:7]))
 	if parts == 0 || parts > MaxParts {
-		return fmt.Errorf("%w: part count %d", ErrMalformedKey, parts)
+		return wrapCodecError(ErrMalformedKey, "part count %d", parts)
 	}
 	off := 7
 	for i := 0; i < parts; i++ {
@@ -383,13 +403,13 @@ func ValidateEncoded(encoded []byte) error {
 		off += payloadLen
 		spec, ok := lookupFamily(id)
 		if !ok || spec.typ != typ {
-			return fmt.Errorf("%w: unknown family %04x", ErrMalformedKey, id)
+			return wrapCodecError(ErrMalformedKey, "unknown family %04x", id)
 		}
 		if !validateParams(spec, params) {
-			return fmt.Errorf("%w: non-canonical parameters for family %04x", ErrMalformedKey, id)
+			return wrapCodecError(ErrMalformedKey, "non-canonical parameters for family %04x", id)
 		}
 		if nullFlag == 1 && payloadLen != 0 {
-			return fmt.Errorf("%w: NULL part has payload", ErrMalformedKey)
+			return wrapCodecError(ErrMalformedKey, "NULL part has payload")
 		}
 		if nullFlag == 0 {
 			if err := validatePayload(spec, params, payload); err != nil {
@@ -398,7 +418,7 @@ func ValidateEncoded(encoded []byte) error {
 		}
 	}
 	if off != len(encoded) {
-		return fmt.Errorf("%w: trailing bytes", ErrMalformedKey)
+		return wrapCodecError(ErrMalformedKey, "trailing bytes")
 	}
 	return nil
 }
@@ -452,18 +472,18 @@ func validatePayload(spec familySpec, params, payload []byte) error {
 	case Text:
 		if spec.charset == CharsetUTF8MB4Bin {
 			if !utf8.Valid(payload) {
-				return fmt.Errorf("%w: malformed utf8-bin payload", ErrMalformedKey)
+				return wrapCodecError(ErrMalformedKey, "malformed utf8-bin payload")
 			}
 		} else if !validGeneralPayload(payload) {
-			return fmt.Errorf("%w: malformed general-ci payload", ErrMalformedKey)
+			return wrapCodecError(ErrMalformedKey, "malformed general-ci payload")
 		}
 	case SignedInteger, UnsignedInteger:
 		if len(params) != 3 || len(payload) != int(binary.BigEndian.Uint16(params[1:])) {
-			return fmt.Errorf("%w: integer payload width", ErrMalformedKey)
+			return wrapCodecError(ErrMalformedKey, "integer payload width")
 		}
 	case Decimal:
 		if !validDecimalPayload(params, payload) {
-			return fmt.Errorf("%w: malformed decimal payload", ErrMalformedKey)
+			return wrapCodecError(ErrMalformedKey, "malformed decimal payload")
 		}
 	}
 	return nil
@@ -509,7 +529,7 @@ func normalize(domain Domain, spec familySpec, value []byte, isNull bool) ([]byt
 		return normalizeBinary(domain, value), nil
 	case SignedInteger, UnsignedInteger:
 		if len(value) != int(domain.Width) {
-			return nil, fmt.Errorf("%w: integer width %d, got %d", ErrInvalidValue, domain.Width, len(value))
+			return nil, wrapCodecError(ErrInvalidValue, "integer width %d, got %d", domain.Width, len(value))
 		}
 		return append([]byte(nil), value...), nil
 	case Decimal:
@@ -521,7 +541,7 @@ func normalize(domain Domain, spec familySpec, value []byte, isNull bool) ([]byt
 
 func normalizeText(domain Domain, spec familySpec, value []byte) ([]byte, error) {
 	if !utf8.Valid(value) {
-		return nil, fmt.Errorf("%w: invalid UTF-8", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "invalid UTF-8")
 	}
 	if domain.Prefix > 0 {
 		value = prefixRunes(value, domain.Prefix)
@@ -533,13 +553,13 @@ func normalizeText(domain Domain, spec familySpec, value []byte) ([]byte, error)
 	// One four-byte big-endian weight per rune is the frozen general-ci-v1
 	// payload rule. The table itself is immutable and package-local.
 	if len(value) > (MaxKeyBytes-32)/4 {
-		return nil, fmt.Errorf("%w: text payload exceeds key limit", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "text payload exceeds key limit")
 	}
 	out := make([]byte, 0, len(value)*4)
 	for len(value) > 0 {
 		r, size := utf8.DecodeRune(value)
 		if r == utf8.RuneError && size == 1 {
-			return nil, fmt.Errorf("%w: invalid UTF-8", ErrInvalidValue)
+			return nil, wrapCodecError(ErrInvalidValue, "invalid UTF-8")
 		}
 		out = appendU32(out, utf8mb4GeneralCIWeight(r))
 		value = value[size:]
@@ -578,7 +598,7 @@ func normalizeBinary(domain Domain, value []byte) []byte {
 func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, error) {
 	s := strings.TrimSpace(string(value))
 	if s == "" {
-		return nil, fmt.Errorf("%w: empty decimal", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "empty decimal")
 	}
 	neg := false
 	if s[0] == '+' || s[0] == '-' {
@@ -586,7 +606,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 		s = s[1:]
 	}
 	if s == "" || strings.Count(s, ".") > 1 {
-		return nil, fmt.Errorf("%w: decimal syntax", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
 	}
 	parts := strings.SplitN(s, ".", 2)
 	whole, frac := parts[0], ""
@@ -597,7 +617,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 		whole = "0"
 	}
 	if !allDigits(whole) || !allDigits(frac) {
-		return nil, fmt.Errorf("%w: decimal digits", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
 	}
 	inputScale := int16(len(frac))
 	coeffText := strings.TrimLeft(whole+frac, "0")
@@ -607,7 +627,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	}
 	coeff := new(big.Int)
 	if _, ok := coeff.SetString(coeffText, 10); !ok {
-		return nil, fmt.Errorf("%w: decimal coefficient", ErrInvalidValue)
+		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient")
 	}
 	if int(inputScale) > int(targetScale) {
 		shift := int(inputScale) - int(targetScale)
@@ -615,7 +635,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 		q, r := new(big.Int), new(big.Int)
 		q.QuoRem(coeff, div, r)
 		if r.Sign() != 0 {
-			return nil, fmt.Errorf("%w: decimal precision exceeds declared scale", ErrInvalidValue)
+			return nil, wrapCodecError(ErrInvalidValue, "decimal precision exceeds declared scale")
 		}
 		coeff = q
 	} else if int(inputScale) < int(targetScale) {
@@ -626,7 +646,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	ten := big.NewInt(10)
 	for coeff.Sign() != 0 && new(big.Int).Mod(coeff, ten).Sign() == 0 {
 		if scale == math.MinInt16 {
-			return nil, fmt.Errorf("%w: decimal scale underflow", ErrInvalidValue)
+			return nil, wrapCodecError(ErrInvalidValue, "decimal scale underflow")
 		}
 		coeff.Quo(coeff, ten)
 		scale--
@@ -636,7 +656,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	}
 	coeffBytes := coeff.Bytes()
 	if len(coeffBytes) > int(width) {
-		return nil, fmt.Errorf("%w: decimal coefficient exceeds width %d", ErrInvalidValue, width)
+		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient exceeds width %d", width)
 	}
 	out := make([]byte, 0, 1+4+4+len(coeffBytes))
 	if neg {
