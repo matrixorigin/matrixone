@@ -138,13 +138,17 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_control_numeric_fields_are_strict(self):
         tuple_value = {
-            "account_id": 1,
+            "account_id": 0,
             "statement_id": "statement",
             "group_id": "group",
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
         }
+        self.assertEqual(
+            (0, "statement", "group", 1, "invocation", 1),
+            worker._tuple_key(tuple_value),
+        )
         with self.assertRaisesRegex(ValueError, "unsupported control"):
             worker._decode_control(json.dumps({"version": True, "kind": "InputBatch", "tuple": tuple_value}).encode())
         with self.assertRaisesRegex(ValueError, "invalid control field sequence"):
