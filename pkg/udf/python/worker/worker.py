@@ -230,15 +230,22 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
 
 def _tuple_key(value: Dict[str, Any]) -> tuple:
     string_fields = ("statement_id", "group_id", "invocation_id")
-    numeric_fields = ("account_id", "group_epoch", "lease_epoch")
     if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in string_fields):
+        raise ValueError("PROTOCOL: incomplete fencing tuple")
+    account_id = value.get("account_id")
+    if (
+        isinstance(account_id, bool)
+        or not isinstance(account_id, int)
+        or account_id < 0
+        or account_id > (1 << 64) - 1
+    ):
         raise ValueError("PROTOCOL: incomplete fencing tuple")
     if any(
         isinstance(value.get(k), bool)
         or not isinstance(value.get(k), int)
         or value[k] <= 0
         or value[k] > (1 << 64) - 1
-        for k in numeric_fields
+        for k in ("group_epoch", "lease_epoch")
     ):
         raise ValueError("PROTOCOL: incomplete fencing tuple")
     return (
