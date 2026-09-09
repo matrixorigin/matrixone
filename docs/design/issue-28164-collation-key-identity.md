@@ -900,3 +900,21 @@ The digest and golden vectors are package tests, not a claim that a relation has
 adopted v2. Subsequent implementation PRs must copy the exact bytes and digest
 through the approved metadata and capability boundaries before any production
 writer is allowed to emit this format.
+
+### 10.3 Implementation series status (PR3)
+
+PR3 is a metadata transport and validation foundation only. It adds typed
+`UniqueKeyCodecVersion` fields to the plan and schema-extra messages, reserves
+typed capability/activation records in the logservice messages, and explicitly
+copies the relation version through the current plan, engine, catalog-cache,
+schema-extra, and deep-copy boundaries. The dependency-light codec package
+validates the supported version, registry version/digest, and maximum encoded
+key size, and separates readable from writable capability bits.
+
+PR3 does not publish an activation state, admit a v2 relation, change a unique
+index, or make any existing writer emit v2 bytes. Capability publication,
+HAKeeper persistence, generation acknowledgements, plan/TN admission, and
+activation recovery remain unimplemented until the distributed state-machine
+and storage owners provide those consumers. A missing or absent field therefore
+continues to mean legacy behavior; this PR must not be interpreted as a
+production compatibility gate by itself.

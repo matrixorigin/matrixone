@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -189,6 +190,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 		Checks:         tableDef.Checks,
 		DefaultCharset: tableDef.DefaultCharset,
+	}
+	if tableDef.UniqueKeyCodecVersion != nil {
+		extra.UniqueKeyCodecVersion = proto.Clone(tableDef.UniqueKeyCodecVersion).(*plan.UniqueKeyCodecVersion)
 	}
 	propDef.Properties = append(
 		propDef.Properties,

@@ -729,6 +729,12 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,
+		UniqueKeyCodecVersion: func() *plan.UniqueKeyCodecVersion {
+			if table.UniqueKeyCodecVersion == nil {
+				return nil
+			}
+			return proto.Clone(table.UniqueKeyCodecVersion).(*plan.UniqueKeyCodecVersion)
+		}(),
 	}
 
 	if withCols {
