@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -3260,8 +3259,7 @@ func absInt64(v int64) int64 {
 func formatUnsignedToBase(val uint64, toBase int64) string {
 	base := absInt64(toBase)
 	if toBase < 0 {
-		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
-		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+		return strings.ToUpper(strconv.FormatInt(int64(val), int(base)))
 	}
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
@@ -3284,14 +3282,17 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-		if len(strings.TrimSpace(string(nStr))) == 0 {
+		// MySQL returns NULL for the empty string, but a non-empty string with
+		// no usable numeric prefix (including whitespace-only input) converts
+		// to zero.
+		if len(nStr) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
 		if err != nil {
 			return err
 		}
@@ -3319,71 +3320,105 @@ func formatSignedToBase(val int64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatInt(val, int(base)))
 }
 
-func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
-	s := strings.TrimSpace(n)
-	if len(s) == 0 {
+func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, error) {
+	// Numeric conversion accepts ASCII whitespace before the prefix. Do not
+	// use strings.TrimSpace here: binary operands are byte-oriented and a
+	// UTF-8 Unicode whitespace sequence is data, not padding. There is no need
+	// to scan the suffix or allocate a string: the first non-digit terminates
+	// the prefix, and the bounded accumulator can decide overflow in one pass.
+	pos := 0
+	for pos < len(n) && isConvWhitespace(n[pos]) {
+		pos++
+	}
+
+	negative := false
+	if pos < len(n) {
+		switch n[pos] {
+		case '+':
+			pos++
+		case '-':
+			negative = true
+			pos++
+		}
+	}
+
+	base := absInt64(fromBase)
+	if base < 2 || base > 36 || pos >= len(n) {
 		return 0, 0, false, nil
 	}
 
-	base := int(absInt64(fromBase))
-	signOffset := 0
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		signOffset = 1
+	firstDigit, ok := convDigitValue(n[pos])
+	if !ok || int64(firstDigit) >= base {
+		return 0, 0, false, nil
 	}
-	if signOffset == len(s) {
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-	}
-	for _, ch := range s[signOffset:] {
-		var digit int
-		switch {
-		case ch >= '0' && ch <= '9':
-			digit = int(ch - '0')
-		case ch >= 'A' && ch <= 'Z':
-			digit = int(ch-'A') + 10
-		case ch >= 'a' && ch <= 'z':
-			digit = int(ch-'a') + 10
-		default:
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		if digit >= base {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+
+	limit := uint64(math.MaxUint64)
+	if fromBase < 0 {
+		limit = uint64(math.MaxInt64)
+		if negative {
+			limit++ // abs(math.MinInt64)
 		}
 	}
 
-	if fromBase < 0 {
-		val, err := strconv.ParseInt(s, base, 64)
-		if err != nil {
-			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				if strings.HasPrefix(s, "-") {
+	value := uint64(0)
+	for pos < len(n) {
+		digit, ok := convDigitValue(n[pos])
+		if !ok || int64(digit) >= base {
+			break
+		}
+		if value > (limit-uint64(digit))/uint64(base) {
+			if fromBase < 0 {
+				if negative {
 					return math.MinInt64, 0, true, nil
 				}
 				return math.MaxInt64, 0, true, nil
 			}
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		return val, 0, true, nil
-	}
-
-	if strings.HasPrefix(s, "-") {
-		magnitudeStr := s[1:]
-		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
-		if !ok {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
-		return 0, uint64(0) - reduced.Uint64(), false, nil
-	}
-
-	s = strings.TrimPrefix(s, "+")
-
-	uval, err := strconv.ParseUint(s, base, 64)
-	if err != nil {
-		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			if negative {
+				// A negative unsigned value whose magnitude is larger than
+				// UINT64_MAX converts to zero in MySQL.
+				return 0, 0, false, nil
+			}
 			return 0, math.MaxUint64, false, nil
 		}
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		value = value*uint64(base) + uint64(digit)
+		pos++
 	}
-	return 0, uval, false, nil
+
+	if fromBase < 0 {
+		if negative {
+			if value == uint64(math.MaxInt64)+1 {
+				return math.MinInt64, 0, true, nil
+			}
+			return -int64(value), 0, true, nil
+		}
+		return int64(value), 0, true, nil
+	}
+	if negative {
+		return 0, uint64(0) - value, false, nil
+	}
+	return 0, value, false, nil
+}
+
+func convDigitValue(ch byte) (uint8, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'A' && ch <= 'Z':
+		return ch - 'A' + 10, true
+	case ch >= 'a' && ch <= 'z':
+		return ch - 'a' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isConvWhitespace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -5331,11 +5366,60 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
+			if r == types.T_bit {
+				return newCheckResultWithSuccess(8)
+			}
 			if i < 2 {
 				return newCheckResultWithSuccess(0)
 			} else {
 				return newCheckResultWithSuccess(i - 1)
 			}
+		}
+	}
+	allIntegers := true
+	for _, input := range inputs {
+		if !input.IsIntOrUint() && input.Oid != types.T_any {
+			allIntegers = false
+			break
+		}
+	}
+	if allIntegers {
+		// MySQL's integer comparison uses the 64-bit representation, including
+		// signed/unsigned combinations. An SQL cast to INT64 would reject UINT64_MAX.
+		return newCheckResultWithSuccess(13)
+	}
+	// DECIMAL comparisons must remain exact. Choose a common decimal storage
+	// family, but retain each operand's scale so no value is rounded during
+	// overload resolution.
+	hasDecimal := false
+	decimalInputs := true
+	for _, input := range inputs {
+		if input.Oid.IsDecimal() {
+			hasDecimal = true
+		} else if !input.Oid.IsInteger() && input.Oid != types.T_any {
+			decimalInputs = false
+		}
+	}
+	if hasDecimal && decimalInputs {
+		target := types.New(types.T_decimal128, 38, 0)
+		for _, input := range inputs {
+			if input.Oid == types.T_decimal256 {
+				target = types.New(types.T_decimal256, 65, 0)
+				break
+			}
+		}
+		castTypes := make([]types.T, len(inputs))
+		targetTypes := make([]types.Type, len(inputs))
+		for i, input := range inputs {
+			castTypes[i] = target.Oid
+			targetTypes[i] = target
+			targetTypes[i].Scale = input.Scale
+		}
+		if c, _ := tryToMatch(inputs, castTypes); c != matchFailed {
+			if target.Oid == types.T_decimal256 {
+				return newCheckResultWithCast(12, targetTypes)
+			}
+			return newCheckResultWithCast(11, targetTypes)
 		}
 	}
 	castTypes := make([]types.T, len(inputs))
@@ -5352,6 +5436,120 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(10, targetTypes)
 	}
 	return newCheckResultWithSuccess(10)
+}
+
+func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	getters := make([]func(uint64) (uint64, bool), len(ivecs))
+	for i, vec := range ivecs {
+		getters[i] = fieldIntegerGetter(vec)
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(getters); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := getters[0](i)
+			v2, null2 := getters[j](i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](vec)
+		return func(i uint64) (uint64, bool) { return p.GetValue(i) }
+	default:
+		panic("FIELD integer overload received non-integer vector")
+	}
+}
+
+func FieldDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal128](ivecs, result, length, func(x, y types.Decimal128, sx, sy int32) bool {
+		return types.CompareDecimal128WithScale(x, y, sx, sy) == 0
+	})
+}
+
+func FieldDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal256](ivecs, result, length, decimal256Equal)
+}
+
+type fieldDecimalType interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func fieldDecimalValues[T fieldDecimalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, equal func(T, T, int32, int32) bool) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(ivecs); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if equal(v1, v2, fs[0].GetType().Scale, fs[j].GetType().Scale) {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256Equal(x, y types.Decimal256, scaleX, scaleY int32) bool {
+	if scaleX == scaleY {
+		return x == y
+	}
+	if scaleX < scaleY {
+		x, err := x.Scale(scaleY - scaleX)
+		return err == nil && x == y
+	}
+	y, err := y.Scale(scaleX - scaleY)
+	return err == nil && x == y
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6905,36 +7103,31 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		str, isnull1 := strs.GetStrValue(i)
-		shaType, isnull2 := shaTypes.GetValue(i)
-
-		if isnull1 || isnull2 || !isSha2Family(shaType) {
+		if sha2RowMasked(selectList, i) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var checksum []byte
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
 
-			switch shaType {
-			case 0, 256:
-				sum256 := sha256.Sum256(str)
-				checksum = sum256[:]
-			case 224:
-				sum224 := sha256.Sum224(str)
-				checksum = sum224[:]
-			case 384:
-				sum384 := sha512.Sum384(str)
-				checksum = sum384[:]
-			case 512:
-				sum512 := sha512.Sum512(str)
-				checksum = sum512[:]
-			default:
-				panic("unexpected err happened in sha2 function")
-			}
-			checksum = []byte(hex.EncodeToString(checksum))
-			if err = res.AppendBytes(checksum, false); err != nil {
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
 		}
 
 	}
@@ -6942,9 +7135,92 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-// any one of 224 256 384 512 0 is valid
-func isSha2Family(len int64) bool {
-	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+// SHA2StringLengthFunc is the character-operand variant of SHA2. MySQL
+// converts the hash length as an integer at execution time, so a value such
+// as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
+// string wrapper preserves binary bytes and avoids the lossy implicit cast to
+// VARCHAR that would otherwise happen before execution.
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaLengths := vector.GenerateFunctionStrParameter(args[1])
+	lengthIsConst := args[1].IsConst()
+	var constLength int64
+	var constLengthNull bool
+	if lengthIsConst {
+		lengthValue, isnull := shaLengths.GetStrValue(0)
+		constLengthNull = isnull
+		if !isnull {
+			constLength = parseMySQLIntegerPrefix(lengthValue)
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if sha2RowMasked(selectList, i) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		var isnull2 bool
+		var shaType int64
+		if lengthIsConst {
+			isnull2 = constLengthNull
+			shaType = constLength
+		} else {
+			lengthValue, isnull := shaLengths.GetStrValue(i)
+			isnull2 = isnull
+			if !isnull {
+				shaType = parseMySQLIntegerPrefix(lengthValue)
+			}
+		}
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sha2Checksum(value []byte, length int64) ([]byte, bool) {
+	var checksum []byte
+	switch length {
+	case 0, 256:
+		sum256 := sha256.Sum256(value)
+		checksum = sum256[:]
+	case 224:
+		sum224 := sha256.Sum224(value)
+		checksum = sum224[:]
+	case 384:
+		sum384 := sha512.Sum384(value)
+		checksum = sum384[:]
+	case 512:
+		sum512 := sha512.Sum512(value)
+		checksum = sum512[:]
+	default:
+		return nil, false
+	}
+	encoded := make([]byte, hex.EncodedLen(len(checksum)))
+	hex.Encode(encoded, checksum)
+	return encoded, true
+}
+
+func sha2RowMasked(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row))
 }
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -13352,6 +13628,19 @@ type aesModeInfo struct {
 	useCBC  bool
 }
 
+func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
+	if !modeInfo.needsIV {
+		return nil
+	}
+	if !hasIV {
+		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
+	}
+	if nullIV || len(iv) < aes.BlockSize {
+		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
+	}
+	return nil
+}
+
 func getAESMode(proc *process.Process) (aesModeInfo, error) {
 	mode := "aes-128-ecb"
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -13407,11 +13696,8 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13480,11 +13766,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)

@@ -3072,7 +3072,7 @@ func TestConvSemantics(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
 		},
 		{
-			name: "negative decimal overflow wraps modulo uint64",
+			name: "negative decimal overflow clamps to zero",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, []bool{false}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
@@ -3127,17 +3127,20 @@ func TestConvSemantics(t *testing.T) {
 	}
 }
 
-func TestConvInvalidInputReturnsError(t *testing.T) {
+func TestConvStringUsesNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	cases := []struct {
 		name  string
 		value string
 		base  int64
+		want  string
 	}{
-		{name: "invalid character", value: "g", base: 16},
-		{name: "prefix truncation", value: "10xyz", base: 10},
-		{name: "invalid digit for base", value: "2", base: 2},
+		{name: "valid prefix", value: "10xyz", base: 10, want: "A"},
+		{name: "invalid first character", value: "g", base: 16, want: "0"},
+		{name: "invalid first digit for base", value: "2", base: 2, want: "0"},
+		{name: "sign only", value: "+", base: 10, want: "0"},
+		{name: "whitespace only", value: "   ", base: 10, want: "0"},
 	}
 
 	for _, tc := range cases {
@@ -3148,7 +3151,7 @@ func TestConvInvalidInputReturnsError(t *testing.T) {
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.base}, []bool{false}),
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
 				},
-				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
 				Conv,
 			)
 			s, info := fcTC.Run()
@@ -3173,22 +3176,41 @@ func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestParseConvStrictStringEdgeCases(t *testing.T) {
+func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
 	t.Run("empty string returns zero values without error", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("", 10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nil, 10)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), signedVal)
 		require.Equal(t, uint64(0), unsignedVal)
 		require.False(t, signed)
 	})
 
-	t.Run("sign only is invalid", func(t *testing.T) {
-		_, _, _, err := parseConvStrictString("+", 10)
-		require.Error(t, err)
+	t.Run("sign only has no numeric prefix", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("+"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("unicode whitespace is not binary padding", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("\u30007x"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("negative unsigned overflow clamps to zero", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("-18446744073709551617tail"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
 	})
 
 	t.Run("negative base positive overflow saturates to max int64", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("9223372036854775808", -10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("9223372036854775808"), -10)
 		require.NoError(t, err)
 		require.True(t, signed)
 		require.Equal(t, int64(math.MaxInt64), signedVal)
@@ -3196,11 +3218,35 @@ func TestParseConvStrictStringEdgeCases(t *testing.T) {
 	})
 
 	t.Run("negative base negative overflow saturates to min int64", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("-9223372036854775809", -10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("-9223372036854775809"), -10)
 		require.NoError(t, err)
 		require.True(t, signed)
 		require.Equal(t, int64(math.MinInt64), signedVal)
 		require.Equal(t, uint64(0), unsignedVal)
+	})
+
+	t.Run("prefix stops at the first invalid digit", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("1z"), 16)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(1), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("base 36 accepts alphabetic digits", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("z1-tail"), 36)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(1261), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("positive unsigned overflow saturates", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("18446744073709551616tail"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(math.MaxUint64), unsignedVal)
+		require.False(t, signed)
 	})
 }
 
@@ -3617,6 +3663,51 @@ func initFieldTestCase() []tcTemp {
 				[]uint64{2},
 				[]bool{false}),
 		},
+	}
+}
+
+func TestFieldDecimalExact(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal0 := types.New(types.T_decimal128, 20, 0)
+	decimal16 := types.New(types.T_decimal128, 20, 16)
+	cases := []struct {
+		name   string
+		typ    types.Type
+		values []types.Decimal128
+		first  []types.Decimal128
+		second []types.Decimal128
+		want   uint64
+	}{
+		{
+			name:   "integer boundary",
+			typ:    decimal0,
+			values: []types.Decimal128{{B0_63: 9007199254740993}},
+			first:  []types.Decimal128{{B0_63: 9007199254740992}},
+			second: []types.Decimal128{{B0_63: 9007199254740993}},
+			want:   2,
+		},
+		{
+			name:   "scale boundary",
+			typ:    decimal16,
+			values: []types.Decimal128{{B0_63: 10000000000000001}},
+			first:  []types.Decimal128{{B0_63: 10000000000000000}},
+			second: []types.Decimal128{{B0_63: 10000000000000001}},
+			want:   2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.values, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.first, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.second, []bool{false}),
+			}
+			fc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, []bool{false}),
+				FieldDecimal128)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
