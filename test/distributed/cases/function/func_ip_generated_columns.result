@@ -33,7 +33,7 @@ from ip_deterministic_generated order by id;
 3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 4  ¦  invalid  ¦  null  ¦  null  ¦  null  ¦  ::1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
 5  ¦  ::ffff:192.0.2.1  ¦  3221225985  ¦  192.0.2.1  ¦  C0000201  ¦  192.0.2.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
-6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::c000:201  ¦  0  ¦  1  ¦  1  ¦  0
+6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::192.0.2.1  ¦  0  ¦  1  ¦  1  ¦  0
 select name, column_name
 from mo_catalog.mo_indexes as i
 join mo_catalog.mo_tables as t on i.table_id = t.rel_id
