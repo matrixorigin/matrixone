@@ -7026,6 +7026,50 @@ func getCount[T number](typ types.Type, val T) int64 {
 	return r
 }
 
+func getDecimalCount[T types.Decimal64 | types.Decimal128](typ types.Type, val T) int64 {
+	var v float64
+	switch x := any(val).(type) {
+	case types.Decimal64:
+		v = types.Decimal64ToFloat64(x, typ.Scale)
+	case types.Decimal128:
+		v = types.Decimal128ToFloat64(x, typ.Scale)
+	}
+	if v >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	if v <= float64(math.MinInt64) {
+		return math.MinInt64
+	}
+	return int64(math.Round(v))
+}
+
+func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	delims := vector.GenerateFunctionStrParameter(ivecs[1])
+	counts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
+	typ := counts.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		d, null2 := delims.GetStrValue(i)
+		c, null3 := counts.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		r, err := subStrIndex(string(v), string(d), getDecimalCount(typ, c))
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(r), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
