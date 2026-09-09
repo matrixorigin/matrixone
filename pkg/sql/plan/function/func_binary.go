@@ -915,6 +915,44 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+// coalesceSignedUnsignedIntegerResult handles the integer domain that cannot
+// be represented by either signed or unsigned BIGINT. The ordinary overload
+// cost ranking prefers uint64 -> int64, so it must not be used when a uint64
+// branch and a signed integer branch are both present. Decimal128 with a
+// zero scale and twenty integral digits exactly covers that combined domain.
+func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasSigned := false
+	hasUint64 := false
+	for _, typ := range inputs {
+		switch {
+		case typ.Oid == types.T_any:
+			// An untyped NULL has no numeric domain and does not affect the
+			// common type selected from value-bearing branches.
+		case typ.Oid.IsSignedInt():
+			hasSigned = true
+		case typ.Oid.IsInteger():
+			if typ.Oid == types.T_uint64 {
+				hasUint64 = true
+			}
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasSigned || !hasUint64 {
+		return checkResult{}, false
+	}
+
+	target, overloadIndex, ok := coalesceDecimalResult(overloads, types.T_decimal128, inputs)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
+	castTypes := make([]types.Type, len(inputs))
+	for i := range castTypes {
+		castTypes[i] = target
+	}
+	return newCheckResultWithCast(overloadIndex, castTypes), true
+}
+
 func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	target, aligned, ok := textStringCommonType(inputs)
 	if !ok {
@@ -1005,6 +1043,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
+		if result, ok := coalesceSignedUnsignedIntegerResult(overloads, inputs); ok {
 			return result
 		}
 

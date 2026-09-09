@@ -902,6 +902,137 @@ func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
 	}
 }
 
+func TestCoalesceSignedUnsignedIntegerCommonType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name:   "int8 and uint64",
+			inputs: []types.Type{types.T_int8.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "uint64 and int8",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_int8.ToType()},
+		},
+		{
+			name:   "int32 and uint64",
+			inputs: []types.Type{types.T_int32.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "uint64 and int16",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_int16.ToType()},
+		},
+		{
+			name:   "int16 and uint64",
+			inputs: []types.Type{types.T_int16.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "uint64 and int32",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_int32.ToType()},
+		},
+		{
+			name:   "int64 and uint64",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "uint64 and int64",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()},
+		},
+		{
+			name:   "integer branches with null",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_any.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "multiple integers signed first",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "multiple integers uint64 first",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType(), types.T_uint32.ToType()},
+		},
+		{
+			name:   "multiple integers uint32 first",
+			inputs: []types.Type{types.T_uint32.ToType(), types.T_int64.ToType(), types.T_uint64.ToType()},
+		},
+		{
+			name:   "multiple integers uint64 middle",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType(), types.T_uint32.ToType()},
+		},
+		{
+			name:   "multiple integers signed last",
+			inputs: []types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
+		},
+		{
+			name:   "multiple integers reversed",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_int64.ToType()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "coalesce", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_decimal128, resolved.GetReturnType().Oid)
+			require.Equal(t, int32(20), resolved.GetReturnType().Width)
+			require.Zero(t, resolved.GetReturnType().Scale)
+
+			castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Len(t, castTypes, len(test.inputs))
+			for _, typ := range castTypes {
+				require.Equal(t, types.T_decimal128, typ.Oid)
+				require.Equal(t, int32(20), typ.Width)
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
+
+func TestCoalesceSignedUnsignedIntegerRequiresDecimalOverload(t *testing.T) {
+	result := coalesceCheck(
+		[]overload{
+			{args: []types.T{types.T_int64}},
+			{args: []types.T{types.T_uint64}},
+		},
+		[]types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+	)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
+func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
+	overloads := []overload{{args: []types.T{types.T_decimal128}}}
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name:   "without uint64",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint32.ToType()},
+		},
+		{
+			name:   "without signed integer",
+			inputs: []types.Type{types.T_uint64.ToType(), types.T_uint32.ToType()},
+		},
+		{
+			name:   "all untyped null",
+			inputs: []types.Type{types.T_any.ToType(), types.T_any.ToType()},
+		},
+		{
+			name:   "non integer branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float64.ToType()},
+		},
+		{
+			name:   "decimal branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType(), types.New(types.T_decimal64, 10, 2)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ok := coalesceSignedUnsignedIntegerResult(overloads, test.inputs)
+			require.False(t, ok)
+		})
+	}
+}
+
 func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
 	for _, test := range []struct {
 		name   string
