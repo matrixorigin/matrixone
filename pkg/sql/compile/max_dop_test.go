@@ -594,6 +594,50 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
 }
 
+func TestCompileRequiredVectorScanGatesLocalDOP(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr, c.ncpu = "cn-local:6001", 8
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.cnList = engine.Nodes{{Id: "cn1", Addr: c.addr, Mcpu: 4}, {Id: "cn2", Addr: "remote:6001", Mcpu: 8}}
+	node := &plan.Node{NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		TableDef: &plan.TableDef{}, Stats: &plan.Stats{Dop: 8},
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{UseMembershipFilter: true, MustApply: true}},
+		VectorIndexScan:        &plan.VectorIndexScan{ScanWork: &plan.VectorIndexScanWork{Rows: 100, Blocks: 8, VectorBytesPerRow: 3072}},
+	}
+	for _, tc := range []struct {
+		hints string
+		want  int
+	}{{"", 1}, {"vectorLocalDOP=0", 1}, {"vectorLocalDOP=2", 1}, {"vectorLocalDOP=1", 8}, {"", 1}} {
+		c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			require.Equal(t, "optimizer_hints", name)
+			return tc.hints, nil
+		})
+		scopes, err := c.compileVectorIndexScan(node)
+		require.NoError(t, err)
+		require.Len(t, scopes, 1, "required domains stay local even without ForceOneCN")
+		require.Equal(t, c.addr, scopes[0].NodeInfo.Addr)
+		require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+		require.Equal(t, tc.want, scopes[0].NodeInfo.Mcpu)
+		require.Equal(t, int32(tc.want), scopes[0].DataSource.node.Stats.Dop)
+		require.Equal(t, int32(8), node.Stats.Dop, "execution gate must not alter the cached plan")
+	}
+	c.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "vectorLocalDOP=1", nil })
+	node.Stats.Dop = 2
+	dop, err := c.vectorIndexScanParallelism(node, 4)
+	require.NoError(t, err)
+	require.Equal(t, 2, dop, "keep max_dop already applied during query planning")
+	c.ncpu = 1
+	dop, err = c.vectorIndexScanParallelism(node, 4)
+	require.NoError(t, err)
+	require.Equal(t, 1, dop)
+	node.VectorIndexScan.ScanWork = nil
+	c.ncpu = 8
+	dop, err = c.vectorIndexScanParallelism(node, 4)
+	require.NoError(t, err)
+	require.Equal(t, 1, dop, "enabling the gate without replanning cannot invent scan work")
+}
+
 func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
 	nestedSnapshot := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 10},

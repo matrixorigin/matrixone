@@ -498,63 +498,18 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "floor"), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
@@ -7820,6 +7775,44 @@ func extractUnitPrefersTime(unit string) bool {
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if len(ivecs) == 3 {
+		var (
+			cachedDefinition string
+			memberPositions  map[string]uint64
+		)
+		findSetMember := func(target string, bitmap uint64, definition string) uint64 {
+			// The definition is a hidden constant for planner-generated SET
+			// calls. Keep the fallback for direct executor tests and defensive
+			// callers that provide a row-wise metadata vector.
+			if memberPositions == nil || cachedDefinition != definition {
+				cachedDefinition = definition
+				memberPositions = make(map[string]uint64)
+				for i, member := range strings.Split(definition, ",") {
+					// Match types.ParseSet: SET definitions are normalized by
+					// trimming trailing ASCII spaces and folding case.
+					key := strings.ToLower(strings.TrimRight(member, " "))
+					memberPositions[key] = uint64(i + 1)
+				}
+			}
+			// Most SET labels are already normalized at the SQL boundary. Try
+			// the allocation-free exact key first and fold only on a miss for
+			// mixed-case or padded needles.
+			targetKey := strings.TrimRight(target, " ")
+			position, ok := memberPositions[targetKey]
+			if !ok {
+				position, ok = memberPositions[strings.ToLower(targetKey)]
+			}
+			if !ok || position == 0 || position > types.MaxSetMembers {
+				return 0
+			}
+			if bitmap&(uint64(1)<<uint(position-1)) == 0 {
+				return 0
+			}
+			return position
+		}
+		return opTernaryStrFixedStrToFixed[uint64, uint64](ivecs, result, proc, length, findSetMember, selectList)
+	}
+
 	findInStrList := func(str, strlist string) uint64 {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {

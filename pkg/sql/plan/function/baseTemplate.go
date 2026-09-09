@@ -1075,6 +1075,89 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	return nil
 }
 
+// opTernaryStrFixedStrToFixed is used by internal overloads whose third
+// argument carries immutable string metadata for a fixed-width value.  It
+// keeps the ordinary vector null/select-list contract while allowing the
+// caller to cache work derived from the metadata argument.
+func opTernaryStrFixedStrToFixed[
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 string, v2 T2, v3 string) Tr, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(3)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p3 := vector.OptGetBytesParamFromWrapper(rs, 2, parameters[2])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	// A constant NULL represents NULL for every output row; a non-constant
+	// vector's null bitmap is already row-indexed.  Treat all three operands as
+	// strict, including the metadata argument, even though the planner emits a
+	// non-NULL constant for the internal overload.
+	if parameters[0].IsConst() {
+		_, isNull := p1.GetStrValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p1.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+	}
+	if parameters[1].IsConst() {
+		_, isNull := p2.GetValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p2.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+	}
+	if parameters[2].IsConst() {
+		_, isNull := p3.GetStrValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p3.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[2].GetNulls(), rsNull)
+	}
+
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if rsNull.Contains(row) {
+			continue
+		}
+		idx1, idx2, idx3 := row, row, row
+		if parameters[0].IsConst() {
+			idx1 = 0
+		}
+		if parameters[1].IsConst() {
+			idx2 = 0
+		}
+		if parameters[2].IsConst() {
+			idx3 = 0
+		}
+		v1, _ := p1.GetStrValue(idx1)
+		v2, _ := p2.GetValue(idx2)
+		v3, _ := p3.GetStrValue(idx3)
+		rss[i] = resultFn(functionUtil.QuickBytesToStr(v1), v2, functionUtil.QuickBytesToStr(v3))
+	}
+	return nil
+}
+
 func opBinaryStrFixedToStrWithErrorCheck[
 	T2 types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 string, v2 T2) (string, error), selectList *FunctionSelectList) error {
