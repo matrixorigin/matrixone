@@ -418,6 +418,12 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 				[]float64{0}, []bool{true}),
 		},
 		{
+			name:  "non-null constant expands to every row",
+			input: NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1.9", "1.9"}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1}, []bool{false, false}),
+		},
+		{
 			name: "nulls at first middle and last rows",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"", "1.9", "", "-1.1", ""},
@@ -440,12 +446,26 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
 		},
 		{
+			name: "non-null empty string remains error",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{""}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
 			name: "masked malformed row",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"1.9", "not-a-number", "-1.1"}, []bool{false, false, false}),
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{1, 0, -2}, []bool{false, true, false}),
 			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+		},
+		{
+			name: "all masked malformed rows skip parsing",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"not-a-number", ""}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0}, []bool{true, true}),
+			selectList: &FunctionSelectList{AllNull: true},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -455,6 +475,18 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 			require.True(t, succeeded, info)
 		})
 	}
+
+	invalidSecondArg := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), FloorStr)
+	require.NoError(t, invalidSecondArg.result.PreExtendAndReset(invalidSecondArg.fnLength))
+	err := FloorStr(invalidSecondArg.parameters, invalidSecondArg.result, proc, invalidSecondArg.fnLength, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the second argument of the floor")
+	require.NotContains(t, err.Error(), "ceil")
 }
 
 func TestFloorStrDecimalPlacesMustBeConstant(t *testing.T) {

@@ -499,7 +499,7 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "floor"), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
