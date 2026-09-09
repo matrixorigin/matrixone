@@ -120,6 +120,100 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	assertAttempts(t, counter, arguments, 3)
 }
 
+func TestUTProcessGroupsEscalateAfterTerm(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exercise the same shared cleanup primitive used by engine, plan, and
+	// embedded prebuild helpers. Both groups deliberately ignore TERM; the
+	// bounded KILL escalation must clear their descendants without waiting for
+	// the process leader to cooperate.
+	script := `
+set -o nounset
+test_dir=$(mktemp -d)
+ready_one="$test_dir/ready-one"
+ready_two="$test_dir/ready-two"
+pid_one="$test_dir/pid-one"
+pid_two="$test_dir/pid-two"
+mkfifo "$ready_one" "$ready_two"
+first=0
+second=0
+cleanup() {
+    for pid in "$first" "$second"; do
+        if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then kill -KILL "$pid" 2>/dev/null || true; fi
+    done
+    for pid_file in "$pid_one" "$pid_two"; do
+        [[ -f "$pid_file" ]] || continue
+        read -r leader child < "$pid_file" || true
+        for pid in "$leader" "$child"; do
+            if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then kill -KILL "$pid" 2>/dev/null || true; fi
+        done
+    done
+    wait "$first" 2>/dev/null || true
+    wait "$second" 2>/dev/null || true
+    rm -rf "$test_dir"
+}
+trap cleanup EXIT
+force_count=0
+function logger() {
+    if [[ "$2" == *"force stopping process group"* ]]; then force_count=$((force_count + 1)); fi
+}
+source "$1"
+(
+    kill_calls=0
+    function kill() { kill_calls=$((kill_calls + 1)); return 0; }
+    terminate_ut_process_group 0 TERM
+    ut_process_group_alive 0
+    if (( kill_calls != 0 )); then
+        echo "zero pid attempted process-group signaling" >&2
+        exit 1
+    fi
+) || exit 1
+set -m
+bash -c 'trap "" TERM; sleep 30 & child=$!; printf "%s %s\\n" "$BASHPID" "$child" > "$2"; printf ready > "$1"; wait "$child"' bash "$ready_one" "$pid_one" &
+first=$!
+bash -c 'trap "" TERM; sleep 30 & child=$!; printf "%s %s\\n" "$BASHPID" "$child" > "$2"; printf ready > "$1"; wait "$child"' bash "$ready_two" "$pid_two" &
+second=$!
+set +m
+IFS= read -r token < "$ready_one"
+IFS= read -r token < "$ready_two"
+terminate_ut_process_groups 2 "$first" "$second"
+wait "$first" 2>/dev/null || true
+wait "$second" 2>/dev/null || true
+read -r first_leader first_child < "$pid_one"
+read -r second_leader second_child < "$pid_two"
+if (( force_count != 2 )); then
+    echo "expected KILL escalation for two groups, got $force_count" >&2
+    exit 1
+fi
+for pid in "$first_leader" "$first_child" "$second_leader" "$second_child"; do
+    gone=0
+    for attempt in {1..20}; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [[ -z "$state" || "$state" == Z* ]]; then
+            gone=1
+            break
+        fi
+        sleep 0.05
+    done
+    if (( gone == 0 )); then
+        echo "TERM-ignoring process descendant survived cancellation: $pid" >&2
+        exit 1
+    fi
+done
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("process-group cancellation harness failed: %v\n%s", err, output)
+	}
+}
+
 func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
 	if err != nil {
@@ -163,7 +257,7 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
 		t.Fatalf("missing setup error summary: %s", text)
 	}
-	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=2 admission_wait(total=2.10s max=2.00s) service_start(total=7.00s max=4.00s) admission_hold_observed_max=5.00s admission_unreleased=1") {
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=2 admission_wait(total=2.10s max=2.00s) service_start(total=7.00s max=4.00s) admission_hold_observed_max=5.00s admission_unreleased_observed=1 admission_release_evidence=partial slowest_completed_admission_waits=2.00s:example/cluster:TestCluster5 pid=10 cluster=1,100.00ms:example/cluster:TestCluster6 pid=11 cluster=1") {
 		t.Fatalf("missing embedded cluster diagnosis: %s", text)
 	}
 
@@ -174,7 +268,7 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n"}`,
 	}, "\n")
 	text = runSummary(filepath.Join(t.TempDir(), "reacquired.json"), reacquired)
-	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased=1") {
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
 		t.Fatalf("reacquired lease was not reported as active: %s", text)
 	}
 
@@ -184,7 +278,7 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=3s hold=3s admission_released=true\n"}`,
 	}, "\n")
 	text = runSummary(filepath.Join(t.TempDir(), "released.json"), released)
-	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased=0") {
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=0 admission_release_evidence=partial") {
 		t.Fatalf("released reacquired lease was not accounted for: %s", text)
 	}
 }

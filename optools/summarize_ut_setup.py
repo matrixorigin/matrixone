@@ -85,6 +85,12 @@ def setup_records(report_path: Path) -> Iterable[Tuple[Dict[str, str], float]]:
                 fields = dict(
                     FIELD_RE.findall(output_line[marker + len("MO_UT_SETUP ") :])
                 )
+                package = event.get("Package")
+                test = event.get("Test")
+                if isinstance(package, str) and package:
+                    fields["package"] = package
+                if isinstance(test, str) and test:
+                    fields["test"] = test
                 fixture = fields.get("fixture")
                 phase = fields.get("phase")
                 duration = fields.get("duration")
@@ -138,6 +144,7 @@ def summarize_embedded_diagnostics(
     # current lease state per cluster key and reset it at every successful
     # admission acquire; a historical release must not hide a later lease.
     admission_state: Dict[Tuple[str, str], bool] = {}
+    waiters: List[Tuple[float, str]] = []
     for fields, seconds in embedded:
         phase_totals[fields["phase"]].append(seconds)
         cluster_id = fields.get("cluster_id")
@@ -151,6 +158,16 @@ def summarize_embedded_diagnostics(
             and fields.get("status") != "error"
         ):
             admission_state[cluster_key] = False
+            wait_seconds = duration_seconds(fields.get("wait", ""))
+            if wait_seconds is not None:
+                package = fields.get("package", "?")
+                test = fields.get("test", "?")
+                owner = f"{package}:{test}"
+                pid = fields.get("pid")
+                cluster = fields.get("cluster_id")
+                if pid or cluster:
+                    owner += f" pid={pid or '?'} cluster={cluster or '?'}"
+                waiters.append((wait_seconds, owner))
         hold = fields.get("hold")
         if hold is not None:
             if cluster_key is not None:
@@ -195,8 +212,18 @@ def summarize_embedded_diagnostics(
             "admission_hold_observed_max=" + format_duration(max(holds))
         )
         details.append(
-            "admission_unreleased="
+            "admission_unreleased_observed="
             f"{sum(not released for released in admission_state.values())}"
+        )
+        details.append("admission_release_evidence=partial")
+    if waiters:
+        slow_waiters = sorted(waiters, reverse=True)[:3]
+        details.append(
+            "slowest_completed_admission_waits="
+            + ",".join(
+                f"{format_duration(seconds)}:{owner[:120]}"
+                for seconds, owner in slow_waiters
+            )
         )
     return "[ut_setup] embedded-cluster diagnosis: " + " ".join(details)
 
