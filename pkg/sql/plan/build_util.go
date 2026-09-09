@@ -1131,33 +1131,50 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 	// would otherwise inline rand() into g and evaluate it twice. Detect that
 	// dependency closure here, after all raw expressions (including generated
 	// expressions) are known, so every DML entry point gets the same rule.
-	projectionColumns := make([]int32, 0, len(colIdxToProjPos))
+	// Only sort and inspect the full projection when at least one raw
+	// expression contains a row-local reference. Ordinary INSERTs with literal
+	// values/defaults still use this helper, but do not need the dependency
+	// closure or its O(width log width) work.
+	needsVolatileClosure := false
 	for colIdx := range colIdxToProjPos {
-		projectionColumns = append(projectionColumns, colIdx)
+		if raw, ok := expressions[colIdx]; ok && raw != nil && exprHasLocalColumnRef(raw) {
+			needsVolatileClosure = true
+			break
+		}
 	}
-	sort.Slice(projectionColumns, func(i, j int) bool {
-		left, right := colIdxToProjPos[projectionColumns[i]], colIdxToProjPos[projectionColumns[j]]
-		if left == right {
-			return projectionColumns[i] < projectionColumns[j]
+	var projectionColumns []int32
+	if needsVolatileClosure {
+		projectionColumns = make([]int32, 0, len(colIdxToProjPos))
+		for colIdx := range colIdxToProjPos {
+			projectionColumns = append(projectionColumns, colIdx)
 		}
-		return left < right
-	})
-	for _, colIdx := range projectionColumns {
-		if materialized[colIdx] {
-			continue
-		}
-		raw, ok := expressions[colIdx]
-		if !ok || raw == nil || !exprHasLocalColumnRef(raw) {
-			continue
-		}
-		needsStage, err := hasVolatileLocalDependency(
-			builder.GetContext(), colIdx, expressions, materialized,
-		)
-		if err != nil {
-			return 0, 0, err
-		}
-		if needsStage {
-			materialized[colIdx] = true
+		sort.Slice(projectionColumns, func(i, j int) bool {
+			left, right := colIdxToProjPos[projectionColumns[i]], colIdxToProjPos[projectionColumns[j]]
+			if left == right {
+				return projectionColumns[i] < projectionColumns[j]
+			}
+			return left < right
+		})
+		for _, colIdx := range projectionColumns {
+			if materialized[colIdx] {
+				continue
+			}
+			raw, ok := expressions[colIdx]
+			if !ok || raw == nil {
+				continue
+			}
+			if !exprHasLocalColumnRef(raw) {
+				continue
+			}
+			needsStage, err := hasVolatileLocalDependency(
+				builder.GetContext(), colIdx, expressions, materialized,
+			)
+			if err != nil {
+				return 0, 0, err
+			}
+			if needsStage {
+				materialized[colIdx] = true
+			}
 		}
 	}
 
@@ -1881,37 +1898,89 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
-// remapGeneratedColExprsToTableOrder normalizes generated-column references
-// after CTAS merges explicit target definitions with source columns. The
-// generated-column binder resolves references against declaration order, while
-// CTAS intentionally stores target-only columns before source-only columns.
-// DML generated-column expansion uses the final TableDef order, so leave the
-// catalog with one stable coordinate system.
-func remapGeneratedColExprsToTableOrder(tableCols, declarationCols []*ColDef) {
-	if len(tableCols) == 0 || len(declarationCols) == 0 {
+// remapCTASColumnExprsToTableOrder normalizes expressions from the two
+// independent CTAS input schemas. Explicit target definitions are bound
+// against declaration order; inherited defaults on SELECT-only columns retain
+// the SELECT output order. Treating every final column as if it came from the
+// explicit declaration list can silently corrupt an inherited source default
+// when target-only columns are prepended.
+func remapCTASColumnExprsToTableOrder(
+	tableCols, declarationCols, sourceCols []*ColDef,
+) {
+	if len(tableCols) == 0 {
 		return
 	}
-	tablePosByName := make(map[string]int, len(tableCols))
-	for pos, col := range tableCols {
+
+	explicitNames := make(map[string]struct{}, len(declarationCols))
+	for _, col := range declarationCols {
 		if col != nil {
-			tablePosByName[col.Name] = pos
-		}
-	}
-	declarationToTablePos := make(map[int32]int32, len(declarationCols))
-	for declarationPos, col := range declarationCols {
-		if col == nil {
-			continue
-		}
-		if tablePos, ok := tablePosByName[col.Name]; ok {
-			declarationToTablePos[int32(declarationPos)] = int32(tablePos)
+			explicitNames[strings.ToLower(col.Name)] = struct{}{}
 		}
 	}
 
+	explicitOwners := make([]*ColDef, 0, len(declarationCols))
+	sourceOwners := make([]*ColDef, 0, len(sourceCols))
 	for _, col := range tableCols {
-		if col == nil || col.GeneratedCol == nil {
+		if col == nil {
 			continue
 		}
-		remapGeneratedColExprPositions(col.GeneratedCol.Expr, declarationToTablePos)
+		if _, ok := explicitNames[strings.ToLower(col.Name)]; ok {
+			explicitOwners = append(explicitOwners, col)
+		} else {
+			sourceOwners = append(sourceOwners, col)
+		}
+	}
+
+	remapColumnExprsToTableOrder(explicitOwners, declarationCols, tableCols)
+	remapColumnExprsToTableOrder(sourceOwners, sourceCols, tableCols)
+}
+
+// remapColumnExprsToTableOrder remaps expressions owned by tableCols. The
+// origin list supplies the coordinates used when those expressions were
+// bound, while finalTableCols supplies the coordinates persisted in the
+// resulting table. DEFAULT and generated expressions share the same row-local
+// ColRef representation and therefore must be remapped together.
+func remapColumnExprsToTableOrder(
+	tableCols, originCols, finalTableCols []*ColDef,
+) {
+	if len(tableCols) == 0 || len(originCols) == 0 || len(finalTableCols) == 0 {
+		return
+	}
+
+	finalPosByName := make(map[string]int, len(finalTableCols))
+	for pos, col := range finalTableCols {
+		if col != nil {
+			finalPosByName[strings.ToLower(col.Name)] = pos
+		}
+	}
+	originToFinal := make(map[int32]int32, len(originCols))
+	for originPos, col := range originCols {
+		if col == nil {
+			continue
+		}
+		if finalPos, ok := finalPosByName[strings.ToLower(col.Name)]; ok {
+			originToFinal[int32(originPos)] = int32(finalPos)
+		}
+	}
+	remapColumnExprsByPosition(tableCols, originToFinal)
+}
+
+// remapColumnExprsByPosition applies a complete coordinate map to every
+// row-local expression attached to the supplied columns.
+func remapColumnExprsByPosition(cols []*ColDef, positions map[int32]int32) {
+	if len(cols) == 0 || len(positions) == 0 {
+		return
+	}
+	for _, col := range cols {
+		if col == nil {
+			continue
+		}
+		if col.Default != nil && col.Default.Expr != nil {
+			remapGeneratedColExprPositions(col.Default.Expr, positions)
+		}
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			remapGeneratedColExprPositions(col.GeneratedCol.Expr, positions)
+		}
 	}
 }
 
@@ -1921,7 +1990,7 @@ func remapGeneratedColExprPositions(expr *plan.Expr, positions map[int32]int32) 
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 {
+		if e.Col != nil && e.Col.RelPos == 0 {
 			if pos, ok := positions[e.Col.ColPos]; ok {
 				e.Col.ColPos = pos
 			}

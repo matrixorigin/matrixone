@@ -5017,6 +5017,21 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		)
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
+		colIdxToProjPos[int32(i)] = int32(proj1Pos)
+		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
+			Typ: genExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: projTag1,
+					ColPos: int32(proj1Pos),
+				},
+			},
+		}
+	}
+
+	for _, i := range generatedColIdxs {
+		genExpr := columnExprs[int32(i)]
+		proj1Pos := genColIdxToProj1Pos[i]
 		needsStage := false
 		for _, refIdx := range collectRefColPos(genExpr) {
 			if materializeCols[refIdx] ||
@@ -5025,26 +5040,24 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				break
 			}
 		}
+		if !needsStage && exprHasLocalColumnRef(genExpr) {
+			volatileDependency, err := hasVolatileLocalDependency(
+				builder.GetContext(), int32(i), columnExprs, materializeCols,
+			)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
+			needsStage = volatileDependency
+		}
 		if needsStage {
 			materializeCols[int32(i)] = true
 			materializeOrder = append(materializeOrder, int32(i))
 		} else {
-			// Generated expressions over ordinary input/default values retain the
+			// Generated expressions over stable input/default values retain the
 			// established inline path. Generated-to-generated and generated-to-
-			// materialized-default edges use the staged path above.
+			// materialized/volatile-default edges use the staged path above.
 			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 			projList1[proj1Pos] = genExpr
-		}
-		pos := int32(proj1Pos)
-		colIdxToProjPos[int32(i)] = pos
-		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
-			Typ: genExpr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: projTag1,
-					ColPos: pos,
-				},
-			},
 		}
 	}
 

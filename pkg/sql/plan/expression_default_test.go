@@ -987,6 +987,80 @@ func TestRemapExpressionDefaultsAndReferencesAfterColumnChanges(t *testing.T) {
 	}, "value"))
 }
 
+func TestRemapCTASColumnExpressionsUsesTheirOriginSchema(t *testing.T) {
+	typ := expressionDefaultIntType()
+
+	// Explicit target columns are bound in declaration order [a, b, g], but
+	// CTAS stores target-only b before the source column a. Both expression
+	// kinds must use the final [b, a, g] coordinates.
+	a := &planpb.ColDef{Name: "a", Typ: typ}
+	b := &planpb.ColDef{
+		Name:    "b",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)},
+	}
+	g := &planpb.ColDef{
+		Name: "g",
+		Typ:  typ,
+		GeneratedCol: &planpb.GeneratedCol{
+			Expr: expressionDefaultCol(1, 0),
+		},
+	}
+	remapCTASColumnExprsToTableOrder(
+		[]*ColDef{b, a, g},
+		[]*ColDef{a, b, g},
+		[]*ColDef{{Name: "a", Typ: typ}},
+	)
+	require.Equal(t, []int32{1}, collectRefColPos(b.Default.Expr))
+	require.Equal(t, []int32{0}, collectRefColPos(g.GeneratedCol.Expr))
+	require.NoError(t, validateDefaultColumnDependencies(context.Background(), []*ColDef{b, a, g}))
+
+	// A SELECT-only column inherits a source default whose coordinates are the
+	// SELECT output order [a, c]. It must not be remapped using the explicit
+	// target schema [x], or c's dependency would incorrectly remain at zero.
+	x := &planpb.ColDef{Name: "x", Typ: typ}
+	sourceA := &planpb.ColDef{Name: "a", Typ: typ}
+	sourceC := &planpb.ColDef{
+		Name:    "c",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)},
+	}
+	final := []*ColDef{x, sourceA, sourceC}
+	remapCTASColumnExprsToTableOrder(
+		final,
+		[]*ColDef{x},
+		[]*ColDef{sourceA, sourceC},
+	)
+	require.Equal(t, []int32{1}, collectRefColPos(sourceC.Default.Expr))
+	require.NoError(t, validateDefaultColumnDependencies(context.Background(), final))
+}
+
+func TestRemapCTASSourceDefaultsUsesSourceAndOutputCoordinates(t *testing.T) {
+	typ := expressionDefaultIntType()
+	b := &planpb.ColDef{
+		Name:    "b",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)},
+	}
+	cols := []*ColDef{b, {Name: "a", Typ: typ}}
+	provenance := []OutputColumnProvenance{
+		{State: ProvenanceSingleSource, Source: &SourceColumn{RelPos: 7, ColPos: 1}},
+		{State: ProvenanceSingleSource, Source: &SourceColumn{RelPos: 7, ColPos: 0}},
+	}
+	require.NoError(t, remapCTASSourceDefaultsToOutput(
+		context.Background(), cols, provenance,
+	))
+	require.Equal(t, []int32{1}, collectRefColPos(b.Default.Expr))
+
+	missing := []*ColDef{{
+		Name:    "b",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(2, 0)},
+	}}
+	err := remapCTASSourceDefaultsToOutput(context.Background(), missing, provenance[:1])
+	require.ErrorContains(t, err, "not in the SELECT output")
+}
+
 func TestModifyColPositionRemapsChangedColumnDefaults(t *testing.T) {
 	ctx := context.Background()
 	typ := expressionDefaultIntType()
@@ -1011,6 +1085,78 @@ func TestModifyColPositionRemapsChangedColumnDefaults(t *testing.T) {
 	// b's DEFAULT(c) was bound before the move. It must still point at c's
 	// final position after the old slot is removed and the new slot inserted.
 	require.Equal(t, []int32{2}, collectRefColPos(nCol.Default.Expr))
+}
+
+func TestModifyColPositionRemapsReferencesToMovedColumn(t *testing.T) {
+	typ := expressionDefaultIntType()
+
+	newTable := func(refPos int32) *TableDef {
+		return &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "a", Typ: typ},
+			{
+				Name:    "b",
+				Typ:     typ,
+				Default: &planpb.Default{Expr: expressionDefaultCol(refPos, 0)},
+			},
+			{Name: "c", Typ: typ},
+		}}
+	}
+
+	// Moving the referenced first column later is the case missed by a
+	// delete-shift plus insert-shift implementation: the reference at oldPos
+	// is not included in either shift.
+	tableDef := newTable(0)
+	require.NoError(t, modifyColPosition(
+		context.Background(),
+		tableDef,
+		tableDef.Cols[0],
+		&planpb.ColDef{Name: "a", Typ: typ},
+		&tree.ColumnPosition{
+			Typ:            tree.ColumnPositionAfter,
+			RelativeColumn: tree.NewUnresolvedColName("b"),
+		},
+	))
+	require.Equal(t, []string{"b", "a", "c"}, []string{
+		tableDef.Cols[0].Name, tableDef.Cols[1].Name, tableDef.Cols[2].Name,
+	})
+	require.Equal(t, []int32{1}, collectRefColPos(tableDef.Cols[0].Default.Expr))
+
+	// Moving a later referenced column to FIRST exercises the opposite
+	// direction and makes sure all neighbor coordinates are remapped too.
+	tableDef = newTable(2)
+	require.NoError(t, modifyColPosition(
+		context.Background(),
+		tableDef,
+		tableDef.Cols[2],
+		&planpb.ColDef{Name: "c", Typ: typ},
+		&tree.ColumnPosition{Typ: tree.ColumnPositionFirst},
+	))
+	require.Equal(t, []string{"c", "a", "b"}, []string{
+		tableDef.Cols[0].Name, tableDef.Cols[1].Name, tableDef.Cols[2].Name,
+	})
+	require.Equal(t, []int32{0}, collectRefColPos(tableDef.Cols[2].Default.Expr))
+}
+
+func TestRemapColumnExprsByPositionRemapsDefaultsAndGeneratedColumns(t *testing.T) {
+	typ := expressionDefaultIntType()
+	cols := []*ColDef{
+		{
+			Name:    "b",
+			Typ:     typ,
+			Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)},
+		},
+		{
+			Name: "a",
+			Typ:  typ,
+			GeneratedCol: &planpb.GeneratedCol{
+				Expr: expressionDefaultCol(2, 0),
+			},
+		},
+		{Name: "c", Typ: typ},
+	}
+	remapColumnExprsByPosition(cols, map[int32]int32{0: 1, 1: 0, 2: 2})
+	require.Equal(t, []int32{1}, collectRefColPos(cols[0].Default.Expr))
+	require.Equal(t, []int32{2}, collectRefColPos(cols[1].GeneratedCol.Expr))
 }
 
 func TestDefaultDependencyDiscoveryHandlesMissingMetadata(t *testing.T) {

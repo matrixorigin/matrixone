@@ -182,6 +182,29 @@ func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testin
 	vs.Free(proc, false, nil)
 }
 
+func TestInitExprExecListCleansPartialInitialization(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
+	valid := &planpb.Expr{
+		Typ: intType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_I64Val{I64Val: 1},
+		}},
+	}
+	vs := &ValueScan{RowsetData: &planpb.RowsetData{Cols: []*planpb.ColData{{
+		Data: []*planpb.RowsetExpr{{Expr: valid}, {Expr: nil}},
+	}}}}
+
+	before := proc.Mp().CurrNB()
+	err := vs.InitExprExecList(proc)
+	require.Error(t, err)
+	require.Nil(t, vs.ExprExecLists)
+	require.Equal(t, before, proc.Mp().CurrNB(),
+		"a failed expression-executor build must release executors created earlier in the rowset")
+}
+
 func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -330,6 +353,51 @@ func TestRowsetExprHasLocalColumnRef(t *testing.T) {
 	require.True(t, rowsetExprHasLocalColumnRef(&planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
 		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0}}},
 	}}}}))
+}
+
+func TestValueScanColumnOrder(t *testing.T) {
+	local := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: pos,
+		}}}
+	}
+	literal := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Value: &planpb.Literal_I64Val{I64Val: 1},
+	}}}
+
+	order, err := valueScanColumnOrder(&planpb.RowsetData{Cols: []*planpb.ColData{
+		{Data: []*planpb.RowsetExpr{{Expr: local(1)}}},
+		{Data: []*planpb.RowsetExpr{{Expr: literal}}},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 0}, order,
+		"a row-local dependency must be evaluated after its source column")
+
+	_, err = valueScanColumnOrder(&planpb.RowsetData{Cols: []*planpb.ColData{
+		{Data: []*planpb.RowsetExpr{{Expr: local(2)}}},
+	}})
+	require.ErrorContains(t, err, "outside the rowset")
+
+	_, err = valueScanColumnOrder(&planpb.RowsetData{Cols: []*planpb.ColData{
+		{Data: []*planpb.RowsetExpr{{Expr: local(1)}}},
+		{Data: []*planpb.RowsetExpr{{Expr: local(0)}}},
+	}})
+	require.ErrorContains(t, err, "circular rowset dependency")
+
+	_, err = valueScanColumnOrder(&planpb.RowsetData{Cols: []*planpb.ColData{
+		{Data: []*planpb.RowsetExpr{nil}},
+	}})
+	require.ErrorContains(t, err, "nil rowset expression")
+
+	order, err = valueScanColumnOrder(&planpb.RowsetData{Cols: []*planpb.ColData{
+		{Data: []*planpb.RowsetExpr{{Expr: literal}}},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, []int{0}, order)
+	order, err = valueScanColumnOrder(nil)
+	require.NoError(t, err)
+	require.Nil(t, order)
 }
 
 func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {

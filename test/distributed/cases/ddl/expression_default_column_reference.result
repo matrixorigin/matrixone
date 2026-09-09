@@ -43,6 +43,25 @@ id    dependency    b_origin
 2    same-source    default
 3    same-source    default
 4    re-evaluated    explicit
+create table t_generated_volatile (
+id int primary key,
+a double default (rand()),
+g double generated always as (a) stored
+);
+insert into t_generated_volatile (id) values (1), (2);
+select id,
+case when a = g then 'same-source' else 're-evaluated' end as dependency
+from t_generated_volatile order by id;
+id    dependency
+1    same-source
+2    same-source
+replace into t_generated_volatile (id) values (1);
+select id,
+case when a = g then 'same-source' else 're-evaluated' end as dependency
+from t_generated_volatile order by id;
+id    dependency
+1    same-source
+2    same-source
 create table t_rows (
 id int primary key,
 a int,
@@ -116,6 +135,40 @@ b    a    c
 11    1    10
 22    2    20
 21    10    20
+create table t_ctas (
+a int,
+b int default (a + 1)
+) as select 10 as a;
+insert into t_ctas (a) values (20);
+select a, b from t_ctas order by a;
+a    b
+10    11
+20    21
+create table t_ctas_expression (
+a int default (1 + 1),
+b int default (a + 1)
+) as select 10 as a;
+insert into t_ctas_expression (a) values (20);
+select a, b from t_ctas_expression order by a;
+a    b
+10    11
+20    21
+create table t_ctas_source (a int, b int default (a + 1));
+insert into t_ctas_source (a) values (10);
+create table t_ctas_source_reordered as select b, a from t_ctas_source;
+insert into t_ctas_source_reordered (a) values (20);
+select b, a from t_ctas_source_reordered order by a;
+b    a
+11    10
+21    20
+create table t_move (a int, b int default (a + 1), c int);
+insert into t_move (a, c) values (10, 30);
+alter table t_move modify column a int after b;
+insert into t_move (a, c) values (20, 40);
+select a, b, c from t_move order by a;
+a    b    c
+10    11    30
+20    21    40
 create table t_like like t_chain;
 insert into t_like (id, a) values (10, 50);
 select id, a, b, c from t_like;

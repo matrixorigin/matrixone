@@ -160,7 +160,7 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 		return nil, nil
 	}
 	columnCount := len(rowsetData.Cols)
-	deps := make([]map[int]struct{}, columnCount)
+	var deps []map[int]struct{}
 	hasDependency := false
 	for colIdx, col := range rowsetData.Cols {
 		if col == nil {
@@ -176,6 +176,9 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 			// map and topological sort.
 			if !rowsetExprHasLocalColumnRef(rowExpr.Expr) {
 				continue
+			}
+			if deps == nil {
+				deps = make([]map[int]struct{}, columnCount)
 			}
 			hasDependency = true
 			refs := make(map[int32]struct{})
@@ -249,6 +252,13 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 			return err
 		}
 	}
+	if valueScan.Batchs == nil || len(valueScan.Batchs) == 0 || valueScan.Batchs[0] == nil {
+		return moerr.NewInternalErrorNoCtx("value scan has no input batch")
+	}
+	if len(valueScan.RowsetData.Cols) != len(valueScan.Batchs[0].Vecs) ||
+		len(valueScan.ExprExecLists) != len(valueScan.RowsetData.Cols) {
+		return moerr.NewInternalErrorNoCtx("value scan rowset and batch columns are inconsistent")
+	}
 
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
 	bat := valueScan.Batchs[0]
@@ -272,13 +282,29 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 }
 
 func (valueScan *ValueScan) InitExprExecList(proc *process.Process) error {
+	if valueScan.RowsetData == nil {
+		return moerr.NewInternalErrorNoCtx("value scan has no rowset data")
+	}
 	exprExecLists := make([][]colexec.ExpressionExecutor, len(valueScan.RowsetData.Cols))
 	for i, col := range valueScan.RowsetData.Cols {
+		if col == nil {
+			freeExpressionExecLists(exprExecLists)
+			valueScan.ExprExecLists = nil
+			return moerr.NewInternalErrorNoCtxf("value scan has a nil column definition at position %d", i)
+		}
 		var exprExecList []colexec.ExpressionExecutor
-		for _, data := range col.Data {
+		for j, data := range col.Data {
+			if data == nil || data.Expr == nil {
+				freeExpressionExecLists(exprExecLists)
+				valueScan.ExprExecLists = nil
+				return moerr.NewInternalErrorNoCtxf(
+					"value scan has a nil expression at column %d row %d", i, j)
+			}
 			exprExecutor, err := colexec.NewExpressionExecutor(proc, data.Expr)
 			if err != nil {
-				valueScan.ExprExecLists = exprExecLists
+				freeExpressionExecLists(exprExecLists)
+				freeExpressionExecLists([][]colexec.ExpressionExecutor{exprExecList})
+				valueScan.ExprExecLists = nil
 				return err
 			}
 			exprExecList = append(exprExecList, exprExecutor)

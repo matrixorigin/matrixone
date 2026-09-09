@@ -1482,6 +1482,21 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		)
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
+		colIdxToProjPos[int32(i)] = int32(proj1Pos)
+		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
+			Typ: genExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: projTag1,
+					ColPos: int32(proj1Pos),
+				},
+			},
+		}
+	}
+
+	for _, i := range generatedColIdxs {
+		genExpr := columnExprs[int32(i)]
+		proj1Pos := genColIdxToProj1Pos[i]
 		needsStage := false
 		for _, refIdx := range collectRefColPos(genExpr) {
 			if materializeCols[refIdx] ||
@@ -1490,23 +1505,21 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				break
 			}
 		}
+		if !needsStage && exprHasLocalColumnRef(genExpr) {
+			volatileDependency, err := hasVolatileLocalDependency(
+				builder.GetContext(), int32(i), columnExprs, materializeCols,
+			)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			needsStage = volatileDependency
+		}
 		if needsStage {
 			materializeCols[int32(i)] = true
 			materializeOrder = append(materializeOrder, int32(i))
 		} else {
 			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 			projList1[proj1Pos] = genExpr
-		}
-		pos := int32(proj1Pos)
-		colIdxToProjPos[int32(i)] = pos
-		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
-			Typ: genExpr.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: projTag1,
-					ColPos: pos,
-				},
-			},
 		}
 	}
 

@@ -115,42 +115,69 @@ func modifyColPosition(
 	pos *tree.ColumnPosition,
 ) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		// Find old column position before removing
+		// Capture the complete pre-move schema. Defaults and generated
+		// expressions on both the changed column and its neighbors use these
+		// positions because buildColumnAndConstraint binds against this schema.
+		oldCols := append([]*ColDef(nil), tableDef.Cols...)
 		oldPos := int32(-1)
-		for i, col := range tableDef.Cols {
+		for i, col := range oldCols {
 			if strings.EqualFold(col.Name, oCol.Name) {
 				oldPos = int32(i)
 				break
 			}
 		}
 
-		// delete old column
-		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
-			return strings.EqualFold(col.Name, oCol.Name)
-		})
-		if oldPos >= 0 {
-			// nCol was bound against the pre-move schema, so it needs the same
-			// removal remap as the columns that remain in the table.  Without
-			// this, CHANGE/MODIFY ... FIRST/AFTER silently changes a default's
-			// dependency whenever the moved column precedes that dependency.
-			if nCol.GeneratedCol != nil {
-				shiftColPosInExpr(nCol.GeneratedCol.Expr, oldPos+1, -1)
+		// Remove the old slot before resolving AFTER, matching MySQL's
+		// position semantics and the previous implementation.
+		// Keep the capacity non-negative even if a malformed caller supplies an
+		// old column that is not present in tableDef. The normal path always
+		// finds oCol, but position validation must not turn bad metadata into a
+		// panic before the relative-position error is reported.
+		remaining := make([]*ColDef, 0, len(oldCols))
+		for i, col := range oldCols {
+			if i != int(oldPos) {
+				remaining = append(remaining, col)
 			}
-			if nCol.Default != nil {
-				shiftColPosInExpr(nCol.Default.Expr, oldPos+1, -1)
-			}
-			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
 		}
 
-		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
+		targetPos, err := findPositionRelativeColumn(ctx, remaining, pos)
 		if err != nil {
 			return err
 		}
-		tableDef.Cols = append(
-			tableDef.Cols[:targetPos],
-			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
-		)
-		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
+		finalCols := make([]*ColDef, 0, len(oldCols))
+		finalCols = append(finalCols, remaining[:targetPos]...)
+		finalCols = append(finalCols, nCol)
+		finalCols = append(finalCols, remaining[targetPos:]...)
+		tableDef.Cols = finalCols
+
+		if oldPos >= 0 {
+			// A delete-shift followed by an insert-shift cannot represent the
+			// moved column itself: references at exactly oldPos are skipped by
+			// the delete pass. Build the bijection once, then rewrite every
+			// DEFAULT and generated expression, including nCol's expression.
+			finalPosByName := make(map[string]int32, len(finalCols))
+			for newIdx, newCol := range finalCols {
+				if newCol != nil {
+					finalPosByName[strings.ToLower(newCol.Name)] = int32(newIdx)
+				}
+			}
+			oldToNew := make(map[int32]int32, len(oldCols))
+			for oldIdx, oldCol := range oldCols {
+				if oldCol == nil {
+					continue
+				}
+				if oldIdx == int(oldPos) {
+					if newPos, ok := finalPosByName[strings.ToLower(nCol.Name)]; ok {
+						oldToNew[int32(oldIdx)] = newPos
+					}
+					continue
+				}
+				if newPos, ok := finalPosByName[strings.ToLower(oldCol.Name)]; ok {
+					oldToNew[int32(oldIdx)] = newPos
+				}
+			}
+			remapColumnExprsByPosition(finalCols, oldToNew)
+		}
 	} else {
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oCol.Name) {

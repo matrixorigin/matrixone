@@ -1452,7 +1452,65 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Default: defaultDef,
 		}
 	}
+	// A copied source DEFAULT is bound in the source table's coordinate system,
+	// while the CTAS result follows SELECT output order. Normalize that first;
+	// buildTableDefs will perform the second, independent mapping from output
+	// order to the final target order (which may prepend explicit columns).
+	if err := remapCTASSourceDefaultsToOutput(
+		ctx.GetContext(), cols, outputColumnProvenance,
+	); err != nil {
+		return nil, nil, err
+	}
 	return cols, query, nil
+}
+
+// remapCTASSourceDefaultsToOutput converts inherited source-table column
+// references to SELECT-output positions. A source DEFAULT that refers to a
+// source column not present in the output cannot be represented by the CTAS
+// row schema; fail at DDL time instead of persisting a position that happens
+// to name an unrelated result column.
+func remapCTASSourceDefaultsToOutput(
+	ctx context.Context,
+	cols []*ColDef,
+	provenance []OutputColumnProvenance,
+) error {
+	sourceOutputPositions := make(map[int32]map[int32]int32)
+	for outputPos, p := range provenance {
+		if p.State != ProvenanceSingleSource || p.Source == nil {
+			continue
+		}
+		positions := sourceOutputPositions[p.Source.RelPos]
+		if positions == nil {
+			positions = make(map[int32]int32)
+			sourceOutputPositions[p.Source.RelPos] = positions
+		}
+		// If a source column is projected more than once, all copies carry the
+		// same value. Keep the first output position for deterministic mapping.
+		if _, exists := positions[p.Source.ColPos]; !exists {
+			positions[p.Source.ColPos] = int32(outputPos)
+		}
+	}
+
+	for outputPos, col := range cols {
+		if col == nil || col.Default == nil || col.Default.Expr == nil ||
+			outputPos >= len(provenance) {
+			continue
+		}
+		p := provenance[outputPos]
+		if p.State != ProvenanceSingleSource || p.Source == nil {
+			continue
+		}
+		positions := sourceOutputPositions[p.Source.RelPos]
+		for _, refPos := range collectRefColPos(col.Default.Expr) {
+			if _, ok := positions[refPos]; !ok {
+				return moerr.NewInvalidInputf(ctx,
+					"cannot inherit default for CTAS column '%s': source column position %d is not in the SELECT output",
+					col.Name, refPos)
+			}
+		}
+		remapGeneratedColExprPositions(col.Default.Expr, positions)
+	}
+	return nil
 }
 
 // normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
@@ -2842,6 +2900,10 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
+	// Keep the SELECT output schema in its original coordinate system. The
+	// explicit column pass may replace matching entries in asSelectCols, but
+	// inherited source defaults were bound before that replacement.
+	sourceColumnDefs := append([]*ColDef(nil), asSelectCols...)
 	var primaryKeys []string
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
@@ -3271,7 +3333,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
-		remapGeneratedColExprsToTableOrder(createTable.TableDef.Cols, allColDefs)
+		remapCTASColumnExprsToTableOrder(
+			createTable.TableDef.Cols,
+			allColDefs,
+			sourceColumnDefs,
+		)
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
