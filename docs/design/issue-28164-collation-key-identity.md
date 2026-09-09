@@ -827,11 +827,11 @@ checks remain proportional to input rows and constraints, not a full-table scan.
 
 | Field | Decision |
 | --- | --- |
-| Change scope | Design plus current-main baseline evidence; later implementation PR series |
+| Change scope | Design plus current-main baseline evidence and the staged implementation series |
 | Design trigger | Crosses planner, executor, lock, storage, catalog, upgrade, and hot-path boundaries; persistent compatibility and concurrency triggers apply |
 | Selected direction | Shared versioned codec with explicit stop-write migration |
 | Public SQL/API change in this delivery | None |
-| Production implementation | Not started by this design PR |
+| Production implementation | PR8 adds guarded planner/index-probe integration; v2 remains disabled and the complete storage/migration/query series is not implemented |
 | QA decision | Required for implementation: user-visible uniqueness, persistence, concurrency, and compatibility behavior |
 | Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
 | Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 3; maintainer approval is still pending |
@@ -865,9 +865,10 @@ evidence, not maintainer approval.
 Revision 3 closes the currently recorded local design findings and is complete
 enough to start a separately reviewed implementation series. It is marked
 ready for maintainer review, not approved: the named owners must still record
-acceptance or new findings against this revision before production code is
-written. The baseline reproduction is evidence of the current defect only;
-`production_fix` and `qa_acceptance` remain not implemented/not run.
+acceptance or new findings against this revision. The baseline reproduction is
+evidence of the current defect only; the staged implementation must keep v2
+gated until every producer and consumer is connected, and `qa_acceptance`
+remains not run.
 
 ### 10.2 Implementation series status (PR1)
 
