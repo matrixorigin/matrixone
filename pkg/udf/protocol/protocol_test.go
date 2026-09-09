@@ -94,6 +94,9 @@ func TestExecutionGroupReleasesOnlyAfterCloseAndAllMembersTerminal(t *testing.T)
 	require.NoError(t, b.Commit())
 
 	require.NoError(t, group.MemberTerminal("a"))
+	require.NoError(t, group.MemberTerminal("a"))
+	_, err = group.BeginOpen("a")
+	require.ErrorIs(t, err, ErrDuplicate)
 	require.NoError(t, group.Close(ReasonInputEOF))
 	require.Equal(t, int32(0), releases.Load())
 	require.NoError(t, group.MemberTerminal("b"))
@@ -127,6 +130,17 @@ func TestExecutionGroupZeroMemberAndAbortedOpenRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, group.Close(ReasonEmptyInput))
 	require.Equal(t, int32(2), releases.Load())
+
+	group, err = NewExecutionGroup("late", 1, 1, func() error {
+		releases.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	open, err = group.BeginOpen("late-member")
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonCancel))
+	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
+	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
 }
 
 func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
