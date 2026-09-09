@@ -652,6 +652,112 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 	})
 }
 
+func TestOrderedPercentileDiscreteSortableTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	run := func(t *testing.T, typ types.Type, vec *vector.Vector) *vector.Vector {
+		t.Helper()
+		exec, err := makeOrderedPercentileExec(
+			mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+		require.NoError(t, err)
+		require.IsType(t, &orderedPercentileDiscreteExec{}, exec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(
+			EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.Equal(t, 1, results[0].Length())
+		exec.Free()
+		return results[0]
+	}
+
+	t.Run("varchar", func(t *testing.T) {
+		typ := types.New(types.T_varchar, 20, 0)
+		vec := vector.NewVec(typ)
+		defer vec.Free(mp)
+		for _, value := range []string{"gamma", "alpha", "beta"} {
+			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+		}
+		result := run(t, typ, vec)
+		defer result.Free(mp)
+		require.Equal(t, "beta", result.GetStringAt(0))
+	})
+
+	t.Run("date", func(t *testing.T) {
+		typ := types.T_date.ToType()
+		vec := buildFixedVec(t, mp, typ, []types.Date{30, 10, 20})
+		defer vec.Free(mp)
+		result := run(t, typ, vec)
+		defer result.Free(mp)
+		require.Equal(t, types.Date(20),
+			vector.GetFixedAtNoTypeCheck[types.Date](result, 0))
+	})
+
+	t.Run("decimal256", func(t *testing.T) {
+		typ := types.New(types.T_decimal256, 65, 2)
+		values := make([]types.Decimal256, 0, 3)
+		for _, text := range []string{"3.00", "1.00", "2.00"} {
+			value, err := types.ParseDecimal256(text, typ.Width, typ.Scale)
+			require.NoError(t, err)
+			values = append(values, value)
+		}
+		vec := buildFixedVec(t, mp, typ, values)
+		defer vec.Free(mp)
+		result := run(t, typ, vec)
+		defer result.Free(mp)
+		require.Equal(t, "2.00",
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0).Format(typ.Scale))
+	})
+}
+
+func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	typ := types.New(types.T_varchar, 20, 0)
+	config := EncodeOrderedPercentileConfig([]byte("0.5"), false)
+	newExec := func() AggFuncExec {
+		exec, err := makeOrderedPercentileExec(
+			mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(config, 0))
+		return exec
+	}
+	newValues := func(values ...string) *vector.Vector {
+		vec := vector.NewVec(typ)
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+		}
+		return vec
+	}
+
+	left := newExec()
+	right := newExec()
+	leftValues := newValues("delta", "alpha")
+	rightValues := newValues("gamma", "beta")
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftValues}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightValues}))
+
+	var encoded bytes.Buffer
+	require.NoError(t, right.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
+	restored := newExec()
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+	require.NoError(t, left.Merge(restored, 0, 0))
+	results, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "beta", results[0].GetStringAt(0))
+
+	results[0].Free(mp)
+	leftValues.Free(mp)
+	rightValues.Free(mp)
+	left.Free()
+	right.Free()
+	restored.Free()
+}
+
 func TestMakeSpecialOrderedPercentileExec(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()

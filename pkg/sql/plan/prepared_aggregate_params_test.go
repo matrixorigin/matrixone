@@ -39,6 +39,29 @@ func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	return prepare
 }
 
+func TestPreparedPercentileParameters(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile(n_nationkey, ?) from nation",
+		"select approx_percentile(?) within group (order by n_nationkey) from nation",
+		"select percentile_cont(?) within group (order by n_nationkey) from nation",
+		"select percentile_disc(?) within group (order by n_name) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+
+	literal := buildPreparedAggregatePlan(t,
+		"select percentile_disc(0.5) within group (order by n_name) from nation")
+	require.False(t, PreparedPlanHasPercentileParams(literal.Plan))
+
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"select percentile_disc(n_regionkey) within group (order by n_name) from nation")
+	require.ErrorContains(t, err, "non-null constant or parameter")
+}
+
 func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return

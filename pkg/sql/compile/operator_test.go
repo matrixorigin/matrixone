@@ -383,6 +383,38 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
 }
 
+func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.25")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			args, config := constructAggregateConfig(bound.GetF(), proc)
+			require.Equal(t, []*plan.Expr{value}, args)
+			require.Equal(t, tc.want, config)
+		})
+	}
+}
+
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -736,7 +768,7 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 		{
 			name:       "non constant",
 			percentile: nonConstant,
-			want:       "invalid input: percentile argument of approx_percentile must be a constant",
+			want:       "invalid input: percentile argument of approx_percentile must be a constant or parameter",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1270,7 +1302,7 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 		}},
 	}
 	require.NoError(t, validateApproxPercentileExpr(literal))
-	require.Error(t, validateApproxPercentileExpr(parameter))
+	require.NoError(t, validateApproxPercentileExpr(parameter))
 }
 
 func TestValidateOrderedPercentileExpr(t *testing.T) {
@@ -1286,7 +1318,7 @@ func TestValidateOrderedPercentileExpr(t *testing.T) {
 
 	require.Error(t, validateOrderedPercentileExpr(nil, plan2.NamePercentileCont))
 	require.Error(t, validateOrderedPercentileExpr(column, plan2.NamePercentileCont))
-	require.Error(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
+	require.NoError(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
 	require.NoError(t, validateOrderedPercentileExpr(literal, plan2.NamePercentileCont))
 }
 

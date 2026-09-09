@@ -4491,6 +4491,42 @@ func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
 }
 
+// PreparedPlanHasPercentileParams reports whether an aggregate percentile is
+// supplied by a prepared marker. The value is compiled into aggregate
+// configuration rather than read as a row argument, so a plan with such a
+// marker must build a fresh physical aggregate for every EXECUTE value.
+func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	found := false
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(root *plan.Expr) error {
+		if found {
+			return nil
+		}
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if found || expr == nil {
+				return nil
+			}
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+				return nil
+			}
+			switch strings.ToLower(fn.Func.ObjName) {
+			case NameApproxPercentile, NamePercentileCont, NamePercentileDisc:
+				found = preparedExprContainsParam(fn.Args[1])
+			}
+			return nil
+		})
+	})
+	return found
+}
+
 // PreparedPlanHasDirectResultParams reports whether a visible SELECT result
 // column is ultimately sourced from a parameter marker.
 func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {

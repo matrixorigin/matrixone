@@ -4589,9 +4589,10 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 		return nil
 	}
 	percentile := args[1]
-	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+	if percentile == nil || isNullExpr(percentile) ||
+		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
 		return moerr.NewInvalidInput(ctx,
-			"percentile argument of approx_percentile must be a non-null constant")
+			"percentile argument of approx_percentile must be a non-null constant or parameter")
 	}
 	return nil
 }
@@ -4605,10 +4606,30 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
 	}
 	percentile := args[1]
-	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+	if percentile == nil || isNullExpr(percentile) ||
+		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
 		return moerr.NewInvalidInputf(ctx,
-			"percentile argument of %s must be a non-null constant", name)
+			"percentile argument of %s must be a non-null constant or parameter", name)
 	}
+	return nil
+}
+
+// normalizePercentileParam gives a bare prepared marker the numeric type used
+// by percentile overloads. Parameter markers have a TEXT transport type while
+// a statement is prepared, but p is numeric configuration that is evaluated
+// once for each EXECUTE.
+func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
+	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
+		len(args) != 2 || !isDirectDynamicParam(args[1]) {
+		return nil
+	}
+
+	floatType := types.T_float64.ToType()
+	percentile, err := appendCastBeforeExpr(ctx, args[1], makePlan2Type(&floatType))
+	if err != nil {
+		return err
+	}
+	args[1] = percentile
 	return nil
 }
 
@@ -4948,6 +4969,9 @@ func bindFuncExprImplByPlanExpr(
 		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
 			return nil, err
 		}
+	}
+	if err = normalizePercentileParam(ctx, name, args); err != nil {
+		return nil, err
 	}
 
 	if (name == "utc_time" || name == "utc_timestamp") && len(args) == 1 {

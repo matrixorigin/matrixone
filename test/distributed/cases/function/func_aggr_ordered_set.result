@@ -50,6 +50,17 @@ percentile_disc(0.25) within group (order by v) as p25_disc
 from t_ordered_set_bvt;
 ➤ p25_cont[8,53,31]  ¦  p25_disc[4,32,0]  𝄀
 6.0  ¦  4
+prepare ordered_percentile_p from
+'select percentile_disc(?) within group (order by v) as prepared_p from t_ordered_set_bvt';
+set @ordered_p = 0.25;
+execute ordered_percentile_p using @ordered_p;
+➤ prepared_p[4,32,0]  𝄀
+4
+set @ordered_p = 0.75;
+execute ordered_percentile_p using @ordered_p;
+➤ prepared_p[4,32,0]  𝄀
+20
+deallocate prepare ordered_percentile_p;
 select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
 from t_ordered_set_bvt;
 ➤ p50_disc_dec38[3,38,0]  𝄀
@@ -81,6 +92,20 @@ where g = 3
 group by g;
 ➤ g[4,32,0]  ¦  null_cont[8,53,31]  ¦  null_disc[4,32,0]  𝄀
 3  ¦  null  ¦  null
+drop table if exists t_ordered_set_types_bvt;
+create table t_ordered_set_types_bvt(s varchar(20), d date, d256 decimal(65,2));
+insert into t_ordered_set_types_bvt values
+('gamma', '2026-01-03', 3.00),
+('alpha', '2026-01-01', 1.00),
+('beta', '2026-01-02', 2.00),
+(NULL, NULL, NULL);
+select percentile_disc(0.5) within group (order by s) as p50_string,
+percentile_disc(0.5) within group (order by d) as p50_date,
+percentile_disc(0.5) within group (order by d256) as p50_decimal256
+from t_ordered_set_types_bvt;
+➤ p50_string[12,20,0]  ¦  p50_date[91,64,0]  ¦  p50_decimal256[3,65,2]  𝄀
+beta  ¦  2026-01-02  ¦  2.00
+drop table t_ordered_set_types_bvt;
 drop table if exists t_within_identifier_bvt;
 create table t_within_identifier_bvt (id int, within int);
 insert into t_within_identifier_bvt values (1, 10), (2, 20);

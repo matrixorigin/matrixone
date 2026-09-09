@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 const orderedPercentileConfigVersion byte = 1
@@ -154,6 +155,13 @@ func PercentileDiscReturnType(args []types.Type) types.Type {
 	return args[0]
 }
 
+// PercentileDiscSupportedType reports whether the engine has a SQL ordering
+// implementation for a type. Unlike PERCENTILE_CONT, PERCENTILE_DISC returns
+// one of its input values and therefore does not require numeric interpolation.
+func PercentileDiscSupportedType(typ types.T) bool {
+	return mosort.IsSupportedType(typ)
+}
+
 type orderedPercentileMode uint8
 
 const (
@@ -184,6 +192,249 @@ type orderedPercentileRun struct {
 	level uint8
 }
 
+// orderedPercentileDiscreteExec retains values in the generic aggregate
+// argument arena. That representation supports both fixed and variable-width
+// SQL-orderable types and participates in Group's allocation accounting and
+// spill protocol. Numeric discrete percentiles keep using orderedPercentileExec
+// below so their standalone external-run spill path remains unchanged.
+type orderedPercentileDiscreteExec struct {
+	aggExec
+	percentile *big.Rat
+	descending bool
+	arithmetic percentileArithmeticScratch
+}
+
+func newOrderedPercentileDiscreteExec(
+	mp *mpool.MPool, aggID int64, param types.Type,
+) *orderedPercentileDiscreteExec {
+	exec := &orderedPercentileDiscreteExec{}
+	exec.mp = mp
+	exec.aggInfo = aggInfo{
+		aggId:     aggID,
+		argTypes:  []types.Type{param},
+		retType:   param,
+		emptyNull: true,
+		saveArg:   true,
+	}
+	return exec
+}
+
+func (exec *orderedPercentileDiscreteExec) SetExtraInformation(
+	partialResult any, _ int,
+) error {
+	percentile, descending, err := decodeOrderedPercentileConfig(partialResult)
+	if err != nil {
+		return err
+	}
+	exec.percentile = percentile
+	exec.descending = descending
+	return nil
+}
+
+func (exec *orderedPercentileDiscreteExec) Fill(
+	groupIndex int, row int, vectors []*vector.Vector,
+) error {
+	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *orderedPercentileDiscreteExec) BulkFill(
+	groupIndex int, vectors []*vector.Vector,
+) error {
+	if len(vectors) != 1 || vectors[0] == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	groups, err := makeAccountedScratch[uint64](
+		exec.allocation, exec.mp, vectors[0].Length())
+	if err != nil {
+		return err
+	}
+	defer mpool.FreeSlice(exec.mp, groups)
+	for i := range groups {
+		groups[i] = uint64(groupIndex + 1)
+	}
+	return exec.BatchFill(0, groups, vectors)
+}
+
+func (exec *orderedPercentileDiscreteExec) BatchFill(
+	offset int, groups []uint64, vectors []*vector.Vector,
+) error {
+	return exec.batchFillArgs(offset, groups, vectors, false)
+}
+
+func (exec *orderedPercentileDiscreteExec) Merge(
+	next AggFuncExec, groupIdx1, groupIdx2 int,
+) error {
+	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
+}
+
+func (exec *orderedPercentileDiscreteExec) BatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*orderedPercentileDiscreteExec)
+	if !ok || other == nil || !exec.compatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return exec.batchMergeArgs(&other.aggExec, offset, groups, false)
+}
+
+func (exec *orderedPercentileDiscreteExec) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*orderedPercentileDiscreteExec)
+	if !ok || other == nil || !exec.compatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return exec.aggExec.PreflightBatchMerge(other, offset, groups)
+}
+
+func (exec *orderedPercentileDiscreteExec) compatible(
+	other *orderedPercentileDiscreteExec,
+) bool {
+	return other != nil && exec.aggId == other.aggId &&
+		len(exec.argTypes) == 1 && len(other.argTypes) == 1 &&
+		exec.argTypes[0].Eq(other.argTypes[0]) && exec.retType.Eq(other.retType) &&
+		exec.percentile != nil && other.percentile != nil &&
+		exec.percentile.Cmp(other.percentile) == 0 &&
+		exec.descending == other.descending
+}
+
+func (exec *orderedPercentileDiscreteExec) Flush() ([]*vector.Vector, error) {
+	return exec.FlushWithContext(context.Background())
+}
+
+func (exec *orderedPercentileDiscreteExec) FlushWithContext(
+	ctx context.Context,
+) (_ []*vector.Vector, retErr error) {
+	if exec.percentile == nil {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"ordered percentile: percentile configuration is not set")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	results := make([]*vector.Vector, len(exec.state))
+	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
+	for chunk := range exec.state {
+		state := &exec.state[chunk]
+		result, err := exec.newDiscreteVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
+		results[chunk] = result
+		if err = result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		for row := uint16(0); row < uint16(state.length); row++ {
+			if err = context.Cause(ctx); err != nil {
+				return nil, err
+			}
+			if state.argCnt[row] == 0 {
+				if err = vector.AppendNull(result, exec.mp); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			values, err := exec.restoreDiscreteValues(ctx, state, row)
+			if err != nil {
+				return nil, err
+			}
+			selectors, err := makeAccountedScratch[int64](
+				exec.allocation, exec.mp, values.Length())
+			if err != nil {
+				values.Free(exec.mp)
+				return nil, err
+			}
+			for i := range selectors {
+				selectors[i] = int64(i)
+			}
+			mosort.SortByVectors(
+				selectors,
+				[]*vector.Vector{values},
+				[]bool{exec.descending},
+				[]bool{false},
+			)
+			rank := exec.arithmetic.discreteRank(
+				uint64(len(selectors)), exec.percentile)
+			err = result.UnionOne(values, selectors[rank], exec.mp)
+			mpool.FreeSlice(exec.mp, selectors)
+			values.Free(exec.mp)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return results, nil
+}
+
+func (exec *orderedPercentileDiscreteExec) newDiscreteVector(
+	typ types.Type,
+) (*vector.Vector, error) {
+	if exec.allocation != nil {
+		return exec.allocation.newVector(typ)
+	}
+	return vector.NewOffHeapVecWithType(typ), nil
+}
+
+func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
+	ctx context.Context, state *aggState, row uint16,
+) (*vector.Vector, error) {
+	values, err := exec.newDiscreteVector(exec.argTypes[0])
+	if err != nil {
+		return nil, err
+	}
+	count := int(state.argCnt[row])
+	if err = values.PreExtend(count, exec.mp); err != nil {
+		values.Free(exec.mp)
+		return nil, err
+	}
+	values.SetLength(count)
+	index := 0
+	err = state.iter(row, func(key []byte) error {
+		if index&1023 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
+		payload := aggPayloadFromKey(&exec.aggInfo, key)
+		if !exec.argTypes[0].IsVarlen() &&
+			len(payload) != exec.argTypes[0].TypeSize() {
+			return moerr.NewInternalErrorNoCtx(
+				"ordered percentile has invalid retained argument")
+		}
+		if index >= count {
+			return moerr.NewInternalErrorNoCtx(
+				"ordered percentile retained argument count mismatch")
+		}
+		if err := values.SetRawBytesAt(index, payload, exec.mp); err != nil {
+			return err
+		}
+		index++
+		return nil
+	})
+	if err == nil && index != count {
+		err = moerr.NewInternalErrorNoCtx(
+			"ordered percentile retained argument count mismatch")
+	}
+	if err != nil {
+		values.Free(exec.mp)
+		return nil, err
+	}
+	return values, nil
+}
+
+func (exec *orderedPercentileDiscreteExec) Size() int64 {
+	var size int64
+	for _, state := range exec.state {
+		size += int64(cap(state.argCnt))*4 +
+			int64(cap(state.argbuf)) + int64(cap(state.argScratch))
+	}
+	for _, state := range exec.standby {
+		size += int64(cap(state.argCnt))*4 +
+			int64(cap(state.argbuf)) + int64(cap(state.argScratch))
+	}
+	return size
+}
+
 func newOrderedPercentileExec[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType](
 	mp *mpool.MPool, info singleAggInfo, mode orderedPercentileMode, initial R,
 ) *orderedPercentileExec[T, R] {
@@ -211,34 +462,47 @@ func (exec *orderedPercentileExec[T, R]) SetAllocationAccount(
 }
 
 func (exec *orderedPercentileExec[T, R]) SetExtraInformation(partialResult any, groupIndex int) error {
+	percentile, descending, err := decodeOrderedPercentileConfig(partialResult)
+	if err != nil {
+		return err
+	}
+	exec.percentile = percentile
+	exec.descending = descending
+	return nil
+}
+
+func decodeOrderedPercentileConfig(partialResult any) (*big.Rat, bool, error) {
 	b, ok := partialResult.([]byte)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx("ordered percentile: expected []byte config")
+		return nil, false, moerr.NewInternalErrorNoCtx(
+			"ordered percentile: expected []byte config")
 	}
+	descending := false
 	if len(b) >= 2 && b[0] == orderedPercentileConfigVersion {
 		if b[1] > 1 {
-			return moerr.NewInvalidInputNoCtx("ordered percentile: invalid sort direction")
+			return nil, false, moerr.NewInvalidInputNoCtx(
+				"ordered percentile: invalid sort direction")
 		}
-		exec.descending = b[1] == 1
+		descending = b[1] == 1
 		b = b[2:]
-	} else {
-		// Keep direct executor tests and old serialized plans readable when the
-		// config contains only the percentile text.
-		exec.descending = false
 	}
+	// Keep direct executor tests and old serialized plans readable when the
+	// config contains only the percentile text.
 	text := string(b)
 	if text == "" {
-		return moerr.NewInvalidInputNoCtx("ordered percentile: percentile is empty")
+		return nil, false, moerr.NewInvalidInputNoCtx(
+			"ordered percentile: percentile is empty")
 	}
 	p, ok := new(big.Rat).SetString(text)
 	if !ok || p.Sign() < 0 || p.Cmp(big.NewRat(1, 1)) > 0 {
-		return moerr.NewInvalidInputNoCtxf("ordered percentile: percentile must be in [0,1], got %q", text)
+		return nil, false, moerr.NewInvalidInputNoCtxf(
+			"ordered percentile: percentile must be in [0,1], got %q", text)
 	}
 	if _, err := strconv.ParseFloat(text, 64); err != nil {
-		return moerr.NewInvalidInputNoCtxf("ordered percentile: invalid percentile %q", text)
+		return nil, false, moerr.NewInvalidInputNoCtxf(
+			"ordered percentile: invalid percentile %q", text)
 	}
-	exec.percentile = p
-	return nil
+	return p, descending, nil
 }
 
 func (exec *orderedPercentileExec[T, R]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
@@ -1183,6 +1447,9 @@ func makeOrderedPercentileExec(mp *mpool.MPool, aggID int64, isDistinct bool, pa
 		}
 		return newOrderedPercentileExec[types.Decimal128, types.Decimal128](mp, info, mode, types.Decimal128{}), nil
 	default:
+		if mode == orderedPercentileDiscrete && PercentileDiscSupportedType(param.Oid) {
+			return newOrderedPercentileDiscreteExec(mp, aggID, param), nil
+		}
 		return nil, moerr.NewInternalErrorNoCtx("unsupported type for ordered percentile")
 	}
 }

@@ -19,10 +19,11 @@ APPROX_PERCENTILE(percentile)
 ```
 
 The ordered-set form has one direct percentile argument and exactly one order
-item. The order expression is the aggregate input. The percentile keeps the
-existing `APPROX_PERCENTILE` contract: it must be a non-NULL compile-time
-constant in `[0, 1]`, and the value expression must use one of the numeric types
-already supported by the aggregate.
+item. The order expression is the aggregate input. The percentile must be a
+non-NULL compile-time constant or a prepared-statement parameter in `[0, 1]`.
+A parameter is fixed for one `EXECUTE`; it is not evaluated per input row. The
+value expression must use one of the numeric types already supported by the
+aggregate.
 
 `ASC` is the default. `DESC` reverses the percentile direction: percentile `p`
 over descending values is evaluated as percentile `1-p` by the existing
@@ -35,7 +36,8 @@ The following remain unsupported:
 - multiple `WITHIN GROUP ORDER BY` expressions;
 - combining the ordinary two-argument form with `WITHIN GROUP`;
 - `APPROX_PERCENTILE(...) WITHIN GROUP (...) OVER (...)`;
-- dynamic percentile expressions and unsupported value types.
+- percentile expressions that depend on an input row and unsupported value
+  types.
 
 ## Parser and binder lowering
 
@@ -64,6 +66,11 @@ percentile text to its exact complement. The executor still receives its
 existing textual percentile configuration, so mixed execution paths and
 partial-state merge use the established `APPROX_PERCENTILE` protocol.
 
+When the percentile is a prepared-statement parameter, MatrixOne rebuilds the
+physical compile for every `EXECUTE`. This evaluates the current parameter into
+the immutable aggregate configuration and prevents a cached compile from
+reusing a percentile supplied by an earlier execution.
+
 The complement calculation uses exact rational arithmetic and preserves the
 source decimal scale. It does not round through `float64`; for example,
 `0.950` becomes `0.050`.
@@ -81,7 +88,8 @@ Regression coverage includes:
 - preservation of the ordinary two-argument form;
 - exact complement configuration and decimal-scale preservation;
 - `EXPLAIN` reconstruction;
-- invalid direct-argument count, multiple order keys, nonconstant percentile,
+- invalid direct-argument count, multiple order keys, row-dependent percentile,
   and window-form rejection;
+- prepared percentile parameters with different values across executions;
 - public BVT equivalence between ordinary and ordered-set ascending syntax and
   the descending percentile result.

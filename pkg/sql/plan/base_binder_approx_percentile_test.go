@@ -91,7 +91,7 @@ func TestBindApproxPercentileAcceptsFoldableConstants(t *testing.T) {
 		approxPercentileValueColumn(),
 		parameter,
 	})
-	require.ErrorContains(t, err, "must be a non-null constant")
+	require.NoError(t, err)
 }
 
 func TestBuildPlanApproxPercentileRejectsInvalidPercentileSQL(t *testing.T) {

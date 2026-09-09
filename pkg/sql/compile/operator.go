@@ -1960,7 +1960,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 				panic(err)
 			}
 			defer free()
-			config, err := getPercentileConfig(vec)
+			config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
 			if err != nil {
 				panic(err)
 			}
@@ -1991,7 +1991,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			panic(err)
 		}
 		defer free()
-		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
+		percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
 		if err != nil {
 			panic(err)
 		}
@@ -2945,19 +2945,34 @@ func constructTableClone(
 }
 
 func validateApproxPercentileExpr(expr *plan.Expr) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+			"percentile argument of approx_percentile must be a constant or parameter")
 	}
 	return nil
 }
 
 func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtxf(
-			"percentile argument of %s must be a constant", name)
+			"percentile argument of %s must be a constant or parameter", name)
 	}
 	return nil
+}
+
+func isPercentileConfigExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if rule.IsConstant(expr, true) || expr.GetP() != nil {
+		return true
+	}
+	// CAST cannot be folded by the generic rule, but the binder inserts this
+	// exact shape to give a TEXT-backed prepared marker its numeric p type.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		len(fn.Args) == 2 && isPercentileConfigExpr(fn.Args[0]) &&
+		rule.IsConstant(fn.Args[1], true)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for
@@ -2965,6 +2980,10 @@ func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
 // helper gives ordered-set aggregates accurate diagnostics.
 func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
+}
+
+func getEvaluatedPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
+	return getPercentileConfigValue(vec, functionName, true)
 }
 
 func complementPercentileConfig(config []byte) ([]byte, error) {
@@ -2983,11 +3002,15 @@ func complementPercentileConfig(config []byte) ([]byte, error) {
 }
 
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
-	if vec == nil || !vec.IsConst() {
+	return getPercentileConfigValue(vec, functionName, false)
+}
+
+func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSingleton bool) ([]byte, error) {
+	if vec == nil || (!vec.IsConst() && !(allowSingleton && vec.Length() == 1)) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s must be a constant", functionName)
 	}
-	if vec.Length() == 0 || vec.IsConstNull() {
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s cannot be NULL", functionName)
 	}

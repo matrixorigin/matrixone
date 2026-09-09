@@ -2810,6 +2810,12 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
+	if plan2.PreparedPlanHasPercentileParams(p) {
+		// The percentile marker is evaluated while the physical aggregate is
+		// constructed and becomes immutable executor configuration. Reusing that
+		// compile would reuse an earlier EXECUTE value for the same parameter type.
+		return false
+	}
 	query := p.GetQuery()
 	if query == nil {
 		return true
