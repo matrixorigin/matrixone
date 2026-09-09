@@ -24,10 +24,10 @@ type Config struct {
 
 func (c *Config) Validate() error {
 	if c.Address == "" {
-		return moerr.NewInternalError(context.Background(), "missing python runtime address")
+		return moerr.NewInternalError(context.Background(), "missing python udf address")
 	}
 	if c.Path == "" {
-		return moerr.NewInternalError(context.Background(), "missing python runtime path")
+		return moerr.NewInternalError(context.Background(), "missing python udf path")
 	}
 	return nil
 }
@@ -41,16 +41,16 @@ type ClientConfig struct {
 
 func (c *ClientConfig) Validate() error {
 	if c.ServerAddress == "" {
-		return moerr.NewInternalError(context.Background(), "missing python runtime address")
+		return moerr.NewInternalError(context.Background(), "missing python udf address")
 	}
 	if c.MaxBatchBytes < 0 || c.MaxBatchBytes > 1<<30 {
-		return moerr.NewInternalError(context.Background(), "invalid python runtime max batch bytes")
+		return moerr.NewInternalError(context.Background(), "invalid python udf max batch bytes")
 	}
 	if c.MaxBatchRows < 0 || c.MaxBatchRows > 1<<30 {
-		return moerr.NewInternalError(context.Background(), "invalid python runtime max batch rows")
+		return moerr.NewInternalError(context.Background(), "invalid python udf max batch rows")
 	}
 	if c.RequestTimeout < 0 {
-		return moerr.NewInternalError(context.Background(), "invalid python runtime request timeout")
+		return moerr.NewInternalError(context.Background(), "invalid python udf request timeout")
 	}
 	return nil
 }

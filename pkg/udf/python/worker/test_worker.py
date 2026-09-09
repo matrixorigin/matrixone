@@ -2,6 +2,7 @@
 
 import datetime
 import importlib.util
+import json
 import pathlib
 import sys
 import unittest
@@ -50,6 +51,14 @@ class WorkerContractTest(unittest.TestCase):
         self.assertEqual(True, array.field("is_zero")[0].as_py())
         self.assertEqual(datetime.date(1970, 1, 1), array.field("value")[0].as_py())
 
+    def test_scalar_value_domain_is_checked_before_arrow_encoding(self):
+        string_descriptor = {"type_id": worker.VARCHAR, "width": 3, "offset_width": 32}
+        with self.assertRaisesRegex(ValueError, "string exceeds"):
+            worker._output_array(["abcd"], string_descriptor, 1)
+        time_descriptor = {"type_id": worker.TIME, "scale": 6, "offset_width": 32}
+        with self.assertRaisesRegex(ValueError, "TIME is outside"):
+            worker._output_array([datetime.timedelta(hours=839)], time_descriptor, 1)
+
     def test_zero_argument_vector_uses_context_rows(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         output = pa.array([7, 7, 7], type=pa.int64())
@@ -64,7 +73,7 @@ class WorkerContractTest(unittest.TestCase):
                 "statement_timestamp_utc": "1704067200123456",
                 "session_timezone_kind": "FIXED_OFFSET",
                 "session_timezone_offset_minutes": "+510",
-                "sql_mode": '["ANSI", "STRICT"]',
+                "sql_mode": '["ANSI","STRICT"]',
                 "current_database": "app",
                 "current_user": "alice",
                 "current_role": "writer",
@@ -126,6 +135,20 @@ class WorkerContractTest(unittest.TestCase):
                 {"account_id": 1, "statement_id": "other", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
                 {"account_id": 1, "statement_id": "statement", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
             )
+
+    def test_control_numeric_fields_are_strict(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported control"):
+            worker._decode_control(json.dumps({"version": True, "kind": "InputBatch", "tuple": tuple_value}).encode())
+        with self.assertRaisesRegex(ValueError, "invalid control field sequence"):
+            worker._required_uint64({"sequence": "1"}, "sequence")
 
 
 if __name__ == "__main__":

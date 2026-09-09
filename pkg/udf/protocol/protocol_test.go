@@ -79,6 +79,13 @@ func TestOutputSnapshotFreezesBeforeWorkerCanRewrite(t *testing.T) {
 	require.NoError(t, empty.Validate(0, empty.Digest()))
 }
 
+func TestOutputSnapshotDetectsTrustedBackingMutation(t *testing.T) {
+	snapshot, err := FreezeOutput([]byte("trusted"), 1024)
+	require.NoError(t, err)
+	snapshot.TrustedBytes()[0] = 'X'
+	require.ErrorContains(t, snapshot.Validate(snapshot.Len(), snapshot.Digest()), "backing changed")
+}
+
 func TestExecutionGroupReleasesOnlyAfterCloseAndAllMembersTerminal(t *testing.T) {
 	var releases atomic.Int32
 	group, err := NewExecutionGroup("g", 1, 2, func() error {
@@ -185,6 +192,30 @@ func TestExecutionGroupReleaseErrorCanBeRetried(t *testing.T) {
 	require.Error(t, group.Close(ReasonCancel))
 	require.Equal(t, GroupDraining, group.State())
 	// A second close is the scheduler's retry-safe release trigger.
+	require.NoError(t, group.Close(ReasonCancel))
+	require.Equal(t, GroupReleased, group.State())
+	require.Equal(t, int32(2), attempts.Load())
+}
+
+func TestExecutionGroupCommitReportsReleaseFailure(t *testing.T) {
+	var attempts atomic.Int32
+	group, err := NewExecutionGroup("g", 1, 1, func() error {
+		if attempts.Add(1) == 1 {
+			return errors.New("temporary release failure")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	open, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonCancel))
+
+	err = open.Commit()
+	require.ErrorIs(t, err, ErrGroupClosed)
+	require.ErrorContains(t, err, "temporary release failure")
+	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
+	require.ErrorContains(t, open.Commit(), "temporary release failure")
+	require.Equal(t, GroupDraining, group.State())
 	require.NoError(t, group.Close(ReasonCancel))
 	require.Equal(t, GroupReleased, group.State())
 	require.Equal(t, int32(2), attempts.Load())
