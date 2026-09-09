@@ -88,8 +88,9 @@ func (opts *CDCCreateTaskOptions) Reset() {
 // skipped.  Do not replace an explicit StartTs supplied by the user.
 func (opts *CDCCreateTaskOptions) setNoFullStartTS(txnOp client.TxnOperator) {
 	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
-		snapshot := txnOp.SnapshotTS().ToStdTime()
-		if !snapshot.IsZero() {
+		snapshotTS := txnOp.SnapshotTS()
+		if !snapshotTS.IsEmpty() {
+			snapshot := snapshotTS.ToStdTime()
 			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
 		}
 	}

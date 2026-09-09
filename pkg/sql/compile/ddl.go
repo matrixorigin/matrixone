@@ -6619,8 +6619,9 @@ type CDCCreateTaskOptions struct {
 
 func setNoFullStartTS(opts *CDCCreateTaskOptions, txnOp client.TxnOperator) {
 	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
-		snapshot := txnOp.SnapshotTS().ToStdTime()
-		if !snapshot.IsZero() {
+		snapshotTS := txnOp.SnapshotTS()
+		if !snapshotTS.IsEmpty() {
+			snapshot := snapshotTS.ToStdTime()
 			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
 		}
 	}
