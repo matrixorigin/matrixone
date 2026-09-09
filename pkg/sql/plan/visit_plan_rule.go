@@ -1355,7 +1355,20 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 	if err != nil {
 		return nil, err
 	}
-	overflow, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(bound), DeepCopyExpr(bound)})
+	// Multiplying by 10^19 overflows signed Decimal128 for every value beyond
+	// UINT64_MAX. Use a one-limb factor rather than bound*bound: the latter
+	// exercises the Decimal256 fallback when both operands have a high limb,
+	// while this path has one high-limb operand and reports the intended range
+	// failure consistently across vector backends.
+	overflowFactor, err := appendCastBeforeExpr(
+		ctx,
+		makePlan2Uint64ConstExprWithType(types.Pow10[19]),
+		makePlan2Type(&decimalType),
+	)
+	if err != nil {
+		return nil, err
+	}
+	overflow, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(bound), overflowFactor})
 	if err != nil {
 		return nil, err
 	}
