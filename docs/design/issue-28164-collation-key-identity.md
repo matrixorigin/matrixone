@@ -1035,3 +1035,22 @@ index schema, point probe, lock, transaction writer, replay consumer, or
 migration command uses it yet. The v2 read/write admission fences therefore
 remain active, and this increment does not change legacy or user-visible SQL
 behaviour.
+
+### 10.10 Implementation series status (migration gate contract)
+
+The migration increment adds a dependency-light `MigrationGate` state contract
+for the explicit stop-write protocol. It records the relation and monotonic
+epoch, fenced owner/incarnation/token, phase deadline, post-drain snapshot and
+temporary relation identities, publication transaction, replay generation,
+outstanding pre-drain permits, and per-target replay acknowledgements or
+retirements. The executable transitions enforce OPEN → DRAINING → EXCLUSIVE →
+PUBLISHED, allow pre-publication ABORTED recovery, require all permits to drain
+before EXCLUSIVE, and make publication irreversible. Expired owners can be
+replaced only with a different fencing identity; stale owners cannot mutate or
+release a gate.
+
+The state machine is not connected to HAKeeper, catalog persistence, SQL
+write admission, TN commit, snapshot creation, or a management command. It
+therefore does not stop real writes or migrate a relation; the planner's v2
+read/write fences remain in force. This increment only freezes and tests the
+failure/recovery contract that those production consumers must implement.
