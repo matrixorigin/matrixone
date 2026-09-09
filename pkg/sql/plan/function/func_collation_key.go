@@ -96,10 +96,10 @@ func BuiltInCollationKeyV2(
 	valueType := parameters[0].GetType()
 	prefixType := parameters[1].GetType()
 	charsetType := parameters[2].GetType()
-	if valueType == nil || prefixType == nil || charsetType == nil || !isCollationKeyTextType(valueType.Oid) {
+	if valueType == nil || !isCollationKeyTextType(valueType.Oid) {
 		return moerr.NewInvalidInput(proc.Ctx, "collation key v2 expects VARCHAR or TEXT")
 	}
-	if prefixType.Oid != types.T_int64 || charsetType.Oid != types.T_int64 {
+	if prefixType == nil || charsetType == nil || prefixType.Oid != types.T_int64 || charsetType.Oid != types.T_int64 {
 		return moerr.NewInvalidInput(proc.Ctx, "collation key v2 descriptor arguments must be INT64")
 	}
 
