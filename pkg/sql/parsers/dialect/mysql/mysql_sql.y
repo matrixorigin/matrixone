@@ -6110,6 +6110,10 @@ insert_no_with_stmt:
             ins.PartitionValues = $3.Values
         }
         ins.OnDuplicateUpdate = $5
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.Ignore = true
+            ins.OnDuplicateUpdate = nil
+        }
         ins.Returning = $6
         $$ = ins
     }
@@ -6132,7 +6136,7 @@ insert_no_with_stmt:
         ins.Returning = $6
         $$ = ins
     }
-|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
     {
         ins := $5
         if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
@@ -6147,8 +6151,12 @@ insert_no_with_stmt:
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
         }
-        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
-        ins.Returning = $6
+        ins.Ignore = true
+        ins.OnDuplicateUpdate = $6
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.OnDuplicateUpdate = nil
+        }
+        ins.Returning = $7
         $$ = ins
     }
 

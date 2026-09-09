@@ -369,6 +369,65 @@ func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInsertIgnoreAndOnDuplicateUpdateAreIndependent(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantIgnore bool
+		wantUpdate int
+	}{
+		{
+			name:       "plain ignore",
+			sql:        "insert ignore into t values (1)",
+			wantIgnore: true,
+		},
+		{
+			name:       "ignore with update",
+			sql:        "insert ignore into t (id, v) values (1, 2) on duplicate key update v = values(v), v = v + 1",
+			wantIgnore: true,
+			wantUpdate: 2,
+		},
+		{
+			name:       "legacy duplicate ignore",
+			sql:        "insert into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+		{
+			name:       "combined duplicate ignore",
+			sql:        "insert ignore into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			insert, ok := stmt.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, test.wantIgnore, insert.IsIgnore())
+			require.Len(t, insert.GetOnDuplicateUpdate(), test.wantUpdate)
+			if test.wantUpdate > 0 {
+				// Keep duplicate assignment targets as an ordered stream.
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[0].Names[0].ColName())
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[1].Names[0].ColName())
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+			roundTripInsert, ok := roundTripped.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, insert.IsIgnore(), roundTripInsert.IsIgnore())
+			require.Len(t, roundTripInsert.GetOnDuplicateUpdate(), test.wantUpdate)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+}
+
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	tests := []struct {
 		sql  string

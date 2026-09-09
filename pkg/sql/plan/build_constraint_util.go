@@ -755,7 +755,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.GetOnDuplicateUpdate())
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -985,11 +985,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
-	if len(stmt.OnDuplicateUpdate) > 0 {
-		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-		if isIgnore {
-			stmt.OnDuplicateUpdate = nil
-		}
+	onDuplicateUpdate := stmt.GetOnDuplicateUpdate()
+	if len(onDuplicateUpdate) > 0 {
 
 		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
@@ -1024,7 +1021,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 			// get update cols
 			updateCols := make(map[string]tree.Expr)
-			for _, updateExpr := range stmt.OnDuplicateUpdate {
+			for _, updateExpr := range onDuplicateUpdate {
 				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
 				if _, ok := uniqueColNames[col]; ok {
@@ -1136,7 +1133,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = isIgnore
+			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -2051,7 +2048,7 @@ func buildValueScan(
 	}
 
 	onUpdateExprs := make([]*plan.Expr, 0)
-	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
+	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
 		for _, expr := range OnDuplicateUpdate {
 			var updateExpr *plan.Expr
 			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]

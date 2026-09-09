@@ -27,6 +27,11 @@ insert into t_odku_fakepk values (1, 'b1'), (3, 'b3'), (2, 'b2')
     on duplicate key update b = values(b);
 select * from t_odku_fakepk order by a;
 
+-- INSERT IGNORE carries an executable ODKU list: a duplicate must UPDATE,
+-- while the statement-level conversion policy remains enabled for casts.
+insert ignore into t_odku_fakepk values (2, 'combo') on duplicate key update b = values(b);
+select * from t_odku_fakepk order by a;
+
 drop table if exists t_odku_fakepk;
 
 -- ============================================================

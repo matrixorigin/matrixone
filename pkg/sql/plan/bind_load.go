@@ -23,6 +23,9 @@ import (
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
+	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
+	// statement-local flag in case a QueryBuilder is reused across DML binds.
+	builder.isInsertIgnore = false
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
 	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx)
