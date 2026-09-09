@@ -131,7 +131,7 @@ test('a successful eligibility job cannot hide skipped UT coverage', () => {
   }
 });
 
-test('entrypoint routes each scope and preserves every required check name', () => {
+test('entrypoint routes each scope through one required check', () => {
   const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
   const blocks = Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
     .map(match => [match[1], match[2]]));
@@ -159,14 +159,10 @@ test('entrypoint routes each scope and preserves every required check name', () 
   }
   const gates = blocks['ci-required'];
   assert.match(gates, /if: \$\{\{ always\(\)/);
-  for (const name of [
-    'Matrixone CI / UT Test on Ubuntu/x86',
-    'Matrixone CI / SCA Test on Linux/arm64',
-    'Matrixone UT Coverage / UT Coverage on Ubuntu/x86',
-    'Matrixone Compose CI / multi cn e2e bvt test docker compose(PROXY)',
-    'Matrixone Standlone CI / multi CN e2e BVT Test on Linux/x64(COMPOSE, PESSIMISTIC)',
-    'Matrixone Utils CI / Coverage',
-  ]) assert.ok(gates.includes(`- ${name}\n`), name);
+  assert.match(gates, /^    name: CI Required$/m);
+  assert.doesNotMatch(gates, /^    strategy:/m);
+  const gateNeeds = gates.match(/^    needs: \[(.*)\]$/m)[1].split(', ');
+  assert.deepEqual(gateNeeds.slice().sort(), Object.keys(results()).sort());
   for (const job of ['matrixone-ci', 'matrixone-ut-coverage', 'matrixone-compose-ci',
     'matrixone-standalone-ci', 'matrixone-coverage-merge']) {
     assert.match(blocks[job], /name: .* execution\n/);

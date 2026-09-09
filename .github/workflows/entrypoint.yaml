@@ -185,24 +185,13 @@ jobs:
       expected_bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
 
-  # Keep all six established required-check names present for every scope.
-  # Each checks the selected suite as an AND gate; failed/cancelled/missing
+  # One required check validates the selected suite as an AND gate; failed/cancelled/missing
   # prerequisites cannot become a green check through dependent-job skipping.
   ci-required:
-    name: ${{ matrix.check }}
+    name: CI Required
     if: ${{ always() && github.base_ref != '3.0-dev' }}
     needs: [check-pr-valid, change-scope, docs-check, bvt-group-plan, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        check:
-          - Matrixone CI / UT Test on Ubuntu/x86
-          - Matrixone CI / SCA Test on Linux/arm64
-          - Matrixone UT Coverage / UT Coverage on Ubuntu/x86
-          - Matrixone Compose CI / multi cn e2e bvt test docker compose(PROXY)
-          - Matrixone Standlone CI / multi CN e2e BVT Test on Linux/x64(COMPOSE, PESSIMISTIC)
-          - Matrixone Utils CI / Coverage
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
