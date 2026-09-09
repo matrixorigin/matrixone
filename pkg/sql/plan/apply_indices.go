@@ -2367,7 +2367,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
-	if idxDef != nil && idxDef.Unique {
+	// Residual pushdown is optional.  Treat incomplete metadata as a reason to
+	// keep the predicate on the base scan rather than dereferencing it here.
+	if idxDef == nil || node == nil || idxTableNode == nil || idxTableNode.TableDef == nil {
+		return
+	}
+	if idxDef.Unique {
 		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableNode.TableDef)
 		if err != nil || useV2 {
 			// v2 index keys are framed identities and cannot safely receive a
@@ -2561,6 +2566,9 @@ func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos i
 }
 
 func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
+	if idxDef == nil || idxTableDef == nil || len(idxDef.Parts) == 0 || len(idxTableDef.Cols) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid unique-key equality metadata")
+	}
 	numParts := len(idxDef.Parts)
 	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
 	if err != nil {
@@ -2581,13 +2589,21 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		values := make([]*plan.Expr, numParts)
 		prefixes := make([]int, numParts)
 		selectivity := 1.0
+		seenFilters := make(map[int32]struct{}, len(filterPos))
 		for i, pos := range filterPos {
 			if pos < 0 || int(pos) >= len(filterList) || filterList[pos] == nil || filterList[pos].GetF() == nil || len(filterList[pos].GetF().Args) < 2 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid v2 unique-key equality filter")
 			}
+			if _, exists := seenFilters[pos]; exists {
+				return nil, moerr.NewInternalErrorNoCtx("duplicate v2 unique-key equality filter")
+			}
+			seenFilters[pos] = struct{}{}
 			filter := filterList[pos]
 			values[i] = DeepCopyExpr(filter.GetF().Args[1])
-			prefixes[i] = prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])]
+			prefixes[i], err = uniqueKeyPrefixLength(prefixLengths, idxDef.Parts[i])
+			if err != nil {
+				return nil, err
+			}
 			selectivity *= filter.Selectivity
 		}
 		var keyExpr *plan.Expr
@@ -2660,6 +2676,9 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 }
 
 func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
+	if idxDef == nil || idxTableDef == nil || len(idxTableDef.Cols) == 0 || filter == nil || filter.GetF() == nil || len(idxDef.Parts) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid unique-key range metadata")
+	}
 	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
 	if err != nil {
 		return nil, err

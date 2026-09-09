@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
@@ -84,8 +85,8 @@ func makeCollationKeyV2Expr(value *planpb.Expr, prefix int) (*planpb.Expr, error
 	if err != nil {
 		return nil, err
 	}
-	if prefix < 0 {
-		return nil, moerr.NewInvalidInputNoCtx("negative unique-key prefix")
+	if prefix < 0 || uint64(prefix) > math.MaxUint32 {
+		return nil, moerr.NewInvalidInputNoCtx("unique-key prefix out of range")
 	}
 	return &planpb.Expr{
 		Typ: collationKeyV2OutputType(value.Typ),
@@ -103,6 +104,49 @@ func makeCollationKeyV2Expr(value *planpb.Expr, prefix int) (*planpb.Expr, error
 	}, nil
 }
 
+// uniqueKeyPrefixLength returns the declared prefix for a source column.  A
+// missing entry means that the part is unprefixed; an entry is only valid when
+// it is strictly positive.  ResolveAlias is applied at the boundary so that
+// physical index metadata and user-facing column names share one lookup.
+func uniqueKeyPrefixLength(prefixLengths map[string]int, part string) (int, error) {
+	part = catalog.ResolveAlias(part)
+	if part == "" {
+		return 0, moerr.NewInternalErrorNoCtx("empty unique-key index part")
+	}
+	if prefixLengths == nil {
+		return 0, nil
+	}
+	length, ok := prefixLengths[part]
+	if !ok {
+		return 0, nil
+	}
+	if length <= 0 {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid unique-key prefix length %d for %s", length, part)
+	}
+	if uint64(length) > math.MaxUint32 {
+		return 0, moerr.NewInvalidInputNoCtxf("unique-key prefix length %d for %s exceeds uint32", length, part)
+	}
+	return length, nil
+}
+
+func validateUniqueKeyInputExprs(tableDef *planpb.TableDef, idxDef *planpb.IndexDef, values []*planpb.Expr) error {
+	if tableDef == nil || idxDef == nil {
+		return moerr.NewInternalErrorNoCtx("nil table or index definition for unique-key identity")
+	}
+	if len(idxDef.Parts) == 0 || len(values) != len(idxDef.Parts) {
+		return moerr.NewInternalErrorNoCtxf("unique-key identity has %d values for %d parts", len(values), len(idxDef.Parts))
+	}
+	for i, value := range values {
+		if value == nil {
+			return moerr.NewInternalErrorNoCtxf("nil value for unique-key part %d", i)
+		}
+		if catalog.ResolveAlias(idxDef.Parts[i]) == "" {
+			return moerr.NewInternalErrorNoCtxf("empty unique-key part %d", i)
+		}
+	}
+	return nil
+}
+
 func makeCollationCompositeKeyV2Expr(values []*planpb.Expr, prefixes []int) (*planpb.Expr, error) {
 	if len(values) < 2 || len(values) != len(prefixes) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid collation composite key v2 parts")
@@ -116,8 +160,8 @@ func makeCollationCompositeKeyV2Expr(values []*planpb.Expr, prefixes []int) (*pl
 		if err != nil {
 			return nil, err
 		}
-		if prefixes[i] < 0 {
-			return nil, moerr.NewInvalidInputNoCtx("negative unique-key prefix")
+		if prefixes[i] < 0 || uint64(prefixes[i]) > math.MaxUint32 {
+			return nil, moerr.NewInvalidInputNoCtx("unique-key prefix out of range")
 		}
 		args = append(args,
 			DeepCopyExpr(value),
@@ -145,6 +189,9 @@ func (builder *QueryBuilder) makeInsertUniqueIndexKeyExpr(
 	colName2Idx map[string]int32,
 	prefixLengths map[string]int,
 ) (*planpb.Expr, error) {
+	if tableDef == nil || idxDef == nil || selectNode == nil || len(idxDef.Parts) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid unique-key index definition")
+	}
 	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
 	if err != nil || !useV2 {
 		if len(idxDef.Parts) == 1 {
@@ -176,7 +223,10 @@ func (builder *QueryBuilder) makeInsertUniqueIndexKeyExpr(
 				Name:   partName,
 			}},
 		}
-		prefixes[i] = prefixLengths[partName]
+		prefixes[i], err = uniqueKeyPrefixLength(prefixLengths, partName)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(values) == 1 {
 		return makeCollationKeyV2Expr(values[0], prefixes[0])
@@ -190,6 +240,9 @@ func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprs(
 	values []*planpb.Expr,
 	prefixLengths map[string]int,
 ) (*planpb.Expr, error) {
+	if err := validateUniqueKeyInputExprs(tableDef, idxDef, values); err != nil {
+		return nil, err
+	}
 	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
 	if err != nil || !useV2 {
 		if len(values) == 1 {
@@ -206,7 +259,10 @@ func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprs(
 	}
 	prefixes := make([]int, len(values))
 	for i := range values {
-		prefixes[i] = prefixLengths[catalog.ResolveAlias(idxDef.Parts[i])]
+		prefixes[i], err = uniqueKeyPrefixLength(prefixLengths, idxDef.Parts[i])
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(values) == 1 {
 		return makeCollationKeyV2Expr(values[0], prefixes[0])

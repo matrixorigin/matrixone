@@ -81,6 +81,35 @@ func TestMakeUniqueIndexKeyExprFromInputExprsRejectsUnsupportedV2Part(t *testing
 	require.Error(t, err)
 }
 
+func TestMakeUniqueIndexKeyExprFromInputExprsRejectsMalformedShape(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	table := &planpb.TableDef{
+		Name:                  "t_v2_shape",
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+	index := &planpb.IndexDef{Parts: []string{"a", "b"}, Unique: true}
+	value := &planpb.Expr{Typ: v2PlannerTextType(uint32(types.CharsetUTF8))}
+
+	_, err := builder.makeUniqueIndexKeyExprFromInputExprs(table, index, []*planpb.Expr{value}, nil)
+	require.Error(t, err)
+
+	_, err = builder.makeUniqueIndexKeyExprFromInputExprs(
+		table, &planpb.IndexDef{Parts: []string{"a"}, Unique: true},
+		[]*planpb.Expr{value}, map[string]int{"a": 0},
+	)
+	require.Error(t, err)
+}
+
+func TestUniqueKeyPrefixLengthRejectsInvalidDeclaredValue(t *testing.T) {
+	_, err := uniqueKeyPrefixLength(map[string]int{"name": 0}, "name")
+	require.Error(t, err)
+	_, err = uniqueKeyPrefixLength(map[string]int{"name": -1}, catalog.CreateAlias("name"))
+	require.Error(t, err)
+	length, err := uniqueKeyPrefixLength(nil, "name")
+	require.NoError(t, err)
+	require.Zero(t, length)
+}
+
 func TestTableUsesCollationKeyV2ValidatesMetadata(t *testing.T) {
 	ctx := context.Background()
 	useV2, err := tableUsesCollationKeyV2(ctx, &planpb.TableDef{UniqueKeyCodecVersion: v2PlannerMetadata()})
