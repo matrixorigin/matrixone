@@ -61,7 +61,7 @@ type sqlExecutor struct {
 	ls          lockservice.LockService
 	qc          qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
-	us          udf.Service
+	us          udf.Runtime
 	taskservice taskservice.TaskService
 }
 
@@ -121,7 +121,7 @@ func NewSQLExecutor(
 	fs fileservice.FileService,
 	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
-	us udf.Service,
+	us udf.Runtime,
 	taskService taskservice.TaskService,
 ) executor.SQLExecutor {
 	v, ok := runtime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(runtime.LockService)
