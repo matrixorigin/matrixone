@@ -311,8 +311,27 @@ execute group_concat_max_len_stmt;
 deallocate prepare group_concat_max_len_stmt;
 set session group_concat_max_len = 5;
 select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_low_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_low_stmt;
 set session group_concat_max_len = 1024;
+execute group_concat_max_len_low_stmt;
+deallocate prepare group_concat_max_len_low_stmt;
 drop table group_concat_max_len_01;
+
+-- A truncating GROUP_CONCAT must expose one MySQL-compatible warning per
+-- aggregate instance, including a diagnostic row number. Keep the second
+-- expression independent so both finalization paths are observable.
+drop table if exists group_concat_warning_01;
+create table group_concat_warning_01 (id int primary key, s varchar(16));
+insert into group_concat_warning_01 values (1, 'éé'), (2, '中中'), (3, 'abcd');
+set session group_concat_max_len = 8;
+select group_concat(s order by id separator '|'),
+       hex(group_concat(s order by id separator '|'))
+from group_concat_warning_01;
+show warnings;
+set session group_concat_max_len = 1024;
+drop table group_concat_warning_01;
 
 -- regression for issue #27589: supported wide and binary types must serialize
 -- consistently instead of failing in the group_concat payload writer

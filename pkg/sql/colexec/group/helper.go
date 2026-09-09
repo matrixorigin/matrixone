@@ -1658,6 +1658,12 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
+		// Publish diagnostics only after every final vector has materialized;
+		// a later vector/allocation error must not expose warnings for a failed
+		// statement.
+		for _, ag := range ctr.aggList {
+			aggexec.ReportGroupConcatWarnings(ag, proc.GetSession())
+		}
 
 		ctr.freeAggList()
 	}

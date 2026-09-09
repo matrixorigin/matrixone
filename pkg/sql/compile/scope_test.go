@@ -114,22 +114,43 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 		{RootOp: windowArg},
 	}
 
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
-	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
-
-	sessionMaxLen = 1024
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, true))
+	// The prepare-time 1024-byte value is a floor. Lowering the session value
+	// for EXECUTE must not make the prepared plan truncate at 5 bytes.
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
 
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, true))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+
+	// A prepared plan with a smaller floor expands for a larger execution-time
+	// value, then returns to its original floor when the session value drops.
+	lowFloor := group.NewArgument()
+	lowFloor.Aggs = []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig("", 5)),
+	}
+	lowFloorScopes := []*Scope{{RootOp: lowFloor}}
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, true))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), lowFloor.Aggs[0].GetExtraConfig())
+	sessionMaxLen = 5
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, true))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), lowFloor.Aggs[0].GetExtraConfig())
+
 	groupArg.Release()
 	mergeGroupArg.Release()
 	windowArg.Release()
+	lowFloor.Release()
 }
 
 func GetFilePath() string {

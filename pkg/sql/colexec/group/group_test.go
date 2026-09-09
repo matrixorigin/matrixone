@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -45,6 +46,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type groupConcatWarningSession struct {
+	total    uint64
+	codes    []uint16
+	messages []string
+}
+
+func (s *groupConcatWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (s *groupConcatWarningSession) AddTempTable(string, string, string)        {}
+func (s *groupConcatWarningSession) RemoveTempTable(string, string)             {}
+func (s *groupConcatWarningSession) RemoveTempTableByRealName(string)           {}
+func (s *groupConcatWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *groupConcatWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
+}
+func (s *groupConcatWarningSession) AppendWarningBatch(
+	total uint64,
+	codes []uint16,
+	messages []string,
+) {
+	s.total += total
+	s.codes = append(s.codes, codes...)
+	s.messages = append(s.messages, messages...)
+}
 
 // mock batch schema: (a int32, b uuid, c varchar, d json, e datetime)
 // col 0 = a int32
@@ -174,6 +199,40 @@ func newMergeGroupOp(aggs []aggexec.AggFuncExecExpression) *MergeGroup {
 		OperatorInfo: vm.OperatorInfo{Idx: 0, IsFirst: false, IsLast: false},
 	}
 	return mg
+}
+
+func TestGroupConcatFinalResultReportsWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &groupConcatWarningSession{}
+	proc.Session = session
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(
+		[]string{"aa", "bb", "cc"}, nil, proc.Mp())
+	input.SetRowCount(3)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			[]*plan.Expr{colExpr(0, types.T_varchar)},
+			aggexec.EncodeGroupConcatConfig("", 5),
+		),
+	})
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, "aabbc", outputs[0].Vecs[0].GetStringAt(0))
+	require.Equal(t, uint64(1), session.total)
+	require.Equal(t, []uint16{moerr.ER_CUT_VALUE_GROUP_CONCAT}, session.codes)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, session.messages)
 }
 
 func TestGroupKeyMergesDuplicateStringSourcesDeterministically(t *testing.T) {

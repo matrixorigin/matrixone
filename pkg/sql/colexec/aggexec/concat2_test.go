@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,6 +32,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+type groupConcatWarningSink struct {
+	total    uint64
+	codes    []uint16
+	messages []string
+}
+
+func (s *groupConcatWarningSink) AppendWarningDiagnostic(code uint16, msg string) {
+	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
+}
+
+func (s *groupConcatWarningSink) AppendWarningBatch(
+	total uint64,
+	codes []uint16,
+	messages []string,
+) {
+	s.total += total
+	s.codes = append(s.codes, codes...)
+	s.messages = append(s.messages, messages...)
+}
 
 func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -1214,6 +1235,42 @@ func TestGroupConcatMaxLen(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     94,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 5), 0))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb", "cc"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "aabbc", string(results[0].GetBytesAt(0)))
+
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []uint16{moerr.ER_CUT_VALUE_GROUP_CONCAT}, sink.codes)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
+
+	// A result can be inspected by more than one execution-layer boundary, but
+	// the same truncation must not be reported twice.
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Len(t, sink.messages, 1)
+
+	results[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatMaxLenCanTruncateSeparator(t *testing.T) {
