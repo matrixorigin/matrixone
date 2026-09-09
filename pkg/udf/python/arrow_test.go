@@ -10,6 +10,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -89,4 +90,47 @@ func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
 	defer times.Release()
 	timeDescriptor := TypeDescriptor{TypeID: int32(types.T_time), Scale: 6, OffsetWidth: 32}
 	require.ErrorContains(t, validateArrowValueDomain(timeDescriptor, times), "outside the declared SQL domain")
+}
+
+func TestArrowTypeValidationIncludesFixedBinaryWidth(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_uuid.ToType())
+	require.NoError(t, err)
+	builder := array.NewFixedSizeBinaryBuilder(memory.NewGoAllocator(), &arrow.FixedSizeBinaryType{ByteWidth: 1})
+	builder.Append([]byte{0xff})
+	values := builder.NewFixedSizeBinaryArray()
+	defer values.Release()
+	require.ErrorContains(t, validateArrayType(descriptor, values), "does not match")
+
+	field, err := descriptor.Field("uuid")
+	require.NoError(t, err)
+	field.Type = &arrow.FixedSizeBinaryType{ByteWidth: 1}
+	require.ErrorContains(t, descriptor.ValidateField(field), "does not match")
+}
+
+func TestArrowValueDomainRejectsDecimalOverflowAndNullableVectorChild(t *testing.T) {
+	decimalType := &arrow.Decimal128Type{Precision: 3, Scale: 0}
+	decimalBuilder := array.NewDecimal128Builder(memory.NewGoAllocator(), decimalType)
+	decimalBuilder.Append(decimal128.FromI64(1000))
+	decimals := decimalBuilder.NewDecimal128Array()
+	defer decimals.Release()
+	decimalDescriptor := TypeDescriptor{TypeID: int32(types.T_decimal128), Width: 3, OffsetWidth: 32}
+	require.ErrorContains(t, validateArrowValueDomain(decimalDescriptor, decimals), "exceeds precision")
+
+	listBuilder := array.NewFixedSizeListBuilder(memory.NewGoAllocator(), 2, arrow.PrimitiveTypes.Float32)
+	listBuilder.Append(true)
+	listBuilder.ValueBuilder().(*array.Float32Builder).Append(1)
+	listBuilder.ValueBuilder().(*array.Float32Builder).AppendNull()
+	lists := listBuilder.NewArray()
+	defer lists.Release()
+	vectorDescriptor := TypeDescriptor{TypeID: int32(types.T_array_float32), Width: 2}
+	require.ErrorContains(t, validateArrowValueDomain(vectorDescriptor, lists), "vector child")
+}
+
+func TestArrowStringWidthCountsUnicodeCharacters(t *testing.T) {
+	builder := array.NewStringBuilder(memory.NewGoAllocator())
+	builder.Append("中")
+	values := builder.NewStringArray()
+	defer values.Release()
+	descriptor := TypeDescriptor{TypeID: int32(types.T_varchar), Width: 1, OffsetWidth: 32}
+	require.NoError(t, validateArrowValueDomain(descriptor, values))
 }

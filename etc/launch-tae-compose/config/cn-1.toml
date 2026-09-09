@@ -68,4 +68,6 @@ enable-dml = true
 enable-maintenance = true
 
 [cn.python-udf-client]
+enabled = true
+allow-unisolated = true
 server-address = "python-udf-worker-cn1:50051"

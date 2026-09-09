@@ -13,6 +13,7 @@ launchers must place it in the sandbox class selected by the routine policy.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _datetime
 import decimal as _decimal
 import hashlib
@@ -20,6 +21,13 @@ import importlib
 import inspect
 import json
 import logging
+import os
+import pickle
+import selectors
+import signal
+import struct
+import subprocess
+import sys
 import threading
 import time
 import uuid as _uuid
@@ -36,6 +44,7 @@ MAX_TERMINAL_RECORDS = 10000
 MAX_TERMINAL_BYTES = 16 << 20
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
+MAX_EXECUTION_FRAME_BYTES = 1 << 30
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
 _MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
@@ -293,6 +302,13 @@ def _required_positive_int(value: Dict[str, Any], key: str, maximum: int) -> int
     return item
 
 
+def _required_positive_float(value: Dict[str, Any], key: str, maximum: float) -> float:
+    item = value.get(key)
+    if isinstance(item, bool) or not isinstance(item, (int, float)) or item <= 0 or item > maximum:
+        raise ValueError(f"PROTOCOL: invalid invocation field {key}")
+    return float(item)
+
+
 def _required_uint64(value: Dict[str, Any], key: str, allow_zero: bool = False) -> int:
     item = value.get(key)
     minimum = 0 if allow_zero else 1
@@ -507,7 +523,7 @@ def _check_scalar(value: Any, descriptor: Dict[str, Any]):
     if type_id in (CHAR, VARCHAR, TEXT):
         if type(value) is not str: raise ValueError("TYPE_CONTRACT: expected string")
         width = int(descriptor.get("width") or 0)
-        if width > 0 and len(value.encode("utf-8")) > width: raise ValueError("TYPE_CONTRACT: string exceeds the declared width")
+        if width > 0 and len(value) > width: raise ValueError("TYPE_CONTRACT: string exceeds the declared width")
         return value
     if type_id == JSON: return _check_json(value)
     if type_id in (BINARY, VARBINARY, BLOB):
@@ -552,8 +568,12 @@ def _check_scalar(value: Any, descriptor: Dict[str, Any]):
         return values
     if type_id in (DECIMAL64, DECIMAL128):
         if not isinstance(value, _decimal.Decimal): raise ValueError("TYPE_CONTRACT: expected decimal.Decimal")
+        if not value.is_finite(): raise ValueError("TYPE_CONTRACT: decimal must be finite")
         scale = int(descriptor.get("scale") or 0)
-        if -value.as_tuple().exponent != scale: raise ValueError("TYPE_CONTRACT: decimal scale mismatch")
+        exponent = value.as_tuple().exponent
+        if not isinstance(exponent, int) or -exponent != scale: raise ValueError("TYPE_CONTRACT: decimal scale mismatch")
+        precision = int(descriptor.get("width") or (18 if type_id == DECIMAL64 else 38))
+        if len(value.as_tuple().digits) > precision: raise ValueError("TYPE_CONTRACT: decimal precision exceeded")
     return value
 
 
@@ -597,7 +617,10 @@ def _output_array(values: Any, descriptor: Dict[str, Any], rows: int) -> pa.Arra
             checked.append(_check_scalar(value, descriptor))
         try:
             child_type = pa.float32() if type_id == VECF32 else pa.float64()
-            flat = [item for row in checked if row is not None for item in row]
+            # A NULL parent still owns exactly `width` child slots in a
+            # FixedSizeListArray.  Leaving those slots out changes the row
+            # layout and makes the following non-NULL rows shift left.
+            flat = [item for row in checked for item in (row if row is not None else [0] * width)]
             child = pa.array(flat, type=child_type)
             mask = pa.array([row is None for row in checked])
             return pa.FixedSizeListArray.from_arrays(child, width, mask=mask)
@@ -614,7 +637,7 @@ def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
     if type_id in (DATE, DATETIME, TIMESTAMP):
         struct = array
         for index in range(len(struct)):
-            if struct.is_null(index): continue
+            if not struct[index].is_valid: continue
             is_zero = bool(struct.field("is_zero")[index].as_py())
             value = struct.field("value")[index].as_py()
             if value is None: raise ValueError("TYPE_CONTRACT: temporal child is null")
@@ -624,14 +647,204 @@ def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
                 if type_id == DATE: _check_scalar(SqlDate(False, value), descriptor)
                 elif type_id == DATETIME: _check_scalar(SqlDatetime(False, value), descriptor)
                 else: _check_scalar(SqlTimestamp(False, value), descriptor)
+    elif type_id in (VECF32, VECF64):
+        values = array.values
+        for index in range(len(values)):
+            if not values[index].is_valid:
+                raise ValueError("TYPE_CONTRACT: vector child validity must be non-null")
     elif type_id in (CHAR, VARCHAR, TEXT, JSON, BINARY, VARBINARY, BLOB, UUID, TIME, DECIMAL64, DECIMAL128):
         for index in range(len(array)):
-            if array.is_null(index): continue
+            if not array[index].is_valid: continue
             value = array[index].as_py()
             if type_id == UUID:
                 if not isinstance(value, (bytes, bytearray)) or len(value) != 16: raise ValueError("TYPE_CONTRACT: UUID must contain 16 bytes")
             else:
                 _check_scalar(value, descriptor)
+
+
+class _DiscardText:
+    def write(self, value: str) -> int:
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+
+def _serialize_record_batch(record: pa.RecordBatch) -> bytes:
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, record.schema) as stream:
+        stream.write_batch(record)
+    return sink.getvalue().to_pybytes()
+
+
+def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
+    reader = pa.ipc.open_stream(pa.py_buffer(data))
+    try:
+        try:
+            record = reader.read_next_batch()
+        except StopIteration as exc:
+            raise ValueError("PROTOCOL: execution payload contains no Arrow batch") from exc
+        try:
+            reader.read_next_batch()
+        except StopIteration:
+            return record
+        raise ValueError("PROTOCOL: execution payload contains multiple Arrow batches")
+    finally:
+        reader.close()
+
+
+def _execute_handler_batch(request: Dict[str, Any]) -> bytes:
+    batch = _deserialize_record_batch(request["input"])
+    args = request["args"]
+    result_descriptor = request["return"]
+    mode = request["mode"]
+    null_policy = request["null_policy"]
+    sdk_version = request["sdk_version"]
+    statement_context = _statement_context(request.get("context"))
+
+    # User code has no stdout/stderr channel in the Flight protocol.  Discard
+    # it so a print() cannot corrupt the length-prefixed response frame.
+    with contextlib.redirect_stdout(_DiscardText()), contextlib.redirect_stderr(_DiscardText()):
+        handler = _load_handler(request["source"], request["handler"])
+        if mode == MODE_VECTOR:
+            call_context = VectorContext(sdk_version, _CallLogger(), statement_context, batch.num_rows)
+            output = handler(call_context, *[batch.column(index) for index in range(batch.num_columns)])
+            if not isinstance(output, (pa.Array, pa.ChunkedArray)):
+                raise ValueError("TYPE_CONTRACT: VECTOR handler must return an Arrow Array or ChunkedArray")
+        else:
+            call_context = ScalarContext(sdk_version, _CallLogger(), statement_context)
+            values = []
+            for row in range(batch.num_rows):
+                params = [_scalar_input(batch.column(index), row, args[index]) for index in range(batch.num_columns)]
+                if null_policy == NULL_RETURN and any(value is None for value in params):
+                    values.append(None)
+                else:
+                    values.append(handler(call_context, *params))
+            output = values
+        output_array = _output_array(output, result_descriptor, batch.num_rows)
+        result_field = _field("result", result_descriptor)
+        result_batch = pa.RecordBatch.from_arrays(
+            [output_array], schema=pa.schema([result_field])
+        )
+        if pa.ipc.get_record_batch_size(result_batch) > request["max_batch_bytes"]:
+            raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
+        return _serialize_record_batch(result_batch)
+
+
+def _read_exact(stream, size: int) -> bytes:
+    result = bytearray()
+    while len(result) < size:
+        chunk = stream.read(size - len(result))
+        if not chunk:
+            raise EOFError("execution frame ended unexpectedly")
+        result.extend(chunk)
+    return bytes(result)
+
+
+def _write_execution_frame(stream, payload: bytes) -> None:
+    if len(payload) > MAX_EXECUTION_FRAME_BYTES:
+        raise ValueError("RESOURCE_EXHAUSTED: execution frame is too large")
+    stream.write(struct.pack(">Q", len(payload)))
+    stream.write(payload)
+    stream.flush()
+
+
+def _execute_handler_subprocess() -> None:
+    try:
+        size = struct.unpack(">Q", _read_exact(sys.stdin.buffer, 8))[0]
+        if size > MAX_EXECUTION_FRAME_BYTES:
+            raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+        request = pickle.loads(_read_exact(sys.stdin.buffer, size))
+        response = {"ok": True, "payload": _execute_handler_batch(request)}
+    except Exception as exc:
+        response = {"ok": False, "error": _safe_error(exc)}
+    _write_execution_frame(sys.stdout.buffer, pickle.dumps(response, protocol=5))
+
+
+def _context_is_cancelled(context) -> bool:
+    if context is None:
+        return False
+    try:
+        return bool(context.is_cancelled())
+    except Exception:
+        return False
+
+
+def _kill_execution_process(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: float) -> bytes:
+    request_wire = pickle.dumps(request, protocol=5)
+    if len(request_wire) > MAX_EXECUTION_FRAME_BYTES:
+        raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+    popen_kwargs = {
+        "stdin": subprocess.PIPE,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+    process = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--execute-handler"], **popen_kwargs)
+    selector = selectors.DefaultSelector()
+    response = bytearray()
+    expected = None
+    try:
+        _write_execution_frame(process.stdin, request_wire)
+        process.stdin.close()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if _context_is_cancelled(context):
+                raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
+            events = selector.select(min(remaining, 0.1))
+            if not events:
+                continue
+            chunk = os.read(process.stdout.fileno(), 65536)
+            if not chunk:
+                if expected is None or len(response) < expected:
+                    raise ValueError("USER_CODE: handler process exited without a response")
+                break
+            response.extend(chunk)
+            if expected is None and len(response) >= 8:
+                expected = struct.unpack(">Q", response[:8])[0]
+                if expected > MAX_EXECUTION_FRAME_BYTES:
+                    raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
+            if expected is not None and len(response) >= expected + 8:
+                break
+        payload = pickle.loads(bytes(response[8 : expected + 8]))
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise ValueError(str(payload.get("error", "USER_CODE: handler process failed")))
+        result = payload.get("payload")
+        if not isinstance(result, bytes):
+            raise ValueError("PROTOCOL: handler process returned an invalid Arrow payload")
+        return result
+    finally:
+        selector.close()
+        if process.poll() is None:
+            _kill_execution_process(process)
+        else:
+            process.wait()
+        process.stdout.close()
+
 
 
 class _InvocationState:
@@ -651,13 +864,15 @@ class _InvocationState:
             self.acked_result = sequence
             self.condition.notify_all()
 
-    def wait_result_ack(self, sequence: int) -> None:
+    def wait_result_ack(self, sequence: int, context=None) -> None:
         deadline = time.monotonic() + ACK_TIMEOUT_SECONDS
         with self.condition:
             while self.acked_result < sequence:
+                if context is not None and context.is_cancelled():
+                    raise TimeoutError("DEADLINE_EXCEEDED: result ACK wait cancelled")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0: raise TimeoutError("DEADLINE_EXCEEDED: result ACK timeout")
-                self.condition.wait(remaining)
+                self.condition.wait(min(remaining, 0.2))
 
     def ack_finish(self, finish_id: str) -> None:
         with self.condition:
@@ -665,13 +880,15 @@ class _InvocationState:
             self.finish_acked = True
             self.condition.notify_all()
 
-    def wait_finish_ack(self) -> None:
+    def wait_finish_ack(self, context=None) -> None:
         deadline = time.monotonic() + ACK_TIMEOUT_SECONDS
         with self.condition:
             while not self.finish_acked:
+                if context is not None and context.is_cancelled():
+                    raise TimeoutError("DEADLINE_EXCEEDED: Finish ACK wait cancelled")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0: raise TimeoutError("DEADLINE_EXCEEDED: Finish ACK timeout")
-                self.condition.wait(remaining)
+                self.condition.wait(min(remaining, 0.2))
 
 
 class RoutineFlightServer(flight.FlightServerBase):
@@ -719,6 +936,22 @@ class RoutineFlightServer(flight.FlightServerBase):
         self._terminal[key] = (deadline, state.terminal_bytes)
         self._terminal.move_to_end(key)
         self._terminal_bytes += state.terminal_bytes
+
+    def _finish_invocation(self, key: tuple, state: Optional[_InvocationState]) -> None:
+        # A rejected duplicate Open has no ownership of the existing state.
+        # Cleanup must therefore be identity based, not key based.
+        if key is None or state is None:
+            return
+        with self._lock:
+            current = self._active.get(key)
+            if current is not state:
+                return
+            self._active.pop(key, None)
+            self._active_bytes -= state.terminal_bytes
+            # A started invocation is terminal even when the worker reports an
+            # error.  Retaining the fence prevents a late retry from running
+            # user code a second time.
+            self._remember_terminal_locked(key, state)
 
     def do_action(self, context, action):
         control = _decode_control(action.body)
@@ -770,12 +1003,16 @@ class RoutineFlightServer(flight.FlightServerBase):
             sdk_version = _required_string(payload, "sdk_version")
             max_batch_bytes = _required_positive_int(payload, "max_batch_bytes", 1 << 30)
             max_batch_rows = _required_positive_int(payload, "max_batch_rows", 1 << 30)
+            handler_timeout_seconds = _required_positive_float(
+                payload, "handler_timeout_seconds", 3600.0
+            )
             if mode not in (MODE_SCALAR, MODE_VECTOR) or null_policy not in (NULL_CALL, NULL_RETURN): raise ValueError("PROTOCOL: unsupported call mode or NULL policy")
             if abi_contract != ABI_CONTRACT or adapter_version != ADAPTER_VERSION: raise ValueError("PROTOCOL: unsupported Python ABI contract")
             if sdk_version != SDK_VERSION: raise ValueError("PROTOCOL: unsupported Python SDK")
             state = self._admit(key)
             state.tuple = open_control["tuple"]
-            handler = _load_handler(_required_string(payload, "source"), _required_string(payload, "handler"))
+            source = _required_string(payload, "source")
+            handler_name = _required_string(payload, "handler")
             schema = None
             result_field = _field("result", result_descriptor)
             result_schema = pa.schema([result_field])
@@ -801,34 +1038,33 @@ class RoutineFlightServer(flight.FlightServerBase):
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
                     if batch.nbytes > max_batch_bytes: raise ValueError("RESOURCE_EXHAUSTED: input batch exceeds byte limit")
-                    if mode == MODE_VECTOR:
-                        call_context = VectorContext(sdk_version, _CallLogger(), statement_context, batch.num_rows)
-                        try:
-                            output = handler(call_context, *[batch.column(index) for index in range(batch.num_columns)])
-                        except Exception as exc:
-                            raise ValueError("USER_CODE: handler failed") from exc
-                        if not isinstance(output, (pa.Array, pa.ChunkedArray)):
-                            raise ValueError("TYPE_CONTRACT: VECTOR handler must return an Arrow Array or ChunkedArray")
-                    else:
-                        call_context = ScalarContext(sdk_version, _CallLogger(), statement_context)
-                        values = []
-                        for row in range(batch.num_rows):
-                            params = [_scalar_input(batch.column(index), row, args[index]) for index in range(batch.num_columns)]
-                            if null_policy == NULL_RETURN and any(value is None for value in params): values.append(None)
-                            else:
-                                try:
-                                    values.append(handler(call_context, *params))
-                                except Exception as exc:
-                                    raise ValueError("USER_CODE: handler failed") from exc
-                        output = values
-                    output_array = _output_array(output, result_descriptor, batch.num_rows)
-                    output_batch = pa.RecordBatch.from_arrays([output_array], schema=result_schema)
+                    execution_request = {
+                        "source": source,
+                        "handler": handler_name,
+                        "mode": mode,
+                        "null_policy": null_policy,
+                        "sdk_version": sdk_version,
+                        "context": payload.get("context"),
+                        "args": args,
+                        "return": result_descriptor,
+                        "max_batch_bytes": max_batch_bytes,
+                        "input": _serialize_record_batch(batch),
+                    }
+                    output_wire = _run_handler_process(
+                        context, execution_request, handler_timeout_seconds
+                    )
+                    output_batch = _deserialize_record_batch(output_wire)
+                    if output_batch.num_rows != batch.num_rows or output_batch.num_columns != 1:
+                        raise ValueError("TYPE_CONTRACT: handler result has the wrong shape")
+                    _validate_field(output_batch.schema.field(0), "result", result_descriptor)
+                    output_array = output_batch.column(0)
+                    _validate_array_values(output_array, result_descriptor)
                     if pa.ipc.get_record_batch_size(output_batch) > max_batch_bytes:
                         raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
                     state.last_result = sequence
                     writer.write_metadata(_encode_control({"kind": "InputConsumed", "tuple": open_control["tuple"], "sequence": sequence}))
                     writer.write_with_metadata(output_batch, _encode_control({"kind": "ResultBatch", "tuple": open_control["tuple"], "sequence": sequence}))
-                    state.wait_result_ack(sequence)
+                    state.wait_result_ack(sequence, context)
                 elif chunk.app_metadata:
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
@@ -841,7 +1077,7 @@ class RoutineFlightServer(flight.FlightServerBase):
             if state.acked_result != state.last_result: raise ValueError("PROTOCOL: result is not acknowledged")
             state.finish_id = _uuid.uuid4().hex
             writer.write_metadata(_encode_control({"kind": "Finish", "tuple": open_control["tuple"], "status": "OK", "finish_id": state.finish_id, "last_sequence": state.last_result}))
-            state.wait_finish_ack()
+            state.wait_finish_ack(context)
         except Exception as exc:
             if writer_started and key is not None:
                 try:
@@ -850,16 +1086,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     pass
             raise
         finally:
-            if key is not None:
-                with self._lock:
-                    current = self._active.pop(key, None)
-                    if current is not None:
-                        self._active_bytes -= current.terminal_bytes
-                        # A started invocation is terminal even when the worker
-                        # reports an error.  Retaining the fence prevents a late
-                        # retry from running user code a second time; the caller's
-                        # error path remains responsible for reporting failure.
-                        self._remember_terminal_locked(key, current)
+            self._finish_invocation(key, state)
 
 
 def _safe_error(exc: Exception) -> str:
@@ -872,8 +1099,14 @@ def _safe_error(exc: Exception) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--address", required=True)
+    parser.add_argument("--execute-handler", action="store_true")
+    parser.add_argument("--address")
     args = parser.parse_args()
+    if args.execute_handler:
+        _execute_handler_subprocess()
+        return
+    if not args.address:
+        parser.error("--address is required for the Flight server")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
     address = args.address if "://" in args.address else "grpc://" + args.address
     server = RoutineFlightServer(address)

@@ -4,7 +4,9 @@ import datetime
 import importlib.util
 import json
 import pathlib
+import struct
 import sys
+import time
 import unittest
 import uuid
 
@@ -76,6 +78,69 @@ class WorkerContractTest(unittest.TestCase):
         time_descriptor = {"type_id": worker.TIME, "scale": 6, "offset_width": 32}
         with self.assertRaisesRegex(ValueError, "TIME is outside"):
             worker._output_array([datetime.timedelta(hours=839)], time_descriptor, 1)
+
+    def test_sql_string_width_counts_characters(self):
+        descriptor = {"type_id": worker.VARCHAR, "width": 1, "offset_width": 32}
+        array = worker._output_array(["中"], descriptor, 1)
+        self.assertEqual(["中"], array.to_pylist())
+
+    def test_decimal_precision_and_vector_child_validity_are_checked(self):
+        decimal_descriptor = {"type_id": worker.DECIMAL128, "width": 3, "scale": 0, "offset_width": 32}
+        with self.assertRaisesRegex(ValueError, "precision exceeded"):
+            worker._output_array([__import__("decimal").Decimal("1000")], decimal_descriptor, 1)
+
+        vector_descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
+        child = pa.array([1.0, None, 3.0, 4.0], type=pa.float32())
+        vector = pa.FixedSizeListArray.from_arrays(child, 2)
+        with self.assertRaisesRegex(ValueError, "child validity"):
+            worker._output_array(vector, vector_descriptor, 2)
+
+    def test_scalar_vector_null_keeps_fixed_size_child_slots(self):
+        descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
+        array = worker._output_array(
+            [memoryview(struct.pack("<ff", 1.0, 2.0)), None,
+             memoryview(struct.pack("<ff", 3.0, 4.0))],
+            descriptor,
+            3,
+        )
+        self.assertEqual(6, len(array.values))
+        self.assertEqual([[1.0, 2.0], None, [3.0, 4.0]], array.to_pylist())
+
+    def test_duplicate_open_cleanup_requires_state_ownership(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        key = (1, "statement", "group", 1, "invocation", 1)
+        state = server._admit(key)
+        server._finish_invocation(key, None)
+        self.assertIn(key, server._active)
+        server._finish_invocation(key, state)
+        self.assertNotIn(key, server._active)
+        self.assertIn(key, server._terminal)
+
+    def test_handler_process_is_fresh_and_can_be_terminated(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays([pa.array([1], type=pa.int64())], ["arg_0"])
+        request = {
+            "source": "counter = globals().get('counter', 0) + 1\ndef f(ctx, x): return counter",
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "input": worker._serialize_record_batch(batch),
+        }
+        first = worker._deserialize_record_batch(worker._run_handler_process(None, request, 3))
+        second = worker._deserialize_record_batch(worker._run_handler_process(None, request, 3))
+        self.assertEqual([1], first.column(0).to_pylist())
+        self.assertEqual([1], second.column(0).to_pylist())
+
+        request["source"] = "import time\ndef f(ctx, x): time.sleep(5); return x"
+        started = time.monotonic()
+        with self.assertRaisesRegex(TimeoutError, "handler execution timeout"):
+            worker._run_handler_process(None, request, 0.1)
+        self.assertLess(time.monotonic() - started, 2)
 
     def test_zero_argument_vector_uses_context_rows(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
