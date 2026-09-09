@@ -128,6 +128,19 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 	}
 }
 
+func TestMakeSetDecimalToBits(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  uint64
+	}{
+		{1.4, 1},
+		{1.9, 1},
+		{-1.5, ^uint64(0)},
+	} {
+		require.Equal(t, tc.want, makeSetDecimalToBits(tc.value))
+	}
+}
+
 func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
 	for _, test := range []struct {
 		name     string
