@@ -186,17 +186,32 @@ func buildInsertPlans(
 ) error {
 
 	var err error
+	// The modern INSERT attempt may have to fall back to this legacy planner for
+	// a table without a primary/unique key. Generated-column DEFAULT values are
+	// removed from the modern source locally, so keep the legacy statement's
+	// column list and VALUES rows aligned as well. The caller's AST remains
+	// untouched for prepared-statement reuse and row-alias validation.
+	planningStmt := stmt
+	if stmt != nil && stmt.Columns != nil {
+		stmtCopy := *stmt
+		stmtCopy.Rows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
+		stmtCopy.Columns, err = builder.stripGeneratedDefaultCols(stmt.Columns, stmtCopy.Rows, tableDef)
+		if err != nil {
+			return err
+		}
+		planningStmt = &stmtCopy
+	}
 	var insertColsNameFromStmt []string
 	var pkFilterExpr []*Expr
 	var newPartitionExpr *Expr
-	if stmt != nil {
-		insertColsNameFromStmt, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
+	if planningStmt != nil {
+		insertColsNameFromStmt, err = getInsertColsFromStmt(ctx.GetContext(), planningStmt, tableDef)
 		if err != nil {
 			return err
 		}
 
 		// try to build pk filter epxr for origin table
-		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, nil) {
+		if canUsePkFilter(builder, ctx, planningStmt, tableDef, insertColsNameFromStmt, nil) {
 			pkLocationMap := newLocationMap(tableDef, nil)
 			// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 			// so the partition expression needs to be remapped and judged whether partition pruning can be performed
@@ -261,7 +276,7 @@ func buildInsertPlans(
 		}
 		skipIndexesCoyp = dedupOpt.SkipIndexesCopy
 	}
-	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
+	return buildInsertPlansWithRelatedHiddenTable(planningStmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
 		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage,
 		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, skipIndexesCoyp,
