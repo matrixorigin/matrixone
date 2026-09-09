@@ -34,6 +34,41 @@ func TestODKUAffectedRowsRules(t *testing.T) {
 	require.EqualValues(t, 1, odkuAffectedRows(false, true))
 }
 
+func TestGeneratedProvenanceMarksOnlySurvivingBuildRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	markers := testutil.MakeBoolVector([]bool{true, false}, nil, proc.Mp())
+	values := testutil.MakeUint64Vector([]uint64{123, 456}, nil, proc.Mp())
+	build := &batch.Batch{Vecs: []*vector.Vector{markers, values}}
+	build.SetRowCount(2)
+	defer build.Clean(proc.Mp())
+
+	arg := &DedupJoin{
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(1, 0),
+			colexec.NewResultPos(1, 1),
+		},
+		AutoIncrementGeneratedResultPos:      0,
+		AutoIncrementGeneratedValueResultPos: 1,
+	}
+	ctr := &container{batches: []*batch.Batch{build}}
+
+	// The first row represents the new INSERT selected after duplicate
+	// arbitration. Its explicit provenance bit, rather than a non-zero value,
+	// publishes the generated key.
+	ctr.markGeneratedBuildRow(arg, 0, proc)
+	require.True(t, proc.HasStatementLastInsertIDGenerated())
+	require.Equal(t, uint64(123), proc.GetStatementLastInsertID())
+
+	// A PRE_INSERT candidate on a row that resolved to an UPDATE must not
+	// publish even though its allocator value is non-zero.
+	proc.ResetStatementLastInsertID()
+	ctr.markGeneratedBuildRow(arg, 1, proc)
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
+	require.Zero(t, proc.GetStatementLastInsertID())
+}
+
 func TestODKUMetadataContractRejectsMalformedPlans(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -53,11 +88,13 @@ func TestODKUMetadataContractRejectsMalformedPlans(t *testing.T) {
 				colexec.NewResultPos(1, 2),
 				colexec.NewResultPos(1, 3),
 			},
-			HasODKUAffectedRows:      true,
-			AffectedRowsResultPos:    0,
-			PhysicalChangedResultPos: 1,
-			EmitActionRows:           true,
-			ActionFinalResultPos:     2,
+			HasODKUAffectedRows:                  true,
+			AffectedRowsResultPos:                0,
+			PhysicalChangedResultPos:             1,
+			EmitActionRows:                       true,
+			ActionFinalResultPos:                 2,
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
 		}
 	}
 

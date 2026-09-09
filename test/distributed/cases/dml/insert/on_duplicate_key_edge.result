@@ -133,6 +133,30 @@ select * from t_odku_auto order by id;
 4  ¦  3  ¦  third
 drop table if exists t_odku_auto;
 drop table if exists ai_duplicate_test;
+drop table if exists t_odku_last_insert_id;
+create table t_odku_last_insert_id (
+id int primary key,
+uk int unique,
+v int default 0
+);
+insert into t_odku_last_insert_id values (1, 10, 9);
+insert into t_odku_last_insert_id values (99, 10, 99)
+on duplicate key update id = last_insert_id(id), v = default;
+select last_insert_id();
+last_insert_id()
+1
+select id, uk, v from t_odku_last_insert_id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  v[4,32,0]
+1  ¦  10  ¦  0
+insert into t_odku_last_insert_id values (99, 10, 99)
+on duplicate key update v = last_insert_id(v + 1);
+select last_insert_id();
+last_insert_id()
+1
+select id, uk, v from t_odku_last_insert_id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  v[4,32,0]
+1  ¦  10  ¦  1
+drop table if exists t_odku_last_insert_id;
 create table ai_duplicate_test (
 id int auto_increment primary key,
 code varchar(20) unique,

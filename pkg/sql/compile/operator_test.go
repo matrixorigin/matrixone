@@ -949,6 +949,8 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := dedupjoin.NewArgument()
+	op.AutoIncrementGeneratedResultPos = 8
+	op.AutoIncrementGeneratedValueResultPos = 9
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*dedupjoin.DedupJoin)
@@ -956,8 +958,14 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 
 	require.Nil(t, op.Mailbox, "duplicating must not mutate the reusable template")
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	require.Equal(t, int32(8), dup1.AutoIncrementGeneratedResultPos)
+	require.Equal(t, int32(9), dup1.AutoIncrementGeneratedValueResultPos)
+	require.Equal(t, int32(8), dup2.AutoIncrementGeneratedResultPos)
+	require.Equal(t, int32(9), dup2.AutoIncrementGeneratedValueResultPos)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+	require.Equal(t, int32(8), nextGeneration.AutoIncrementGeneratedResultPos)
+	require.Equal(t, int32(9), nextGeneration.AutoIncrementGeneratedValueResultPos)
 }
 
 func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {

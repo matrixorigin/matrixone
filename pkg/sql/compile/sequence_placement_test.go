@@ -43,6 +43,18 @@ func TestSequenceBearingQueryUsesOneCNExecType(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, sequenceExecType(plan2.ExecTypeAP_MULTICN, &plan.Query{}))
 }
 
+func TestLastInsertIDExprUsesOneCNExecType(t *testing.T) {
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, function.LastInsertIDExprOverload)},
+	}}}
+	qry := &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}
+
+	require.Equal(t, plan2.ExecTypeAP_ONECN, sequenceExecType(plan2.ExecTypeAP_MULTICN, qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, sequenceExecType(plan2.ExecTypeAP_MULTICN, &plan.Query{Nodes: []*plan.Node{{
+		ProjectList: []*plan.Expr{sequenceExprForCompileTest(function.LAST_INSERT_ID)},
+	}}}))
+}
+
 func TestSequenceBearingQueryRejectsNonCoordinatorScope(t *testing.T) {
 	sequence := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.NEXTVAL, 0)},
@@ -109,6 +121,22 @@ func TestSequencePlacementPreservesLocalDOP(t *testing.T) {
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
 	plan2.CalcQueryDOP(p, 4, 1, sequenceExecType(plan2.ExecTypeAP_MULTICN, qry))
 	require.Equal(t, int32(3), qry.Nodes[0].Stats.Dop)
+}
+
+func TestLastInsertIDExprForcesStableLocalDOP(t *testing.T) {
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, function.LastInsertIDExprOverload)},
+	}}}
+	qry := &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{{
+			ProjectList: []*plan.Expr{expr},
+			Stats:       &plan.Stats{BlockNum: 32},
+		}},
+	}
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
+	plan2.CalcQueryDOP(p, 4, 1, plan2.ExecTypeAP_ONECN)
+	require.Equal(t, int32(1), qry.Nodes[0].Stats.Dop)
 }
 
 func TestSequencePlacementPinsCurrentCNAndKeepsSequenceFreeMultiCN(t *testing.T) {

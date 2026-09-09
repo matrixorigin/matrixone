@@ -242,8 +242,10 @@ func TestDedupJoinEmitsOrderedODKUActions(t *testing.T) {
 					colexec.NewResultPos(1, 3), colexec.NewResultPos(1, 4),
 					colexec.NewResultPos(1, 5),
 				},
-				OnDuplicateAction: plan.Node_UPDATE,
-				UpdateColIdxList:  []int32{1}, UpdateColExprList: []*plan.Expr{updateExpr},
+				AutoIncrementGeneratedResultPos:      -1,
+				AutoIncrementGeneratedValueResultPos: -1,
+				OnDuplicateAction:                    plan.Node_UPDATE,
+				UpdateColIdxList:                     []int32{1}, UpdateColExprList: []*plan.Expr{updateExpr},
 				UpdateCheckColIdxList: []int32{1}, HasODKUAffectedRows: true,
 				AffectedRowsResultPos: 1, PhysicalChangedResultPos: 2,
 				EmitActionRows: !tc.compactActions, ActionFinalResultPos: 3,
@@ -403,14 +405,16 @@ func TestDedupJoinUpdateRestoresProbeVectors(t *testing.T) {
 					colexec.NewResultPos(1, 1),
 					colexec.NewResultPos(0, 0),
 				},
-				OnDuplicateAction:       plan.Node_UPDATE,
-				UpdateColIdxList:        []int32{1},
-				UpdateColExprList:       []*plan.Expr{updateExpr},
-				UpdateCheckColIdxList:   []int32{1},
-				DelColIdx:               -1,
-				DedupDeleteMarkerColIdx: -1,
-				JoinMapTag:              curTag,
-				OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+				AutoIncrementGeneratedResultPos:      -1,
+				AutoIncrementGeneratedValueResultPos: -1,
+				OnDuplicateAction:                    plan.Node_UPDATE,
+				UpdateColIdxList:                     []int32{1},
+				UpdateColExprList:                    []*plan.Expr{updateExpr},
+				UpdateCheckColIdxList:                []int32{1},
+				DelColIdx:                            -1,
+				DedupDeleteMarkerColIdx:              -1,
+				JoinMapTag:                           curTag,
+				OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 			}
 			buildArg := &hashbuild.HashBuild{
 				NeedHashMap:      true,
@@ -470,15 +474,17 @@ func TestDedupJoinUpdateUsesBuildOnlyResultColumn(t *testing.T) {
 	}
 
 	dedupArg := &DedupJoin{
-		LeftTypes:               []types.Type{int32Typ},
-		RightTypes:              []types.Type{int32Typ, int32Typ},
-		Conditions:              conditions,
-		Result:                  []colexec.ResultPos{colexec.NewResultPos(1, 1)},
-		OnDuplicateAction:       plan.Node_UPDATE,
-		DelColIdx:               -1,
-		DedupDeleteMarkerColIdx: -1,
-		JoinMapTag:              curTag,
-		OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		LeftTypes:                            []types.Type{int32Typ},
+		RightTypes:                           []types.Type{int32Typ, int32Typ},
+		Conditions:                           conditions,
+		Result:                               []colexec.ResultPos{colexec.NewResultPos(1, 1)},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_UPDATE,
+		DelColIdx:                            -1,
+		DedupDeleteMarkerColIdx:              -1,
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:             true,
@@ -523,6 +529,9 @@ func TestDedupJoinFinalizeMatchedZero_NonCapture(t *testing.T) {
 
 	// Build keys [10,20,30] with payload col [100,200,300].
 	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{10, 20, 30}, {100, 200, 300}}, nil)
+	buildBat.Vecs = append(buildBat.Vecs,
+		testutil.MakeBoolVector([]bool{true, true, true}, nil, proc.Mp()),
+		testutil.MakeUint64Vector([]uint64{501, 502, 503}, nil, proc.Mp()))
 	// Probe key [99] misses every build bucket → matched stays at 0.
 	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{99}, {0}}, nil)
 
@@ -533,12 +542,15 @@ func TestDedupJoinFinalizeMatchedZero_NonCapture(t *testing.T) {
 
 	dedupArg := &DedupJoin{
 		LeftTypes:  []types.Type{int32Typ, int32Typ},
-		RightTypes: []types.Type{int32Typ, int32Typ},
+		RightTypes: []types.Type{int32Typ, int32Typ, types.T_bool.ToType(), types.T_uint64.ToType()},
 		Conditions: conditions,
 		Result: []colexec.ResultPos{
 			colexec.NewResultPos(1, 0), // build key
 			colexec.NewResultPos(1, 1), // build payload — exercises transfer path
+			colexec.NewResultPos(1, 2), // generated provenance marker
+			colexec.NewResultPos(1, 3), // generated value
 		},
+		AutoIncrementGeneratedResultPos: 2, AutoIncrementGeneratedValueResultPos: 3,
 		OnDuplicateAction: plan.Node_FAIL, // no capture, no matched marking
 		JoinMapTag:        curTag,
 		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
@@ -562,6 +574,9 @@ func TestDedupJoinFinalizeMatchedZero_NonCapture(t *testing.T) {
 	col1 := vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1])
 	require.Equal(t, []int32{10, 20, 30}, col0)
 	require.Equal(t, []int32{100, 200, 300}, col1)
+	require.True(t, proc.HasStatementLastInsertIDGenerated())
+	require.Equal(t, uint64(501), proc.GetStatementLastInsertID(),
+		"the HashOnUnique matched-zero transfer must publish the first surviving build id")
 
 	// Reset should walk JoinMap.batches whose Vecs slots are now nil-aliased
 	// into the output buf — must not panic / double-free.
@@ -605,11 +620,13 @@ func TestDedupJoinFinalizeMatchedZero_WithCapture(t *testing.T) {
 			colexec.NewResultPos(1, 0), // build key — non-capture column, transfer path
 			colexec.NewResultPos(1, 1), // capture target — must be NULL-filled
 		},
-		OnDuplicateAction:               plan.Node_FAIL,
-		OldColCapturePlaceholderIdxList: []int32{1},
-		OldColCaptureProbeIdxList:       []int32{1},
-		JoinMapTag:                      curTag,
-		OperatorBase:                    vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList:      []int32{1},
+		OldColCaptureProbeIdxList:            []int32{1},
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:   true,
@@ -658,6 +675,9 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 
 	// Build keys [10,20,30,40], payload [100,200,300,400].
 	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{10, 20, 30, 40}, {100, 200, 300, 400}}, nil)
+	buildBat.Vecs = append(buildBat.Vecs,
+		testutil.MakeBoolVector([]bool{true, true, true, true}, nil, proc.Mp()),
+		testutil.MakeUint64Vector([]uint64{601, 602, 603, 604}, nil, proc.Mp()))
 	// Probe matches keys 10 and 30 → matched bitmap = {0, 2}.
 	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{10, 30}, {0, 0}}, nil)
 
@@ -668,12 +688,15 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 
 	dedupArg := &DedupJoin{
 		LeftTypes:  []types.Type{int32Typ, int32Typ},
-		RightTypes: []types.Type{int32Typ, int32Typ},
+		RightTypes: []types.Type{int32Typ, int32Typ, types.T_bool.ToType(), types.T_uint64.ToType()},
 		Conditions: conditions,
 		Result: []colexec.ResultPos{
 			colexec.NewResultPos(1, 0),
 			colexec.NewResultPos(1, 1),
+			colexec.NewResultPos(1, 2),
+			colexec.NewResultPos(1, 3),
 		},
+		AutoIncrementGeneratedResultPos: 2, AutoIncrementGeneratedValueResultPos: 3,
 		OnDuplicateAction: plan.Node_IGNORE, // sets matched bitmap on hit
 		JoinMapTag:        curTag,
 		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
@@ -698,6 +721,9 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 	col1 := vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1])
 	require.Equal(t, []int32{20, 40}, col0)
 	require.Equal(t, []int32{200, 400}, col1)
+	require.True(t, proc.HasStatementLastInsertIDGenerated())
+	require.Equal(t, uint64(602), proc.GetStatementLastInsertID(),
+		"only unmatched HashOnUnique selections may publish generated ids")
 
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
@@ -734,9 +760,11 @@ func TestDedupJoinIgnoreSkipsUpdateTargetOldKey(t *testing.T) {
 			colexec.NewResultPos(1, 0),
 			colexec.NewResultPos(1, 2),
 		},
-		OnDuplicateAction: plan.Node_IGNORE,
-		JoinMapTag:        curTag,
-		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_IGNORE,
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:       true,
@@ -789,9 +817,11 @@ func TestDedupJoinIgnoreMapsNullableKeyGroupToBuildRow(t *testing.T) {
 			colexec.NewResultPos(1, 0),
 			colexec.NewResultPos(1, 1),
 		},
-		OnDuplicateAction: plan.Node_IGNORE,
-		JoinMapTag:        curTag,
-		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_IGNORE,
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:       true,
@@ -987,9 +1017,11 @@ func TestDedupJoinFinalizeMatchedZero_DuplicateBuildPos(t *testing.T) {
 			colexec.NewResultPos(1, 1), // build payload
 			colexec.NewResultPos(1, 1), // SAME build payload — aliased projection
 		},
-		OnDuplicateAction: plan.Node_FAIL, // no capture, no matched marking
-		JoinMapTag:        curTag,
-		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_FAIL, // no capture, no matched marking
+		JoinMapTag:                           curTag,
+		OperatorBase:                         vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
 		NeedHashMap:   true,

@@ -695,6 +695,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CountFoundRows = t.CountFoundRows
 		op.EmitActionRows = t.EmitActionRows
 		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.AutoIncrementGeneratedResultPos = t.AutoIncrementGeneratedResultPos
+		op.AutoIncrementGeneratedValueResultPos = t.AutoIncrementGeneratedValueResultPos
 		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -1617,6 +1619,12 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.EmitActionRows = node.DedupJoinCtx.EmitActionRows
 		if arg.EmitActionRows {
 			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
+		}
+		if node.DedupJoinCtx.AutoIncrementGeneratedCol != nil {
+			arg.AutoIncrementGeneratedResultPos = findJoinResultPos(result, node.DedupJoinCtx.AutoIncrementGeneratedCol)
+		}
+		if node.DedupJoinCtx.AutoIncrementGeneratedValueCol != nil {
+			arg.AutoIncrementGeneratedValueResultPos = findJoinResultPos(result, node.DedupJoinCtx.AutoIncrementGeneratedValueCol)
 		}
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
 		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {

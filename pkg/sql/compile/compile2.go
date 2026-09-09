@@ -1043,8 +1043,9 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	// value from the rolled-back attempt win the new attempt's result, and
 	// restore the session-visible LAST_INSERT_ID baseline until the retry
 	// generates a replacement value.
-	c.proc.SetStatementLastInsertID(0)
+	c.proc.ResetStatementLastInsertID()
 	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
+	c.proc.ResetLastInsertIDExpr()
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()

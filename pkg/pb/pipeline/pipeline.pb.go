@@ -2596,22 +2596,25 @@ type DedupJoin struct {
 	// at index i means: at probe time, when the build bucket for a row is hit,
 	// capture left (probe) column old_col_capture_probe_idx_list[i] and emit
 	// it in finalize() into right (build) column old_col_capture_placeholder_idx_list[i].
-	OldColCapturePlaceholderIdxList []int32               `protobuf:"varint,17,rep,packed,name=old_col_capture_placeholder_idx_list,json=oldColCapturePlaceholderIdxList,proto3" json:"old_col_capture_placeholder_idx_list,omitempty"`
-	OldColCaptureProbeIdxList       []int32               `protobuf:"varint,18,rep,packed,name=old_col_capture_probe_idx_list,json=oldColCaptureProbeIdxList,proto3" json:"old_col_capture_probe_idx_list,omitempty"`
-	DedupBuildKeepLast              bool                  `protobuf:"varint,19,opt,name=dedup_build_keep_last,json=dedupBuildKeepLast,proto3" json:"dedup_build_keep_last,omitempty"`
-	DedupDeleteKeepColIdxList       []int32               `protobuf:"varint,20,rep,packed,name=dedup_delete_keep_col_idx_list,json=dedupDeleteKeepColIdxList,proto3" json:"dedup_delete_keep_col_idx_list,omitempty"`
-	DedupDeleteMarkerColIdx         int32                 `protobuf:"varint,21,opt,name=dedup_delete_marker_col_idx,json=dedupDeleteMarkerColIdx,proto3" json:"dedup_delete_marker_col_idx,omitempty"`
-	HasOdkuAffectedRows             bool                  `protobuf:"varint,22,opt,name=has_odku_affected_rows,json=hasOdkuAffectedRows,proto3" json:"has_odku_affected_rows,omitempty"`
-	AffectedRowsResultPos           int32                 `protobuf:"varint,23,opt,name=affected_rows_result_pos,json=affectedRowsResultPos,proto3" json:"affected_rows_result_pos,omitempty"`
-	PhysicalChangedRowsResultPos    int32                 `protobuf:"varint,24,opt,name=physical_changed_rows_result_pos,json=physicalChangedRowsResultPos,proto3" json:"physical_changed_rows_result_pos,omitempty"`
-	UpdateCheckColIdxList           []int32               `protobuf:"varint,25,rep,packed,name=update_check_col_idx_list,json=updateCheckColIdxList,proto3" json:"update_check_col_idx_list,omitempty"`
-	CountFoundRows                  bool                  `protobuf:"varint,26,opt,name=count_found_rows,json=countFoundRows,proto3" json:"count_found_rows,omitempty"`
-	EmitActionRows                  bool                  `protobuf:"varint,27,opt,name=emit_action_rows,json=emitActionRows,proto3" json:"emit_action_rows,omitempty"`
-	ActionFinalResultPos            int32                 `protobuf:"varint,28,opt,name=action_final_result_pos,json=actionFinalResultPos,proto3" json:"action_final_result_pos,omitempty"`
-	ForeignKeyChecks                []ODKUForeignKeyCheck `protobuf:"bytes,29,rep,name=foreign_key_checks,json=foreignKeyChecks,proto3" json:"foreign_key_checks"`
-	XXX_NoUnkeyedLiteral            struct{}              `json:"-"`
-	XXX_unrecognized                []byte                `json:"-"`
-	XXX_sizecache                   int32                 `json:"-"`
+	OldColCapturePlaceholderIdxList      []int32               `protobuf:"varint,17,rep,packed,name=old_col_capture_placeholder_idx_list,json=oldColCapturePlaceholderIdxList,proto3" json:"old_col_capture_placeholder_idx_list,omitempty"`
+	OldColCaptureProbeIdxList            []int32               `protobuf:"varint,18,rep,packed,name=old_col_capture_probe_idx_list,json=oldColCaptureProbeIdxList,proto3" json:"old_col_capture_probe_idx_list,omitempty"`
+	DedupBuildKeepLast                   bool                  `protobuf:"varint,19,opt,name=dedup_build_keep_last,json=dedupBuildKeepLast,proto3" json:"dedup_build_keep_last,omitempty"`
+	DedupDeleteKeepColIdxList            []int32               `protobuf:"varint,20,rep,packed,name=dedup_delete_keep_col_idx_list,json=dedupDeleteKeepColIdxList,proto3" json:"dedup_delete_keep_col_idx_list,omitempty"`
+	DedupDeleteMarkerColIdx              int32                 `protobuf:"varint,21,opt,name=dedup_delete_marker_col_idx,json=dedupDeleteMarkerColIdx,proto3" json:"dedup_delete_marker_col_idx,omitempty"`
+	HasOdkuAffectedRows                  bool                  `protobuf:"varint,22,opt,name=has_odku_affected_rows,json=hasOdkuAffectedRows,proto3" json:"has_odku_affected_rows,omitempty"`
+	AffectedRowsResultPos                int32                 `protobuf:"varint,23,opt,name=affected_rows_result_pos,json=affectedRowsResultPos,proto3" json:"affected_rows_result_pos,omitempty"`
+	PhysicalChangedRowsResultPos         int32                 `protobuf:"varint,24,opt,name=physical_changed_rows_result_pos,json=physicalChangedRowsResultPos,proto3" json:"physical_changed_rows_result_pos,omitempty"`
+	UpdateCheckColIdxList                []int32               `protobuf:"varint,25,rep,packed,name=update_check_col_idx_list,json=updateCheckColIdxList,proto3" json:"update_check_col_idx_list,omitempty"`
+	CountFoundRows                       bool                  `protobuf:"varint,26,opt,name=count_found_rows,json=countFoundRows,proto3" json:"count_found_rows,omitempty"`
+	EmitActionRows                       bool                  `protobuf:"varint,27,opt,name=emit_action_rows,json=emitActionRows,proto3" json:"emit_action_rows,omitempty"`
+	ActionFinalResultPos                 int32                 `protobuf:"varint,28,opt,name=action_final_result_pos,json=actionFinalResultPos,proto3" json:"action_final_result_pos,omitempty"`
+	ForeignKeyChecks                     []ODKUForeignKeyCheck `protobuf:"bytes,29,rep,name=foreign_key_checks,json=foreignKeyChecks,proto3" json:"foreign_key_checks"`
+	AutoIncrementGeneratedProvenance     bool                  `protobuf:"varint,30,opt,name=auto_increment_generated_provenance,json=autoIncrementGeneratedProvenance,proto3" json:"auto_increment_generated_provenance,omitempty"`
+	AutoIncrementGeneratedResultPos      int32                 `protobuf:"varint,31,opt,name=auto_increment_generated_result_pos,json=autoIncrementGeneratedResultPos,proto3" json:"auto_increment_generated_result_pos,omitempty"`
+	AutoIncrementGeneratedValueResultPos int32                 `protobuf:"varint,32,opt,name=auto_increment_generated_value_result_pos,json=autoIncrementGeneratedValueResultPos,proto3" json:"auto_increment_generated_value_result_pos,omitempty"`
+	XXX_NoUnkeyedLiteral                 struct{}              `json:"-"`
+	XXX_unrecognized                     []byte                `json:"-"`
+	XXX_sizecache                        int32                 `json:"-"`
 }
 
 func (m *DedupJoin) Reset()         { *m = DedupJoin{} }
@@ -2848,6 +2851,27 @@ func (m *DedupJoin) GetForeignKeyChecks() []ODKUForeignKeyCheck {
 		return m.ForeignKeyChecks
 	}
 	return nil
+}
+
+func (m *DedupJoin) GetAutoIncrementGeneratedProvenance() bool {
+	if m != nil {
+		return m.AutoIncrementGeneratedProvenance
+	}
+	return false
+}
+
+func (m *DedupJoin) GetAutoIncrementGeneratedResultPos() int32 {
+	if m != nil {
+		return m.AutoIncrementGeneratedResultPos
+	}
+	return 0
+}
+
+func (m *DedupJoin) GetAutoIncrementGeneratedValueResultPos() int32 {
+	if m != nil {
+		return m.AutoIncrementGeneratedValueResultPos
+	}
+	return 0
 }
 
 type RightDedupJoin struct {
@@ -9869,6 +9893,32 @@ func (m *DedupJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.AutoIncrementGeneratedValueResultPos != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.AutoIncrementGeneratedValueResultPos))
+		i--
+		dAtA[i] = 0x2
+		i--
+		dAtA[i] = 0x80
+	}
+	if m.AutoIncrementGeneratedResultPos != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.AutoIncrementGeneratedResultPos))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0xf8
+	}
+	if m.AutoIncrementGeneratedProvenance {
+		i--
+		if m.AutoIncrementGeneratedProvenance {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0xf0
+	}
 	if len(m.ForeignKeyChecks) > 0 {
 		for iNdEx := len(m.ForeignKeyChecks) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -15548,6 +15598,15 @@ func (m *DedupJoin) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 2 + l + sovPipeline(uint64(l))
 		}
+	}
+	if m.AutoIncrementGeneratedProvenance {
+		n += 3
+	}
+	if m.AutoIncrementGeneratedResultPos != 0 {
+		n += 2 + sovPipeline(uint64(m.AutoIncrementGeneratedResultPos))
+	}
+	if m.AutoIncrementGeneratedValueResultPos != 0 {
+		n += 2 + sovPipeline(uint64(m.AutoIncrementGeneratedValueResultPos))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -24894,6 +24953,64 @@ func (m *DedupJoin) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 30:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AutoIncrementGeneratedProvenance", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.AutoIncrementGeneratedProvenance = bool(v != 0)
+		case 31:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AutoIncrementGeneratedResultPos", wireType)
+			}
+			m.AutoIncrementGeneratedResultPos = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AutoIncrementGeneratedResultPos |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 32:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AutoIncrementGeneratedValueResultPos", wireType)
+			}
+			m.AutoIncrementGeneratedValueResultPos = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AutoIncrementGeneratedValueResultPos |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])

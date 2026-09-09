@@ -355,13 +355,15 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	var allocation resource.AllocationAccountTotals
 	require.Zero(t, allocation.AddGeneration(17, 0, true))
 	require.Zero(t, allocation.AddOwnerGeneration(63, 17, 0))
+	generated := true
 	envelope := remoteTerminalEnvelope{
 		PhyPlan: models.PhyPlan{
 			Version:    "1.0",
 			LocalScope: []models.PhyScope{{Magic: "Merge"}},
 		},
-		TerminalResourceVersion: remoteTerminalResourceVersion,
-		StatementLastInsertID:   17,
+		TerminalResourceVersion:        remoteTerminalResourceVersion,
+		StatementLastInsertID:          17,
+		StatementLastInsertIDGenerated: &generated,
 		Delta: resource.Delta{
 			Usage:   resource.Usage{ExclusiveActiveNS: 11, S3ReadBytes: 12},
 			Quality: resource.QualityPartial,
@@ -407,6 +409,81 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
 	require.Len(t, anal.remotePhyPlans, 1)
 	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
+
+	// A legacy numeric terminal keeps the pre-field non-zero compatibility
+	// behavior. New peers send an explicit bit, including false when no row was
+	// generated.
+	legacyProc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+	}}
+	legacySender := &messageSenderOnClient{proc: legacyProc}
+	legacyData, err := json.Marshal(remoteTerminalEnvelope{StatementLastInsertID: 23})
+	require.NoError(t, err)
+	require.NoError(t, legacySender.dealRemoteTerminal(legacyData))
+	require.Equal(t, uint64(23), legacyProc.GetStatementLastInsertID())
+	require.True(t, legacyProc.HasStatementLastInsertIDGenerated())
+
+	explicitFalse := false
+	falseProc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+	}}
+	falseSender := &messageSenderOnClient{proc: falseProc}
+	falseData, err := json.Marshal(remoteTerminalEnvelope{
+		StatementLastInsertID:          31,
+		StatementLastInsertIDGenerated: &explicitFalse,
+	})
+	require.NoError(t, err)
+	require.NoError(t, falseSender.dealRemoteTerminal(falseData))
+	require.Zero(t, falseProc.GetStatementLastInsertID())
+	require.False(t, falseProc.HasStatementLastInsertIDGenerated())
+
+	explicitTrue := true
+	zeroLastInsertID := uint64(19)
+	zeroStatementLastInsertID := uint64(19)
+	zeroProc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          &zeroLastInsertID,
+		StatementLastInsertID: &zeroStatementLastInsertID,
+	}}
+	zeroSender := &messageSenderOnClient{proc: zeroProc}
+	zeroData, err := json.Marshal(remoteTerminalEnvelope{
+		StatementLastInsertIDGenerated: &explicitTrue,
+	})
+	require.NoError(t, err)
+	require.NoError(t, zeroSender.dealRemoteTerminal(zeroData))
+	require.Zero(t, zeroProc.GetStatementLastInsertID())
+	require.Zero(t, zeroProc.GetLastInsertID())
+	require.True(t, zeroProc.HasStatementLastInsertIDGenerated())
+
+	for _, tc := range []struct {
+		name   string
+		values []uint64
+	}{
+		{name: "zero then nonzero", values: []uint64{0, 7}},
+		{name: "nonzero then zero", values: []uint64{7, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := uint64(99)
+			statement := uint64(99)
+			mergeProc := &process.Process{Base: &process.BaseProcess{
+				LastInsertID:          &last,
+				StatementLastInsertID: &statement,
+			}}
+			for _, value := range tc.values {
+				generated := true
+				data, err := json.Marshal(remoteTerminalEnvelope{
+					StatementLastInsertID:          value,
+					StatementLastInsertIDGenerated: &generated,
+				})
+				require.NoError(t, err)
+				require.NoError(t, (&messageSenderOnClient{proc: mergeProc}).dealRemoteTerminal(data))
+			}
+			require.Zero(t, mergeProc.GetStatementLastInsertID())
+			require.Zero(t, mergeProc.GetLastInsertID())
+			require.True(t, mergeProc.HasStatementLastInsertIDGenerated())
+		})
+	}
 
 	// A pre-resource client decodes the same payload as a non-empty PhyPlan.
 	var legacyClientPlan models.PhyPlan

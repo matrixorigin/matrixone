@@ -1006,36 +1006,44 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
 			return ctxId, nil, err
 		}
+		if t.AutoIncrementGeneratedResultPos >= 0 {
+			if err := validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc, true); err != nil {
+				return ctxId, nil, err
+			}
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
-			RelList:                         relList,
-			ColList:                         colList,
-			LeftCond:                        t.Conditions[0],
-			RightCond:                       t.Conditions[1],
-			RuntimeFilterBuildList:          t.RuntimeFilterSpecs,
-			IsShuffle:                       t.IsShuffle,
-			JoinMapTag:                      t.JoinMapTag,
-			ShuffleIdx:                      t.ShuffleIdx,
-			OnDuplicateAction:               t.OnDuplicateAction,
-			DedupBuildKeepLast:              t.DedupBuildKeepLast,
-			DedupColName:                    t.DedupColName,
-			DedupColTypes:                   t.DedupColTypes,
-			DelColIdx:                       t.DelColIdx,
-			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
-			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
-			LeftTypes:                       convertToPlanTypes(t.LeftTypes),
-			RightTypes:                      convertToPlanTypes(t.RightTypes),
-			UpdateColIdxList:                t.UpdateColIdxList,
-			UpdateColExprList:               t.UpdateColExprList,
-			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
-			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
-			HasOdkuAffectedRows:             t.HasODKUAffectedRows,
-			AffectedRowsResultPos:           t.AffectedRowsResultPos,
-			PhysicalChangedRowsResultPos:    t.PhysicalChangedResultPos,
-			UpdateCheckColIdxList:           t.UpdateCheckColIdxList,
-			CountFoundRows:                  t.CountFoundRows,
-			EmitActionRows:                  t.EmitActionRows,
-			ActionFinalResultPos:            t.ActionFinalResultPos,
+			RelList:                              relList,
+			ColList:                              colList,
+			LeftCond:                             t.Conditions[0],
+			RightCond:                            t.Conditions[1],
+			RuntimeFilterBuildList:               t.RuntimeFilterSpecs,
+			IsShuffle:                            t.IsShuffle,
+			JoinMapTag:                           t.JoinMapTag,
+			ShuffleIdx:                           t.ShuffleIdx,
+			OnDuplicateAction:                    t.OnDuplicateAction,
+			DedupBuildKeepLast:                   t.DedupBuildKeepLast,
+			DedupColName:                         t.DedupColName,
+			DedupColTypes:                        t.DedupColTypes,
+			DelColIdx:                            t.DelColIdx,
+			DedupDeleteMarkerColIdx:              t.DedupDeleteMarkerColIdx,
+			DedupDeleteKeepColIdxList:            t.DedupDeleteKeepColIdxList,
+			LeftTypes:                            convertToPlanTypes(t.LeftTypes),
+			RightTypes:                           convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:                     t.UpdateColIdxList,
+			UpdateColExprList:                    t.UpdateColExprList,
+			OldColCapturePlaceholderIdxList:      t.OldColCapturePlaceholderIdxList,
+			OldColCaptureProbeIdxList:            t.OldColCaptureProbeIdxList,
+			HasOdkuAffectedRows:                  t.HasODKUAffectedRows,
+			AffectedRowsResultPos:                t.AffectedRowsResultPos,
+			PhysicalChangedRowsResultPos:         t.PhysicalChangedResultPos,
+			UpdateCheckColIdxList:                t.UpdateCheckColIdxList,
+			CountFoundRows:                       t.CountFoundRows,
+			EmitActionRows:                       t.EmitActionRows,
+			ActionFinalResultPos:                 t.ActionFinalResultPos,
+			AutoIncrementGeneratedProvenance:     t.AutoIncrementGeneratedResultPos >= 0,
+			AutoIncrementGeneratedResultPos:      t.AutoIncrementGeneratedResultPos,
+			AutoIncrementGeneratedValueResultPos: t.AutoIncrementGeneratedValueResultPos,
 		}
 		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
@@ -1686,6 +1694,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CountFoundRows = t.CountFoundRows
 		arg.EmitActionRows = t.EmitActionRows
 		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		if t.AutoIncrementGeneratedProvenance {
+			arg.AutoIncrementGeneratedResultPos = t.AutoIncrementGeneratedResultPos
+			arg.AutoIncrementGeneratedValueResultPos = t.AutoIncrementGeneratedValueResultPos
+		}
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -2005,6 +2017,18 @@ func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, re
 	return nil
 }
 
+func validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAutoIncrementGeneratedProvenance(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote DedupJoin generated provenance requires MORPC protocol version 59",
+		)
+	}
+	return nil
+}
+
 func validateRemoteStringProvenancePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2166,6 +2190,11 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
 				proc, preInsertUnique.PreInsertUkCtx.GetAutoIncrementReorder()); err != nil {
+				return err
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.AutoIncrementGeneratedProvenance {
+			if err := validateRemoteAutoIncrementGeneratedProvenanceProtocol(proc, true); err != nil {
 				return err
 			}
 		}

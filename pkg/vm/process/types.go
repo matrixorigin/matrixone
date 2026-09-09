@@ -452,7 +452,27 @@ type BaseProcess struct {
 	// session value so LAST_INSERT_ID() continues to observe the previous
 	// value when an INSERT supplies all auto-increment values explicitly.
 	StatementLastInsertID *uint64
-	statementInsertIDMu   sync.Mutex
+	// statementLastInsertIDGenerated is true only after the execution path has
+	// committed a newly generated auto-increment row.  The numeric field alone
+	// is not sufficient: PRE_INSERT may materialize an allocator candidate that
+	// an ODKU later resolves to an existing row.
+	statementLastInsertIDGenerated bool
+	// statementLastInsertIDValueValid distinguishes a confirmed generated value
+	// of zero from an uninitialized statement value. Parallel fragments use the
+	// smallest confirmed value, including zero, as the deterministic winner.
+	statementLastInsertIDValueValid bool
+	statementInsertIDMu             sync.Mutex
+	// lastInsertIDExpr is the tentative value produced by LAST_INSERT_ID(expr)
+	// during the current statement.  It is deliberately separate from both
+	// generated-key protocol state and the cross-request Session value.  The
+	// frontend publishes it only after the statement succeeds.
+	lastInsertIDExpr      uint64
+	lastInsertIDExprValid bool
+	// lastInsertIDExprNull distinguishes a successful NULL expression from an
+	// expression that did not execute.  The wire OK packet has only an unsigned
+	// numeric insert-id field, but LAST_INSERT_ID(expr) still needs to preserve
+	// NULL as a successful session-state update.
+	lastInsertIDExprNull bool
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -826,11 +846,132 @@ func (proc *Process) SetStatementLastInsertID(num uint64) {
 	}
 }
 
+// ResetStatementLastInsertID starts a new statement generation.  It clears
+// both the candidate and its provenance so a retry or a reused Process cannot
+// report an allocator value that was never committed by this statement.
+func (proc *Process) ResetStatementLastInsertID() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.statementLastInsertIDGenerated = false
+	proc.Base.statementLastInsertIDValueValid = false
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, 0)
+	}
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// MarkStatementLastInsertIDGenerated records that the current statement
+// emitted a newly inserted row carrying an auto-increment value.
+func (proc *Process) MarkStatementLastInsertIDGenerated() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.statementLastInsertIDGenerated = true
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// MarkStatementLastInsertIDGeneratedWithValue publishes the value belonging
+// to the first confirmed generated row without changing the session value.
+// ODKU must call this after duplicate arbitration because PRE_INSERT may have
+// consumed lower allocator candidates for rows that resolve to existing rows.
+func (proc *Process) MarkStatementLastInsertIDGeneratedWithValue(num uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
+		current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+		if !proc.Base.statementLastInsertIDValueValid || num < current {
+			atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		}
+	}
+	proc.Base.statementLastInsertIDValueValid = true
+	proc.Base.statementLastInsertIDGenerated = true
+}
+
+func (proc *Process) HasStatementLastInsertIDGenerated() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.statementLastInsertIDGenerated
+}
+
+// ResetLastInsertIDExpr clears the statement-local LAST_INSERT_ID(expr)
+// candidate.  A Process is reused across statements and retries, so the
+// candidate must never carry across an execution boundary.
+func (proc *Process) ResetLastInsertIDExpr() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = 0
+	proc.Base.lastInsertIDExprValid = false
+	proc.Base.lastInsertIDExprNull = false
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// SetLastInsertIDExpr records a successful row-level LAST_INSERT_ID(expr)
+// evaluation without changing the session-visible value.  The caller owns
+// statement success publication.
+func (proc *Process) SetLastInsertIDExpr(num uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = num
+	proc.Base.lastInsertIDExprValid = true
+	proc.Base.lastInsertIDExprNull = false
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// SetLastInsertIDExprNull records a successful NULL evaluation.  NULL is a
+// real candidate, so publication must be able to clear a previous numeric
+// session value rather than treating the call as absent.
+func (proc *Process) SetLastInsertIDExprNull() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = 0
+	proc.Base.lastInsertIDExprValid = true
+	proc.Base.lastInsertIDExprNull = true
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// GetLastInsertIDExpr returns the tentative statement-local value and whether
+// LAST_INSERT_ID(expr) successfully evaluated. Use GetLastInsertIDExprState
+// when the distinction between numeric zero and NULL matters.
+func (proc *Process) GetLastInsertIDExpr() (uint64, bool) {
+	if proc == nil || proc.Base == nil {
+		return 0, false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.lastInsertIDExpr, proc.Base.lastInsertIDExprValid
+}
+
+// GetLastInsertIDExprState returns value, successful-call, and NULL state for
+// the current statement generation.
+func (proc *Process) GetLastInsertIDExprState() (uint64, bool, bool) {
+	if proc == nil || proc.Base == nil {
+		return 0, false, false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.lastInsertIDExpr, proc.Base.lastInsertIDExprValid, proc.Base.lastInsertIDExprNull
+}
+
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
-// value seen by any parallel scope of the current statement.  Statement
-// LAST_INSERT_ID is reset before execution starts, so the shared coordinator
-// makes the first generated value deterministic while keeping the session and
-// statement values synchronized.
+// value seen by any parallel scope of the current statement. An explicit zero
+// must use MarkStatementLastInsertIDGeneratedWithValue so zero is not mistaken
+// for an uninitialized value; once a confirmed zero exists, later non-zero
+// legacy fragments cannot overwrite it.
 func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
 	if num == 0 {
 		if proc.Base == nil {
@@ -850,8 +991,9 @@ func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
 		return num
 	}
 	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
-	if current == 0 || num < current {
+	if !proc.Base.statementLastInsertIDValueValid || num < current {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		proc.Base.statementLastInsertIDValueValid = true
 		if proc.Base.LastInsertID != nil {
 			atomic.StoreUint64(proc.Base.LastInsertID, num)
 		}

@@ -4906,11 +4906,16 @@ func executeStmtWithResponse(ses *Session,
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
-
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
 	// following statement (same proc for multi-statement COM_QUERY, or the next
 	// COM_QUERY via the session) reads the correct value.
 	recordLastAffectedRows(ses, execCtx)
+	// Result-set responses have no later OK-status arbitration point. Publish a
+	// successful expression state before their metadata/rows reach the client;
+	// status statements publish it in respStatus after generated-id arbitration.
+	if execCtx.stmt.StmtKind().RespType() != tree.RESP_STATUS && !statementHasGeneratedLastInsertID(execCtx) {
+		publishLastInsertIDExprBeforeResponse(ses, execCtx)
+	}
 
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
@@ -5816,7 +5821,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// COM_QUERY.  The generated-key field belongs to this statement's OK
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
-		proc.SetStatementLastInsertID(0)
+		proc.ResetStatementLastInsertID()
+		proc.ResetLastInsertIDExpr()
 		// SET statements in the same COM_QUERY execute after the wrappers were
 		// planned.  Refresh the runtime snapshot immediately before each
 		// statement so the remote PRE_INSERT path observes the session values

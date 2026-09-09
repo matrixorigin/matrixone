@@ -6144,6 +6144,56 @@ func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
 		"fake-PK ODKU must arbitrate pre-statement and statement-local unique conflicts")
 }
 
+func TestInsertOnDupFakePKDoesNotTrackHiddenAllocator(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t VALUES (1, 'x') ON DUPLICATE KEY UPDATE b = 'y'")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if pre := node.GetPreInsertCtx(); pre != nil {
+			require.False(t, pre.TrackAutoIncrementGenerated,
+				"the hidden fake PK must not be exported as a client generated ID")
+		}
+		if dedup := node.GetDedupJoinCtx(); dedup != nil {
+			require.Nil(t, dedup.AutoIncrementGeneratedCol,
+				"fake-PK ODKU must not publish hidden allocator provenance")
+		}
+	}
+}
+
+func TestInsertOnDupVisibleAutoIncrementUniqueWithoutRealPKTracksVisibleColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// fake_pk_t models a table without a declared primary key. Add a user
+	// AUTO_INCREMENT UNIQUE column while retaining the catalog's hidden fake
+	// primary key. The visible column is the only valid client generated-ID
+	// source; the hidden allocator must be ignored.
+	tableDef := mock.ctxt.tables["fake_pk_t"]
+	autoPos := tableDef.Name2ColIndex["a"]
+	tableDef.Cols[autoPos].Typ.AutoIncr = true
+
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t (b) VALUES ('x') ON DUPLICATE KEY UPDATE b = 'y'")
+	require.NoError(t, err)
+
+	trackedPreInsert := false
+	trackedDedup := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if pre := node.GetPreInsertCtx(); pre != nil && pre.TrackAutoIncrementGenerated {
+			trackedPreInsert = true
+			require.GreaterOrEqual(t, pre.AutoIncrementGeneratedColumn, int32(0))
+		}
+		if dedup := node.GetDedupJoinCtx(); dedup != nil && dedup.AutoIncrementGeneratedCol != nil {
+			trackedDedup = true
+			require.Equal(t, int32(autoPos), dedup.AutoIncrementGeneratedValueCol.ColPos)
+		}
+	}
+	require.True(t, trackedPreInsert,
+		"ODKU with a visible AUTO_INCREMENT UNIQUE column must retain provenance")
+	require.True(t, trackedDedup,
+		"ODKU must connect provenance to the visible auto column")
+}
+
 func TestInsertOnDupFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

@@ -847,3 +847,21 @@ payload    copied_payload
 1    copied
 3    after-copy
 drop table issue_23143_copy_auto_increment;
+select last_insert_id(4242);
+last_insert_id(4242)
+4242
+select last_insert_id();
+last_insert_id()
+4242
+select last_insert_id(0);
+last_insert_id(0)
+0
+select last_insert_id();
+last_insert_id()
+0
+select last_insert_id(NULL);
+last_insert_id(NULL)
+null
+select last_insert_id();
+last_insert_id()
+0

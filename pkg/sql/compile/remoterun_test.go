@@ -1064,6 +1064,28 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	require.True(t, instruction.PreInsert.HasAutoCol)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+
+	// DedupJoin's explicit generated-row provenance is a separate wire
+	// capability from the v56 session increment/offset metadata. Both the
+	// sender conversion and receiver pipeline gate must reject a v58 peer.
+	dedupWithProvenance := &dedupjoin.DedupJoin{
+		Conditions:                           [][]*plan.Expr{nil, nil},
+		AutoIncrementGeneratedResultPos:      2,
+		AutoIncrementGeneratedValueResultPos: 3,
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+	_, _, err = convertToPipelineInstruction(dedupWithProvenance, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 59")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+	_, dedupInstruction, err := convertToPipelineInstruction(dedupWithProvenance, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, dedupInstruction.DedupJoin.AutoIncrementGeneratedProvenance)
+	dedupPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{dedupInstruction}}
+	require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 59")
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
@@ -2502,15 +2524,17 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("DedupJoin_DedupBuildKeepLastAndODKUMetadata", func(t *testing.T) {
 		op := &dedupjoin.DedupJoin{
-			Conditions:               [][]*plan.Expr{nil, nil},
-			DedupBuildKeepLast:       true,
-			HasODKUAffectedRows:      true,
-			AffectedRowsResultPos:    4,
-			PhysicalChangedResultPos: 5,
-			UpdateCheckColIdxList:    []int32{1, 3},
-			CountFoundRows:           true,
-			EmitActionRows:           true,
-			ActionFinalResultPos:     6,
+			Conditions:                           [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast:                   true,
+			HasODKUAffectedRows:                  true,
+			AffectedRowsResultPos:                4,
+			PhysicalChangedResultPos:             5,
+			UpdateCheckColIdxList:                []int32{1, 3},
+			CountFoundRows:                       true,
+			EmitActionRows:                       true,
+			ActionFinalResultPos:                 6,
+			AutoIncrementGeneratedResultPos:      8,
+			AutoIncrementGeneratedValueResultPos: 9,
 			ForeignKeyChecks: []dedupjoin.ODKUForeignKeyCheck{{
 				ColIdxList: []int32{1, 2}, EligibilityResultPos: 7,
 			}},
@@ -2525,6 +2549,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, pipeInstr.DedupJoin.CountFoundRows)
 		require.True(t, pipeInstr.DedupJoin.EmitActionRows)
 		require.Equal(t, int32(6), pipeInstr.DedupJoin.ActionFinalResultPos)
+		require.True(t, pipeInstr.DedupJoin.AutoIncrementGeneratedProvenance)
+		require.Equal(t, int32(8), pipeInstr.DedupJoin.AutoIncrementGeneratedResultPos)
+		require.Equal(t, int32(9), pipeInstr.DedupJoin.AutoIncrementGeneratedValueResultPos)
 		require.Equal(t, []int32{1, 2}, pipeInstr.DedupJoin.ForeignKeyChecks[0].ColIdxList)
 		require.Equal(t, int32(7), pipeInstr.DedupJoin.ForeignKeyChecks[0].EligibilityResultPos)
 
@@ -2544,6 +2571,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredDedup.CountFoundRows)
 		require.True(t, restoredDedup.EmitActionRows)
 		require.Equal(t, int32(6), restoredDedup.ActionFinalResultPos)
+		require.Equal(t, int32(8), restoredDedup.AutoIncrementGeneratedResultPos)
+		require.Equal(t, int32(9), restoredDedup.AutoIncrementGeneratedValueResultPos)
 		require.Equal(t, []int32{1, 2}, restoredDedup.ForeignKeyChecks[0].ColIdxList)
 		require.Equal(t, int32(7), restoredDedup.ForeignKeyChecks[0].EligibilityResultPos)
 
@@ -2553,10 +2582,15 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		_, compactInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.False(t, compactInstr.DedupJoin.EmitActionRows)
+		require.True(t, compactInstr.DedupJoin.AutoIncrementGeneratedProvenance)
+		require.Equal(t, int32(8), compactInstr.DedupJoin.AutoIncrementGeneratedResultPos)
+		require.Equal(t, int32(9), compactInstr.DedupJoin.AutoIncrementGeneratedValueResultPos)
 		require.Len(t, compactInstr.DedupJoin.ForeignKeyChecks, 1)
 		compactRestored, err := convertToVmOperator(compactInstr, ctx, nil)
 		require.NoError(t, err)
 		require.False(t, compactRestored.(*dedupjoin.DedupJoin).EmitActionRows)
+		require.Equal(t, int32(8), compactRestored.(*dedupjoin.DedupJoin).AutoIncrementGeneratedResultPos)
+		require.Equal(t, int32(9), compactRestored.(*dedupjoin.DedupJoin).AutoIncrementGeneratedValueResultPos)
 		require.Len(t, compactRestored.(*dedupjoin.DedupJoin).ForeignKeyChecks, 1)
 	})
 

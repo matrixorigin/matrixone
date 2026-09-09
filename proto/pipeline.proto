@@ -352,6 +352,11 @@ message DedupJoin {
   bool emit_action_rows = 27;
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
+  // Explicit PRE_INSERT generated-row provenance. Positions are meaningful
+  // only when the marker is true; -1 remains the runtime unset sentinel.
+  bool auto_increment_generated_provenance = 30;
+  int32 auto_increment_generated_result_pos = 31;
+  int32 auto_increment_generated_value_result_pos = 32;
 }
 
 message RightDedupJoin {

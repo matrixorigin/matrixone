@@ -345,7 +345,12 @@ type DedupJoin struct {
 	CountFoundRows            bool
 	EmitActionRows            bool
 	ActionFinalResultPos      int32
-	ForeignKeyChecks          []ODKUForeignKeyCheck
+	// AutoIncrementGeneratedResultPos points at the PRE_INSERT provenance bit.
+	// It is inspected only while emitting an unmatched ODKU build row; matched
+	// update actions never publish an allocator candidate.
+	AutoIncrementGeneratedResultPos      int32
+	AutoIncrementGeneratedValueResultPos int32
+	ForeignKeyChecks                     []ODKUForeignKeyCheck
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -452,7 +457,10 @@ func (dedupJoin DedupJoin) TypeName() string {
 }
 
 func NewArgument() *DedupJoin {
-	return reuse.Alloc[DedupJoin](nil)
+	arg := reuse.Alloc[DedupJoin](nil)
+	arg.AutoIncrementGeneratedResultPos = -1
+	arg.AutoIncrementGeneratedValueResultPos = -1
+	return arg
 }
 
 func (dedupJoin *DedupJoin) Release() {

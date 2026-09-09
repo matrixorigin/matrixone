@@ -174,6 +174,8 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.Base.SessionInfo.LastInsertID = 41
+	proc.SetLastInsertID(41)
 	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
@@ -204,6 +206,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 
 	evaluations := 0
+	retryBaselineChecked := false
 	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 		if bat == nil {
 			return nil
@@ -212,6 +215,16 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 		require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
 		require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
 		evaluations++
+		if evaluations == 1 {
+			proc.SetLastInsertIDExpr(99)
+		}
+		if evaluations == 2 {
+			_, valid, isNull := proc.GetLastInsertIDExprState()
+			require.False(t, valid, "retry starts a fresh LAST_INSERT_ID(expr) generation")
+			require.False(t, isNull)
+			require.Equal(t, uint64(41), proc.GetLastInsertID(), "retry restores the attempt-entry session value")
+			retryBaselineChecked = true
+		}
 		if evaluations <= 2 {
 			return moerr.NewTxnNeedRetryNoCtx()
 		}
@@ -224,12 +237,36 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, evaluations)
 	require.Equal(t, 2, c.retryTimes)
+	require.True(t, retryBaselineChecked)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
 	c.Release()
 	proc.Free()
 	proc.GetSessionInfo().Buf.Free()
+}
+
+func TestRetryGenerationKeepsCommittedLastInsertIDBaseline(t *testing.T) {
+	lastInsertID := uint64(41)
+	statementLastInsertID := uint64(0)
+	proc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          &lastInsertID,
+		StatementLastInsertID: &statementLastInsertID,
+		SessionInfo:           process.SessionInfo{LastInsertID: 73},
+	}}
+
+	proc.SetStatementLastInsertID(73)
+	proc.MarkStatementLastInsertIDGenerated()
+	proc.SetLastInsertID(73)
+
+	// This is the state after a successful setter has published its result.
+	// Starting the next retry generation must clear statement provenance while
+	// retaining the committed session baseline instead of restoring 41.
+	proc.ResetStatementLastInsertID()
+	proc.SetLastInsertID(proc.GetSessionInfo().LastInsertID)
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
+	require.Zero(t, proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(73), proc.GetLastInsertID())
 }
 
 func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {

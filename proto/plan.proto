@@ -744,6 +744,12 @@ message DedupJoinCtx {
   bool emit_action_rows = 10;
   ColRef action_final_col = 11;
   repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
+  // auto_increment_generated_col is a PRE_INSERT provenance bit.  It is
+  // consumed only for an unmatched ODKU group, after duplicate resolution,
+  // so an allocator candidate never becomes a generated OK-packet id merely
+  // because PRE_INSERT filled the value.
+  ColRef auto_increment_generated_col = 13;
+  ColRef auto_increment_generated_value_col = 14;
 }
 
 message UpdateCtx {

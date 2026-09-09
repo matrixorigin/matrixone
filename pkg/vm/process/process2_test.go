@@ -152,6 +152,12 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	}}
 	proc.SetLastInsertID(11)
 	proc.SetStatementLastInsertID(5)
+	proc.MarkStatementLastInsertIDGenerated()
+	require.True(t, proc.HasStatementLastInsertIDGenerated())
+	proc.ResetStatementLastInsertID()
+	require.False(t, proc.HasStatementLastInsertIDGenerated())
+	require.Zero(t, proc.GetStatementLastInsertID())
+	proc.SetStatementLastInsertID(5)
 	require.Equal(t, uint64(11), proc.GetLastInsertID())
 	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
 	empty := &Process{Base: &BaseProcess{}}
@@ -179,6 +185,72 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	legacyProc := &Process{Base: &BaseProcess{LastInsertID: &legacy}}
 	require.Equal(t, uint64(8), legacyProc.SetStatementLastInsertIDIfEarlier(8))
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
+}
+
+func TestStatementLastInsertIDGeneratedValueZeroPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		first  uint64
+		second uint64
+		want   uint64
+	}{
+		{name: "zero then nonzero", first: 0, second: 7, want: 0},
+		{name: "nonzero then zero", first: 7, second: 0, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := uint64(99)
+			statement := uint64(99)
+			proc := &Process{Base: &BaseProcess{
+				LastInsertID:          &last,
+				StatementLastInsertID: &statement,
+			}}
+			proc.ResetStatementLastInsertID()
+			proc.MarkStatementLastInsertIDGeneratedWithValue(tc.first)
+			proc.MarkStatementLastInsertIDGeneratedWithValue(tc.second)
+			require.True(t, proc.HasStatementLastInsertIDGenerated())
+			require.Equal(t, tc.want, proc.GetStatementLastInsertID())
+		})
+	}
+
+	// A legacy non-zero fragment arriving after an explicit zero must not
+	// reinterpret the valid zero as an empty coordinator slot.
+	last := uint64(99)
+	statement := uint64(99)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.ResetStatementLastInsertID()
+	proc.MarkStatementLastInsertIDGeneratedWithValue(0)
+	require.Equal(t, uint64(0), proc.SetStatementLastInsertIDIfEarlier(7))
+	require.Equal(t, uint64(0), proc.GetStatementLastInsertID())
+}
+
+func TestLastInsertIDExprIsStatementLocal(t *testing.T) {
+	last := uint64(17)
+	proc := &Process{Base: &BaseProcess{LastInsertID: &last}}
+
+	proc.SetLastInsertIDExpr(0)
+	value, valid := proc.GetLastInsertIDExpr()
+	require.True(t, valid)
+	require.Zero(t, value)
+	_, valid, isNull := proc.GetLastInsertIDExprState()
+	require.True(t, valid)
+	require.False(t, isNull)
+	require.Equal(t, uint64(17), proc.GetLastInsertID())
+
+	proc.ResetLastInsertIDExpr()
+	_, valid = proc.GetLastInsertIDExpr()
+	require.False(t, valid)
+	proc.SetLastInsertIDExprNull()
+	value, valid, isNull = proc.GetLastInsertIDExprState()
+	require.True(t, valid)
+	require.True(t, isNull)
+	require.Zero(t, value)
+	proc.SetLastInsertIDExpr(^uint64(0))
+	value, valid = proc.GetLastInsertIDExpr()
+	require.True(t, valid)
+	require.Equal(t, ^uint64(0), value)
 }
 
 func TestFoundRows(t *testing.T) {

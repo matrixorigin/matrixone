@@ -118,6 +118,57 @@ func setRowCount(ses *Session, proc *process.Process, v int64) {
 	}
 }
 
+// applyLastInsertIDExprResponse resolves the two statement-local sources of
+// an OK packet before it is written. A generated auto-increment id has packet
+// precedence; otherwise a successful LAST_INSERT_ID(expr), including NULL or
+// zero, updates the session and supplies the protocol value (NULL is encoded
+// as the protocol's numeric zero because OK packets have no NULL insert-id
+// representation).
+func applyLastInsertIDExprResponse(ses *Session, execCtx *ExecCtx, res *Response, generated bool) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil || res == nil || generated {
+		return
+	}
+	value, valid, isNull := execCtx.proc.GetLastInsertIDExprState()
+	if !valid {
+		return
+	}
+	if isNull {
+		value = 0
+	}
+	res.lastInsertId = value
+	publishLastInsertIDExprState(ses, execCtx, value)
+}
+
+func publishLastInsertIDExprState(ses *Session, execCtx *ExecCtx, value uint64) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	ses.SetLastInsertID(value)
+	execCtx.proc.SetLastInsertID(value)
+	execCtx.proc.GetSessionInfo().LastInsertID = value
+}
+
+func publishLastInsertIDExprBeforeResponse(ses *Session, execCtx *ExecCtx) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	value, valid, isNull := execCtx.proc.GetLastInsertIDExprState()
+	if !valid {
+		return
+	}
+	if isNull {
+		value = 0
+	}
+	publishLastInsertIDExprState(ses, execCtx, value)
+}
+
+func statementHasGeneratedLastInsertID(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.proc == nil {
+		return false
+	}
+	return execCtx.proc.HasStatementLastInsertIDGenerated()
+}
+
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {

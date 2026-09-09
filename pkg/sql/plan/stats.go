@@ -3198,6 +3198,20 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 
 func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	qry := p.GetQuery()
+	// LAST_INSERT_ID(expr) publishes one session-owned value in expression
+	// evaluation order. A mutex prevents races but cannot make last-writer-wins
+	// deterministic, so serialize the executable plan to one worker.
+	if QueryContainsLastInsertIDExpr(qry) {
+		for i := range qry.Nodes {
+			if qry.Nodes[i] != nil {
+				if qry.Nodes[i].Stats == nil {
+					qry.Nodes[i].Stats = DefaultStats()
+				}
+				qry.Nodes[i].Stats.Dop = 1
+			}
+		}
+		return
+	}
 	if typ == ExecTypeTP || ncpu == 1 {
 		for i := range qry.Nodes {
 			qry.Nodes[i].Stats.Dop = 1

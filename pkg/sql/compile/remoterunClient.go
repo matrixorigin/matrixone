@@ -949,8 +949,28 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
-		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	if sender.proc != nil {
+		generated := envelope.StatementLastInsertIDGenerated != nil &&
+			*envelope.StatementLastInsertIDGenerated
+		if envelope.StatementLastInsertIDGenerated == nil {
+			// Pre-field peers had no provenance bit. Preserve their established
+			// non-zero terminal behavior while keeping zero explicitly opt-in.
+			generated = envelope.StatementLastInsertID != 0
+		}
+		if generated {
+			if envelope.StatementLastInsertIDGenerated == nil {
+				sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+			} else {
+				// MarkWithValue carries an explicit valid bit, so zero remains a
+				// real fragment value instead of being treated as an empty merge.
+				sender.proc.MarkStatementLastInsertIDGeneratedWithValue(envelope.StatementLastInsertID)
+			}
+			// A remote terminal is already successful, so synchronize the
+			// session-visible value after the statement winner is selected. This
+			// avoids SetStatementLastInsertIDIfEarlier for explicit zero.
+			sender.proc.SetLastInsertID(sender.proc.GetStatementLastInsertID())
+			sender.proc.MarkStatementLastInsertIDGenerated()
+		}
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
