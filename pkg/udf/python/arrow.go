@@ -99,11 +99,18 @@ func (d TypeDescriptor) Fingerprint() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	physicalFingerprint := physical.Fingerprint()
+	if types.T(d.TypeID) == types.T_uuid {
+		// Arrow-Go's FixedSizeBinary fingerprint omits ByteWidth.  Keep the
+		// UUID width in the cross-language fingerprint as part of the frozen
+		// physical contract instead of relying only on the local type check.
+		physicalFingerprint = "@P[16]"
+	}
 	h := sha256.New()
 	h.Write([]byte("matrixone-python-udf-type\x00"))
 	h.Write(canonical)
 	h.Write([]byte{0})
-	h.Write([]byte(physical.Fingerprint()))
+	h.Write([]byte(physicalFingerprint))
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
