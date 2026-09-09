@@ -1165,9 +1165,13 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				maxNotReady = 0
 			}
 			seedCount := min(nodeCount, 10)
+			gossipPorts := make([]int, nodeCount)
+			for i := range gossipPorts {
+				gossipPorts[i] = getTestGossipPort()
+			}
 			seedAddresses := make([]string, seedCount)
 			for i := range seedCount {
-				seedAddresses[i] = fmt.Sprintf("127.0.0.1:%d", 26002+10*i)
+				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
 			}
 			configs := make([]Config, 0, nodeCount)
 			services := make([]*Service, 0, nodeCount)
@@ -1178,9 +1182,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				cfg.DeploymentID = 1
 				cfg.RTTMillisecond = 200
 				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = 26000 + 10*i
-				cfg.RaftPort = 26000 + 10*i + 1
-				cfg.GossipPort = 26000 + 10*i + 2
+				cfg.LogServicePort = getTestServicePort()
+				cfg.RaftPort = getAvailablePort()
+				cfg.GossipPort = gossipPorts[i]
 				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
 				cfg.DisableWorkers = true
 				cfg.LogDBBufferSize = 1024 * 16
