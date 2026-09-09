@@ -22,6 +22,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,6 +52,17 @@ func expressionDefaultAdd(left, right *planpb.Expr) *planpb.Expr {
 
 func expressionDefaultInt(value int64) *planpb.Expr {
 	return makePlan2Int64ConstExprWithType(value)
+}
+
+func expressionDefaultRand(t *testing.T) *planpb.Expr {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_float64), Width: 64},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+			Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+		}}},
+	}
 }
 
 func expressionDefaultFindLocalCol(expr *planpb.Expr) *planpb.Expr {
@@ -251,6 +263,45 @@ func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing
 	}
 }
 
+func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	nodeCtx := NewBindContext(builder, nil)
+	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
+	childID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_VALUE_SCAN,
+		TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "a", Typ: floatTyp},
+		}},
+	}, nodeCtx)
+
+	randExpr := expressionDefaultRand(t)
+	generatedExpr := expressionDefaultAdd(
+		&planpb.Expr{Typ: floatTyp, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+		expressionDefaultInt(1),
+	)
+	generatedExpr.Typ = floatTyp
+	projection := []*planpb.Expr{randExpr, makePlan2NullConstExprWithType()}
+	projection[1].Typ = floatTyp
+	colIdxToProjPos := map[int32]int32{0: 0, 1: 1}
+	expressions := map[int32]*planpb.Expr{0: randExpr, 1: generatedExpr}
+
+	lastID, finalTag, err := builder.appendMaterializedExprProjections(
+		nodeCtx, childID, builder.genNewBindTag(), projection,
+		colIdxToProjPos, expressions, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, finalTag, builder.qry.Nodes[lastID].BindingTags[0])
+	// The generated column must read a's first-stage value. If it were inlined,
+	// the plan would contain only the initial projection and RAND would execute
+	// twice for one inserted row.
+	require.Equal(t, 3, len(builder.qry.Nodes)-int(childID))
+	stage := builder.qry.Nodes[lastID]
+	arg := stage.ProjectList[1].GetF().GetArgs()[0].GetCol()
+	require.NotNil(t, arg)
+	require.Equal(t, builder.qry.Nodes[childID+1].BindingTags[0], arg.RelPos)
+	require.Equal(t, int32(0), arg.ColPos)
+}
+
 func TestDefaultExprExpanderHonorsCancellationBeforeExpansion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -260,6 +311,19 @@ func TestDefaultExprExpanderHonorsCancellationBeforeExpansion(t *testing.T) {
 	_, err := expander.expandExpr(expressionDefaultAdd(
 		expressionDefaultCol(0, 0), expressionDefaultInt(1)))
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDefaultExprExpanderHonorsAggregateExpansionBudget(t *testing.T) {
+	expander := newDefaultExprExpander(context.Background(), func(colIdx int32) (*planpb.Expr, bool) {
+		return nil, false
+	})
+	expander.maxNodes = 16
+	expr := expressionDefaultInt(0)
+	for i := int64(1); i <= 32; i++ {
+		expr = expressionDefaultAdd(expr, expressionDefaultInt(i))
+	}
+	_, err := expander.expandExpr(expr)
+	require.ErrorContains(t, err, "planner limit")
 }
 
 func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T) {

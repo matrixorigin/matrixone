@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1073,11 +1074,12 @@ func isExpressionDefault(def *plan.Default) bool {
 // column.  RelPos values other than zero belong to the surrounding plan and
 // must remain untouched.
 type defaultExprExpander struct {
-	ctx     context.Context
-	resolve func(int32) (*plan.Expr, bool)
-	state   map[int32]uint8
-	memo    map[int32]*plan.Expr
-	nodes   int
+	ctx      context.Context
+	resolve  func(int32) (*plan.Expr, bool)
+	state    map[int32]uint8
+	memo     map[int32]*plan.Expr
+	nodes    int
+	maxNodes int
 }
 
 // A few planner-only callers still need expression inlining (for example,
@@ -1114,11 +1116,73 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 	materialize map[int32]bool,
 	order []int32,
 ) (int32, int32, error) {
-	initial := DeepCopyExprList(projection)
+	// Keep the caller's map immutable. Some callers reuse the expression map to
+	// build index/update projections after this function returns.
+	materialized := make(map[int32]bool, len(materialize))
 	for colIdx, needsStage := range materialize {
-		if !needsStage {
+		if needsStage {
+			materialized[colIdx] = true
+		}
+	}
+
+	// A generated column can depend on a volatile default without having a
+	// local reference itself. For example, a DEFAULT (rand()) and g AS (a+1)
+	// would otherwise inline rand() into g and evaluate it twice. Detect that
+	// dependency closure here, after all raw expressions (including generated
+	// expressions) are known, so every DML entry point gets the same rule.
+	projectionColumns := make([]int32, 0, len(colIdxToProjPos))
+	for colIdx := range colIdxToProjPos {
+		projectionColumns = append(projectionColumns, colIdx)
+	}
+	sort.Slice(projectionColumns, func(i, j int) bool {
+		left, right := colIdxToProjPos[projectionColumns[i]], colIdxToProjPos[projectionColumns[j]]
+		if left == right {
+			return projectionColumns[i] < projectionColumns[j]
+		}
+		return left < right
+	})
+	for _, colIdx := range projectionColumns {
+		if materialized[colIdx] {
 			continue
 		}
+		raw, ok := expressions[colIdx]
+		if !ok || raw == nil || !exprHasLocalColumnRef(raw) {
+			continue
+		}
+		needsStage, err := hasVolatileLocalDependency(
+			builder.GetContext(), colIdx, expressions, materialized,
+		)
+		if err != nil {
+			return 0, 0, err
+		}
+		if needsStage {
+			materialized[colIdx] = true
+		}
+	}
+
+	materializationOrder := make([]int32, 0, len(materialized))
+	ordered := make(map[int32]struct{}, len(materialized))
+	appendOrder := func(colIdx int32) {
+		if !materialized[colIdx] {
+			return
+		}
+		if _, exists := ordered[colIdx]; exists {
+			return
+		}
+		ordered[colIdx] = struct{}{}
+		materializationOrder = append(materializationOrder, colIdx)
+	}
+	for _, colIdx := range order {
+		appendOrder(colIdx)
+	}
+	// The volatile-closure pass can add columns that the caller did not know
+	// needed a stage. Include all such columns in stable projection order.
+	for _, colIdx := range projectionColumns {
+		appendOrder(colIdx)
+	}
+
+	initial := DeepCopyExprList(projection)
+	for colIdx := range materialized {
 		projPos, ok := colIdxToProjPos[colIdx]
 		raw, rawOK := expressions[colIdx]
 		if !ok || projPos < 0 || int(projPos) >= len(initial) || !rawOK || raw == nil {
@@ -1147,11 +1211,11 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 	}, nodeCtx)
 	currentTag := initialTag
 	currentProjection := initial
-	state := make(map[int32]uint8, len(materialize))
+	state := make(map[int32]uint8, len(materialized))
 
 	var visit func(int32) error
 	visit = func(colIdx int32) error {
-		if !materialize[colIdx] {
+		if !materialized[colIdx] {
 			return nil
 		}
 		switch state[colIdx] {
@@ -1173,7 +1237,7 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 					"expression for column position %d references unavailable column position %d",
 					colIdx, refIdx)
 			}
-			if materialize[refIdx] {
+			if materialized[refIdx] {
 				if err := visit(refIdx); err != nil {
 					return err
 				}
@@ -1209,12 +1273,73 @@ func (builder *QueryBuilder) appendMaterializedExprProjections(
 		return nil
 	}
 
-	for _, colIdx := range order {
+	for _, colIdx := range materializationOrder {
 		if err := visit(colIdx); err != nil {
 			return 0, 0, err
 		}
 	}
 	return currentID, currentTag, nil
+}
+
+// hasVolatileLocalDependency reports whether expr depends on a non-foldable
+// expression through the local table-column namespace. It follows raw
+// expressions rather than expanded copies, so the check is linear in the
+// dependency graph and cannot recreate the exponential planner tree that the
+// materialization boundary is intended to avoid.
+func hasVolatileLocalDependency(
+	ctx context.Context,
+	colIdx int32,
+	expressions map[int32]*plan.Expr,
+	materialized map[int32]bool,
+) (bool, error) {
+	state := make(map[int32]uint8)
+	memo := make(map[int32]bool)
+	var visit func(int32) (bool, error)
+	visit = func(current int32) (bool, error) {
+		if value, ok := memo[current]; ok {
+			return value, nil
+		}
+		if state[current] == 1 {
+			return false, moerr.NewInvalidInputf(ctx,
+				"expression has a circular dependency at column position %d", current)
+		}
+		expr, ok := expressions[current]
+		if !ok || expr == nil {
+			return false, moerr.NewInvalidInputf(ctx,
+				"expression for column position %d references unavailable expression", current)
+		}
+		state[current] = 1
+		if containsVolatileFunction(expr) {
+			state[current] = 2
+			memo[current] = true
+			return true, nil
+		}
+		for _, refIdx := range collectRefColPos(expr) {
+			if materialized[refIdx] {
+				state[current] = 2
+				memo[current] = true
+				return true, nil
+			}
+			if _, exists := expressions[refIdx]; !exists {
+				return false, moerr.NewInvalidInputf(ctx,
+					"expression for column position %d references unavailable column position %d",
+					current, refIdx)
+			}
+			needsStage, err := visit(refIdx)
+			if err != nil {
+				return false, err
+			}
+			if needsStage {
+				state[current] = 2
+				memo[current] = true
+				return true, nil
+			}
+		}
+		state[current] = 2
+		memo[current] = false
+		return false, nil
+	}
+	return visit(colIdx)
 }
 
 // rewriteLocalRefsToProjection makes a single expression read the current
@@ -1271,10 +1396,11 @@ func rewriteLocalRefsToProjection(
 
 func newDefaultExprExpander(ctx context.Context, resolve func(int32) (*plan.Expr, bool)) *defaultExprExpander {
 	return &defaultExprExpander{
-		ctx:     ctx,
-		resolve: resolve,
-		state:   make(map[int32]uint8),
-		memo:    make(map[int32]*plan.Expr),
+		ctx:      ctx,
+		resolve:  resolve,
+		state:    make(map[int32]uint8),
+		memo:     make(map[int32]*plan.Expr),
+		maxNodes: maxDefaultExpansionNodes,
 	}
 }
 
@@ -1361,7 +1487,7 @@ func (e *defaultExprExpander) consumeNode() error {
 	if err := e.ctx.Err(); err != nil {
 		return err
 	}
-	if e.nodes >= maxDefaultExpansionNodes {
+	if e.nodes >= e.maxNodes {
 		return moerr.NewInvalidInput(e.ctx,
 			"default expression expansion exceeds the planner limit")
 	}

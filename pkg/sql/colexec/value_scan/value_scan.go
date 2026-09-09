@@ -38,29 +38,66 @@ func (valueScan *ValueScan) String(buf *bytes.Buffer) {
 
 func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor, input *batch.Batch,
 ) error {
+	if vec == nil {
+		return moerr.NewInternalErrorNoCtx("value scan has no destination vector")
+	}
+	var inputWindow *batch.Batch
+	var inputWindowRow int32 = -1
+	defer func() {
+		if inputWindow != nil {
+			inputWindow.Clean(nil)
+		}
+	}()
+
 	for i, expr := range exprExecs {
+		if expr == nil || i >= len(rowsetExpr) || rowsetExpr[i] == nil {
+			return moerr.NewInternalErrorNoCtxf("value scan has an invalid rowset expression at position %d", i)
+		}
+		rowPos := rowsetExpr[i].RowPos
+		if rowPos < 0 || int(rowPos) >= vec.Length() {
+			return moerr.NewInternalErrorNoCtxf(
+				"value scan expression has invalid destination row position %d", rowPos)
+		}
 		bats := []*batch.Batch{batch.EmptyForConstFoldBatch}
-		sourceRow := int64(0)
 		if rowsetExprHasLocalColumnRef(rowsetExpr[i].Expr) {
 			// A row-local DEFAULT dependency must read the value already
-			// materialized in an earlier VALUE_SCAN column. Evaluating against the
-			// empty constant-fold batch would either fail the column lookup or
-			// force the dependent default to replay a volatile expression.
-			bats = []*batch.Batch{input}
-			sourceRow = int64(rowsetExpr[i].RowPos)
+			// materialized in an earlier VALUE_SCAN column. Evaluate against a
+			// one-row window rather than the complete VALUES batch: passing the full
+			// batch makes every per-row executor produce and retain an N-row result,
+			// turning N row-local defaults into quadratic work and memory.
+			if input == nil {
+				return moerr.NewInternalErrorNoCtx("value scan row-local expression has no input batch")
+			}
+			if rowPos < 0 || int(rowPos) >= input.RowCount() {
+				return moerr.NewInternalErrorNoCtxf(
+					"value scan row-local expression has invalid row position %d", rowPos)
+			}
+			if inputWindow == nil || inputWindowRow != rowPos {
+				if inputWindow != nil {
+					inputWindow.Clean(nil)
+				}
+				var err error
+				inputWindow, err = input.Window(int(rowPos), int(rowPos)+1)
+				if err != nil {
+					return err
+				}
+				inputWindowRow = rowPos
+			}
+			bats = []*batch.Batch{inputWindow}
 		}
 		val, err := expr.Eval(proc, bats, nil)
 		if err != nil {
 			return err
 		}
-		// Constant/folded executors return a one-value vector while a
-		// row-dependent executor returns the full input cardinality. Keep the
-		// historical scalar behavior for the former and select this row for the
-		// latter.
-		if sourceRow >= int64(val.Length()) {
-			sourceRow = 0
+		if val == nil {
+			return moerr.NewInternalErrorNoCtxf("value scan expression at row position %d returned no vector", rowsetExpr[i].RowPos)
 		}
-		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), sourceRow, proc.Mp()); err != nil {
+		if val.Length() == 0 {
+			return moerr.NewInternalErrorNoCtxf("value scan expression at row position %d returned an empty vector", rowsetExpr[i].RowPos)
+		}
+		// Constant/folded executors return a scalar vector; row-local executors
+		// receive a one-row window. Both are copied from their first value.
+		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), 0, proc.Mp()); err != nil {
 			return err
 		}
 	}
@@ -124,6 +161,7 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 	}
 	columnCount := len(rowsetData.Cols)
 	deps := make([]map[int]struct{}, columnCount)
+	hasDependency := false
 	for colIdx, col := range rowsetData.Cols {
 		if col == nil {
 			continue
@@ -133,6 +171,13 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 				return nil, moerr.NewInternalErrorNoCtxf(
 					"value scan has a nil rowset expression in column %d", colIdx)
 			}
+			// Keep the historical fast path allocation-free for ordinary VALUES:
+			// only the exceptional row-local DEFAULT protocol needs a dependency
+			// map and topological sort.
+			if !rowsetExprHasLocalColumnRef(rowExpr.Expr) {
+				continue
+			}
+			hasDependency = true
 			refs := make(map[int32]struct{})
 			collectRowsetLocalColumnRefs(rowExpr.Expr, refs)
 			for ref := range refs {
@@ -147,6 +192,13 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 				deps[colIdx][int(ref)] = struct{}{}
 			}
 		}
+	}
+	if !hasDependency {
+		order := make([]int, columnCount)
+		for colIdx := range order {
+			order[colIdx] = colIdx
+		}
+		return order, nil
 	}
 
 	state := make([]uint8, columnCount) // 0=unvisited, 1=visiting, 2=done

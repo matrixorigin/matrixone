@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,44 @@ type valueScanTestCase struct {
 	arg  *ValueScan
 	proc *process.Process
 }
+
+type rowWindowExpressionExecutor struct {
+	value    int64
+	seenRows []int
+	result   *vector.Vector
+	mp       *mpool.MPool
+}
+
+func (e *rowWindowExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if len(batches) != 1 || batches[0] == nil {
+		return nil, moerr.NewInternalErrorNoCtx("row-window probe received an invalid input")
+	}
+	e.seenRows = append(e.seenRows, batches[0].RowCount())
+	if batches[0].RowCount() != 1 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"row-window probe received %d rows", batches[0].RowCount())
+	}
+	e.mp = proc.Mp()
+	var err error
+	e.result, err = vector.NewConstFixed(types.T_int64.ToType(), e.value, 1, e.mp)
+	return e.result, err
+}
+
+func (e *rowWindowExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return e.Eval(proc, batches, selectList)
+}
+
+func (e *rowWindowExpressionExecutor) ResetForNextQuery() {}
+
+func (e *rowWindowExpressionExecutor) Free() {
+	if e.result != nil {
+		e.result.Free(e.mp)
+		e.result = nil
+	}
+}
+
+func (e *rowWindowExpressionExecutor) IsColumnExpr() bool { return false }
+func (e *rowWindowExpressionExecutor) TypeName() string   { return "row-window-probe" }
 
 func makeTestCases(t *testing.T) []valueScanTestCase {
 	return []valueScanTestCase{
@@ -139,6 +178,102 @@ func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testin
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int64{11, 21}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
 	require.Equal(t, []int64{10, 20}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+	vs.Free(proc, false, nil)
+}
+
+func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	const rowCount = 128
+	intType := types.T_int64.ToType()
+	planIntType := planpb.Type{Id: int32(types.T_int64), Width: 64}
+	localCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planIntType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+
+	input := batch.NewWithSize(1)
+	input.SetRowCount(rowCount)
+	input.Vecs[0] = vector.NewVec(intType)
+	inputValues := make([]int64, rowCount)
+	for i := range inputValues {
+		inputValues[i] = int64(i)
+	}
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], inputValues, nil, proc.Mp()))
+	defer input.Clean(proc.Mp())
+
+	target := vector.NewVec(intType)
+	require.NoError(t, vector.AppendFixedList(target, make([]int64, rowCount), nil, proc.Mp()))
+	defer target.Free(proc.Mp())
+
+	rowset := make([]*planpb.RowsetExpr, rowCount)
+	execs := make([]colexec.ExpressionExecutor, rowCount)
+	probes := make([]*rowWindowExpressionExecutor, rowCount)
+	for row := 0; row < rowCount; row++ {
+		rowset[row] = &planpb.RowsetExpr{RowPos: int32(row), Expr: localCol(0)}
+		probes[row] = &rowWindowExpressionExecutor{value: int64(row)}
+		execs[row] = probes[row]
+		defer probes[row].Free()
+	}
+
+	require.NoError(t, evalRowsetData(proc, rowset, target, execs, input))
+	for row, probe := range probes {
+		require.Equal(t, []int{1}, probe.seenRows,
+			"row %d must not evaluate its expression against the full VALUES batch", row)
+	}
+	require.Equal(t, inputValues, vector.MustFixedColNoTypeCheck[int64](target))
+}
+
+func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
+	randFn, err := function.GetFunctionByName(proc.Ctx, "rand", nil)
+	require.NoError(t, err)
+	randExpr := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: floatType,
+			Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+				Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+			}}},
+		}
+	}
+	localCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  floatType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	rowset := &planpb.RowsetData{
+		RowCount: 2,
+		Cols: []*planpb.ColData{
+			{Data: []*planpb.RowsetExpr{{RowPos: 0, Expr: randExpr()}, {RowPos: 1, Expr: randExpr()}}},
+			{Data: []*planpb.RowsetExpr{{RowPos: 0, Expr: localCol(0)}, {RowPos: 1, Expr: localCol(0)}}},
+		},
+	}
+	bat := batch.NewWithSize(2)
+	bat.SetRowCount(2)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{0, 0}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{0, 0}, nil, proc.Mp()))
+	vs := &ValueScan{
+		NodeType:   planpb.Node_VALUE_SCAN,
+		ColCount:   2,
+		Batchs:     []*batch.Batch{bat, nil},
+		RowsetData: rowset,
+	}
+	require.NoError(t, vs.Prepare(proc))
+	result, err := vs.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	source := vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[0])
+	dependent := vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[1])
+	require.Len(t, source, 2)
+	require.Equal(t, source, dependent,
+		"a dependent default must consume the already materialized volatile source")
 	vs.Free(proc, false, nil)
 }
 
