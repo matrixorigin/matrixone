@@ -784,6 +784,9 @@ func (s *service) stopRPCs() error {
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())
 	}
+	if closer, ok := s.udfService.(udf.RuntimeCloser); ok {
+		err = errors.Join(err, closer.Close())
+	}
 	if s.timestampWaiter != nil {
 		s.timestampWaiter.Close()
 	}

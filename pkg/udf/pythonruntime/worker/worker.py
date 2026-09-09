@@ -78,6 +78,25 @@ class SqlTimestamp:
     value: Optional[_datetime.datetime]
 
 
+@dataclass(frozen=True, slots=True)
+class TimezoneContext:
+    kind: str
+    name: Optional[str] = None
+    offset_minutes: Optional[int] = None
+    tzdb_version: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
+class StatementContext:
+    statement_timestamp_utc: _datetime.datetime
+    session_timezone: TimezoneContext
+    sql_mode: tuple[str, ...]
+    current_database: Optional[str]
+    current_user: str
+    current_role: Optional[str]
+    connection_collation: str
+
+
 class _CallLogger:
     __slots__ = ()
 
@@ -95,15 +114,106 @@ class _CallLogger:
 class ScalarContext:
     sdk_version: str
     logger: _CallLogger
-    statement: Any = None
+    statement: Optional[StatementContext] = None
 
 
 @dataclass(frozen=True, slots=True)
 class VectorContext:
     sdk_version: str
     logger: _CallLogger
-    statement: Any = None
+    statement: Optional[StatementContext] = None
     num_rows: int = 0
+
+
+_FENCING_CONTEXT_KEYS = frozenset(
+    {"account_id", "statement_id", "group_id", "group_epoch", "invocation_id", "lease_epoch"}
+)
+_STATEMENT_CONTEXT_KEYS = frozenset(
+    {
+        "statement_timestamp_utc",
+        "session_timezone_kind",
+        "session_timezone_name",
+        "session_timezone_offset_minutes",
+        "session_timezone_tzdb_version",
+        "sql_mode",
+        "current_database",
+        "current_user",
+        "current_role",
+        "connection_collation",
+    }
+)
+
+
+def _required_context_value(context: Dict[str, Any], key: str) -> str:
+    value = context.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"PROTOCOL: missing statement context field {key}")
+    return value
+
+
+def _statement_context(raw: Any) -> Optional[StatementContext]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("PROTOCOL: statement context must be an object")
+    unknown = set(raw) - _FENCING_CONTEXT_KEYS - _STATEMENT_CONTEXT_KEYS
+    if unknown:
+        raise ValueError("PROTOCOL: unsupported statement context field")
+    if not (set(raw) & _STATEMENT_CONTEXT_KEYS):
+        # The fencing fields are transport identity, not user-visible context.
+        return None
+
+    timestamp_text = _required_context_value(raw, "statement_timestamp_utc")
+    try:
+        timestamp_micros = int(timestamp_text, 10)
+        seconds, micros = divmod(timestamp_micros, 1_000_000)
+        timestamp = _datetime.datetime(1970, 1, 1, tzinfo=_datetime.timezone.utc) + _datetime.timedelta(seconds=seconds, microseconds=micros)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("PROTOCOL: invalid statement_timestamp_utc") from exc
+
+    timezone_kind = _required_context_value(raw, "session_timezone_kind").upper()
+    if timezone_kind == "IANA":
+        timezone_name = _required_context_value(raw, "session_timezone_name")
+        tzdb_version = _required_context_value(raw, "session_timezone_tzdb_version")
+        if raw.get("session_timezone_offset_minutes"):
+            raise ValueError("PROTOCOL: IANA timezone cannot carry a fixed offset")
+        timezone = TimezoneContext("IANA", name=timezone_name, tzdb_version=tzdb_version)
+    elif timezone_kind == "FIXED_OFFSET":
+        offset_text = _required_context_value(raw, "session_timezone_offset_minutes")
+        try:
+            offset_minutes = int(offset_text, 10)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("PROTOCOL: invalid fixed timezone offset") from exc
+        if offset_minutes < -839 or offset_minutes > 840:
+            raise ValueError("PROTOCOL: fixed timezone offset is outside SQL range")
+        if raw.get("session_timezone_name") or raw.get("session_timezone_tzdb_version"):
+            raise ValueError("PROTOCOL: fixed timezone cannot carry IANA identity")
+        timezone = TimezoneContext("FIXED_OFFSET", offset_minutes=offset_minutes)
+    else:
+        raise ValueError("PROTOCOL: unsupported timezone kind")
+
+    sql_mode_text = _required_context_value(raw, "sql_mode")
+    try:
+        sql_mode_value = json.loads(sql_mode_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PROTOCOL: sql_mode must be canonical JSON array") from exc
+    if not isinstance(sql_mode_value, list) or any(not isinstance(item, str) for item in sql_mode_value):
+        raise ValueError("PROTOCOL: sql_mode must be an array of strings")
+    sql_mode = tuple(sorted(set(sql_mode_value)))
+    if list(sql_mode) != sql_mode_value:
+        raise ValueError("PROTOCOL: sql_mode is not canonical")
+
+    current_user = _required_context_value(raw, "current_user")
+    connection_collation = _required_context_value(raw, "connection_collation")
+    return StatementContext(
+        statement_timestamp_utc=timestamp,
+        session_timezone=timezone,
+        sql_mode=sql_mode,
+        current_database=raw.get("current_database") or None,
+        current_user=current_user,
+        current_role=raw.get("current_role") or None,
+        connection_collation=connection_collation,
+    )
 
 
 def _tuple_key(value: Dict[str, Any]) -> tuple:
@@ -528,6 +638,7 @@ class RoutineFlightServer(flight.FlightServerBase):
             if isinstance(payload, str):
                 payload = json.loads(payload)
             args = list(payload.get("args", [])); result_descriptor = payload["return"]
+            statement_context = _statement_context(payload.get("context"))
             mode = payload.get("mode", MODE_SCALAR); null_policy = payload.get("null_policy", NULL_CALL)
             abi_contract = payload.get("abi_contract", ABI_CONTRACT)
             adapter_version = payload.get("adapter_version", ADAPTER_VERSION)
@@ -563,7 +674,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
                     if mode == MODE_VECTOR:
-                        call_context = VectorContext(sdk_version, _CallLogger(), None, batch.num_rows)
+                        call_context = VectorContext(sdk_version, _CallLogger(), statement_context, batch.num_rows)
                         try:
                             output = handler(call_context, *[batch.column(index) for index in range(batch.num_columns)])
                         except Exception as exc:
@@ -571,7 +682,7 @@ class RoutineFlightServer(flight.FlightServerBase):
                         if not isinstance(output, (pa.Array, pa.ChunkedArray)):
                             raise ValueError("TYPE_CONTRACT: VECTOR handler must return an Arrow Array or ChunkedArray")
                     else:
-                        call_context = ScalarContext(sdk_version, _CallLogger(), None)
+                        call_context = ScalarContext(sdk_version, _CallLogger(), statement_context)
                         values = []
                         for row in range(batch.num_rows):
                             params = [_scalar_input(batch.column(index), row, args[index]) for index in range(batch.num_columns)]
