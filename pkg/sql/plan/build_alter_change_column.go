@@ -279,6 +279,10 @@ func buildColumnAndConstraint(
 			}
 			newCol.Default = defaultValue
 		}
+		if exprReferencesColumn(newCol.Default.Expr, newColName, defaultScope) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
+		}
 	}
 
 	if err = checkIndexedColumnTypeChange(ctx.GetContext(), targetTableDef, oldCol, newCol); err != nil {

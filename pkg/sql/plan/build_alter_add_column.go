@@ -226,6 +226,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			return nil, err
 		}
 		newCol.Default = defaultValue
+		if exprReferencesColumn(defaultValue.Expr, newColName, scopeCols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
+		}
 
 		hasDefaultValue = defaultValue.Expr != nil
 		if auto_incr && hasDefaultValue {

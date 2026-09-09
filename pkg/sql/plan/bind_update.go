@@ -234,7 +234,18 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 			currentValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
 			for i := range tableDef.Cols {
 				if i < len(currentProjectList) {
-					currentValues[int32(i)] = currentProjectList[i]
+					// Resolve DEFAULT references against the row image produced by
+					// the preceding assignment projection.  Keeping the raw
+					// expression here would replay a volatile default (for example,
+					// RAND()) instead of reading the value already materialized in
+					// the current row.
+					currentValues[int32(i)] = &plan.Expr{
+						Typ: currentProjectList[i].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: currentTag,
+							ColPos: int32(i),
+						}},
+					}
 				}
 			}
 			rhs, err = expandDefaultExprWithColumnExprs(builder.GetContext(), rhs, currentValues)

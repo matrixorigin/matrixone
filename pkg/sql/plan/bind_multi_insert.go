@@ -881,11 +881,28 @@ func multiInsertUnionColumnsWithDefaultDependencies(
 			return nil, moerr.NewInternalErrorf(ctx,
 				"multi-table INSERT cannot resolve target column %q", columns[i])
 		}
-		for _, refIdx := range collectRefColPos(tableDef.Cols[colIdx].Default.GetExpr()) {
+		colDef := tableDef.Cols[colIdx]
+		if colDef.Default == nil {
+			// Older catalog rows and synthetic plans may omit Default metadata
+			// for a nullable ordinary column; its implicit default is NULL.
+			continue
+		}
+		for _, refIdx := range collectRefColPos(colDef.Default.GetExpr()) {
 			if refIdx < 0 || int(refIdx) >= len(tableDef.Cols) || tableDef.Cols[refIdx] == nil {
 				return nil, moerr.NewInvalidInputf(ctx,
 					"default expression for column %q references invalid column position %d",
 					columns[i], refIdx)
+			}
+			refCol := tableDef.Cols[refIdx]
+			if refCol.GeneratedCol != nil {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"default expression for column %q cannot depend on generated column %q",
+					columns[i], refCol.Name)
+			}
+			if refCol.Typ.AutoIncr {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"default expression for column %q cannot depend on auto-increment column %q",
+					columns[i], refCol.Name)
 			}
 			refName := tableDef.Cols[refIdx].Name
 			if _, exists := seen[refName]; exists {

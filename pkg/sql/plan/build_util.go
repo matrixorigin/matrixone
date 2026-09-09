@@ -1747,7 +1747,13 @@ func valueScanColumnsWithDefaultDependencies(
 			}
 			tableToInput[ref] = struct{}{}
 			columns = append(columns, col.Name)
-			refs = append(refs, collectRefColPos(col.Default.GetExpr())...)
+			// A nullable ordinary column may have no persisted Default metadata
+			// (older catalogs and synthetic plans are both allowed to omit it).
+			// Its implicit default is NULL; do not dereference the absent metadata
+			// while discovering the dependency closure.
+			if col.Default != nil {
+				refs = append(refs, collectRefColPos(col.Default.GetExpr())...)
+			}
 		}
 	}
 	return columns, nil

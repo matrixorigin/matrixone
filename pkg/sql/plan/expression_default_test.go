@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -404,6 +405,89 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 	require.Len(t, valueScan.RowsetData.Cols, 3)
 	require.Equal(t, []int32{2}, collectRefColPos(valueScan.RowsetData.Cols[1].Data[0].Expr),
 		"b's row expression must read the appended a input, not inline rand()")
+}
+
+func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true), false, true)
+	nodeCtx := NewBindContext(builder, nil)
+	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
+	rowIDTyp := planpb.Type{Id: int32(types.T_Rowid), Width: 16}
+	tableDef := &TableDef{
+		Name: "expression_default_update",
+		Name2ColIndex: map[string]int32{
+			"a": 0, "b": 1, catalog.Row_ID: 2,
+		},
+		Cols: []*ColDef{
+			{Name: "a", Typ: floatTyp, Default: &planpb.Default{Expr: expressionDefaultRand(t)}},
+			{Name: "b", Typ: floatTyp, Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)}},
+			{Name: catalog.Row_ID, Typ: rowIDTyp, Hidden: true},
+		},
+		Pkey: &PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+	selectTag := builder.genNewBindTag()
+	selectNode := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{selectTag},
+		ProjectList: []*planpb.Expr{
+			{Typ: floatTyp, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: selectTag, ColPos: 0}}},
+			{Typ: floatTyp, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: selectTag, ColPos: 1}}},
+			{Typ: rowIDTyp, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: selectTag, ColPos: 2}}},
+		},
+	}
+	childID := builder.appendNode(selectNode, nodeCtx)
+	oldColName2Idx := make(map[string]int32)
+	newColName2Idx := make(map[string]int32)
+	_, _, _, err := builder.appendSequentialSingleTableUpdateAssignments(
+		nodeCtx,
+		childID,
+		selectNode,
+		selectTag,
+		tableDef,
+		"expression_default_update",
+		[]UpdateAssignment{
+			{Column: "a", Expr: &tree.DefaultVal{}},
+			{Column: "b", Expr: &tree.DefaultVal{}},
+		},
+		false,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	require.NoError(t, err)
+
+	var countRand func(*planpb.Expr) int
+	countRand = func(expr *planpb.Expr) int {
+		if expr == nil {
+			return 0
+		}
+		count := 0
+		switch impl := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if impl.F != nil && impl.F.Func != nil && impl.F.Func.ObjName == "rand" {
+				count++
+			}
+			if impl.F != nil {
+				for _, arg := range impl.F.Args {
+					count += countRand(arg)
+				}
+			}
+		case *planpb.Expr_List:
+			if impl.List != nil {
+				for _, item := range impl.List.List {
+					count += countRand(item)
+				}
+			}
+		}
+		return count
+	}
+	count := 0
+	for _, node := range builder.qry.Nodes {
+		for _, expr := range node.ProjectList {
+			count += countRand(expr)
+		}
+	}
+	// RAND is the source default for a, and b=DEFAULT must read that
+	// materialized value instead of carrying a second RAND root.
+	require.Equal(t, 1, count)
 }
 
 func TestExpandDefaultExprsInValueScanIsRowLocal(t *testing.T) {
@@ -851,6 +935,49 @@ func TestRemapExpressionDefaultsAndReferencesAfterColumnChanges(t *testing.T) {
 	require.NoError(t, checkColumnWithDefaultDependency(ctx, &TableDef{
 		Cols: []*ColDef{{Name: "value", Default: &planpb.Default{Expr: expressionDefaultInt(1)}}},
 	}, "value"))
+}
+
+func TestModifyColPositionRemapsChangedColumnDefaults(t *testing.T) {
+	ctx := context.Background()
+	typ := expressionDefaultIntType()
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "a", Typ: typ},
+		{Name: "b", Typ: typ},
+		{Name: "c", Typ: typ},
+	}}
+	oCol := tableDef.Cols[1]
+	nCol := &planpb.ColDef{
+		Name:    "b",
+		Typ:     typ,
+		Default: &planpb.Default{Expr: expressionDefaultCol(2, 0)},
+	}
+	require.NoError(t, modifyColPosition(
+		ctx, tableDef, oCol, nCol,
+		&tree.ColumnPosition{Typ: tree.ColumnPositionFirst},
+	))
+	require.Equal(t, []string{"b", "a", "c"}, []string{
+		tableDef.Cols[0].Name, tableDef.Cols[1].Name, tableDef.Cols[2].Name,
+	})
+	// b's DEFAULT(c) was bound before the move. It must still point at c's
+	// final position after the old slot is removed and the new slot inserted.
+	require.Equal(t, []int32{2}, collectRefColPos(nCol.Default.Expr))
+}
+
+func TestDefaultDependencyDiscoveryHandlesMissingMetadata(t *testing.T) {
+	typ := expressionDefaultIntType()
+	tableDef := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+		Cols: []*planpb.ColDef{
+			{Name: "a", Typ: typ}, // implicit NULL default; no catalog metadata
+			{Name: "b", Typ: typ, Default: &planpb.Default{Expr: expressionDefaultCol(0, 0)}},
+		},
+	}
+	branches := []*multiInsertBranch{{insertColumns: []string{"b"}}}
+	columns, err := multiInsertUnionColumnsWithDefaultDependencies(
+		context.Background(), branches, tableDef,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b", "a"}, columns)
 }
 
 func TestExpressionDefaultClassification(t *testing.T) {

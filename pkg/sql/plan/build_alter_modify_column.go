@@ -129,6 +129,16 @@ func modifyColPosition(
 			return strings.EqualFold(col.Name, oCol.Name)
 		})
 		if oldPos >= 0 {
+			// nCol was bound against the pre-move schema, so it needs the same
+			// removal remap as the columns that remain in the table.  Without
+			// this, CHANGE/MODIFY ... FIRST/AFTER silently changes a default's
+			// dependency whenever the moved column precedes that dependency.
+			if nCol.GeneratedCol != nil {
+				shiftColPosInExpr(nCol.GeneratedCol.Expr, oldPos+1, -1)
+			}
+			if nCol.Default != nil {
+				shiftColPosInExpr(nCol.Default.Expr, oldPos+1, -1)
+			}
 			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
 		}
 
