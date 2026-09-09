@@ -34,6 +34,33 @@ replace into fi_inline (id, doc, name, qty) values (3, '{"sku":"epsilon"}', 'Car
 insert into fi_inline (id, doc, name, qty) values (1, '{"sku":"zeta"}', 'Alice', 13) on duplicate key update doc = values(doc), qty = values(qty);
 select id, json_unquote(json_extract(doc, '$.sku')) as sku, qty from fi_inline order by id;
 
+-- Accepted-expression writer/query session matrix. The indexed lower(name)
+-- result must remain equivalent to a forced index and a forced table scan
+-- after the writer and reader use different session settings.
+set @fi_matrix_old_time_zone = @@time_zone;
+set @fi_matrix_old_sql_mode = @@sql_mode;
+set time_zone = '+00:00';
+set sql_mode = '';
+create table fi_session_matrix (
+    id int primary key,
+    name varchar(32),
+    key idx_lower ((lower(name)))
+);
+insert into fi_session_matrix (id, name) values (1, 'Alice'), (2, 'ALICE'), (3, 'Bob');
+set time_zone = '+08:00';
+set sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+select id from fi_session_matrix where lower(name) = 'alice' order by id;
+select id from fi_session_matrix force index (idx_lower) where lower(name) = 'alice' order by id;
+select id from fi_session_matrix ignore index (idx_lower) where lower(name) = 'alice' order by id;
+set time_zone = '-05:00';
+set sql_mode = 'STRICT_TRANS_TABLES';
+select id from fi_session_matrix where lower(name) = 'alice' order by id;
+select id from fi_session_matrix force index (idx_lower) where lower(name) = 'alice' order by id;
+select id from fi_session_matrix ignore index (idx_lower) where lower(name) = 'alice' order by id;
+drop table fi_session_matrix;
+set sql_mode = @fi_matrix_old_sql_mode;
+set time_zone = @fi_matrix_old_time_zone;
+
 drop index idx_name_lower on fi_inline;
 alter table fi_inline drop index idx_qty_plus;
 drop index idx_sku on fi_inline;
