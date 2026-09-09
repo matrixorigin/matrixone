@@ -49,3 +49,6 @@ enable-write = true
 enable-delete = true
 enable-dml = true
 enable-maintenance = true
+
+[cn.python-udf-client]
+server-address = "127.0.0.1:50051"
