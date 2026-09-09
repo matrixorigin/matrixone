@@ -4856,6 +4856,19 @@ func bindFuncExprImplByPlanExpr(
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
+	// HEX/BIT literals are stored as raw bytes in a VARCHAR-shaped plan
+	// expression. BIN treats those literals as unsigned numeric values, while
+	// ordinary string and binary-string operands use the numeric-prefix path.
+	// Preserve that syntax distinction before overload resolution; once the
+	// literal is cast to UINT64 the execution vector no longer has to infer its
+	// meaning from payload bytes (for example, 0xff must be 255, not zero).
+	if name == "bin" && len(args) == 1 && isBinaryNumericLiteral(args[0]) {
+		target := types.T_uint64.ToType()
+		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+		if err != nil {
+			return nil, err
+		}
+	}
 	if name == "member of" {
 		if len(args) > 0 {
 			args[0], err = makeEnumOrSetDisplayValue(ctx, args[0])
@@ -8437,6 +8450,23 @@ func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
 	return fn.Args[0].GetLit() != nil &&
 		fn.Args[0].GetLit().IsBin &&
 		types.T(expr.Typ.Id) == types.T_varchar
+}
+
+func isBinaryNumericLiteral(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	literal := expr.GetLit()
+	if literal == nil || !literal.IsBin {
+		return false
+	}
+	switch literal.LiteralForm {
+	case plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plan.StringLiteralForm_STRING_LITERAL_BIT:
+		return true
+	default:
+		return false
+	}
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {
