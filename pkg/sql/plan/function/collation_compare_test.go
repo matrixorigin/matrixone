@@ -188,3 +188,26 @@ func TestCollationKeyNullSafeSelectionMaskConstAndStaleRows(t *testing.T) {
 		require.True(t, ok, info)
 	})
 }
+
+func TestCollationKeyEqualSelectionMaskAndStaleRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(typ, []string{"Alpha", "beta"}, []bool{false, false}),
+		NewFunctionTestInput(typ, []string{"alpha", "BETA"}, []bool{false, false}),
+	}
+	// The second row is outside the current selection and must remain NULL.
+	// The extra mask entry simulates a longer preceding batch and must not
+	// influence the two rows evaluated here.
+	testCase := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, true}),
+		CollationKeyEqual).WithSelectList(&FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, false, false},
+	})
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}

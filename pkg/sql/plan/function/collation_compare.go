@@ -66,15 +66,19 @@ func CollationKeyEqual(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil ||
+		parameters[0].GetType() == nil || parameters[1].GetType() == nil {
+		return moerr.NewInvalidInputNoCtx("collation comparison expects two typed inputs")
+	}
 	domain, ok := collationKeyTextDomain(*parameters[0].GetType(), *parameters[1].GetType())
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "collation comparison domains are not aligned")
 	}
-	return opBinaryBytesBytesToFixedWithErrorCheck(
+	return opBinaryBytesBytesToFixedCollationWithErrorCheck(
 		parameters, result, proc, length,
 		func(left, right []byte) (bool, error) {
 			return collationkey.Equal(domain, left, right)
-		}, selectList)
+		}, selectList, false)
 }
 
 // CollationKeyNullSafeEqual is the NULL-safe counterpart of CollationKeyEqual.
@@ -87,25 +91,42 @@ func CollationKeyNullSafeEqual(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil ||
+		parameters[0].GetType() == nil || parameters[1].GetType() == nil {
+		return moerr.NewInvalidInputNoCtx("collation comparison expects two typed inputs")
+	}
 	domain, ok := collationKeyTextDomain(*parameters[0].GetType(), *parameters[1].GetType())
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "collation comparison domains are not aligned")
 	}
-	return opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
+	return opBinaryBytesBytesToFixedCollationWithErrorCheck(
 		parameters, result, proc, length,
 		func(left, right []byte) (bool, error) {
 			return collationkey.Equal(domain, left, right)
-		}, selectList)
+		}, selectList, true)
 }
 
-func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
+// opBinaryBytesBytesToFixedCollationWithErrorCheck is deliberately separate
+// from the legacy bytewise helper in baseTemplate.go. A collation comparator
+// can return an error for malformed UTF-8, so it must honor the executor's
+// selection mask before reading or comparing a row. It also clears the result
+// null bitmap on every invocation; otherwise a shorter reused batch can retain
+// a stale masked/null row from the previous batch.
+func opBinaryBytesBytesToFixedCollationWithErrorCheck(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
 	cmpFn func(v1, v2 []byte) (bool, error),
 	selectList *FunctionSelectList,
+	nullSafe bool,
 ) error {
+	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil {
+		return moerr.NewInvalidInputNoCtx("collation comparison expects two non-nil inputs")
+	}
+	if length < 0 {
+		return moerr.NewInvalidInputNoCtxf("collation comparison length %d is negative", length)
+	}
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -114,27 +135,27 @@ func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 	rsNull := rsVec.GetNulls()
 
-	// Result of <=> is never NULL for evaluated rows.  A select list is the
-	// executor's short-circuit mask: rows outside it must remain NULL and must
-	// not invoke the comparator.  Reset first because the same result vector is
-	// reused across batches and a stale mask must not leak past length.
+	// A select list is the executor's short-circuit mask: rows outside it must
+	// remain NULL and must not invoke the comparator. Reset first because the
+	// same result vector is reused across batches and a stale mask must not leak
+	// past length. For ordinary equality, source NULLs are added below; for
+	// NULL-safe equality, evaluated source NULLs produce a boolean value.
 	rsNull.Reset()
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
 			rs.SetNullResult(uint64(length))
 			return nil
 		}
-		if !selectList.ShouldEvalAllRow() {
-			limit := len(selectList.SelectList)
-			if limit > length {
-				limit = length
-			}
-			for i := 0; i < limit; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
+	}
+	shouldSkip := func(row uint64) bool {
+		if selectList == nil || selectList.ShouldEvalAllRow() {
+			return false
 		}
+		if selectList.Contains(row) {
+			rsNull.Add(row)
+			return true
+		}
+		return false
 	}
 
 	// Keep the scalar fast paths while checking the mask before reading a
@@ -145,20 +166,22 @@ func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
 		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
+			if shouldSkip(i) {
 				continue
 			}
-			if null1 && null2 {
-				rss[i] = true
-			} else if null1 || null2 {
-				rss[i] = false
-			} else {
-				matched, err := cmpFn(v1, v2)
-				if err != nil {
-					return err
+			if null1 || null2 {
+				if nullSafe {
+					rss[i] = null1 && null2
+				} else {
+					rsNull.Add(i)
 				}
-				rss[i] = matched
+				continue
 			}
+			matched, err := cmpFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = matched
 		}
 		return nil
 	}
@@ -166,21 +189,23 @@ func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
+			if shouldSkip(i) {
 				continue
 			}
 			v2, null2 := p2.GetStrValue(i)
-			if null1 && null2 {
-				rss[i] = true
-			} else if null1 || null2 {
-				rss[i] = false
-			} else {
-				matched, err := cmpFn(v1, v2)
-				if err != nil {
-					return err
+			if null1 || null2 {
+				if nullSafe {
+					rss[i] = null1 && null2
+				} else {
+					rsNull.Add(i)
 				}
-				rss[i] = matched
+				continue
 			}
+			matched, err := cmpFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = matched
 		}
 		return nil
 	}
@@ -188,42 +213,46 @@ func opBinaryBytesBytesToFixedNullSafeWithErrorCheck(
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
+			if shouldSkip(i) {
 				continue
 			}
 			v1, null1 := p1.GetStrValue(i)
-			if null1 && null2 {
-				rss[i] = true
-			} else if null1 || null2 {
-				rss[i] = false
-			} else {
-				matched, err := cmpFn(v1, v2)
-				if err != nil {
-					return err
+			if null1 || null2 {
+				if nullSafe {
+					rss[i] = null1 && null2
+				} else {
+					rsNull.Add(i)
 				}
-				rss[i] = matched
+				continue
 			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if rsNull.Contains(i) {
-			continue
-		}
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 && null2 {
-			rss[i] = true
-		} else if null1 || null2 {
-			rss[i] = false
-		} else {
 			matched, err := cmpFn(v1, v2)
 			if err != nil {
 				return err
 			}
 			rss[i] = matched
 		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if shouldSkip(i) {
+			continue
+		}
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			if nullSafe {
+				rss[i] = null1 && null2
+			} else {
+				rsNull.Add(i)
+			}
+			continue
+		}
+		matched, err := cmpFn(v1, v2)
+		if err != nil {
+			return err
+		}
+		rss[i] = matched
 	}
 	return nil
 }
