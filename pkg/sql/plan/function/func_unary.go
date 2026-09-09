@@ -8211,6 +8211,13 @@ func randomBytesRoundedDecimalIntegerString(integer string, proc *process.Proces
 }
 
 func randomBytesRoundedDecimal64(value types.Decimal64, scale int32, proc *process.Process) (int64, error) {
+	// Decimal64 normally has at most 18 fractional digits, so keep the
+	// allocation-free fixed-width path for the common case. Scale splits a
+	// larger divisor into 19-digit chunks and rounds each chunk; use the exact
+	// decimal conversion helper whenever that split would be needed.
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal64RoundedIntegerString(value, scale), proc)
+	}
 	rounded, err := value.Scale(-scale)
 	if err != nil || rounded.Sign() || uint64(rounded) < 1 || uint64(rounded) > randomBytesMaxLength {
 		return 0, randomBytesRangeError(proc)
@@ -8219,6 +8226,9 @@ func randomBytesRoundedDecimal64(value types.Decimal64, scale int32, proc *proce
 }
 
 func randomBytesRoundedDecimal128(value types.Decimal128, scale int32, proc *process.Process) (int64, error) {
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal128RoundedIntegerString(value, scale), proc)
+	}
 	rounded, err := value.Scale(-scale)
 	if err != nil || rounded.Sign() || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
 		return 0, randomBytesRangeError(proc)
@@ -8227,6 +8237,9 @@ func randomBytesRoundedDecimal128(value types.Decimal128, scale int32, proc *pro
 }
 
 func randomBytesRoundedDecimal256(value types.Decimal256, scale int32, proc *process.Process) (int64, error) {
+	if scale > 19 {
+		return randomBytesRoundedDecimalIntegerString(decimal256RoundedIntegerString(value, scale), proc)
+	}
 	rounded, err := value.Scale(-scale)
 	if err != nil || rounded.Sign() || rounded.B192_255 != 0 || rounded.B128_191 != 0 || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
 		return 0, randomBytesRangeError(proc)

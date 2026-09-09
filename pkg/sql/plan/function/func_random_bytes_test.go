@@ -232,6 +232,68 @@ func TestRandomBytesDecimalUsesExactSQLRounding(t *testing.T) {
 			run(t, tc.typ, tc.make("2.5000000000000001"), []int{3})
 		})
 	}
+
+	// Decimal128 and Decimal256 use multiple 19-digit division chunks in
+	// Decimal.Scale. RANDOM_BYTES must round the original decimal once rather
+	// than round an intermediate chunk (for example, 0.49 must not become 1).
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		make func(string) any
+	}{
+		{
+			name: "decimal128_high_scale",
+			typ:  types.New(types.T_decimal128, 38, 20),
+			make: func(value string) any {
+				parsed, err := types.ParseDecimal128(value, 38, 20)
+				require.NoError(t, err)
+				return []types.Decimal128{parsed}
+			},
+		},
+		{
+			name: "decimal256_high_scale",
+			typ:  types.New(types.T_decimal256, 76, 40),
+			make: func(value string) any {
+				parsed, err := types.ParseDecimal256(value, 76, 40)
+				require.NoError(t, err)
+				return []types.Decimal256{parsed}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, tc.typ, tc.make("2.49"), []int{2})
+			run(t, tc.typ, tc.make("1024.49"), []int{1024})
+			runOutOfRange(t, tc.typ, tc.make("0.49"))
+			runOutOfRange(t, tc.typ, tc.make("1024.5"))
+		})
+	}
+}
+
+func TestRandomBytesDecimalHighScalePathsAgree(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal128, 38, 20)
+	value, err := types.ParseDecimal128("2.49", 38, 20)
+	require.NoError(t, err)
+
+	run := func(t *testing.T, input FunctionTestInput) int {
+		t.Helper()
+		caseTest := NewFunctionTestCase(proc, []FunctionTestInput{input},
+			NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+		require.NoError(t, caseTest.result.PreExtendAndReset(caseTest.fnLength))
+		require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, caseTest.fnLength, nil))
+		return len(caseTest.GetResultVectorDirectly().GetBytesAt(0))
+	}
+
+	require.Equal(t, 2, run(t, NewFunctionTestInput(typ, []types.Decimal128{value}, nil)))
+	require.Equal(t, 2, run(t, NewFunctionTestConstInput(typ, []types.Decimal128{value}, nil)))
+
+	prepared := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"2.49"}, nil)},
+		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+	prepared.parameters[0].SetPrepareParamKind(vector.PrepareParamDecimal)
+	require.NoError(t, prepared.result.PreExtendAndReset(1))
+	require.NoError(t, RandomBytes(prepared.parameters, prepared.result, proc, 1, nil))
+	require.Len(t, prepared.GetResultVectorDirectly().GetBytesAt(0), 2)
 }
 
 func TestRandomBytesHonorsRuntimeTextOverrideForBinaryCommonType(t *testing.T) {
