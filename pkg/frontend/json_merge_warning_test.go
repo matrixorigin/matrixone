@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -79,6 +80,37 @@ func TestBuildPlanWithPrepareModeReusesJSONMergeWarningLifecycle(t *testing.T) {
 
 	require.Equal(t, []uint16{moerr.ER_WARN_DEPRECATED_SYNTAX}, sink.codes)
 	require.Equal(t, []string{plan.JSONMergeDeprecatedWarning}, sink.msgs)
+}
+
+func TestJSONMergeWarningProductionEntrySurvivesCompileRetry(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select json_merge('[1]', '[2]')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	input := &UserInput{sql: "select json_merge('[1]', '[2]')"}
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.proc = ses.GetProc()
+	execCtx.input = input
+	execCtx.stmt = stmt
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+
+	// Enter through the same statement boundary used by doComQuery instead of
+	// manually installing a warning origin in the compiler context.
+	resetDiagnosticsForStatement(ses, execCtx, input, stmt)
+	_, err = buildPlanWithPrepareMode(ctx, ses, ses.GetTxnCompileCtx(), stmt, false)
+	require.NoError(t, err)
+	_, err = buildPlanForCompileRetry(ctx, ses, ses.GetTxnCompileCtx(), stmt, false, nil)
+	require.NoError(t, err)
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, []uint16{moerr.ER_WARN_DEPRECATED_SYNTAX}, info.codes)
 }
 
 func TestBeginJSONMergeWarningStatementRecognizesAllPrepareForms(t *testing.T) {
