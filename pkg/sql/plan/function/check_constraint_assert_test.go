@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,4 +83,45 @@ func TestCheckConstraintAssert(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), err)
 		require.Contains(t, err.Error(), "t_chk_1")
 	})
+}
+
+func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	mp := proc.Mp()
+
+	flag := newVectorByType(mp, types.T_bool.ToType(), []bool{true, false, false}, &nulls.Nulls{})
+	message := newVectorByType(
+		mp,
+		types.T_varchar.ToType(),
+		[]string{"Check constraint 'ck_pos' is violated."},
+		&nulls.Nulls{},
+	)
+	defer flag.Free(mp)
+	defer message.Free(mp)
+
+	fn, err := GetFunctionByName(
+		proc.Ctx,
+		"_check_constraint_assert",
+		[]types.Type{types.T_bool.ToType(), types.T_varchar.ToType()},
+	)
+	require.NoError(t, err)
+	result, err := RunFunctionDirectly(
+		proc,
+		fn.GetEncodedOverloadID(),
+		[]*vector.Vector{flag, message},
+		3,
+	)
+	require.NoError(t, err)
+	defer result.Free(mp)
+
+	require.Equal(t, []bool{true, false, false}, vector.MustFixedColWithTypeCheck[bool](result))
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_CHECK_CONSTRAINT_VIOLATED, warning.code)
+		require.Equal(t, "Check constraint 'ck_pos' is violated.", warning.msg)
+	}
 }

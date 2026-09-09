@@ -17,6 +17,7 @@ package colexec
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,4 +46,19 @@ func FormatDedupKey(vec *vector.Vector, row int, colTypes []plan.Type) (string, 
 		return "", err
 	}
 	return "(" + strings.Join(items, ",") + ")", nil
+}
+
+// FormatDedupEntry formats the user-visible part of a duplicate-entry
+// diagnostic.  Index-table keys are normally serialized into a varchar; when
+// that serialization contains a tuple, decode it back to the logical key so
+// INSERT/UPDATE IGNORE warnings match the existing duplicate error path.
+func FormatDedupEntry(vec *vector.Vector, row int, colName string, colTypes []plan.Type) (string, error) {
+	if len(colTypes) == 1 && colName == catalog.IndexTableIndexColName &&
+		vec.GetType().Oid == types.T_varchar {
+		t, _, schema, err := types.DecodeTuple(vec.GetBytesAt(row))
+		if err == nil && len(schema) > 1 {
+			return t.ErrString(make([]int32, len(schema))), nil
+		}
+	}
+	return FormatDedupKey(vec, row, colTypes)
 }

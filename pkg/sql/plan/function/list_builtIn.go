@@ -15675,12 +15675,25 @@ var supportedOthersBuiltIns = []FuncNew{
 					}
 					errMsg := functionUtil.QuickBytesToStr(value)
 					res := vector.MustFunctionResult[bool](result)
+					ignore := statementIgnore(proc)
+					var warnings process.WarningAccumulator
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
-							return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							if !ignore {
+								return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							}
+							// Keep the value false so the surrounding FILTER
+							// removes this row, while retaining one bounded
+							// warning record per ignored row.
+							warnings.Add(moerr.ER_CHECK_CONSTRAINT_VIOLATED, errMsg)
+							res.AppendMustValue(false)
+							continue
 						}
 						res.AppendMustValue(true)
+					}
+					if ignore {
+						warnings.Flush(proc)
 					}
 					return nil
 				}

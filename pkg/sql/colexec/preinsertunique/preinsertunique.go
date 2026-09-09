@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -382,6 +384,60 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		outputColumns <= 0 || outputColumns > len(inputBat.Vecs) {
 		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup output width")
 	}
+	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore()
+	var duplicateWarnings process.WarningAccumulator
+	var warningKeyMetadata []insertIgnoreWarningKey
+	if warningsEnabled {
+		warningKeyMetadata = buildInsertIgnoreKeyMetadata(ctx)
+	}
+	recordDuplicateWarning := func(keyIdx, row int) {
+		if !warningsEnabled || keyIdx < 0 || keyIdx >= len(keyColumns) {
+			return
+		}
+		if !duplicateWarnings.NeedsDiagnostic() {
+			duplicateWarnings.AddCount()
+			return
+		}
+		keyPos := keyColumns[keyIdx]
+		if keyPos < 0 || int(keyPos) >= len(inputBat.Vecs) || inputBat.Vecs[keyPos] == nil {
+			// The row has already been rejected by the arbiter. Keep the warning
+			// count exact even if a malformed/legacy plan cannot provide its key
+			// vector for rendering.
+			duplicateWarnings.AddCount()
+			return
+		}
+		keyVec := inputBat.Vecs[keyPos]
+		row = vectorRowIndex(keyVec, row)
+		var keyName string
+		var keyTypes []plan.Type
+		var ok bool
+		if keyIdx < len(warningKeyMetadata) {
+			metadata := warningKeyMetadata[keyIdx]
+			keyName, keyTypes, ok = metadata.name, metadata.types, metadata.valid
+		}
+		var rowStr string
+		var err error
+		if ok {
+			rowStr, err = colexec.FormatDedupKey(keyVec, row, keyTypes)
+		} else {
+			// Plans produced before the metadata fields were added can still be
+			// executed from a cached/remote plan. Preserve IGNORE semantics and
+			// emit a useful best-effort warning instead of failing the statement.
+			rowStr = keyVec.RowToString(row)
+			keyName = "unknown"
+		}
+		if err != nil {
+			// Rendering is diagnostic-only. A malformed internal key must not
+			// turn a row that IGNORE already rejected into a statement error.
+			duplicateWarnings.AddCount()
+			return
+		}
+		duplicateWarnings.Add(
+			moerr.ER_DUP_ENTRY,
+			moerr.NewDuplicateEntry(proc.Ctx, rowStr, keyName).Error(),
+		)
+	}
 	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector
 	autoOutputColumn := -1
 	if autoIncrementReorder {
@@ -439,6 +495,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		accepted := true
 		primaryKeyConflict := false
+		conflictKey := -1
 		for keyIdx, conflictPos := range conflictColumns {
 			conflictVec := inputBat.Vecs[conflictPos]
 			conflictRow := vectorRowIndex(conflictVec, row)
@@ -448,6 +505,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 					primaryKeyConflict = true
 				}
 				accepted = false
+				conflictKey = keyIdx
 				break
 			}
 			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
@@ -457,6 +515,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			if autoIncrementReorder && keyIdx == int(ctx.AutoIncrementKeyIndex) {
 				if preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
 					accepted = false
+					conflictKey = keyIdx
 					break
 				}
 				// Ordered assignment can publish a retained candidate instead
@@ -470,10 +529,12 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			}
 			if zvals[0] != 0 && vals[0] != 0 {
 				accepted = false
+				conflictKey = keyIdx
 				break
 			}
 		}
 		if !accepted {
+			recordDuplicateWarning(conflictKey, row)
 			if autoIncrementReorder && generated && !primaryKeyConflict {
 				if !preInsertUnique.hasAcceptedAutoIncrementValue(autoValue) {
 					if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
@@ -548,6 +609,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	}
 	if len(sels) == 0 {
 		result.Batch = batch.EmptyBatch
+		duplicateWarnings.Flush(proc)
 		return result, nil
 	}
 	preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
@@ -572,7 +634,50 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		return vm.CancelResult, err
 	}
 	result.Batch = preInsertUnique.ctr.buf
+	duplicateWarnings.Flush(proc)
 	return result, nil
+}
+
+type insertIgnoreWarningKey struct {
+	name  string
+	types []plan.Type
+	valid bool
+}
+
+func buildInsertIgnoreKeyMetadata(ctx *plan.PreInsertUkCtx) []insertIgnoreWarningKey {
+	if ctx == nil || len(ctx.KeyColumns) == 0 ||
+		len(ctx.KeyNames) != len(ctx.KeyColumns) ||
+		len(ctx.KeyTypeCounts) != len(ctx.KeyColumns) {
+		return nil
+	}
+	metadata := make([]insertIgnoreWarningKey, len(ctx.KeyColumns))
+	offset := 0
+	for i, count := range ctx.KeyTypeCounts {
+		if count <= 0 {
+			return nil
+		}
+		end := offset + int(count)
+		if offset < 0 || end > len(ctx.KeyTypes) {
+			return nil
+		}
+		keyTypes := make([]plan.Type, int(count))
+		for j, typ := range ctx.KeyTypes[offset:end] {
+			if typ == nil {
+				return nil
+			}
+			keyTypes[j] = *typ
+		}
+		metadata[i] = insertIgnoreWarningKey{
+			name:  ctx.KeyNames[i],
+			types: keyTypes,
+			valid: true,
+		}
+		offset = end
+	}
+	if offset != len(ctx.KeyTypes) {
+		return nil
+	}
+	return metadata
 }
 
 func (preInsertUnique *PreInsertUnique) initInsertIgnoreOutput(input *batch.Batch, columns int) {
