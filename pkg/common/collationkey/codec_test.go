@@ -232,6 +232,9 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	if _, err := EncodePart(nil, Part{Domain: Domain{Type: SignedInteger, Width: 33}, Value: make([]byte, 33)}); err == nil {
 		t.Fatal("oversized integer domain was accepted")
 	}
+	if _, err := EncodePart(nil, Part{Domain: Domain{Type: Decimal, Width: 8, Scale: -1}, Value: []byte("1")}); !errors.Is(err, ErrUnsupportedDomain) {
+		t.Fatalf("negative decimal scale error = %v", err)
+	}
 	if _, err := EncodePart(nil, Part{Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixBytes}, Value: []byte("a")}); err == nil {
 		t.Fatal("text byte prefix domain was accepted")
 	}
