@@ -868,3 +868,35 @@ ready for maintainer review, not approved: the named owners must still record
 acceptance or new findings against this revision before production code is
 written. The baseline reproduction is evidence of the current defect only;
 `production_fix` and `qa_acceptance` remain not implemented/not run.
+
+### 10.2 Implementation series status (PR1)
+
+The first implementation delivery is intentionally limited to the dependency-
+light codec foundation in `pkg/common/collationkey`. It does not change any
+planner, executor, catalog, protobuf, storage, or SQL entry point. The package
+therefore cannot make an existing relation collation-aware by itself; the
+remaining metadata, capability, sidecar, query, DML, migration, and activation
+deliveries remain required before the issue can be closed.
+
+PR1 freezes the following implementation details without changing the approved
+revision-3 contract:
+
+- registry name `collationkey/domains-v1`, registry version `1`, codec envelope
+  version `2`, and a maximum framed key size of `67108864` bytes;
+- family IDs `0x0001` (UTF-8 general-ci-v1/PAD SPACE), `0x0002` (UTF-8 `_bin`/
+  PAD SPACE), `0x0003` (exact binary), `0x0101` (signed integer), `0x0102`
+  (unsigned integer), and `0x0103` (decimal);
+- canonical parameter bytes use big-endian prefix/width fields and the schema
+  bytes defined in Section 4.3; the immutable registry digest is
+  `0c84115b0e4999cd90fd03c1fb4bedb3ed560a4e97e64f73840952c4e469feca`;
+- all text input is validated as complete UTF-8 before prefixing, general-ci
+  emits one four-byte big-endian weight per code point, and NULL/empty values
+  retain distinct framed states;
+- malformed descriptors, unknown families, invalid widths/scales, non-canonical
+  decimal payloads, invalid UTF-8, and over-sized envelopes fail before a key is
+  published; `HashEncoded` is only a bucket hint and never a uniqueness oracle.
+
+The digest and golden vectors are package tests, not a claim that a relation has
+adopted v2. Subsequent implementation PRs must copy the exact bytes and digest
+through the approved metadata and capability boundaries before any production
+writer is allowed to emit this format.
