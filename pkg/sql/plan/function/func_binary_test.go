@@ -4507,6 +4507,12 @@ func TestGetDecimalCountRounding(t *testing.T) {
 	for _, tt := range tests {
 		require.Equal(t, tt.want, getDecimalCount(typ, tt.value))
 	}
+	maxTyp := types.T_decimal64.ToType()
+	require.Equal(t, int64(^uint64(0)>>1), getDecimalCount(maxTyp, types.Decimal64(^uint64(0))))
+	require.Equal(t, int64(-1), getDecimalCount(maxTyp, types.Decimal64(1).Minus()))
+	typ128 := types.T_decimal128.ToType()
+	typ128.Scale = 1
+	require.Equal(t, int64(2), getDecimalCount(typ128, types.Decimal128{B0_63: 15}))
 }
 
 func TestSubStrIndex(t *testing.T) {
