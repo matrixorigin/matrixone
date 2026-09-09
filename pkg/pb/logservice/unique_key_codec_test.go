@@ -52,3 +52,21 @@ func TestUniqueKeyCodecMetadataRoundTripsThroughHeartbeatAndChecker(t *testing.T
 	require.NoError(t, proto.Unmarshal(encoded, decodedState))
 	require.Equal(t, activation, decodedState.UniqueKeyCodecActivation)
 }
+
+func TestUniqueKeyCodecActivationRoundTripsThroughHAKeeperRSMState(t *testing.T) {
+	activation := &UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{9, 8, 7},
+		Generation:       23,
+		Phase:            PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 11},
+		TnTargets:        map[string]uint64{"tn-1": 12},
+	}
+	want := &HAKeeperRSMState{Index: 42, UniqueKeyCodecActivation: activation}
+	encoded, err := proto.Marshal(want)
+	require.NoError(t, err)
+	got := &HAKeeperRSMState{}
+	require.NoError(t, proto.Unmarshal(encoded, got))
+	require.Equal(t, want, got)
+}

@@ -1073,3 +1073,19 @@ target maps and registry bytes are copied. This prevents a protobuf transport
 round-trip from becoming an accidental downgrade and gives the eventual
 coordinator a single validation boundary, while still leaving the actual
 heartbeat publication and activation state machine unconnected.
+
+### 10.12 Durable HAKeeper activation state
+
+The activation record is now also a field of `HAKeeperRSMState` (field 43) in
+the logservice schema. The generated binding therefore carries the same typed
+activation through RSM snapshots and Dragonboat recovery, while the existing
+`StateQuery` response copies it into `CheckerState`. The query path returns a
+deep copy, so callers cannot mutate replicated target maps or registry bytes.
+Round-trip, snapshot/recovery, and state-query aliasing tests cover the new
+boundary.
+
+This is persistence and observation only. No RSM command changes the phase,
+heartbeats do not advertise a new capability, and no planner, TN commit,
+catalog, migration, or management entry point consumes the field yet. The
+v2 admission fences remain enabled; a missing activation still means that
+production v2 is disabled rather than legacy data being reinterpreted.

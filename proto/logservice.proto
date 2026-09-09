@@ -933,6 +933,10 @@ message HAKeeperRSMState {
   // this liveness proof for an older process.
   map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
   map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
+  // UniqueKeyCodecActivation is the durable cluster-level fence for the
+  // versioned unique-key codec.  It is kept in the RSM state so snapshots,
+  // replay, backup and restore cannot lose an enabled generation.
+  UniqueKeyCodecActivation UniqueKeyCodecActivation = 43;
 }
 
 // ReplicaInfo contains details of a replica

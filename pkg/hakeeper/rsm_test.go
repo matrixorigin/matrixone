@@ -57,6 +57,15 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1.state.CommandDeliveryEnabled = true
 	tsm1.state.CommandDeliveryBatchIDsAssigned = true
 	tsm1.state.CommandDeliveryCommandIDsAssigned = true
+	tsm1.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{6, 7, 8},
+		Generation:       13,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 21},
+		TnTargets:        map[string]uint64{"tn-1": 22},
+	}
 	tsm1.state.ScheduleCommands["tn-1"] = pb.CommandBatch{
 		BatchID:    9,
 		Commands:   []pb.ScheduleCommand{{UUID: "tn-1", ServiceType: pb.TNService}},
@@ -72,6 +81,7 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Equal(t, uint64(7), tsm2.state.IDWatermarkRestoreGeneration)
 	assert.True(t, tsm2.state.CommandDeliveryEnabled)
 	assert.True(t, tsm2.state.CommandDeliveryCommandIDsAssigned)
+	assert.Equal(t, tsm1.state.UniqueKeyCodecActivation, tsm2.state.UniqueKeyCodecActivation)
 	assert.Equal(t, tsm1.state.ScheduleCommands, tsm2.state.ScheduleCommands)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
@@ -588,6 +598,31 @@ func TestClusterDetailsQuery(t *testing.T) {
 func TestInitialState(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
+}
+
+func TestStateQueryPreservesUniqueKeyCodecActivation(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{1, 2, 3},
+		Generation:       9,
+		Phase:            pb.ENABLED,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+
+	value, err := rsm.Lookup(&StateQuery{})
+	require.NoError(t, err)
+	state := value.(*pb.CheckerState)
+	require.Equal(t, rsm.state.UniqueKeyCodecActivation, state.UniqueKeyCodecActivation)
+
+	// StateQuery must return a deep copy so callers cannot mutate replicated
+	// activation state through the read-only view.
+	state.UniqueKeyCodecActivation.RegistryDigest[0] = 8
+	state.UniqueKeyCodecActivation.CnTargets["cn-1"] = 99
+	require.Equal(t, byte(1), rsm.state.UniqueKeyCodecActivation.RegistryDigest[0])
+	require.Equal(t, uint64(4), rsm.state.UniqueKeyCodecActivation.CnTargets["cn-1"])
 }
 
 func TestSetState(t *testing.T) {
