@@ -38,6 +38,12 @@ var PrefixEqualFunctionEncodedID = encodeOverloadID(PREFIX_EQ, 0)
 var PrefixEqualFunctionName = "prefix_eq"
 var L2DistanceFunctionEncodedID = encodeOverloadID(L2_DISTANCE, 0)
 
+// CollationKeyV2FunctionEncodedID is used only by planner-owned expressions
+// after a relation has passed the v2 capability/activation checks. The name is
+// intentionally absent from functionIdRegister, so SQL users cannot resolve
+// this primitive as a callable function.
+var CollationKeyV2FunctionEncodedID = encodeOverloadID(INTERNAL_COLLATION_KEY_V2, 0)
+
 func init() {
 	// init fixed type cast rule for binary operator like
 	// +, -, x, /, div, >=, =, != and so on.
