@@ -72,6 +72,10 @@ function launch_jstfu() {
 }
 
 launch_mo
-launch_jstfu || exit $?
+if [[ "${SKIP_JSTFU:-false}" == "true" ]]; then
+    echo "skip jstfu for this BVT suite"
+else
+    launch_jstfu || exit $?
+fi
 wait_system_init
 exit $?
