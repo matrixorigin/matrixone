@@ -24,11 +24,13 @@ import (
 
 	"github.com/prashantv/gostub"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
@@ -116,6 +119,88 @@ func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 			require.ErrorContains(t, err, testCase.want)
 		})
 	}
+}
+
+func TestExecBackupSkipsObjectDeletedInSpecialCheckpoint(t *testing.T) {
+	ctx := t.Context()
+	src := newBackupMemoryFS(t, "backup-soft-deleted-src")
+	legacyDst := newBackupMemoryFS(t, "backup-soft-deleted-legacy-dst")
+	fixedDst := newBackupMemoryFS(t, "backup-soft-deleted-fixed-dst")
+
+	objectID := objectio.NewObjectid()
+	objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+	objectStats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsLocation(
+		objectStats,
+		objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0),
+	))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(objectStats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(objectStats, 1))
+	require.NoError(t, writeFile(ctx, src, objectName.String(), []byte("deleted object")))
+
+	cat := catalog.MockCatalog(nil)
+	defer cat.Close()
+	dbEntry, err := cat.CreateDBEntry("backup_test", "", "", nil)
+	require.NoError(t, err)
+	table, err := dbEntry.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+
+	createTS := types.BuildTS(5, 0)
+	checkpointStart := types.BuildTS(15, 0)
+	checkpointEnd := types.BuildTS(30, 0)
+	entry, err := table.CreateCommittedObject(
+		createTS,
+		&objectio.CreateObjOpt{Stats: objectStats},
+		nil,
+	)
+	require.NoError(t, err)
+	catalog.MockDroppedObjectEntry2List(entry, checkpointEnd)
+
+	checkpointData, err := logtail.BackupCheckpointDataFactory(
+		checkpointStart,
+		checkpointEnd,
+		src,
+	)(cat)
+	require.NoError(t, err)
+	defer checkpointData.Close()
+	checkpointLocation, _, err := checkpointData.Sync(ctx, src)
+	require.NoError(t, err)
+
+	softDeletes := make(map[string]bool)
+	objects, _, err := logtail.LoadCheckpointEntriesFromKey(
+		ctx,
+		"backup-test",
+		src,
+		checkpointLocation,
+		logtail.CheckpointCurrentVersion,
+		&softDeletes,
+		&types.TS{},
+	)
+	require.NoError(t, err)
+	require.Contains(t, softDeletes, objectName.String())
+	require.NoError(t, src.Delete(ctx, objectName.String()))
+	_, err = src.StatFile(ctx, objectName.String())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+
+	// The object has a committed DropTS in the selected special checkpoint. A
+	// completed GC may have already removed its physical file before backup.
+	// The old selection path still schedules it and therefore fails with 20405.
+	legacyFiles := selectBackupObjects(objects, nil, nil, nil)
+	require.Contains(t, legacyFiles, objectName.String())
+	_, err = parallelCopyData(
+		ctx,
+		src,
+		legacyDst,
+		legacyFiles,
+		1,
+		nil,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+
+	files := selectBackupObjects(objects, softDeletes, nil, nil)
+	require.NotContains(t, files, objectName.String())
+	_, err = parallelCopyData(ctx, src, fixedDst, files, 1, nil)
+	require.NoError(t, err)
 }
 
 func TestBackupData(t *testing.T) {

@@ -320,7 +320,7 @@ func execBackup(
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
-	files := make(map[string]*objectio.BackupObject, 0)
+	var files map[string]*objectio.BackupObject
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
 	var loadDuration, copyDuration, reWriteDuration time.Duration
@@ -362,11 +362,15 @@ func execBackup(
 		}
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CKPReader
-		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
-		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
-		}
+		oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			srcFs,
+			key,
+			uint32(version),
+			&softDeletes,
+			&baseTS,
+		)
 		if err != nil {
 			return err
 		}
@@ -393,20 +397,7 @@ func execBackup(
 		}
 	}
 	startTime = time.Now()
-	for _, oName := range oNames {
-		objName := oName.Location.Name().String()
-		// Check if file already exists in current backup directory
-		if dstHave[objName] {
-			oName.NeedCopy = false
-		}
-		// Check if file exists in global index (already backed up in previous backups)
-		if globalIndex != nil && globalIndex.Has(objName) {
-			oName.NeedCopy = false
-		}
-		if files[objName] == nil {
-			files[objName] = oName
-		}
-	}
+	files = selectBackupObjects(oNames, softDeletes, dstHave, globalIndex)
 
 	// trim checkpoint and block
 	var cnLoc, mergeStart, mergeEnd string
@@ -521,6 +512,34 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+func selectBackupObjects(
+	oNames []*objectio.BackupObject,
+	softDeletes, dstHave map[string]bool,
+	globalIndex *GlobalFileIndex,
+) map[string]*objectio.BackupObject {
+	files := make(map[string]*objectio.BackupObject, len(oNames))
+	for _, oName := range oNames {
+		objName := oName.Location.Name().String()
+		// A deleted object is represented by its checkpoint lifecycle record;
+		// its physical data can already have been collected by GC.
+		if softDeletes[objName] {
+			continue
+		}
+		// Check if file already exists in current backup directory
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		// Check if file exists in global index (already backed up in previous backups)
+		if globalIndex != nil && globalIndex.Has(objName) {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
+		}
+	}
+	return files
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
