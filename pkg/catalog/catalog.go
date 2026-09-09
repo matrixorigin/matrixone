@@ -226,7 +226,7 @@ func GenMoTablesLogicalIdIndexTableDefs() []engine.TableDef {
 	priColDef := &engine.AttributeDef{
 		Attr: engine.Attribute{
 			Name:     IndexTablePrimaryColName,
-			Type:     types.New(types.T_varchar, 0, 65536), // composite primary key of main table
+			Type:     MoTablesTypes[MO_TABLES_CPKEY_IDX], // composite primary key of main table
 			Primary:  false,
 			IsHidden: false,
 			Alg:      compress.Lz4,

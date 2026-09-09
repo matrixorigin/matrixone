@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func TestTemporaryIndexTableNameClassification(t *testing.T) {
@@ -42,4 +43,19 @@ func TestTemporaryIndexTableNameClassification(t *testing.T) {
 	ordinaryName := defines.GenTempTableName(sessionID, uniqueName, "ordinary_table")
 	require.False(t, IsUniqueIndexTable(ordinaryName))
 	require.False(t, IsSecondaryIndexTable(ordinaryName))
+}
+
+func TestMoTablesLogicalIDIndexPrimaryColumnType(t *testing.T) {
+	defs := GenMoTablesLogicalIdIndexTableDefs()
+	sourceType := MoTablesTypes[MO_TABLES_CPKEY_IDX]
+
+	for _, def := range defs {
+		attrDef, ok := def.(*engine.AttributeDef)
+		if ok && attrDef.Attr.Name == IndexTablePrimaryColName {
+			require.Equal(t, sourceType, attrDef.Attr.Type)
+			return
+		}
+	}
+
+	t.Fatal("logical ID index primary column definition not found")
 }
