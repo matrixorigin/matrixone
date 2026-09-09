@@ -492,3 +492,12 @@ insert into issue_23143_copy_auto_increment(payload, copied_payload) values (3, 
 select count(*) = 2 as copied_rows_preserved, max(id) > 1001 as source_allocator_preserved from issue_23143_copy_auto_increment;
 select payload, copied_payload from issue_23143_copy_auto_increment order by payload;
 drop table issue_23143_copy_auto_increment;
+
+-- issue #28163: the one-argument form returns the value and updates the
+-- session value used by the following zero-argument read.
+select last_insert_id(4242);
+select last_insert_id();
+select last_insert_id(0);
+select last_insert_id();
+select last_insert_id(NULL);
+select last_insert_id();

@@ -453,6 +453,12 @@ type BaseProcess struct {
 	// value when an INSERT supplies all auto-increment values explicitly.
 	StatementLastInsertID *uint64
 	statementInsertIDMu   sync.Mutex
+	// lastInsertIDExpr is the tentative value produced by LAST_INSERT_ID(expr)
+	// during the current statement.  It is deliberately separate from both
+	// generated-key protocol state and the cross-request Session value.  The
+	// frontend publishes it only after the statement succeeds.
+	lastInsertIDExpr      uint64
+	lastInsertIDExprValid bool
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -824,6 +830,43 @@ func (proc *Process) SetStatementLastInsertID(num uint64) {
 	if proc.Base.StatementLastInsertID != nil {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
 	}
+}
+
+// ResetLastInsertIDExpr clears the statement-local LAST_INSERT_ID(expr)
+// candidate.  A Process is reused across statements and retries, so the
+// candidate must never carry across an execution boundary.
+func (proc *Process) ResetLastInsertIDExpr() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = 0
+	proc.Base.lastInsertIDExprValid = false
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// SetLastInsertIDExpr records a successful row-level LAST_INSERT_ID(expr)
+// evaluation without changing the session-visible value.  The caller owns
+// statement success publication.
+func (proc *Process) SetLastInsertIDExpr(num uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	proc.Base.lastInsertIDExpr = num
+	proc.Base.lastInsertIDExprValid = true
+	proc.Base.statementInsertIDMu.Unlock()
+}
+
+// GetLastInsertIDExpr returns the tentative statement-local value and whether
+// LAST_INSERT_ID(expr) successfully evaluated a non-NULL value.
+func (proc *Process) GetLastInsertIDExpr() (uint64, bool) {
+	if proc == nil || proc.Base == nil {
+		return 0, false
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	return proc.Base.lastInsertIDExpr, proc.Base.lastInsertIDExprValid
 }
 
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated

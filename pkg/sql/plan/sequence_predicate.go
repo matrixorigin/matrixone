@@ -36,10 +36,15 @@ func ContainsSequenceFunction(expr *planpb.Expr) bool {
 		if fn == nil || fn.Func == nil {
 			return nil
 		}
-		fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+		fid, overload := function.DecodeOverloadID(fn.Func.Obj)
 		switch fid {
 		case function.NEXTVAL, function.SETVAL, function.CURRVAL, function.LASTVAL:
 			found = true
+		case function.LAST_INSERT_ID:
+			// LAST_INSERT_ID() is a pure session read and can be evaluated on
+			// any worker.  Only the one-argument overload mutates the
+			// initiating session's tentative state.
+			found = overload == function.LastInsertIDExprOverload
 		}
 		return nil
 	})

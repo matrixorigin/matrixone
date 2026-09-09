@@ -14087,7 +14087,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: LAST_INSERT_ID,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    lastInsertIDTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -14100,6 +14100,18 @@ var supportedOthersBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
 					return LastInsertID
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_any},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return LastInsertIDExpr
 				},
 			},
 		},

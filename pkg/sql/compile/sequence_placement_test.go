@@ -43,6 +43,18 @@ func TestSequenceBearingQueryUsesOneCNExecType(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, sequenceExecType(plan2.ExecTypeAP_MULTICN, &plan.Query{}))
 }
 
+func TestLastInsertIDExprUsesOneCNExecType(t *testing.T) {
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, function.LastInsertIDExprOverload)},
+	}}}
+	qry := &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}
+
+	require.Equal(t, plan2.ExecTypeAP_ONECN, sequenceExecType(plan2.ExecTypeAP_MULTICN, qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, sequenceExecType(plan2.ExecTypeAP_MULTICN, &plan.Query{Nodes: []*plan.Node{{
+		ProjectList: []*plan.Expr{sequenceExprForCompileTest(function.LAST_INSERT_ID)},
+	}}}))
+}
+
 func TestSequenceBearingQueryRejectsNonCoordinatorScope(t *testing.T) {
 	sequence := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.NEXTVAL, 0)},

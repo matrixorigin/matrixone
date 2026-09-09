@@ -118,6 +118,22 @@ func setRowCount(ses *Session, proc *process.Process, v int64) {
 	}
 }
 
+// publishLastInsertIDExpr transfers a successful LAST_INSERT_ID(expr)
+// candidate from the statement's Process to the owning Session. Generated
+// auto-increment state remains owned by StatementLastInsertID and is handled
+// by the normal OK response path.
+func publishLastInsertIDExpr(ses *Session, execCtx *ExecCtx) {
+	if ses == nil || execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	value, valid := execCtx.proc.GetLastInsertIDExpr()
+	if !valid {
+		return
+	}
+	ses.SetLastInsertID(value)
+	execCtx.proc.SetLastInsertID(value)
+}
+
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {

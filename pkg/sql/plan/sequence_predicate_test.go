@@ -42,6 +42,17 @@ func TestContainsSequenceFunctionUsesBoundFunctionID(t *testing.T) {
 	require.False(t, ContainsSequenceFunction(sequenceExprForTest(function.ABS)))
 }
 
+func TestLastInsertIDPlacementOnlyTracksExpressionOverload(t *testing.T) {
+	read := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, 0)},
+	}}}
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.LAST_INSERT_ID, function.LastInsertIDExprOverload)},
+	}}}
+	require.False(t, ContainsSequenceFunction(read))
+	require.True(t, ContainsSequenceFunction(expr))
+}
+
 func TestQueryContainsSequenceFunctionVisitsSupplementalExpressions(t *testing.T) {
 	qry := &plan.Query{
 		Steps: []int32{0},

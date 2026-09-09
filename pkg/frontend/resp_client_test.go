@@ -49,6 +49,27 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
 
+func TestPublishLastInsertIDExprAfterSuccess(t *testing.T) {
+	ses := &Session{}
+	ses.SetLastInsertID(7)
+	proc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID: new(uint64),
+	}}
+	proc.SetLastInsertID(7)
+	proc.SetLastInsertIDExpr(0)
+	execCtx := &ExecCtx{proc: proc}
+
+	publishLastInsertIDExpr(ses, execCtx)
+	require.Equal(t, uint64(0), ses.GetLastInsertID())
+	require.Equal(t, uint64(0), proc.GetLastInsertID())
+
+	proc.ResetLastInsertIDExpr()
+	proc.SetLastInsertIDExpr(42)
+	publishLastInsertIDExpr(ses, execCtx)
+	require.Equal(t, uint64(42), ses.GetLastInsertID())
+	require.Equal(t, uint64(42), proc.GetLastInsertID())
+}
+
 func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	ses := &Session{
 		seqLastValue:  new(string),

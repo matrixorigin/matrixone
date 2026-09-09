@@ -181,6 +181,25 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
 }
 
+func TestLastInsertIDExprIsStatementLocal(t *testing.T) {
+	last := uint64(17)
+	proc := &Process{Base: &BaseProcess{LastInsertID: &last}}
+
+	proc.SetLastInsertIDExpr(0)
+	value, valid := proc.GetLastInsertIDExpr()
+	require.True(t, valid)
+	require.Zero(t, value)
+	require.Equal(t, uint64(17), proc.GetLastInsertID())
+
+	proc.ResetLastInsertIDExpr()
+	_, valid = proc.GetLastInsertIDExpr()
+	require.False(t, valid)
+	proc.SetLastInsertIDExpr(^uint64(0))
+	value, valid = proc.GetLastInsertIDExpr()
+	require.True(t, valid)
+	require.Equal(t, ^uint64(0), value)
+}
+
 func TestFoundRows(t *testing.T) {
 	var nilProc *Process
 	nilProc.BeginFoundRowsStatement(true)

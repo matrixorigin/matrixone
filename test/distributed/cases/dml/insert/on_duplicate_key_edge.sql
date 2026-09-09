@@ -156,6 +156,26 @@ drop table if exists t_odku_auto;
 -- Unique-key conflicts on auto_increment tables update the conflicting row
 -- (aligns with MySQL: any unique-key conflict triggers the update).
 drop table if exists ai_duplicate_test;
+
+-- ============================================================
+-- Part 7: LAST_INSERT_ID(expr) session side effects (#28163)
+-- ============================================================
+drop table if exists t_odku_last_insert_id;
+create table t_odku_last_insert_id (
+    id int primary key,
+    uk int unique,
+    v int default 0
+);
+insert into t_odku_last_insert_id values (1, 10, 9);
+insert into t_odku_last_insert_id values (99, 10, 99)
+    on duplicate key update id = last_insert_id(id), v = default;
+select last_insert_id();
+select id, uk, v from t_odku_last_insert_id;
+insert into t_odku_last_insert_id values (99, 10, 99)
+    on duplicate key update v = last_insert_id(v + 1);
+select last_insert_id();
+select id, uk, v from t_odku_last_insert_id;
+drop table if exists t_odku_last_insert_id;
 create table ai_duplicate_test (
     id int auto_increment primary key,
     code varchar(20) unique,

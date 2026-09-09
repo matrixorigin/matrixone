@@ -4906,7 +4906,6 @@ func executeStmtWithResponse(ses *Session,
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
-
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
 	// following statement (same proc for multi-statement COM_QUERY, or the next
 	// COM_QUERY via the session) reads the correct value.
@@ -4916,6 +4915,11 @@ func executeStmtWithResponse(ses *Session,
 	if err != nil {
 		return err
 	}
+	// LAST_INSERT_ID(expr) is statement-local until execution has completed
+	// successfully. Publish it after the response path so an auto-increment
+	// generated-key packet can remain independent while the expression's
+	// session override wins for the following statement.
+	publishLastInsertIDExpr(ses, execCtx)
 	recordLastFoundRows(ses, execCtx)
 
 	return
@@ -5817,6 +5821,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		proc.ResetLastInsertIDExpr()
 		// SET statements in the same COM_QUERY execute after the wrappers were
 		// planned.  Refresh the runtime snapshot immediately before each
 		// statement so the remote PRE_INSERT path observes the session values
