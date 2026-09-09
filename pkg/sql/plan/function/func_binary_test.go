@@ -4610,19 +4610,31 @@ func initSubStrIndexTestCase() []tcTemp {
 	}
 }
 
-func TestGetCountFloatRounding(t *testing.T) {
+func TestGetCountFloatTruncation(t *testing.T) {
 	tests := []struct {
 		value float64
 		want  int64
 	}{
 		{1.4, 1},
-		{1.5, 2},
-		{1.9, 2},
-		{-1.5, -2},
-		{-2.5, -3},
+		{1.5, 1},
+		{1.9, 1},
+		{-1.5, -1},
+		{-2.5, -2},
 	}
 	for _, tt := range tests {
 		require.Equal(t, tt.want, getCount(types.T_float64.ToType(), tt.value))
+	}
+}
+
+func TestGetDecimalCountRounding(t *testing.T) {
+	tests := []struct {
+		value types.Decimal64
+		want  int64
+	}{{14, 1}, {15, 2}, {-15, -2}, {-25, -3}}
+	typ := types.T_decimal64.ToType()
+	typ.Scale = 1
+	for _, tt := range tests {
+		require.Equal(t, tt.want, getDecimalCount(typ, tt.value))
 	}
 }
 
