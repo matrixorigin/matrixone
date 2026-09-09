@@ -16,7 +16,6 @@ package aggexec
 
 import (
 	"math/bits"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -262,7 +261,7 @@ func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector)
 
 func (exec *sumAvgExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	if exec.isSum {
 		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
@@ -1188,7 +1187,7 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 
 func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	if exec.isSum {
 		return exec.bulkFillSumSingleGroup(groupIndex, vectors)

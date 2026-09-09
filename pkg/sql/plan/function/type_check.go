@@ -224,6 +224,56 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
+// sha2TypeMatch defers an unknown hash-length operand to SHA2's string
+// overload. A parameter marker is represented as T_any during prepare, but a
+// later execution may bind a character value such as "256tail". Resolving it
+// to the BIGINT overload at prepare time would perform a strict cast before
+// SHA2 can apply MySQL's prefix conversion.
+func sha2TypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 2 && inputs[1].Oid == types.T_any {
+		for i, ov := range overloads {
+			if len(ov.args) == 2 && ov.args[0] == types.T_varchar && ov.args[1] == types.T_varchar {
+				return stringDomainMatchSingleOverload(overloads, inputs, i)
+			}
+		}
+	}
+	return stringDomainFixedTypeMatch(overloads, inputs)
+}
+
+func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
+	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ov := overloads[index]
+	targets := make([]types.Type, len(inputs))
+	needsCast := false
+	for i, expected := range ov.args {
+		if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
+			targets[i] = inputs[i]
+			continue
+		}
+		status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+		if status == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if status == matchByCast {
+			needsCast = true
+			targets[i] = expected.ToType()
+			if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				targets[i] = formattedScalarStringType(inputs[i])
+			}
+			SetTargetScaleFromSource(&inputs[i], &targets[i])
+		} else {
+			targets[i] = inputs[i]
+		}
+	}
+	if needsCast {
+		return newCheckResultWithCast(index, targets)
+	}
+	return newCheckResultWithSuccess(index)
+}
+
 // crc32TypeMatch retains CRC32's historical acceptance of every varlen type
 // while extending the function to scalar values through the normal formatted
 // string cast. The executor hashes the resulting bytes, so changing the

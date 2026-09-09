@@ -12,13 +12,22 @@ stringabc 	stringabc
 drop table t1;
 create table t1 (a varchar(16383));
 insert into t1 select space(50000);
-invalid input: the space count is greater than max allowed value 8000
 select length(a) from t1;
 length(a)
+16383
 drop table t1;
 select space(5),concat_ws('*',space(5),'*');
 space(5)	concat_ws(*, space(5), *)
      	     **
+SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535));
+length(space(8001))	length(space(10000))	length(space(65535))
+8001	10000	65535
+SELECT LENGTH(SPACE(CAST(1.4 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(1.5 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(1.9 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(-1.5 AS DECIMAL(4,1))));
+length(space(cast(1.4 as decimal(4, 1))))	length(space(cast(1.5 as decimal(4, 1))))	length(space(cast(1.9 as decimal(4, 1))))	length(space(cast(-1.5 as decimal(4, 1))))
+1	2	2	0
 select space(-1);
 space(-1)
 
@@ -26,41 +35,45 @@ select space(-4294967295);
 space(-4294967295)
 
 select space(4294967295);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-4294967296);
 space(-4294967296)
 
 select space(4294967296);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-4294967297);
 space(-4294967297)
 
 select space(4294967297);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-18446744073709551615);
-Data truncation: data out of range: data type uint64, value '-18446744073709551615'
+space(-18446744073709551615)
+
 select space(18446744073709551615);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-18446744073709551616);
-Data truncation: data out of range: data type uint64, value '-18446744073709551616'
+space(-18446744073709551616)
+
 select space(18446744073709551616);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-18446744073709551617);
-Data truncation: data out of range: data type uint64, value '-18446744073709551617'
+space(-18446744073709551617)
+
 select space(18446744073709551617);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT space(9223372036854775808);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT length(space(9223372036854775809));
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT SPACE(NULL);
 space(null)
 null
 SELECT SPACE(12)+"123";
 space(12) + 123
             123
-SELECT SPACE(12314.14123)+"123";
-invalid input: the space count is greater than max allowed value 8000
+SELECT LENGTH(SPACE(12314.14123));
+length(space(12314.14123))
+12314
 SELECT SPACE("1231")+"123";
 space(1231) + 123
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                123
@@ -70,10 +83,10 @@ SELECT SPACE("2012-03-12")+"123";
 CREATE TABLE t(i BIGINT UNSIGNED);
 INSERT INTO t values(9223372036854775808);
 SELECT space(i) FROM t;
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 DROP TABLE t;
 SELECT space(1073741824);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT TO_DATE(SPACE(2),'1');
 to_date(space(2), 1)
 null
