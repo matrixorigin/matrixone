@@ -30,6 +30,7 @@ import (
 
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -183,7 +184,7 @@ func maxCommitTSInAppendableObject(
 	mp *mpool.MPool,
 ) (types.TS, error) {
 	if fs == nil || mp == nil {
-		return types.TS{}, fmt.Errorf("appendable object commit-ts scan requires file service and mpool")
+		return types.TS{}, moerr.NewInternalErrorNoCtx("appendable object commit-ts scan requires file service and mpool")
 	}
 	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
 	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
