@@ -70,11 +70,15 @@ jobs:
             if tar -xzf "${artifact}" -C "${unpacked}"; then
               artifact_head_sha=$(sed -n 's/^head_sha=//p' "${unpacked}/BUILD_INFO" 2>/dev/null || true)
               artifact_build_opt=$(sed -n 's/^gobuild_opt=//p' "${unpacked}/BUILD_INFO" 2>/dev/null || true)
-              if [ "${artifact_head_sha}" = "${EXPECTED_HEAD_SHA}" ] && [ "${artifact_build_opt}" = "-cover" ]; then
+              if [ "${artifact_head_sha}" = "${EXPECTED_HEAD_SHA}" ] \
+                && [ "${artifact_build_opt}" = "-cover" ] \
+                && [ -x "${unpacked}/mo-service" ] \
+                && [ -d "${unpacked}/lib" ] \
+                && [ -d "${unpacked}/dict" ]; then
                 cp -a "${unpacked}/BUILD_INFO" "${unpacked}/mo-service" "${unpacked}/lib" "${unpacked}/dict" "${GITHUB_WORKSPACE}/"
                 chmod +x mo-service
               else
-                echo "::warning::shared build metadata mismatch; falling back to a local build"
+                echo "::warning::shared build artifact is incomplete or mismatched; falling back to a local build"
               fi
             else
               echo "::warning::shared build artifact could not be extracted; falling back to a local build"
