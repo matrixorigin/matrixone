@@ -3272,6 +3272,87 @@ func TestBin(t *testing.T) {
 	}
 }
 
+func TestBinStringUsesNumericPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"7x", "-2tail", "abc", "   ", ""},
+			[]bool{false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{
+			"111",
+			"1111111111111111111111111111111111111111111111111111111111111110",
+			"0",
+			"0",
+			"",
+		},
+		[]bool{false, false, false, false, true})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, BinString)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+
+	binaryInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varbinary.ToType(),
+			[]string{
+				string([]byte{0x37, 0xff}),
+				string([]byte{0xe3, 0x80, 0x80, 0x37, 0x78}),
+				string([]byte{0x00, 0x37}),
+				"",
+			},
+			[]bool{false, false, false, false}),
+	}
+	binaryExpect := NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"111", "0", "0", ""}, []bool{false, false, false, true})
+	fcTC = NewFunctionTestCase(proc, binaryInputs, binaryExpect, BinString)
+	s, info = fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestBinStringSkipsMaskedInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-number", "7x"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "111"}, []bool{true, false}),
+		BinString).WithSelectList(&FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{false, true},
+	})
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
+func TestBinTypeMatchPreservesNumericOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.T{
+		types.T_char,
+		types.T_varchar,
+		types.T_text,
+		types.T_binary,
+		types.T_varbinary,
+		types.T_blob,
+	} {
+		got, err := GetFunctionByName(proc.Ctx, "bin", []types.Type{typ.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, int32(10), got.overloadId)
+		require.False(t, got.needCast)
+	}
+
+	parameter, err := GetFunctionByName(proc.Ctx, "bin", []types.Type{types.T_any.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, int32(10), parameter.overloadId)
+	require.True(t, parameter.needCast)
+	require.Equal(t, types.T_varchar, parameter.targetTypes[0].Oid)
+
+	numeric, err := GetFunctionByName(proc.Ctx, "bin", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, int32(7), numeric.overloadId)
+	require.False(t, numeric.needCast)
+}
+
 func initBinFloatTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -4440,6 +4521,79 @@ func TestSpace(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSpaceHonorsStringLimitAndNegativeCount(t *testing.T) {
+	require.Len(t, mustFillSpaceNumber(t, uint64(MaxAllowedValue)), MaxAllowedValue)
+	require.Empty(t, mustFillSpaceNumber(t, int64(-1)))
+	_, err := FillSpaceNumber(uint64(MaxAllowedValue + 1))
+	require.Error(t, err)
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8000, 8001, 10000},
+				[]bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{strings.Repeat(" ", 8000), strings.Repeat(" ", 8001), strings.Repeat(" ", 10000)},
+			[]bool{false, false, false}),
+		SpaceNumber[uint64],
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+}
+
+func mustFillSpaceNumber(t *testing.T, value any) string {
+	t.Helper()
+	var result string
+	var err error
+	switch value := value.(type) {
+	case uint64:
+		result, err = FillSpaceNumber(value)
+	case int64:
+		result, err = FillSpaceNumber(value)
+	default:
+		t.Fatalf("unsupported test value type %T", value)
+	}
+	require.NoError(t, err)
+	return result
+}
+
+func TestSpaceDecimalUsesMySQLRounding(t *testing.T) {
+	decimalType := types.New(types.T_decimal64, 8, 1)
+	values := make([]types.Decimal64, 0, 5)
+	for _, value := range []string{"1.4", "1.5", "1.9", "-1.5", "0.5"} {
+		decimal, err := types.ParseDecimal64(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
+	}
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimalType, values, []bool{false, false, false, false, false}),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{" ", "  ", "  ", "", " "},
+			[]bool{false, false, false, false, false},
+		),
+		SpaceDecimal64,
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+
+	resolved, err := GetFunctionByName(context.Background(), "space", []types.Type{decimalType})
+	require.NoError(t, err)
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	require.Empty(t, targets)
 }
 
 func initToTimeCase() []tcTemp {
