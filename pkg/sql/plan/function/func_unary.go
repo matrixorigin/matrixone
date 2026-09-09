@@ -34,6 +34,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/big"
 	"math/bits"
 	"net"
 	"runtime"
@@ -8197,18 +8198,147 @@ func randomBytesRoundedFloat(value float64, proc *process.Process) (int64, error
 	return int64(rounded), nil
 }
 
+// randomBytesRoundedDecimalIntegerString validates an already rounded,
+// decimal-domain integer. decimalInt64Explicit clamps values outside int64,
+// which is sufficient because every value outside [1, 1024] is rejected below
+// anyway.
+func randomBytesRoundedDecimalIntegerString(integer string, proc *process.Process) (int64, error) {
+	length, err := decimalInt64Explicit(integer)
+	if err != nil || length < 1 || length > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return length, nil
+}
+
+func randomBytesRoundedDecimal64(value types.Decimal64, scale int32, proc *process.Process) (int64, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || uint64(rounded) < 1 || uint64(rounded) > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded), nil
+}
+
+func randomBytesRoundedDecimal128(value types.Decimal128, scale int32, proc *process.Process) (int64, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded.B0_63), nil
+}
+
+func randomBytesRoundedDecimal256(value types.Decimal256, scale int32, proc *process.Process) (int64, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.B192_255 != 0 || rounded.B128_191 != 0 || rounded.B64_127 != 0 || rounded.B0_63 < 1 || rounded.B0_63 > randomBytesMaxLength {
+		return 0, randomBytesRangeError(proc)
+	}
+	return int64(rounded.B0_63), nil
+}
+
+// roundPreparedDecimalIntegerString keeps a decimal value in the exact
+// arithmetic domain while it is still represented by the text transport
+// vector used for prepared parameters.  big.Rat accepts the canonical decimal
+// spelling emitted by the MySQL protocol (including an optional exponent),
+// and the quotient/remainder step implements the engine's half-up, away from
+// zero tie rule without converting through float64.
+func roundPreparedDecimalIntegerString(value string) (string, error) {
+	if !isPreparedDecimalLiteral(value) {
+		return "", strconv.ErrSyntax
+	}
+	rational, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return "", strconv.ErrSyntax
+	}
+	numerator := rational.Num()
+	denominator := rational.Denom()
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if remainder.Sign() != 0 {
+		if new(big.Int).Lsh(new(big.Int).Abs(remainder), 1).Cmp(denominator) >= 0 {
+			if numerator.Sign() < 0 {
+				quotient.Sub(quotient, big.NewInt(1))
+			} else {
+				quotient.Add(quotient, big.NewInt(1))
+			}
+		}
+	}
+	return quotient.String(), nil
+}
+
+func isPreparedDecimalLiteral(value string) bool {
+	const (
+		maxLiteralLength = 256
+		maxExponent      = 256
+	)
+	if value == "" || len(value) > maxLiteralLength {
+		return false
+	}
+	pos := 0
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+		if pos == len(value) {
+			return false
+		}
+	}
+	digits := 0
+	for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+		pos++
+		digits++
+	}
+	if pos < len(value) && value[pos] == '.' {
+		pos++
+		for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+			pos++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return false
+	}
+	if pos < len(value) && (value[pos] == 'e' || value[pos] == 'E') {
+		pos++
+		if pos < len(value) && (value[pos] == '+' || value[pos] == '-') {
+			pos++
+		}
+		exponentDigits := 0
+		exponent := 0
+		for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+			pos++
+			exponentDigits++
+			if exponent > maxExponent/10 {
+				return false
+			}
+			exponent = exponent*10 + int(value[pos-1]-'0')
+			if exponent > maxExponent {
+				return false
+			}
+		}
+		if exponentDigits == 0 {
+			return false
+		}
+	}
+	return pos == len(value)
+}
+
 func randomBytesTextLength(
 	param *vector.Vector,
 	value []byte,
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	switch param.GetPrepareParamKindAt(int(row)) {
+	kind := param.GetPrepareParamKindAt(int(row))
+	switch kind {
 	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
 		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
 		// SQL PREPARE stores the value in a text transport vector. The source
 		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even).
+		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
+		if kind == vector.PrepareParamDecimal {
+			integer, err := roundPreparedDecimalIntegerString(text)
+			if err != nil {
+				return 0, randomBytesRangeError(proc)
+			}
+			return randomBytesRoundedDecimalIntegerString(integer, proc)
+		}
 		floating, err := strconv.ParseFloat(text, 64)
 		if err != nil {
 			return 0, randomBytesRangeError(proc)
@@ -8352,7 +8482,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			if null {
 				return 0, true, nil
 			}
-			converted, err := randomBytesRoundedFloat(types.Decimal64ToFloat64(value, scale), proc)
+			converted, err := randomBytesRoundedDecimal64(value, scale, proc)
 			return converted, false, err
 		}, nil
 	case types.T_decimal128:
@@ -8363,7 +8493,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			if null {
 				return 0, true, nil
 			}
-			converted, err := randomBytesRoundedFloat(types.Decimal128ToFloat64(value, scale), proc)
+			converted, err := randomBytesRoundedDecimal128(value, scale, proc)
 			return converted, false, err
 		}, nil
 	case types.T_decimal256:
@@ -8374,7 +8504,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			if null {
 				return 0, true, nil
 			}
-			converted, err := randomBytesRoundedFloat(types.Decimal256ToFloat64(value, scale), proc)
+			converted, err := randomBytesRoundedDecimal256(value, scale, proc)
 			return converted, false, err
 		}, nil
 	case types.T_year:
@@ -8386,15 +8516,27 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary:
 		p := vector.GenerateFunctionStrParameter(param)
-		isBinary := param.GetIsBin() ||
-			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary ||
-			param.GetIsBinaryString()
+		staticBinary := param.GetIsBin() ||
+			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
 		return func(i uint64) (int64, bool, error) {
 			value, null := p.GetStrValue(i)
 			if null {
 				return 0, true, nil
 			}
-			if isBinary || param.GetIsBinaryStringAt(int(i)) {
+			isBinary := staticBinary
+			switch param.GetRuntimeStringDomainAt(int(i)) {
+			case types.RuntimeStringText:
+				// A selected CASE/IF/COALESCE value can explicitly restore
+				// character semantics even when the common vector type is
+				// VARBINARY/BLOB.  The row-level override must win over the
+				// static type and any conservative vector summary.
+				isBinary = false
+			case types.RuntimeStringBinary:
+				isBinary = true
+			default:
+				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
+			}
+			if isBinary {
 				if len(value) == 0 {
 					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
 				}
