@@ -1,0 +1,53 @@
+SELECT LENGTH(RANDOM_BYTES(TRUE)) AS bool_true;
+bool_true
+1
+SELECT LENGTH(RANDOM_BYTES('2tail')) AS string_prefix;
+string_prefix
+2
+SELECT LENGTH(RANDOM_BYTES('1.5')) AS string_fraction;
+string_fraction
+1
+SELECT LENGTH(RANDOM_BYTES(1.5)) AS numeric_fraction;
+numeric_fraction
+2
+CREATE TABLE random_bytes_coercion_28483(
+    id INT PRIMARY KEY,
+    text_len VARCHAR(20),
+    numeric_len DOUBLE,
+    bool_len BOOLEAN
+);
+INSERT INTO random_bytes_coercion_28483 VALUES
+    (1, '2tail', 1.5, TRUE),
+    (2, '1.5', 2.5, NULL),
+    (3, NULL, NULL, NULL);
+SELECT id,
+       LENGTH(RANDOM_BYTES(text_len)) AS text_result,
+       LENGTH(RANDOM_BYTES(numeric_len)) AS numeric_result,
+       LENGTH(RANDOM_BYTES(bool_len)) AS bool_result
+FROM random_bytes_coercion_28483
+WHERE id IN (1, 2, 3)
+ORDER BY id;
+id    text_result    numeric_result    bool_result
+1    2    2    1
+2    1    2    null
+3    null    null    null
+DROP TABLE random_bytes_coercion_28483;
+PREPARE random_bytes_coercion_28483_stmt FROM
+    'SELECT LENGTH(RANDOM_BYTES(?)) AS random_length';
+SET @random_bytes_coercion_28483_value = '2tail';
+EXECUTE random_bytes_coercion_28483_stmt USING @random_bytes_coercion_28483_value;
+random_length
+2
+SET @random_bytes_coercion_28483_value = 1.5;
+EXECUTE random_bytes_coercion_28483_stmt USING @random_bytes_coercion_28483_value;
+random_length
+2
+SET @random_bytes_coercion_28483_value = TRUE;
+EXECUTE random_bytes_coercion_28483_stmt USING @random_bytes_coercion_28483_value;
+random_length
+1
+DEALLOCATE PREPARE random_bytes_coercion_28483_stmt;
+SELECT RANDOM_BYTES(FALSE);
+length value is out of range in 'random_bytes'
+SELECT RANDOM_BYTES('not-a-number');
+length value is out of range in 'random_bytes'
