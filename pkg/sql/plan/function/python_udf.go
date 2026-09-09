@@ -130,7 +130,12 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
 		}
 	}
-	if selectList != nil && len(selectList.SelectList) < length {
+	// FunctionExpressionExecutor passes an empty, non-nil select list when the
+	// caller selected every row.  In that state AnyNull is false and the
+	// missing bitmap means "all rows", not a truncated selection.  A partial
+	// selection must still carry one entry per invocation row so that a row
+	// cannot accidentally be evaluated after CASE/short-circuit filtering.
+	if selectList != nil && !selectList.ShouldEvalAllRow() && len(selectList.SelectList) < length {
 		return fmt.Errorf("python udf: selection list is shorter than invocation length")
 	}
 

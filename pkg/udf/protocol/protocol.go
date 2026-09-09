@@ -59,7 +59,10 @@ type FencingTuple struct {
 }
 
 func (t FencingTuple) Validate() error {
-	if t.AccountID == 0 || t.StatementID == "" || t.GroupID == "" ||
+	// Account zero is the reserved system account in MatrixOne and is a valid
+	// execution identity.  The remaining fields are generation fences and must
+	// never be zero or empty.
+	if t.StatementID == "" || t.GroupID == "" ||
 		t.GroupEpoch == 0 || t.InvocationID == "" || t.LeaseEpoch == 0 {
 		return fmt.Errorf("%w: incomplete fencing tuple", ErrProtocol)
 	}
