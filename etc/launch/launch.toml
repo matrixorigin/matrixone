@@ -9,7 +9,3 @@ tnservices = [
 cnservices = [
     "./etc/launch/cn.toml"
 ]
-
-python-udf-services = [
-    "./etc/launch-with-python-udf-worker/python-udf-worker.toml"
-]
