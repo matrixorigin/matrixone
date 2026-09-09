@@ -102,6 +102,21 @@ func TestSHA2StillFormatsScalarInput(t *testing.T) {
 	require.Equal(t, types.T_int64, targets[1].Oid)
 }
 
+func TestSHA2DefersUnknownHashLengthToStringOverload(t *testing.T) {
+	resolved, err := GetFunctionByName(context.Background(), "sha2", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_any.ToType(),
+	})
+	require.NoError(t, err)
+	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overload)
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	require.True(t, shouldCast)
+	require.Len(t, targets, 2)
+	require.Equal(t, types.T_varchar, targets[0].Oid)
+	require.Equal(t, types.T_varchar, targets[1].Oid)
+}
+
 func TestSHA2PreservesEveryMySQLStringDomain(t *testing.T) {
 	for _, oid := range []types.T{
 		types.T_char,
@@ -122,6 +137,107 @@ func TestSHA2PreservesEveryMySQLStringDomain(t *testing.T) {
 			require.Empty(t, targets)
 		})
 	}
+}
+
+func TestSHA2StringLengthUsesMySQLIntegerConversion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	values := []string{"256tail", "  +224tail", "abc", "", "123", "0", "-0tail", "-256tail", "9223372036854775808tail"}
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"hello", "hello", "hello", "hello", "hello", "hello", "hello", "hello", "hello"},
+			[]bool{false, false, false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), values,
+			[]bool{false, false, false, false, false, false, false, false, false}),
+	}
+	want := sha2TestDigest("hello", 256)
+	want224 := sha2TestDigest("hello", 224)
+	testCase := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{want, want224, want, want, "", want, want, "", ""},
+			[]bool{false, false, false, false, true, false, false, true, true},
+		),
+		SHA2StringLengthFunc,
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+}
+
+func TestSHA2StringLengthPreservesBinaryOperands(t *testing.T) {
+	binaryType := types.NewWithCharset(types.T_varbinary, 32, 0, types.CharsetBinary)
+	resolved, err := GetFunctionByName(context.Background(), "sha2", []types.Type{
+		binaryType,
+		binaryType,
+	})
+	require.NoError(t, err)
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	require.Empty(t, targets)
+	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overload)
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	value := string([]byte{0xff, 0x00, 'm', 'o'})
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(binaryType, []string{value}, []bool{false}),
+			NewFunctionTestConstInput(binaryType, []string{"256tail"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{sha2TestDigest(value, 256)}, []bool{false}),
+		SHA2StringLengthFunc,
+	)
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
+}
+
+func TestSHA2StringLengthAcceptsEveryMySQLStringDomain(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_char,
+		types.T_varchar,
+		types.T_binary,
+		types.T_varbinary,
+		types.T_blob,
+		types.T_text,
+	} {
+		t.Run(oid.String(), func(t *testing.T) {
+			lengthType := oid.ToType()
+			resolved, err := GetFunctionByName(context.Background(), "sha2", []types.Type{
+				types.T_varchar.ToType(),
+				lengthType,
+			})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+			require.Empty(t, targets)
+			_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(1), overload)
+		})
+	}
+}
+
+func TestSHA2StringLengthHonorsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello", "hello"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-length", "256"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", sha2TestDigest("hello", 256)}, []bool{true, false}),
+		SHA2StringLengthFunc,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	succeeded, info := testCase.Run()
+	require.True(t, succeeded, info)
 }
 
 func sha2TestDigest(input string, algorithm int64) string {
