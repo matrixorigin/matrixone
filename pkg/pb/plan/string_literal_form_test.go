@@ -412,6 +412,11 @@ func TestRequiresMORPCVersion59NumericFormatArguments(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+	t.Run("missing first argument", func(t *testing.T) {
+		_, err := RequiresMORPCVersion59NumericFormatArguments(
+			format(int64(262)<<32, "format", nil, scale))
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
+	})
 
 	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
 		Expressions: []*Expr{

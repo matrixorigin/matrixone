@@ -228,7 +228,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
 			}
-			if !features.FormatNumericArguments && isNumericFormatFunction(fn) {
+			formatNumericArguments, err := isNumericFormatFunction(fn)
+			if err != nil {
+				return err
+			}
+			if formatNumericArguments {
 				features.FormatNumericArguments = true
 			}
 			return nil
@@ -241,16 +245,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 // execution path. A pre-v59 receiver still interprets those vectors as
 // Varlena and can panic while decoding the first argument, so this physical
 // argument contract must be fenced at the remote pipeline boundary.
-func isNumericFormatFunction(function *Function) bool {
+func isNumericFormatFunction(function *Function) (bool, error) {
 	if function == nil || function.Func == nil || len(function.Args) < 2 {
-		return false
+		return false, nil
 	}
 	const formatFunctionID int32 = 262
 	functionID := int32(function.Func.Obj >> 32)
 	if functionID != formatFunctionID && !strings.EqualFold(function.Func.GetObjName(), "format") {
-		return false
+		return false, nil
 	}
-	return isPlanNumericType(function.Args[0].Typ.Id)
+	if function.Args[0] == nil {
+		return false, moerr.NewInvalidInputNoCtx("FORMAT is missing its first argument")
+	}
+	return isPlanNumericType(function.Args[0].Typ.Id), nil
 }
 
 // isPlanNumericType mirrors container/types.Type.IsNumeric without importing

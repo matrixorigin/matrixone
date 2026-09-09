@@ -1526,6 +1526,21 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("typed FORMAT rejects nil first argument", func(t *testing.T) {
+		badExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(262) << 32, ObjName: "format"},
+				Args: []*planpb.Expr{nil, {Typ: planpb.Type{Id: int32(types.T_varchar)}}},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+		err := validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{badExpr}}},
+		})
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
+	})
+
 	tests := []struct {
 		name                string
 		expressions         []*planpb.Expr
