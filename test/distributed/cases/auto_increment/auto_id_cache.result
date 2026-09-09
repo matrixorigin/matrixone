@@ -146,6 +146,52 @@ select id from ai_temp;
 ➤ id[-5,64,0]  𝄀
 1
 drop temporary table ai_temp;
+begin;
+create table ai_observe(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=1;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+➤ auto_increment[-5,64,0]  𝄀
+10
+rollback;
+select count(*) from information_schema.tables where table_schema=database() and table_name='ai_observe';
+➤ count(*)[-5,64,0]  𝄀
+0
+begin;
+create table ai_observe(id bigint auto_increment primary key) auto_increment=10 auto_id_cache=1;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+➤ auto_increment[-5,64,0]  𝄀
+10
+commit;
+select auto_increment from information_schema.tables where table_schema=database() and table_name='ai_observe';
+➤ auto_increment[-5,64,0]  𝄀
+10
+insert into ai_observe values(NULL);
+select id from ai_observe;
+➤ id[-5,64,0]  𝄀
+10
+create table ai_modify(id bigint auto_increment primary key, v int) auto_id_cache=1;
+insert into ai_modify(v) values(7);
+alter table ai_modify modify id bigint;
+show create table ai_modify;
+➤ Table[12,9,0]  ¦  Create Table[12,97,0]  𝄀
+ai_modify  ¦  CREATE TABLE `ai_modify` (
+  `id` bigint NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select id,v from ai_modify;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+create table ai_drop(id bigint auto_increment primary key, v int) auto_id_cache=2;
+insert into ai_drop(v) values(7);
+alter table ai_drop drop column id;
+show create table ai_drop;
+➤ Table[12,7,0]  ¦  Create Table[12,49,0]  𝄀
+ai_drop  ¦  CREATE TABLE `ai_drop` (
+  `v` int DEFAULT NULL
+)
+select v from ai_drop;
+➤ v[4,32,0]  𝄀
+7
 create table ai_bad(id bigint auto_increment) auto_id_cache=1000001;
 invalid input: AUTO_ID_CACHE must be between 0 and 1000000
 create table ai_bad(id bigint auto_increment) auto_id_cache=-1;

@@ -63,6 +63,36 @@ func TestAutoIDCachePlanAndPersistence(t *testing.T) {
 	}
 }
 
+func TestAutoIDCacheAlterFinalDefinition(t *testing.T) {
+	for _, tc := range []struct {
+		options string
+		want    uint64
+	}{
+		{"modify id bigint", 0},
+		{"drop column id", 0},
+		{"modify id bigint auto_increment", 1},
+		{"drop column v", 1},
+		{"modify id bigint, modify v int auto_increment", 1},
+	} {
+		t.Run(tc.options, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer()
+			source := mock.ctxt.tables["auto_incr_t"]
+			source.AutoIdCache = 1
+			p, err := buildSingleStmt(mock, t, "alter table constraint_test.auto_incr_t "+tc.options+", algorithm=copy")
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.Equal(t, tc.want, alter.CopyTableDef.AutoIdCache)
+			require.Equal(t, uint64(1), source.AutoIdCache, "the original catalog definition must remain unchanged")
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, alter.CreateTmpTableSql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			rebuilt, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err, "the internal CREATE must accept the final ALTER definition")
+			require.Equal(t, tc.want, rebuilt.GetDdl().GetCreateTable().GetTableDef().AutoIdCache)
+		})
+	}
+}
+
 func TestAutoIDCacheZeroWithoutAutoColumn(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(id bigint) auto_id_cache=0", 1)
 	require.NoError(t, err)
