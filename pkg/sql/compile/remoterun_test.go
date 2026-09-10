@@ -1426,6 +1426,34 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}}},
 		}
 	}
+	makeFormatExpr := func(firstType types.Type, withLocale bool) *planpb.Expr {
+		args := []*planpb.Expr{{
+			Typ:  planpb.Type{Id: int32(firstType.Oid), Width: firstType.Width, Scale: firstType.Scale},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}, {
+			Typ:  planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+		}}
+		if withLocale {
+			args = append(args, &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+			})
+		}
+		inputTypes := make([]types.Type, len(args))
+		for i := range args {
+			inputTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		resolved, err := planfunction.GetFunctionByName(context.Background(), "format", inputTypes)
+		require.NoError(t, err)
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "format"},
+				Args: args,
+			}},
+		}
+	}
 	t.Run("instruction expression owner", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{
 			InstructionList: []*pipeline.Instruction{{
@@ -1453,6 +1481,64 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("typed FORMAT sender and receiver boundary", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			firstType  types.Type
+			withLocale bool
+		}{
+			{name: "exact two args", firstType: types.T_decimal64.ToType()},
+			{name: "approximate two args", firstType: types.T_float64.ToType()},
+			{name: "exact three args", firstType: types.T_int64.ToType(), withLocale: true},
+			{name: "approximate three args", firstType: types.T_float32.ToType(), withLocale: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				expr := makeFormatExpr(test.firstType, test.withLocale)
+				remotePipeline := &pipeline.Pipeline{
+					InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+				}
+				scope := makeScope(expr)
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+
+				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.NoError(t, err)
+				decoded, err := decodeScope(encoded, proc, true, nil)
+				require.NoError(t, err)
+				decoded.release()
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				_, err = decodeScope(encoded, proc, true, nil)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+			})
+		}
+	})
+
+	t.Run("typed FORMAT rejects nil first argument", func(t *testing.T) {
+		badExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(262) << 32, ObjName: "format"},
+				Args: []*planpb.Expr{nil, {Typ: planpb.Type{Id: int32(types.T_varchar)}}},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+		err := validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{badExpr}}},
+		})
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
 	})
 
 	tests := []struct {

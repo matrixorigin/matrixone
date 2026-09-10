@@ -1512,6 +1512,9 @@ func buildCTASDefaultFromOrigin(
 	if err != nil {
 		return nil, err
 	}
+	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
+		return nil, err
+	}
 	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
 	if err != nil {
 		return nil, err
@@ -3669,6 +3672,9 @@ func appendCheckDef(
 	binder.enableCanonicalNameConstValueCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
+		return err
+	}
+	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {

@@ -1,11 +1,11 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Accepted for this PR，revision 2
+- 状态：Accepted for this PR，revision 4
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享、fixture reset 合并和动态调度不在本 PR。
+- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
 
 ## 1. 问题与不变量
 
@@ -44,6 +44,16 @@ TERM 路径停止新的 command，抓取当前 checkpoint 和 active test，向�
 为 cluster 用例维护兼容矩阵：CN/TN 拓扑、启动配置、global hook/failpoint、内存限制、restart/destructive 行为、SQL/session 状态和 cleanup 要求。只把矩阵兼容且通过 reset 验证的公共 API 用例移动到明确领域 suite；保留原 named test/subtest 和独立 oracle。不同 Go test binary 不能共享内存中的 `SharedTestCluster` 指针，因此先通过有意的 suite 合并减少 fixture 启停，不引入跨进程 cluster daemon。
 
 不得把所有 issue 用例倒入已经约 9 分钟的 package。若 body 占据主要时间，继续合并 fixture 只会增加失败耦合；应先缩小数据、移除无契约的 sleep、合并重复 setup，或把真正的压力/稳定性场景迁移到合适的 BVT/perf 层，并保留最小 public SQL oracle。
+
+本 revision 迁移了 `pkg/tests/issues/isolated` 中配置兼容的 `TestIssue26111...` 和
+`TestIssue26114...` 到 canonical `RunSingleCNBaseClusterTests`。26111 原先依赖关集群
+丢弃 catalog 状态，因此迁移时补了 snapshot、database 和 account 的进入前/退出后
+清理；清理失败时只在 callback 返回后丢弃 dirty fixture，避免在共享锁内自锁。26114
+汇总并报告每条清理语句的错误，并在 testcase 生命周期边界丢弃 fixture，避免脏 catalog
+被下一次 `-count` 或重排执行复用。单 CN fixture 的显式 release 在成功关闭后重置
+初始化代数，因此 `-count` 和 shuffle 不依赖顶层测试顺序。该包仍包含必须使用专用
+内存、双 CN、restore 或 global hook 的场景；这些场景在启动前显式释放已经完成的单 CN
+fixture，避免同时持有两个 complete cluster，且不改变现有 admission 保护。
 
 ### Phase 3：reset/cleanup 契约和低质量测试清理
 
@@ -86,6 +96,6 @@ TERM 路径停止新的 command，抓取当前 checkpoint 和 active test，向�
 
 1. 本 revision：runner checkpoint、报告早创建、取消进程组清理、`run_ut.sh` 执行阶段的 70 分钟外层兜底、helper 报告所有权和诊断测试。`make ut` 的 `cgo/config` prerequisites 在该 timeout 之前运行；它们仍由各自命令负责失败和重试，不把 70 分钟描述成整个 make job 的硬上限。
 2. 本 revision 提供 compile-only embedded prebuild，但默认关闭（`UT_PREBUILD_EMBEDDED=0`）；plan overlap 同样默认关闭（`UT_OVERLAP_PLAN=0`）。打开任一开关前必须补同资源 A/B 和负向取消证据。
-3. 后续 PR：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after。
+3. 本 revision：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after；后续继续逐组验证，不跨越不同 topology 或 global hook 合并。
 4. 后续 PR：清理慢测试的重复 setup、无契约等待和过大数据，逐项保留 oracle 证明。
 5. 后续 PR：静态 shard/runner 资源 A/B；只有证据支持时再考虑跨进程共享 cluster。
