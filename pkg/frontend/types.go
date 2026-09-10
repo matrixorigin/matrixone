@@ -1999,6 +1999,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "window_partition_algorithm" {
 		if newValue, ok := val.(string); ok && oldWindowPartitionAlgorithm != newValue {
 			ses.cleanCache()
+			ses.markPreparedPlansForWindowPartitionAlgorithmChange()
 		}
 	}
 
