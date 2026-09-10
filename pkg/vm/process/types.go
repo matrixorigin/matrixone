@@ -671,14 +671,18 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	MsgId           uint64
-	Uid             uuid.UUID
-	Cs              morpc.ClientSession
-	Err             chan error
-	ReserveBatch    func(context.Context, uint64) (uint64, error)
-	RollbackBatch   func(uint64)
-	BatchCredits    uint32
-	ByteCredits     uint64
+	// TerminalBacked marks registrations whose immutable terminal owns the
+	// generation result. Such registrations must not use Err for a second,
+	// competing terminal notification; Err is nil for that path.
+	TerminalBacked bool
+	MsgId          uint64
+	Uid            uuid.UUID
+	Cs             morpc.ClientSession
+	Err            chan error
+	ReserveBatch   func(context.Context, uint64) (uint64, error)
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
