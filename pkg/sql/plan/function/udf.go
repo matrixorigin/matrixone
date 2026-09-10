@@ -10,6 +10,8 @@ package function
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,7 +88,7 @@ func (u *Udf) GetArgsPlanType() []*plan.Type {
 }
 func (u *Udf) GetRetPlanType() *plan.Type { return type2PlanType(u.GetRetType()) }
 func (u *Udf) GetArgsType() []types.Type {
-	if len(u.PythonArgTypes) != 0 {
+	if u.Language == "python" {
 		args := make([]types.Type, len(u.PythonArgTypes))
 		for i, descriptor := range u.PythonArgTypes {
 			args[i] = descriptor.Type()
@@ -96,29 +98,76 @@ func (u *Udf) GetArgsType() []types.Type {
 	return u.ArgsType
 }
 func (u *Udf) GetRetType() types.Type {
-	if u.PythonReturnType != nil {
+	if u.Language == "python" {
+		if u.PythonReturnType == nil {
+			return types.Type{}
+		}
 		return u.PythonReturnType.Type()
 	}
 	return types.Types[u.RetType].ToType()
 }
 
-// LoadPythonTypeContract copies exact type metadata persisted in the Python
-// routine body into the plan object. Older catalog rows have no such fields
-// and intentionally retain the legacy logical-type fallback.
+// LoadPythonTypeContract loads the exact type metadata persisted in the Python
+// routine body. Python execution has one ABI, so an incomplete body is
+// rejected instead of being reinterpreted through the legacy logical-type
+// columns.
 func (u *Udf) LoadPythonTypeContract() error {
 	if u.Language != "python" {
 		return nil
 	}
+	u.PythonArgTypes = nil
+	u.PythonReturnType = nil
 	body := PythonRoutineBody{}
 	if err := json.Unmarshal([]byte(u.Body), &body); err != nil {
 		return err
 	}
-	if len(body.ArgTypes) != 0 {
-		u.PythonArgTypes = append([]PythonTypeDescriptor(nil), body.ArgTypes...)
+	if body.ReturnType == nil {
+		return fmt.Errorf("python routine is missing return descriptor")
 	}
-	if body.ReturnType != nil {
-		returnType := *body.ReturnType
-		u.PythonReturnType = &returnType
+	for i, descriptor := range body.ArgTypes {
+		if err := validatePythonTypeDescriptor(descriptor); err != nil {
+			return fmt.Errorf("python routine argument descriptor %d: %w", i, err)
+		}
+	}
+	if err := validatePythonTypeDescriptor(*body.ReturnType); err != nil {
+		return fmt.Errorf("python routine return descriptor: %w", err)
+	}
+	u.PythonArgTypes = append([]PythonTypeDescriptor(nil), body.ArgTypes...)
+	returnType := *body.ReturnType
+	u.PythonReturnType = &returnType
+	return nil
+}
+
+// ValidatePythonTypeContract checks the descriptor count after catalog
+// argument names have been decoded. LoadPythonTypeContract deliberately runs
+// before that decode during lookup, so this second check closes the only point
+// where an argument list and its exact ABI could otherwise diverge.
+func (u *Udf) ValidatePythonTypeContract() error {
+	if u.Language != "python" {
+		return nil
+	}
+	if u.PythonReturnType == nil {
+		return fmt.Errorf("python routine is missing return descriptor")
+	}
+	if len(u.PythonArgTypes) != len(u.Args) {
+		return fmt.Errorf("python routine has %d descriptors for %d arguments", len(u.PythonArgTypes), len(u.Args))
+	}
+	for i, descriptor := range u.PythonArgTypes {
+		if err := validatePythonTypeDescriptor(descriptor); err != nil {
+			return fmt.Errorf("python routine argument descriptor %d: %w", i, err)
+		}
+	}
+	return validatePythonTypeDescriptor(*u.PythonReturnType)
+}
+
+func validatePythonTypeDescriptor(descriptor PythonTypeDescriptor) error {
+	typ := descriptor.Type()
+	canonical, err := NewPythonTypeDescriptor(typ)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(canonical, descriptor) {
+		return fmt.Errorf("descriptor is not canonical for %s", typ.String())
 	}
 	return nil
 }
