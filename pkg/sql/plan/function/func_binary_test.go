@@ -5899,14 +5899,14 @@ func initTruncateTestCase() []tcTemp {
 		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
-	// truncate with NULL second argument should expect error, we want a const.
+	// NULL precision propagates to the result instead of being rejected.
 	testInputs = append(testInputs, tcTemp{
 		info: "test truncate with NULL second argument",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
 		},
-		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
 	return testInputs
@@ -5920,6 +5920,119 @@ func TestTruncate(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestMathPrecisionNullContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fn        fEvalFn
+		wantError bool
+	}{
+		{"ceil", CeilFloat64, true},
+		{"floor", FloorFloat64, true},
+		{"round", RoundFloat64, false},
+		{"truncate", TruncateFloat64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			for _, nullValue := range []bool{false, true} {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, []bool{nullValue}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				}, NewFunctionTestResult(types.T_float64.ToType(), tc.wantError, []float64{0}, []bool{true}), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+			if tc.wantError {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1}, nil),
+				}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+		})
+	}
+}
+
+func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		flat []float64
+	}{
+		{"round", RoundFloat64, []float64{150, 149}},
+		{"truncate", TruncateFloat64, []float64{140, 149}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+			defer result.Free()
+			values := vector.NewVec(types.T_float64.ToType())
+			defer values.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(values, []float64{149, 149}, nil, proc.Mp()))
+			constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(-2), 2, proc.Mp())
+			require.NoError(t, err)
+			defer constant.Free(proc.Mp())
+			null := vector.NewConstNull(types.T_int64.ToType(), 2, proc.Mp())
+			defer null.Free(proc.Mp())
+			flat := vector.NewVec(types.T_int64.ToType())
+			defer flat.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(flat, []int64{-1, 0}, nil, proc.Mp()))
+			for _, step := range []struct {
+				name   string
+				digits *vector.Vector
+				want   []float64
+				mask   *FunctionSelectList
+			}{
+				{"const", constant, []float64{100, 100}, nil},
+				{"null", null, nil, nil},
+				{"flat", flat, tc.flat, nil},
+				{"masked", flat, tc.flat, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}},
+				{"all masked", flat, nil, &FunctionSelectList{AllNull: true}},
+				{"const again", constant, []float64{100, 100}, nil},
+			} {
+				t.Run(step.name, func(t *testing.T) {
+					require.NoError(t, result.PreExtendAndReset(2))
+					require.NoError(t, tc.fn([]*vector.Vector{values, step.digits}, result, proc, 2, step.mask))
+					actual := vector.GenerateFunctionFixedTypeParameter[float64](result.GetResultVector())
+					for i := uint64(0); i < 2; i++ {
+						value, isNull := actual.GetValue(i)
+						wantNull := step.want == nil || (step.mask != nil && !step.mask.SelectList[i])
+						require.Equal(t, wantNull, isNull)
+						if !wantNull {
+							require.Equal(t, step.want[i], value)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
+	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2, -1, 1, 0}, []bool{false, false, false, false, false, true})
+	expectedRound := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.5, 123.46, 120, -123.5, 0}, []bool{false, false, false, false, false, true})
+	expectedTruncate := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.4, 123.45, 120, -123.4, 0}, []bool{false, false, false, false, false, true})
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		want *FunctionTestResult
+	}{
+		{name: "round", fn: RoundFloat64, want: &expectedRound},
+		{name: "truncate", fn: TruncateFloat64, want: &expectedTruncate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits}, *tc.want, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 

@@ -4136,7 +4136,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RANDOM_BYTES,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    randomBytesCheck,
 
 		Overloads: []overload{
 			{
@@ -4152,6 +4152,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RandomBytes
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_any},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
