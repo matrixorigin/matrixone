@@ -46,7 +46,7 @@ UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"70m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
-UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"0"}
+UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # A helper may own two independent child process groups. Its trap gives each
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
@@ -78,6 +78,8 @@ ENGINE_RACE_JOB_PID=""
 ENGINE_RACE_REPORT=""
 ENGINE_RACE_REPORT_READY=""
 CURRENT_UT_PID=""
+CURRENT_UT_COMMAND_STAGE=""
+CURRENT_UT_COMMAND_LABEL=""
 CURRENT_UT_STAGE="initializing"
 CURRENT_UT_LABEL="startup"
 UT_TERMINATING=0
@@ -159,26 +161,64 @@ function mark_ut_stage(){
     checkpoint_ut_event "${event}" "${stage}" "${label}" "${status}" "${detail}"
 }
 
-function run_ut_command(){
-    if (( $# < 3 )); then
-        echo "Usage: run_ut_command STAGE LABEL COMMAND [ARG...]" >&2
+# The parent retains the foreground command's PID even while joining another
+# helper. Only this command writes UT_REPORT; helper reports are consumed after
+# finish_ut_command has reaped it.
+function start_ut_command(){
+    if (( $# < 3 )) || [[ -n "${CURRENT_UT_PID}" ]]; then
+        logger "ERR" "start_ut_command requires stage, label, command and no active writer"
         return 2
     fi
-
     local stage=$1
     local label=$2
     shift 2
-    local status=0
+    local saved_term_trap
+    local term_pending=0
+    CURRENT_UT_COMMAND_STAGE=${stage}
+    CURRENT_UT_COMMAND_LABEL=${label}
     mark_ut_stage "${stage}" "${label}" start "" "${*}"
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
     set -m
     "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
     CURRENT_UT_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
     checkpoint_ut_event "pid-start" "${stage}" "${label}" "" "child_pid=${CURRENT_UT_PID}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function finish_ut_command(){
+    local status=0
     wait "${CURRENT_UT_PID}" || status=$?
     CURRENT_UT_PID=""
-    set +m
-    mark_ut_stage "${stage}" "${label}" finish "${status}"
+    mark_ut_stage "${CURRENT_UT_COMMAND_STAGE}" "${CURRENT_UT_COMMAND_LABEL}" finish "${status}"
     return "${status}"
+}
+
+function run_ut_command(){
+    start_ut_command "$@" || return $?
+    finish_ut_command
+}
+
+function start_plan_race(){
+    local package=$1
+    local saved_term_trap
+    local term_pending=0
+    PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
+    PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    run_plan_race_shards "${package}" &
+    PLAN_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
 }
 
 
@@ -306,9 +346,15 @@ function handle_ut_termination(){
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
         "current_pid=${CURRENT_UT_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
+    local pid
+    # Notify every group before waiting, so the concurrent plan/helper cleanup
+    # gets the same grace window as the foreground writer.
+    for pid in "${CURRENT_UT_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
+        [[ -n "${pid}" ]] && terminate_ut_process_group "${pid}" TERM
+    done
+
     if [[ -n "${CURRENT_UT_PID}" ]]; then
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
-        terminate_ut_process_group "${CURRENT_UT_PID}" TERM
         # Leave the outer timeout's kill-after budget for descendants that do
         # not honour TERM; do not block the diagnostic path indefinitely.
         wait_for_ut_process_group "${CURRENT_UT_PID}" 20
@@ -316,20 +362,17 @@ function handle_ut_termination(){
         CURRENT_UT_PID=""
     fi
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
-        terminate_ut_process_group "${ENGINE_RACE_JOB_PID}" TERM
         wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || true
         ENGINE_RACE_JOB_PID=""
     fi
     if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
-        terminate_ut_process_group "${PLAN_RACE_JOB_PID}" TERM
         wait_for_ut_process_group "${PLAN_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${PLAN_RACE_JOB_PID}" 2>/dev/null || true
         PLAN_RACE_JOB_PID=""
     fi
     consume_plan_race_report
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
-        terminate_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" TERM
         wait_for_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${CLUSTER_PREBUILD_JOB_PID}" 2>/dev/null || true
         CLUSTER_PREBUILD_JOB_PID=""
@@ -1017,6 +1060,7 @@ function run_tests(){
         local resource_heavy_parallel=1
         local engine_race_parallel=1
         local shard_engine=1
+        local engine_joined=0
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
             (( HEAVY_RACE_PARALLEL > 64 )); then
@@ -1210,30 +1254,26 @@ function run_tests(){
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
-        # The plan package has no embedded cluster and its shards are already
-        # sequential inside one prebuilt binary. Start it while the heavy
-        # resource wave is running, but keep its JSON in a private report so
-        # concurrent writers cannot interleave malformed lines.
-        # Plan overlap consumes one additional process slot. It is disabled by
-        # default and only allowed when the heavy budget has room for engine
-        # shards (two), one resource package slot, and the plan child itself.
-        if (( UT_OVERLAP_PLAN == 1 && HEAVY_RACE_PARALLEL >= ENGINE_RACE_SHARDS + 2 && shard_engine == 1 )) &&
-            should_run_ut_stage plan && should_run_ut_stage heavy; then
-            resource_heavy_parallel=$((resource_heavy_parallel - 1))
-            PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
-            PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
-            logger "INF" "Start plan race shards concurrently with the heavy stage"
-            set -m
-            run_plan_race_shards "${plan_package}" &
-            PLAN_RACE_JOB_PID=$!
-            set +m
-        elif (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan && should_run_ut_stage heavy; then
-            logger "WRN" "Plan overlap requested but disabled: HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL}, engine_shards=${ENGINE_RACE_SHARDS}, shard_engine=${shard_engine}"
-        fi
-
         if should_run_ut_stage heavy; then
             logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
-            run_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
+            start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
+
+            # Reuse the engine slots only after its helper has exited. At the
+            # default budget, engine(2)+resource(1) becomes plan(1)+resource(1).
+            # A failed engine still releases capacity: all tests must run and
+            # its status remains authoritative. Defer report transfer until the
+            # foreground writer stops; an atomic rename during its writes would
+            # otherwise lose subsequent events written to the old inode.
+            if [[ -n "${ENGINE_RACE_JOB_PID}" ]] &&
+                (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan; then
+                wait "${ENGINE_RACE_JOB_PID}"
+                engine_status=$?
+                ENGINE_RACE_JOB_PID=""
+                engine_joined=1
+                logger "INF" "Engine finished; reuse released capacity for plan race tests"
+                start_plan_race "${plan_package}"
+            fi
+            finish_ut_command
             resource_heavy_status=$?
 
             if (( shard_engine == 1 )); then
@@ -1241,7 +1281,7 @@ function run_tests(){
                     wait "${ENGINE_RACE_JOB_PID}"
                     engine_status=$?
                     ENGINE_RACE_JOB_PID=""
-                else
+                elif (( engine_joined == 0 )); then
                     # Keep the helper's process-group TERM trap scoped to a
                     # subshell even when a low budget requires sequential waves.
                     set -m
@@ -1271,15 +1311,7 @@ function run_tests(){
                 plan_status=$?
                 PLAN_RACE_JOB_PID=""
             else
-                PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
-                PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
-                # Keep the sequential plan path in its own helper process too.
-                # The parent remains the cancellation/report owner, while the
-                # helper owns metadata, build, list, and shard descendants.
-                set -m
-                run_plan_race_shards "${plan_package}" &
-                PLAN_RACE_JOB_PID=$!
-                set +m
+                start_plan_race "${plan_package}"
                 wait "${PLAN_RACE_JOB_PID}"
                 plan_status=$?
                 PLAN_RACE_JOB_PID=""
