@@ -373,11 +373,20 @@ def _reject_nonstandard_json_constant(value):
 def _decode_control(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid control size")
-    value = json.loads(
-        bytes(data).decode("utf-8"),
-        object_pairs_hook=_reject_duplicate_json_pairs,
-        parse_constant=_reject_nonstandard_json_constant,
-    )
+    try:
+        text = bytes(data).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("PROTOCOL: invalid control UTF-8") from exc
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError("PROTOCOL: invalid control JSON") from exc
+    except RecursionError as exc:
+        raise ValueError("PROTOCOL: control JSON is too deeply nested") from exc
     if (
         not isinstance(value, dict)
         or type(value.get("version")) is not int
@@ -881,7 +890,10 @@ def _serialize_record_batch(record: pa.RecordBatch) -> bytes:
 def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
     if not isinstance(data, (bytes, bytearray)) or not data:
         raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
-    reader = pa.ipc.open_stream(pa.py_buffer(data))
+    try:
+        reader = pa.ipc.open_stream(pa.py_buffer(data))
+    except pa.ArrowException as exc:
+        raise ValueError("PROTOCOL: execution payload is not a valid Arrow stream") from exc
     try:
         try:
             record = reader.read_next_batch()
