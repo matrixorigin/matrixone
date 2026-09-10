@@ -47,6 +47,12 @@ UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
+# The light package wave does not own embedded-cluster fixtures.  On CI's
+# single runner it can therefore overlap the exclusive issues package when
+# enabled, but it uses its own conservative package budget so the two waves do
+# not recreate the six-way race-test pressure that this scheduler removed.
+UT_OVERLAP_LIGHT=${UT_OVERLAP_LIGHT:-"0"}
+UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # A helper may own two independent child process groups. Its trap gives each
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
@@ -77,6 +83,8 @@ ENGINE_RACE_TEST_BINARY=""
 ENGINE_RACE_JOB_PID=""
 ENGINE_RACE_REPORT=""
 ENGINE_RACE_REPORT_READY=""
+LIGHT_RACE_JOB_PID=""
+LIGHT_RACE_REPORT=""
 CURRENT_UT_PID=""
 CURRENT_UT_COMMAND_STAGE=""
 CURRENT_UT_COMMAND_LABEL=""
@@ -201,6 +209,91 @@ function finish_ut_command(){
 function run_ut_command(){
     start_ut_command "$@" || return $?
     finish_ut_command
+}
+
+function start_light_race(){
+    if (( $# != 2 )); then
+        logger "ERR" "start_light_race requires package scope and parallelism"
+        return 2
+    fi
+    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
+        logger "ERR" "start_light_race cannot start while another light helper is active"
+        return 2
+    fi
+
+    local package_scope=$1
+    local package_parallel=$2
+    local saved_term_trap
+    local term_pending=0
+    LIGHT_RACE_REPORT="${G_WKSP}/${G_TS}-light-race-report.out"
+    : > "${LIGHT_RACE_REPORT}"
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    checkpoint_ut_event "start" "light" "light race-test packages" "" \
+        "parallel=${package_parallel} background=true"
+    set -m
+    env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json \
+        -tags "${TAGS}" -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" \
+        -race ${package_scope} > "${LIGHT_RACE_REPORT}" 2>> "${UT_STDERR}" &
+    LIGHT_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    checkpoint_ut_event "pid-start" "light" "light race-test packages" "" \
+        "child_pid=${LIGHT_RACE_JOB_PID} parallel=${package_parallel}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function consume_light_race_report(){
+    if [[ -z "${LIGHT_RACE_REPORT}" ]]; then
+        return 0
+    fi
+
+    # The helper is the sole writer until its PID is reaped.  Hold this same
+    # boundary while publishing its private JSON so a TERM cannot append a
+    # prefix and then cause a second append from the cancellation path.
+    local saved_term_trap
+    local term_pending=0
+    local append_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    append_ut_report "${LIGHT_RACE_REPORT}" "${UT_REPORT}"
+    append_status=$?
+    if (( append_status != 0 )); then
+        logger "ERR" "failed to consume light race report; preserving ${LIGHT_RACE_REPORT}"
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+            handle_ut_termination
+        fi
+        return "${append_status}"
+    fi
+    rm -f "${LIGHT_RACE_REPORT}" "${LIGHT_RACE_REPORT}".*
+    LIGHT_RACE_REPORT=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function finish_light_race(){
+    local status=0
+    local report_status=0
+    if [[ -z "${LIGHT_RACE_JOB_PID}" ]]; then
+        return 0
+    fi
+    wait "${LIGHT_RACE_JOB_PID}" || status=$?
+    LIGHT_RACE_JOB_PID=""
+    checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
+    consume_light_race_report
+    report_status=$?
+    if (( report_status != 0 && status == 0 )); then
+        status=${report_status}
+    fi
+    return "${status}"
 }
 
 function start_plan_race(){
@@ -344,12 +437,12 @@ function handle_ut_termination(){
     fi
     UT_TERMINATING=1
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
-        "current_pid=${CURRENT_UT_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
+        "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
     local pid
     # Notify every group before waiting, so the concurrent plan/helper cleanup
     # gets the same grace window as the foreground writer.
-    for pid in "${CURRENT_UT_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
+    for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
         [[ -n "${pid}" ]] && terminate_ut_process_group "${pid}" TERM
     done
 
@@ -361,6 +454,12 @@ function handle_ut_termination(){
         wait "${CURRENT_UT_PID}" 2>/dev/null || true
         CURRENT_UT_PID=""
     fi
+    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
+        wait_for_ut_process_group "${LIGHT_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
+        wait "${LIGHT_RACE_JOB_PID}" 2>/dev/null || true
+        LIGHT_RACE_JOB_PID=""
+    fi
+    consume_light_race_report
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || true
@@ -920,6 +1019,7 @@ function run_tests(){
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
+    echo "#  LIGHT OVERLAP:   $UT_OVERLAP_LIGHT (parallel $UT_OVERLAP_LIGHT_PARALLEL)"
     echo "#  HELPER TERM GRACE: $UT_HELPER_TERM_GRACE_TICKS ticks"
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
@@ -960,6 +1060,19 @@ function run_tests(){
     fi
     if ! [[ "${UT_OVERLAP_PLAN}" =~ ^[01]$ ]]; then
         logger "ERR" "UT_OVERLAP_PLAN must be 0 or 1, got '${UT_OVERLAP_PLAN}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_LIGHT}" =~ ^[01]$ ]]; then
+        logger "ERR" "UT_OVERLAP_LIGHT must be 0 or 1, got '${UT_OVERLAP_LIGHT}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_LIGHT_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( UT_OVERLAP_LIGHT_PARALLEL > 64 )); then
+        logger "ERR" "UT_OVERLAP_LIGHT_PARALLEL must be an integer from 1 through 64, got '${UT_OVERLAP_LIGHT_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -1061,6 +1174,19 @@ function run_tests(){
         local engine_race_parallel=1
         local shard_engine=1
         local engine_joined=0
+        local light_started=0
+        local overlap_light=0
+        local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
+
+        if ! [[ "${UT_PARALLEL}" =~ ^[1-9][0-9]*$ ]]; then
+            logger "ERR" "UT_PARALLEL must be a positive integer, got '${UT_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if (( light_parallel > UT_PARALLEL )); then
+            light_parallel=${UT_PARALLEL}
+            logger "INF" "Cap overlapping light package parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
             (( HEAVY_RACE_PARALLEL > 64 )); then
@@ -1173,20 +1299,43 @@ function run_tests(){
         fi
 
         : > "${UT_REPORT}"
-        if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
-            logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-            run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
-            light_status=$?
-        fi
+        # HNSW owns native worker pools inside its test binary. It must finish
+        # before another race wave starts. When the bounded light/issues
+        # overlap is eligible, run HNSW first, then let the low-budget light
+        # helper overlap only the exclusive issues package.
+        if (( UT_OVERLAP_LIGHT == 1 && UT_PARALLEL > 1 )) &&
+            should_run_ut_stage light && should_run_ut_stage serial &&
+            [[ -n "${light_test_scope}" ]]; then
+            overlap_light=1
+            if should_run_ut_stage hnsw; then
+                logger "INF" "Run HNSW race-test package with exclusive runner CPU before light/issues overlap"
+                run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
+                hnsw_status=$?
+            fi
+            logger "INF" "Start light race-test packages in background with parallelism ${light_parallel}; overlap only with exclusive issues"
+            if start_light_race "${light_test_scope}" "${light_parallel}"; then
+                light_started=1
+            else
+                # A launch failure must not silently remove the light group
+                # from the authoritative suite. Fall back to the original
+                # foreground command so the package scope still executes.
+                logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                light_status=$?
+                overlap_light=0
+            fi
+        else
+            if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
+                logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                light_status=$?
+            fi
 
-        # HNSW owns native worker pools inside its test binary. Running it as
-        # one package slot after the normal light wave preserves its full-batch
-        # and repeated-lifecycle targets without letting package concurrency
-        # turn CPU scheduling delay into a multi-minute light-stage straggler.
-        if should_run_ut_stage hnsw; then
-            logger "INF" "Run HNSW race-test package with exclusive runner CPU"
-            run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
-            hnsw_status=$?
+            if should_run_ut_stage hnsw; then
+                logger "INF" "Run HNSW race-test package with exclusive runner CPU"
+                run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
+                hnsw_status=$?
+            fi
         fi
 
         # Compile the next embedded wave while the exclusive issues package is
@@ -1194,6 +1343,7 @@ function run_tests(){
         # compiles and links; it does not execute TestMain or any test, so this
         # overlaps build/link work without creating another active cluster.
         if (( UT_PREBUILD_EMBEDDED == 1 )) &&
+            (( overlap_light == 0 )) &&
             should_run_ut_stage serial && should_run_ut_stage embedded &&
             [[ -n "${cluster_test_scope}" ]]; then
             start_embedded_prebuild "${cluster_test_scope}" "${cluster_package_parallel}"
@@ -1210,6 +1360,12 @@ function run_tests(){
                     logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
                 fi
             done
+        fi
+
+        if (( light_started == 1 )); then
+            finish_light_race
+            light_status=$?
+            report_cgroup_memory_usage "Light/issues overlap"
         fi
 
         # These packages link embedded clusters with substantial race-detector

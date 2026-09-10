@@ -532,10 +532,17 @@ UT_PREBUILD_EMBEDDED ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
+# On the single CI runner, an A/B can overlap the dependency-disjoint light
+# wave with the exclusive issues package. HNSW remains an exclusive foreground
+# phase first; the overlap helper defaults to two package slots to leave memory
+# headroom. Keep the safe sequential baseline until a target-runner A/B proves
+# the concurrent path's wall-time and resource budget.
+UT_OVERLAP_LIGHT ?= 0
+UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

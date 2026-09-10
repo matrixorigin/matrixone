@@ -1,11 +1,33 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Accepted for this PR，revision 6
+- 状态：Proposed for this PR，revision 7
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 7: bounded light/issues overlap on one runner
+
+最近成功的单 runner UT 记录显示，`light race-test` 约占 10--20 分钟，
+`pkg/tests/issues` 的独占阶段约占 6--11 分钟；两者当前完全串行。依赖图分组已经把
+所有会启动 embedded cluster 的 package 从 light 组移除，因此可以在不增加 runner、
+不改变测试参数和不共享 fixture 的前提下，让两个阶段重叠。
+
+调度保持 HNSW 的 native worker pool 独占约束：先完成 HNSW，再启动 light helper，随后
+前台执行 issues。light helper 使用 `-race`、相同的 tags/timeout 和完整的 light scope，
+但将自己的 JSON 写入私有文件；issues 的 writer 结束后，父进程再原子合并 helper 报告。
+两条路径都执行完毕后才进入 embedded 阶段。helper 的 PID、进程组、退出状态和报告消费
+纳入同一 TERM 取消路径，任何一边失败都不会跳过另一边。
+
+并发是有界的：`UT_OVERLAP_LIGHT=0` 默认保持顺序基线，`UT_OVERLAP_LIGHT=1` 提供受限 A/B，
+`UT_OVERLAP_LIGHT_PARALLEL=2` 默认限制 light 的 package 并行度，并在小于该值的
+`UT_PARALLEL` 下自动收窄。开启 overlap 时不同时启动 compile-only embedded prebuild，
+避免叠加第二条编译通道。所有 package 仍只执行一次，测试函数、subtest、race detector、
+coverage 事件和失败断言都保持不变；这里改变的是阶段顺序和 package 调度，而不是测试
+强度。预期收益是被重叠的 issues wall time，约 6--11 分钟只是基于阶段长度的上限，
+必须在同资源 Linux runner 上用 cgroup memory/OOM、CPU throttling、长尾和失败率的 A/B
+结果确认净收益后再调整并行度。
 
 ## Revision 6: reuse released engine capacity on one runner
 

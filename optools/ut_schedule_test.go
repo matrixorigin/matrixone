@@ -28,6 +28,20 @@ import (
 // Source the real runner in a private repository layout. Its startup clears
 // diagnostics, so sourcing it in the actual checkout would corrupt another UT.
 func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+# The real env/go command must preserve both events around the report merge.
+printf 'heavy-start\n'
+printf started > "$CASE_DIR/heavy-started"
+if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+ while [[ ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
+fi
+printf 'heavy-end\n'
+exit "$HEAVY_STATUS"
+`, variables...)
+}
+
+func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
@@ -51,17 +65,6 @@ func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, 
 			t.Fatal(err)
 		}
 	}
-	mock := `#!/bin/bash
-if [[ "$1" == version ]]; then exit 0; fi
-# The real env/go command must preserve both events around the report merge.
-printf 'heavy-start\n'
-printf started > "$CASE_DIR/heavy-started"
-if [[ "$EXPECT_OVERLAP" == 1 ]]; then
- while [[ ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
-fi
-printf 'heavy-end\n'
-exit "$HEAVY_STATUS"
-`
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(mock), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +153,7 @@ cat "$UT_REPORT"
 func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -177,5 +181,178 @@ kill -TERM "$$"
 	}
 	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nheavy-start\nheavy-stopped\nplan-start\nplan-stopped\nengine\n") {
 		t.Fatalf("writer was not stopped before merging: %s", out)
+	}
+}
+
+func TestLightIssuesOverlapPreservesReportsAndFailures(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *example/light-package* ]]; then
+ printf 'light-start\n'
+ touch "$CASE_DIR/light-started"
+ while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+ printf 'light-end\n'
+ exit "$LIGHT_STATUS"
+fi
+exit 99
+`
+	for _, tc := range []struct {
+		name, lightStatus, serialStatus string
+	}{
+		{name: "success", lightStatus: "0", serialStatus: "0"},
+		{name: "light-failure", lightStatus: "7", serialStatus: "0"},
+		{name: "serial-failure", lightStatus: "0", serialStatus: "9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+trap handle_ut_termination TERM
+start_light_race example/light-package 2
+start_ut_command serial 'exclusive issues package' bash -c '
+ printf "serial-start\n"
+ touch "$CASE_DIR/serial-started"
+ while [[ ! -e "$CASE_DIR/light-started" ]]; do sleep 0.01; done
+ printf "serial-end\n"
+ exit "$SERIAL_STATUS"
+'
+serial_status=0
+finish_ut_command || serial_status=$?
+light_status=0
+finish_light_race || light_status=$?
+[[ "$serial_status" == "$SERIAL_STATUS" ]] || exit 90
+[[ "$light_status" == "$LIGHT_STATUS" ]] || exit 91
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$LIGHT_RACE_REPORT" ]] || exit 92
+report=$(cat "$UT_REPORT")
+[[ "$report" == $'serial-start\nserial-end\nlight-start\nlight-end' ]] || { printf 'REPORT=%q\n' "$report"; exit 93; }
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"LIGHT_STATUS="+tc.lightStatus, "SERIAL_STATUS="+tc.serialStatus)
+			if err != nil {
+				t.Fatalf("overlap: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestLightIssuesCancellationStopsWritersBeforeMerge(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *example/light-package* ]]; then
+ trap 'printf "light-stopped\\n"; exit 143' TERM
+ printf 'light-start\n'
+ touch "$CASE_DIR/light-started"
+ while :; do sleep 0.01; done
+fi
+exit 99
+`
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+start_light_race example/light-package 2
+start_ut_command serial 'exclusive issues package' bash -c '
+ trap '\''printf "serial-stopped\n"; exit 143'\'' TERM
+ printf "serial-start\n"
+ touch "$CASE_DIR/serial-started"
+ while :; do sleep 0.01; done
+'
+while [[ ! -e "$CASE_DIR/light-started" || ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+kill -TERM "$$"
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nserial-start\nserial-stopped\nlight-start\nlight-stopped\n") {
+		t.Fatalf("writer was not stopped before merging: %s", out)
+	}
+}
+
+func TestRunTestsPlacesHNSWBeforeLightIssuesOverlap(t *testing.T) {
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
+ printf 'hnsw\n'
+ touch "$CASE_DIR/hnsw-done"
+ exit 0
+fi
+if [[ "$*" == *pkg/light-package* ]]; then
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  [[ -e "$CASE_DIR/hnsw-done" ]] || exit 81
+ fi
+ printf 'light\n'
+ touch "$CASE_DIR/light-started"
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+ fi
+ printf 'light-end\n'
+ exit 0
+fi
+if [[ "$*" == *pkg/tests/issues* ]]; then
+ printf 'serial\n'
+ touch "$CASE_DIR/serial-started"
+ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
+  while [[ ! -e "$CASE_DIR/light-started" ]]; do sleep 0.01; done
+ fi
+ printf 'serial-end\n'
+ exit 0
+fi
+if [[ "$*" == *pkg/tests/embedded* ]]; then printf 'embedded\n'; exit 0; fi
+if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
+exit 0
+`
+	for _, tc := range []struct {
+		name, parallel, overlap, expectOverlap, expected string
+	}{
+		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
+		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
+		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
+		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+function make() { :; }
+function egrep() { echo fake.pb.go; }
+	MO_CL_CUDA=1
+	UT_SHARD=all
+UT_PARALLEL=${UT_PARALLEL_VALUE}
+UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}
+UT_OVERLAP_LIGHT_PARALLEL=2
+UT_OVERLAP_PLAN=0
+UT_PREBUILD_EMBEDDED=0
+function go() {
+ if [[ "$1" == clean ]]; then return 0; fi
+ if [[ "$1" != list ]]; then return 0; fi
+ if [[ "$*" == *"./pkg/sql/plan"* ]]; then echo github.com/matrixorigin/matrixone/pkg/sql/plan; return 0; fi
+ if [[ "$*" == *"./pkg/vm/engine/test"* ]]; then echo github.com/matrixorigin/matrixone/pkg/vm/engine/test; return 0; fi
+ if [[ "$*" == *"./pkg/vectorindex/hnsw"* ]]; then echo github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw; return 0; fi
+ if [[ "$*" == *"./pkg/tests/issues"* ]]; then echo github.com/matrixorigin/matrixone/pkg/tests/issues; return 0; fi
+ if [[ "$*" == *"./pkg/backup"* ]]; then echo github.com/matrixorigin/matrixone/pkg/backup; return 0; fi
+ if [[ "$*" == *"./..."* ]]; then
+  printf '%s\n' github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,tests/embedded,light-package,backup}
+ fi
+}
+function list_embedded_cluster_test_packages() { echo github.com/matrixorigin/matrixone/pkg/tests/embedded; }
+function run_engine_race_shards() { printf 'engine\n' > "$ENGINE_RACE_REPORT"; return 0; }
+function run_plan_race_shards() { return 0; }
+trap handle_ut_termination TERM
+run_tests
+[[ "$UT_TEST_STATUS" == 0 ]] || exit 90
+[[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
+report=$(cat "$UT_REPORT")
+[[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"UT_PARALLEL_VALUE="+tc.parallel,
+				"UT_OVERLAP_VALUE="+tc.overlap,
+				"EXPECT_OVERLAP="+tc.expectOverlap,
+				"EXPECTED_REPORT="+tc.expected)
+			if err != nil {
+				t.Fatalf("scheduler: %v\n%s", err, out)
+			}
+		})
 	}
 }
