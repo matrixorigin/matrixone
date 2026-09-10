@@ -2665,6 +2665,28 @@ func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
 	assert.Zero(t, updater.updateCalls.Load())
 }
 
+func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
+	start := types.BuildTS(100, 5)
+	h := newTableStreamHarness(t,
+		withHarnessNoFull(true),
+		withHarnessStartTs(start),
+	)
+	h.Stream().start.Done() // invoke processOneRound directly
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		require.Equal(t, start, fromTs)
+		require.Equal(t, types.BuildTS(200, 10), toTs)
+		return newImmediateChangesHandle(nil), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, start, calls[0].from)
+}
+
 func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
 	epoch := types.BuildTS(80, 0)
 	h := newTableStreamHarness(

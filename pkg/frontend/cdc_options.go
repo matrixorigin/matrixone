@@ -90,8 +90,10 @@ func (opts *CDCCreateTaskOptions) setNoFullStartTS(txnOp client.TxnOperator) {
 	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
 		snapshotTS := txnOp.SnapshotTS()
 		if !snapshotTS.IsEmpty() {
-			snapshot := snapshotTS.ToStdTime()
-			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+			// Keep both HLC components. Converting through time.Time would
+			// discard LogicalTime and move the watermark backwards within the
+			// same physical timestamp.
+			opts.StartTs = snapshotTS.DebugString()
 		}
 	}
 }

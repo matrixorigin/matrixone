@@ -107,7 +107,7 @@ func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(snapshot)
 	setNoFullStartTS(opts, txnOp)
-	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
 
 	// Explicit StartTs and absent transaction operators do not alter the start.
 	opts.StartTs = "2026-09-01T00:00:00Z"
