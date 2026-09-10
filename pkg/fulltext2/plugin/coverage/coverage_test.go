@@ -267,3 +267,17 @@ func TestParseWatermark(t *testing.T) {
 		require.False(t, ok, bad)
 	}
 }
+
+// IndexBuildTS returns the searched generation's build_ts for the planner's gap sizing: zero for an
+// incomplete request, else the cold-path MAX(build_ts) from the metadata table. It does not check
+// liveness (that is CoversSnapshot's job).
+func TestIndexBuildTS(t *testing.T) {
+	// an incomplete request yields the zero TS (fail closed)
+	zero := Hooks{}.IndexBuildTS(sysCtx(), coverage.Request{})
+	require.True(t, zero.IsEmpty())
+
+	// cold cache -> MAX(build_ts) from the metadata table (liveness rows are irrelevant here)
+	mockGate(t, nil, 4242)
+	bts := Hooks{}.IndexBuildTS(sysCtx(), gateReq(0))
+	require.Equal(t, int64(4242), bts.Physical())
+}

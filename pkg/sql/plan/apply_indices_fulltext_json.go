@@ -417,6 +417,13 @@ const (
 	jsonProbePartial
 )
 
+// The two coverage lookups are the only runtime-dependent inputs to the probe decision, so they
+// are indirected here to let unit tests drive the covered/partial/skip matrix without a live index.
+var (
+	coversSnapshotFn = indexplugin.CoversSnapshot
+	indexBuildTSFn   = indexplugin.IndexBuildTS
+)
+
 // decideJSONProbe evaluates idx against scanNode's read and reports how a probe may use it, plus
 // (for jsonProbePartial) the build_ts the searched generation reached -- the lower bound of the
 // table_changes tail that fills the freshness gap. A synchronous index always covers. An async
@@ -495,7 +502,7 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 		IndexMetadataTable: metaTbl,
 		ScanSnapshotTS:     scanSnapshotTS,
 	}
-	covered, err := indexplugin.CoversSnapshot(ctx, algo, req)
+	covered, err := coversSnapshotFn(ctx, algo, req)
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
 		return jsonProbeSkip, types.TS{}
@@ -509,7 +516,7 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if scanSnapshotTS != nil {
 		return jsonProbeSkip, types.TS{}
 	}
-	buildTS := indexplugin.IndexBuildTS(ctx, algo, req)
+	buildTS := indexBuildTSFn(ctx, algo, req)
 	if buildTS.IsEmpty() {
 		return jsonProbeSkip, types.TS{}
 	}

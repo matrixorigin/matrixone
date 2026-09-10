@@ -15,16 +15,21 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +40,12 @@ type fakeCoverageTxn struct{ client.TxnOperator }
 
 func (fakeCoverageTxn) SnapshotTS() timestamp.Timestamp {
 	return timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}
+}
+
+// Txn answers the read snapshot so EffectiveSnapshotTS can compare a historical read against it
+// (a {snapshot=...} TS earlier than this counts as historical).
+func (fakeCoverageTxn) Txn() txn.TxnMeta {
+	return txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}}
 }
 
 func jpColExpr(pos int32) *plan.Expr {
@@ -713,4 +724,110 @@ func TestBuildJSONProbeTail(t *testing.T) {
 	tc := builder.qry.Nodes[filter.Children[0]]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tc.NodeType)
 	require.Equal(t, "table_changes", tc.TableDef.TblFunc.Name)
+}
+
+// fakeSourceEngine/fakeSourceRel provide the minimum decideJSONProbe touches on a current read: a
+// relation that answers SourceCommitTS. Any other engine/relation call panics on the nil embed,
+// surfacing an unexpected dependency rather than hiding it.
+type fakeSourceEngine struct{ engine.Engine }
+
+func (fakeSourceEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	return "", "", fakeSourceRel{}, nil
+}
+
+type fakeSourceRel struct{ engine.Relation }
+
+func (fakeSourceRel) SourceCommitTS(context.Context) (types.TS, error) {
+	return types.BuildTS(50, 0), nil
+}
+
+// TestDecideJSONProbeMatrix drives the covered / partial / skip decision by stubbing the two runtime
+// coverage lookups, so the whole decision surface is exercised without a live index. A fulltext2
+// json index is AlwaysAsync, so decideJSONProbe runs the full path rather than short-circuiting.
+func TestDecideJSONProbeMatrix(t *testing.T) {
+	origCovers, origBuild := coversSnapshotFn, indexBuildTSFn
+	defer func() { coversSnapshotFn, indexBuildTSFn = origCovers, origBuild }()
+
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	newCase := func(withEngine bool) (*QueryBuilder, *plan.Node) {
+		mockCtx := NewMockCompilerContext(false)
+		proc := mockCtx.GetProcess()
+		proc.Base.TxnOperator = fakeCoverageTxn{}
+		if withEngine {
+			proc.Base.SessionInfo.StorageEngine = fakeSourceEngine{}
+		} else {
+			proc.Base.SessionInfo.StorageEngine = nil
+		}
+		scan := &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{7},
+			ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef: &plan.TableDef{
+				TblId:     424242,
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
+				},
+				Pkey:    &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Indexes: []*plan.IndexDef{idx},
+			},
+		}
+		return &QueryBuilder{compCtx: mockCtx}, scan
+	}
+	asSnapshot := func(scan *plan.Node) {
+		scan.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000}}
+	}
+	covers := func(v bool, err error) {
+		coversSnapshotFn = func(context.Context, string, coverage.Request) (bool, error) { return v, err }
+	}
+	buildTS := func(ts types.TS) {
+		indexBuildTSFn = func(context.Context, string, coverage.Request) types.TS { return ts }
+	}
+
+	// current read, behind, build_ts known, table_changes-eligible -> partial
+	covers(false, nil)
+	buildTS(types.BuildTS(100, 0))
+	b, scan := newCase(true)
+	kind, bts := b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, int64(100), bts.Physical())
+
+	// current read, behind, unknown build_ts -> skip
+	buildTS(types.TS{})
+	b, scan = newCase(true)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// current read, covered -> covered
+	covers(true, nil)
+	b, scan = newCase(true)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeCovered, kind)
+
+	// snapshot read, covered -> covered (skips the source-relation lookup)
+	b, scan = newCase(false)
+	asSnapshot(scan)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeCovered, kind)
+
+	// snapshot read, not covered -> skip; snapshots are binary, never partial
+	covers(false, nil)
+	buildTS(types.BuildTS(100, 0))
+	b, scan = newCase(false)
+	asSnapshot(scan)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// coverage lookup error -> skip (fail closed)
+	covers(false, moerr.NewInternalErrorNoCtx("boom"))
+	b, scan = newCase(true)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// current read with no storage engine -> skip
+	covers(true, nil)
+	b, scan = newCase(false)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
 }

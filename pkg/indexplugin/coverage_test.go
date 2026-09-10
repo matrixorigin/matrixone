@@ -44,15 +44,17 @@ type coveringAlgo struct {
 	bareAlgo
 	covered bool
 	err     error
+	buildTS types.TS
 }
 
 type stubHooks struct {
 	covered bool
 	err     error
 	calls   *int
+	buildTS types.TS
 }
 
-func (h stubHooks) IndexBuildTS(context.Context, coverage.Request) types.TS { return types.TS{} }
+func (h stubHooks) IndexBuildTS(context.Context, coverage.Request) types.TS { return h.buildTS }
 
 func (h stubHooks) CoversSnapshot(context.Context, coverage.Request) (bool, error) {
 	if h.calls != nil {
@@ -61,7 +63,9 @@ func (h stubHooks) CoversSnapshot(context.Context, coverage.Request) (bool, erro
 	return h.covered, h.err
 }
 
-func (p coveringAlgo) Coverage() coverage.Hooks { return stubHooks{covered: p.covered, err: p.err} }
+func (p coveringAlgo) Coverage() coverage.Hooks {
+	return stubHooks{covered: p.covered, err: p.err, buildTS: p.buildTS}
+}
 
 // registerForTest installs a plugin and removes it when the test ends, so the
 // process-wide registry is not left mutated.
@@ -133,3 +137,21 @@ var (
 	_ AlgoPlugin     = bareAlgo{}
 	_ CoveragePlugin = coveringAlgo{}
 )
+
+// IndexBuildTS mirrors CoversSnapshot's fail-closed dispatch: an unregistered algo or one without
+// the coverage capability reports the zero TS, and a capable algo's value is passed through.
+func TestIndexBuildTS(t *testing.T) {
+	registerForTest(t, bareAlgo{algo: "bts_bare"})
+	registerForTest(t, coveringAlgo{bareAlgo: bareAlgo{algo: "bts_yes"}, buildTS: types.BuildTS(4242, 0)})
+
+	ctx := context.Background()
+
+	// unregistered algo -> zero TS
+	missing := IndexBuildTS(ctx, "bts_missing", coverage.Request{})
+	require.True(t, missing.IsEmpty())
+	// registered but without the coverage capability -> zero TS
+	bare := IndexBuildTS(ctx, "bts_bare", coverage.Request{})
+	require.True(t, bare.IsEmpty())
+	// capable algo -> its build_ts is passed through
+	require.Equal(t, int64(4242), IndexBuildTS(ctx, "bts_yes", coverage.Request{}).Physical())
+}
