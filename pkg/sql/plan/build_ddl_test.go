@@ -173,6 +173,51 @@ func TestMaybeEnableCollationKeyV2RejectsMixedAndMalformedDefinitions(t *testing
 	require.Error(t, maybeEnableCollationKeyV2ForCreate(ctx, legacyCharset, nil))
 }
 
+func TestUniqueIndexDDLPropagatesV2Metadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	metadata := collationkey.NewCollationAwareMetadata()
+	source := &plan.TableDef{
+		Name: "v2_source",
+		Cols: []*plan.ColDef{{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
+		}},
+		UniqueKeyCodecVersion: &plan.UniqueKeyCodecVersion{
+			Value:                metadata.Version,
+			RegistryVersion:      metadata.RegistryVersion,
+			RegistryDigest:       metadata.RegistryDigest,
+			MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+			ActivationGeneration: metadata.ActivationGeneration,
+		},
+	}
+	target := &plan.CreateTable{TableDef: &plan.TableDef{}}
+	require.NoError(t, validateV2UniqueIndexParts(ctx, source, []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("k")}}))
+	require.NoError(t, propagateUniqueKeyCodecMetadata(ctx, source, target))
+	require.Equal(t, source.UniqueKeyCodecVersion, target.TableDef.UniqueKeyCodecVersion)
+	require.NotSame(t, source.UniqueKeyCodecVersion, target.TableDef.UniqueKeyCodecVersion)
+	originalDigest := append([]byte(nil), source.UniqueKeyCodecVersion.RegistryDigest...)
+	target.TableDef.UniqueKeyCodecVersion.RegistryDigest[0]++
+	require.NotEqual(t, originalDigest, target.TableDef.UniqueKeyCodecVersion.RegistryDigest)
+	target.TableDef.UniqueKeyCodecVersion.RegistryDigest[0]--
+
+	source.Cols = append(source.Cols, &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(types.T_int64)}})
+	err := validateV2UniqueIndexParts(ctx, source, []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("n")}})
+	require.Error(t, err)
+}
+
+func TestUniqueIndexDDLRejectsMalformedV2Metadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	source := &plan.TableDef{
+		Name: "v2_malformed_source",
+		UniqueKeyCodecVersion: &plan.UniqueKeyCodecVersion{
+			Value: uint32(collationkey.CollationAwareVersion),
+		},
+	}
+	target := &plan.CreateTable{TableDef: &plan.TableDef{}}
+	require.Error(t, propagateUniqueKeyCodecMetadata(ctx, source, target))
+	require.Nil(t, target.TableDef.UniqueKeyCodecVersion)
+}
+
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {
 	c.building = building
 	c.database = database

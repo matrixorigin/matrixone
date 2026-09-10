@@ -4483,6 +4483,77 @@ func maybeEnableCollationKeyV2ForCreate(
 	return nil
 }
 
+// propagateUniqueKeyCodecMetadata carries the relation-level codec identity
+// into a newly planned hidden UNIQUE relation. CREATE TABLE already supplies
+// this metadata before buildUniqueIndexTable; CREATE INDEX and ALTER ADD
+// UNIQUE construct their CreateTable shell separately and must copy it here.
+// A missing metadata field remains the legacy path. An explicitly present
+// field is validated before it is copied so a malformed v2 relation cannot
+// silently create an untyped side relation.
+func propagateUniqueKeyCodecMetadata(
+	ctx CompilerContext,
+	source *plan.TableDef,
+	target *plan.CreateTable,
+) error {
+	if source == nil || source.UniqueKeyCodecVersion == nil || target == nil {
+		return nil
+	}
+	if target.TableDef == nil {
+		target.TableDef = &plan.TableDef{}
+	}
+	if _, err := tableUsesCollationKeyV2(ctx.GetContext(), source); err != nil {
+		return err
+	}
+	metadata := *source.UniqueKeyCodecVersion
+	metadata.RegistryDigest = append([]byte(nil), source.UniqueKeyCodecVersion.RegistryDigest...)
+	target.TableDef.UniqueKeyCodecVersion = &metadata
+	return nil
+}
+
+// validateV2UniqueIndexParts prevents a v2 relation from acquiring a new
+// UNIQUE side relation whose parts have no registered collation-key domain.
+// The table-level activation decision is intentionally conservative: once a
+// relation owns v2 identity, every subsequently added UNIQUE part must use a
+// supported text domain rather than silently falling back to bytewise v1.
+func validateV2UniqueIndexParts(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	keyParts []*tree.KeyPart,
+) error {
+	if tableDef == nil || tableDef.UniqueKeyCodecVersion == nil {
+		return nil
+	}
+	useV2, err := tableUsesCollationKeyV2(ctx.GetContext(), tableDef)
+	if err != nil {
+		return err
+	}
+	if !useV2 {
+		return nil
+	}
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")
+		}
+		name := catalog.ResolveAlias(keyPart.ColName.ColName())
+		col, ok := slicesxFindCol(tableDef.Cols, name)
+		if !ok && tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil &&
+			tableDef.Pkey.CompPkeyCol.Name == name {
+			col = tableDef.Pkey.CompPkeyCol
+			ok = true
+		}
+		if !ok {
+			return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
+		}
+		if col.Typ.Id != int32(types.T_varchar) && col.Typ.Id != int32(types.T_text) {
+			return moerr.NewNotSupported(ctx.GetContext(), "v2 unique-key activation requires registered text index parts")
+		}
+		if _, err := collationKeyV2ValueCharset(col.Typ); err != nil {
+			return moerr.NewNotSupportedf(ctx.GetContext(), "v2 unique-key index part %s is not registered: %v", name, err)
+		}
+	}
+	return nil
+}
+
 func slicesxFindCol(cols []*plan.ColDef, name string) (*plan.ColDef, bool) {
 	for _, col := range cols {
 		if col != nil && col.Name == name {
@@ -5794,6 +5865,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 
 	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
+		if err := validateV2UniqueIndexParts(ctx, tableDef, uIdx.KeyParts); err != nil {
+			return nil, err
+		}
+		if err := propagateUniqueKeyCodecMetadata(ctx, tableDef, indexInfo); err != nil {
+			return nil, err
+		}
 		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
@@ -6509,6 +6586,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				if err := validateV2UniqueIndexParts(ctx, tableDef, def.KeyParts); err != nil {
+					return nil, err
+				}
+				if err := propagateUniqueKeyCodecMetadata(ctx, tableDef, indexInfo); err != nil {
+					return nil, err
+				}
 				if err := buildUniqueIndexTable(
 					indexInfo,
 					[]*tree.UniqueIndex{def},
