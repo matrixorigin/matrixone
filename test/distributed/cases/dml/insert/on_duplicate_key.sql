@@ -284,6 +284,12 @@ create table t_odku_no_key_generated (
 );
 insert into t_odku_no_key_generated(a, g) values (1, default) as n(x, y) on duplicate key update a = n.x;
 select * from t_odku_no_key_generated;
+prepare s_odku_no_key_generated from insert into t_odku_no_key_generated(a, g) values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_a = 2;
+set @odku_no_key_delta = 3;
+execute s_odku_no_key_generated using @odku_no_key_a, @odku_no_key_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated;
 drop table t_odku_no_key_generated;
 
 create table t_null_dup (id int primary key, a int, b int);
