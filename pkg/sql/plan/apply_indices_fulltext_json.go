@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -386,14 +387,30 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 		logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
 		return false
 	}
+	// Resolve the index's hidden tables so the freshness check can read the loaded
+	// generation's build_ts (cache, keyed by the storage table) or the durable
+	// MAX(build_ts) from the metadata table on a cold cache.
+	storeTbl, metaTbl, _ := builder.findFulltext2IndexTables(scanNode, idx)
+	dbName := ""
+	if scanNode.ObjRef != nil {
+		dbName = scanNode.ObjRef.SchemaName
+	}
+	// The effective historical read TS for a {snapshot=...}/AS OF query (nil for a
+	// current read), computed exactly as the search does, so the freshness check
+	// targets the same snapshot-bound index generation the search will load.
+	scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot)
 	// proc.Ctx is canceled during planning; use the top context.
 	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
-		CNUUID:         proc.GetService(),
-		Txn:            txn,
-		TableID:        scanNode.TableDef.TblId,
-		IndexDef:       idx,
-		Snapshot:       types.TimestampToTS(txn.SnapshotTS()),
-		SourceCommitTS: sourceCommitTS,
+		CNUUID:             proc.GetService(),
+		Txn:                txn,
+		TableID:            scanNode.TableDef.TblId,
+		IndexDef:           idx,
+		Snapshot:           types.TimestampToTS(txn.SnapshotTS()),
+		SourceCommitTS:     sourceCommitTS,
+		IndexStorageTable:  storeTbl,
+		IndexMetadataDB:    dbName,
+		IndexMetadataTable: metaTbl,
+		ScanSnapshotTS:     scanSnapshotTS,
 	})
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 // ISCP job states, mirrored from pkg/iscp/types.go. They are duplicated rather
@@ -102,78 +103,121 @@ func parseWatermark(s string) (types.TS, bool) {
 	return ts, !ts.IsEmpty()
 }
 
-// CoversSnapshot reports whether the index's watermark has reached the source
-// DML commit timestamp observed by the query CN.
+// CoversSnapshot reports whether the index generation a probe would search reaches
+// the source DML commit observed by the query CN.
 //
-// Fails closed everywhere: a missing job, a dropped one, a job that is not
-// running cleanly, a NULL/unparsable watermark, or any lookup error all report
-// false. Only an explicit "watermark >= source commit ts" on a live job returns
-// true. An empty source commit ts is treated as no evidence and declines: any
-// watermark is >= the zero timestamp, so accepting it would fail open.
+// Two independent conditions, both required and both fail closed:
+//   - liveness: there is a live (running/completed, not dropped) ISCP maintenance job,
+//     so the index is being kept current at all;
+//   - coverage: build_ts >= SourceCommitTS, where build_ts is MAX(metadata.build_ts)
+//     over base + cdc_tail of the generation the search will actually use -- the loaded
+//     generation from the cache when warm, else the durable metadata a fresh load would
+//     see. Reading the searched generation's own build_ts (not a global watermark) is
+//     what prevents a stale warm cache from over-reporting coverage.
+//
+// An empty SourceCommitTS, an unknown build_ts (0), or any lookup error declines.
 func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
 	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 || req.SourceCommitTS.IsEmpty() {
 		return false, nil
 	}
+	live, err := indexJobLive(ctx, req)
+	if err != nil || !live {
+		return false, err
+	}
+	// Target the exact generation the search will load, and target it the SAME way for
+	// both build_ts sources: a {snapshot=...}/AS OF read uses the snapshot-bound cache key
+	// (index_table@snapshot) AND reads the durable metadata as of that snapshot; a current
+	// read uses the plain key AND the current txn. Deriving both from this one choice keeps
+	// the warm (cache) and cold (metadata) paths from disagreeing about which generation
+	// they measure.
+	key, metaTxn := req.IndexStorageTable, req.Txn
+	if req.ScanSnapshotTS != nil {
+		key = veccache.SnapshotKey(req.IndexStorageTable, *req.ScanSnapshotTS)
+		metaTxn = req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
+	}
+	// The loaded generation's build_ts when the index is warm in this CN's cache; a cold
+	// cache would load the durable metadata, so read its MAX(build_ts) instead.
+	buildTS, ok := veccache.Cache.GetBuildTS(key)
+	if !ok {
+		buildTS = maxDurableBuildTS(ctx, req, metaTxn)
+	}
+	covered := types.BuildTS(buildTS, 0)
+	return !covered.LT(&req.SourceCommitTS), nil
+}
+
+// indexJobLive reports whether the index has a live ISCP maintenance job: at least one
+// non-dropped row, and every non-dropped row running or completed. Fails closed.
+func indexJobLive(ctx context.Context, req coverage.Request) (bool, error) {
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return false, err
 	}
-	// The ISCP log lives in the system tenant and carries account_id as an
-	// ordinary column, so the tenant is named in the predicate, not inherited
-	// from the context.
+	// The ISCP log lives in the system tenant and carries account_id as an ordinary
+	// column, so the tenant is named in the predicate, not inherited from the context.
 	sysCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	sql := fmt.Sprintf(
-		"SELECT watermark, job_state, drop_at FROM mo_catalog.mo_iscp_log"+
+		"SELECT job_state, drop_at FROM mo_catalog.mo_iscp_log"+
 			" WHERE account_id = %d AND table_id = %d AND job_name = %s",
 		accountID, req.TableID, sqlquote.String(jobNameForIndex(req.IndexDef.IndexName)),
 	)
-
 	res, err := execWithResult(sysCtx, sql, req.CNUUID, req.Txn)
 	if err != nil {
 		return false, err
 	}
 	defer res.Close()
 
-	// (account, table, job_name) is not unique — job_id completes the key, so a
-	// dropped job and its replacement both appear. Dropped rows say nothing
-	// about current content and are ignored; every LIVE row must be covered,
-	// and there must be at least one, or there is no maintenance to rely on.
-	sawLive, covered := false, true
+	// (account, table, job_name) is not unique — job_id completes the key, so a dropped
+	// job and its replacement both appear. Dropped rows say nothing; every live row must be
+	// running/completed, and there must be at least one, or there is no maintenance to rely on.
+	sawLive, live := false, true
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if len(cols) < 3 {
-			covered = false
+		if len(cols) < 2 {
+			live = false
 			return false
 		}
-		states := vector.MustFixedColWithTypeCheck[int8](cols[1])
+		states := vector.MustFixedColWithTypeCheck[int8](cols[0])
 		for i := 0; i < rows; i++ {
-			watermarkText := "<NULL>"
-			if !cols[0].IsNull(uint64(i)) {
-				watermarkText = cols[0].GetStringAt(i)
-			}
-			if !cols[2].IsNull(uint64(i)) {
+			if !cols[1].IsNull(uint64(i)) {
 				continue // dropped
 			}
 			sawLive = true
-			// pending / error / canceled: not being kept current
 			if states[i] != iscpJobStateRunning && states[i] != iscpJobStateCompleted {
-				covered = false
-				return false
-			}
-			if cols[0].IsNull(uint64(i)) {
-				covered = false
-				return false
-			}
-			// the log stores the watermark in the "physical-logical" form the
-			// ISCP executor writes; parsed here rather than with
-			// types.StringToTS, which PANICS on anything malformed and would
-			// take the planner down over a corrupt catalog row
-			wm, ok := parseWatermark(watermarkText)
-			if !ok || wm.LT(&req.SourceCommitTS) {
-				covered = false
+				live = false
 				return false
 			}
 		}
 		return true
 	})
-	return sawLive && covered, nil
+	return sawLive && live, nil
+}
+
+// maxDurableBuildTS reads MAX(build_ts) over the index's metadata table -- base + cdc_tail --
+// the coverage a fresh (cold-cache) load would see. Runs in the caller's tenant, where the
+// index's hidden tables live. Returns 0 (declines) on a missing column (pre-migration index),
+// an unresolved table, or any read error: a safe under-report.
+// maxDurableBuildTS reads MAX(build_ts) over the index's metadata table -- base + cdc_tail --
+// on txn, the operator the caller already snapshot-aligned to the generation being measured
+// (the current txn, or one cloned at the read's snapshot). Returns 0 (declines) on a missing
+// column (pre-migration index), an unresolved table, or any read error: a safe under-report.
+func maxDurableBuildTS(ctx context.Context, req coverage.Request, txn client.TxnOperator) int64 {
+	if req.IndexMetadataDB == "" || req.IndexMetadataTable == "" {
+		return 0
+	}
+	sql := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		sqlquote.QualifiedIdent(req.IndexMetadataDB, req.IndexMetadataTable))
+	res, err := execWithResult(ctx, sql, req.CNUUID, txn)
+	if err != nil {
+		return 0
+	}
+	defer res.Close()
+	var ts int64
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) < 1 || cols[0].IsNull(0) {
+			return false
+		}
+		ts = vector.GetFixedAtNoTypeCheck[int64](cols[0], 0)
+		return false
+	})
+	return ts
 }

@@ -31,8 +31,9 @@ import (
 )
 
 type MockSearch struct {
-	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Idxcfg  vectorindex.IndexConfig
+	Tblcfg  vectorindex.IndexTableConfig
+	BuildTs int64
 }
 
 func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -551,8 +552,33 @@ func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorind
 }
 
 // BuildTS stubs (fulltext2 async-freshness interface method).
-func (m *MockSearch) BuildTS() int64            { return 0 }
+func (m *MockSearch) BuildTS() int64            { return m.BuildTs }
 func (m *MockAnySearch) BuildTS() int64         { return 0 }
 func (m *MockSearchLoadError) BuildTS() int64   { return 0 }
 func (m *MockSearchSearchError) BuildTS() int64 { return 0 }
 func (m *MockRuntimeSearch) BuildTS() int64     { return 0 }
+
+func TestGetBuildTS(t *testing.T) {
+	c := &VectorIndexCache{}
+
+	// No cached entry: not found, so the freshness gate proceeds (a search loads fresh).
+	_, found := c.GetBuildTS("missing")
+	require.False(t, found)
+
+	// A loaded generation reports its own build_ts (what a probe now would search).
+	// captureSize publishes Algo.BuildTS() to the entry atomic, exactly as Load does.
+	loaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 42}}
+	loaded.captureSize()
+	loaded.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("idx", loaded)
+	ts, found := c.GetBuildTS("idx")
+	require.True(t, found)
+	require.Equal(t, int64(42), ts)
+
+	// A not-yet-loaded entry has no meaningful build_ts: not found.
+	preloaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 99}}
+	preloaded.Status.Store(STATUS_NOT_INIT)
+	c.IndexMap.Store("idx2", preloaded)
+	_, found = c.GetBuildTS("idx2")
+	require.False(t, found)
+}

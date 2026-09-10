@@ -32,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -57,6 +58,21 @@ type Request struct {
 	// usable only after its watermark reaches this timestamp. It intentionally
 	// excludes flush/merge lifecycle timestamps.
 	SourceCommitTS types.TS
+
+	// IndexStorageTable, IndexMetadataDB, and IndexMetadataTable are the index's
+	// hidden tables, resolved by the planner. The freshness check reads the loaded
+	// generation's build_ts from the cache keyed by IndexStorageTable, and on a cold
+	// cache reads MAX(build_ts) from IndexMetadataDB.IndexMetadataTable (what a fresh
+	// load would see). Empty when the planner could not resolve them.
+	IndexStorageTable  string
+	IndexMetadataDB    string
+	IndexMetadataTable string
+
+	// ScanSnapshotTS is the effective historical read TS for a {snapshot=...}/AS OF
+	// query, or nil for a current read. When set, the freshness check targets the
+	// snapshot-bound index generation (cache key index_table@snapshot) and reads the
+	// metadata as of this TS, matching how the search loads a historical generation.
+	ScanSnapshotTS *timestamp.Timestamp
 }
 
 // Hooks reports index freshness.
