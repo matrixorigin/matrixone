@@ -70,6 +70,7 @@ func TestSequenceKeepsHalfCloseIndependentFromResults(t *testing.T) {
 
 	require.ErrorIs(t, sequence.AcceptInput(3), ErrSequence)
 	require.ErrorIs(t, sequence.AcknowledgeResults(3), ErrSequence)
+	require.ErrorIs(t, sequence.AcknowledgeResults(0), ErrSequence)
 	require.NoError(t, sequence.EndInput(2))
 }
 

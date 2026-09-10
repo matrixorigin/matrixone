@@ -11612,12 +11612,20 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		if cf.Import {
 			return moerr.NewNotSupportedNoCtx("Python artifact import requires the immutable artifact catalog")
 		}
+		mode := cf.Mode
+		if mode == "" {
+			mode = "SCALAR"
+		}
+		nullPolicy := cf.NullPolicy
+		if nullPolicy == "" {
+			nullPolicy = udf.NullCallHandler
+		}
 
 		nb := function.PythonRoutineBody{
 			Handler:        cf.Handler,
 			Source:         cf.Body,
-			Mode:           "SCALAR",
-			NullPolicy:     udf.NullCallHandler,
+			Mode:           mode,
+			NullPolicy:     nullPolicy,
 			ABIContract:    udf.PythonABIContract,
 			AdapterVersion: udf.PythonAdapterVersion,
 			SDKVersion:     udf.PythonSDKVersion,

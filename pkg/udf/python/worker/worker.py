@@ -968,7 +968,7 @@ class _InvocationState:
 
     def ack_result(self, sequence: int) -> None:
         with self.condition:
-            if sequence < self.acked_result or sequence > self.last_result:
+            if sequence <= 0 or sequence < self.acked_result or sequence > self.last_result:
                 raise ValueError("PROTOCOL: result ACK is outside the received range")
             self.acked_result = sequence
             self.condition.notify_all()
@@ -1098,7 +1098,6 @@ class RoutineFlightServer(flight.FlightServerBase):
                 }
             )
             return
-            raise ValueError("PROTOCOL: unknown invocation")
         if action.type == "AcknowledgeResults":
             state.ack_result(_required_uint64(control, "ack_sequence"))
         elif action.type == "AcknowledgeFinish":

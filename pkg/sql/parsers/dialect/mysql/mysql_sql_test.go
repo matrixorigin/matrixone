@@ -104,6 +104,44 @@ func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	}
 }
 
+func TestPythonFunctionOptions(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create function py (x int) returns int language python as 'def py(ctx, x): return x' handler 'py' mode vector returns null on null input", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	create, ok := stmt.(*tree.CreateFunction)
+	require.True(t, ok)
+	require.Equal(t, "VECTOR", create.Mode)
+	require.Equal(t, "RETURNS_NULL_ON_NULL_INPUT", create.NullPolicy)
+	require.NoError(t, create.Valid())
+	require.Equal(t,
+		"create function py (x int) returns int language python as 'def py(ctx, x): return x' handler 'py' mode vector returns null on null input",
+		tree.String(stmt, dialect.MYSQL))
+
+	reversed, err := ParseOne(context.Background(),
+		"create function py (x int) returns int language python as 'def py(ctx, x): return x' handler 'py' returns null on null input mode scalar", 1)
+	require.NoError(t, err)
+	defer reversed.Free()
+	reversedCreate := reversed.(*tree.CreateFunction)
+	require.Equal(t, "SCALAR", reversedCreate.Mode)
+	require.Equal(t, "RETURNS_NULL_ON_NULL_INPUT", reversedCreate.NullPolicy)
+
+	called, err := ParseOne(context.Background(),
+		"create function py (x int) returns int language python as 'def py(ctx, x): return x' handler 'py' mode vector called on null input", 1)
+	require.NoError(t, err)
+	defer called.Free()
+	calledCreate := called.(*tree.CreateFunction)
+	require.Equal(t, "VECTOR", calledCreate.Mode)
+	require.Equal(t, "CALLED_ON_NULL_INPUT", calledCreate.NullPolicy)
+
+	sqlOptions, err := ParseOne(context.Background(),
+		"create function sql_fn (x int) returns int language sql as 'select $1' mode vector", 1)
+	require.NoError(t, err)
+	defer sqlOptions.Free()
+	require.ErrorContains(t, sqlOptions.(*tree.CreateFunction).Valid(), "require LANGUAGE PYTHON")
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)
