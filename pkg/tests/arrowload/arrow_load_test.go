@@ -139,12 +139,12 @@ func TestArrowLoadGateDisabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
+// testArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
 // any network I/O. Dummy, unreachable credentials are sufficient proof of the
 // ordering: the statement must be rejected by configuration rather than
 // attempting HeadObject.
-func TestArrowLoadGateS3Disabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, false, false)
+func testArrowLoadGateS3Disabled(t *testing.T, c embed.Cluster) {
+	t.Helper()
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_s3_gate_off")
 	mustExec(t, db, "use arrow_s3_gate_off")
