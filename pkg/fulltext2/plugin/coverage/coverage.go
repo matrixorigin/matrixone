@@ -103,21 +103,33 @@ func parseWatermark(s string) (types.TS, bool) {
 	return ts, !ts.IsEmpty()
 }
 
-// CoversSnapshot reports whether the index generation a probe would search reaches
-// the source DML commit observed by the query CN.
+// CoversSnapshot reports whether the index generation a probe would search reaches the
+// read's coverage bar.
 //
 // Two independent conditions, both required and both fail closed:
 //   - liveness: there is a live (running/completed, not dropped) ISCP maintenance job,
 //     so the index is being kept current at all;
-//   - coverage: build_ts >= SourceCommitTS, where build_ts is MAX(metadata.build_ts)
-//     over base + cdc_tail of the generation the search will actually use -- the loaded
-//     generation from the cache when warm, else the durable metadata a fresh load would
-//     see. Reading the searched generation's own build_ts (not a global watermark) is
-//     what prevents a stale warm cache from over-reporting coverage.
+//   - coverage: build_ts >= bar, where build_ts is MAX(metadata.build_ts) over base +
+//     cdc_tail of the generation the search will actually use -- the loaded generation
+//     from the cache when warm, else the durable metadata a fresh load would see. Reading
+//     the searched generation's own build_ts (not a global watermark) is what prevents a
+//     stale warm cache from over-reporting coverage. The bar is the snapshot TS for a
+//     historical read (fixed past state) and SourceCommitTS for a current read.
 //
-// An empty SourceCommitTS, an unknown build_ts (0), or any lookup error declines.
+// An empty bar, an unknown build_ts (0), or any lookup error declines.
 func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
-	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 || req.SourceCommitTS.IsEmpty() {
+	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
+		return false, nil
+	}
+	// The bar build_ts must reach. A historical read sees a fixed past state, so the bar
+	// is the snapshot TS itself (build_ts >= snapshot ⇒ every source commit up to it is
+	// indexed); SourceCommitTS is not used for a snapshot read. A current read uses the
+	// max outstanding source commit the query CN observes.
+	bar := req.SourceCommitTS
+	if req.ScanSnapshotTS != nil {
+		bar = types.TimestampToTS(*req.ScanSnapshotTS)
+	}
+	if bar.IsEmpty() {
 		return false, nil
 	}
 	live, err := indexJobLive(ctx, req)
@@ -142,7 +154,7 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 		buildTS = maxDurableBuildTS(ctx, req, metaTxn)
 	}
 	covered := types.BuildTS(buildTS, 0)
-	return !covered.LT(&req.SourceCommitTS), nil
+	return !covered.LT(&bar), nil
 }
 
 // indexJobLive reports whether the index has a live ISCP maintenance job: at least one

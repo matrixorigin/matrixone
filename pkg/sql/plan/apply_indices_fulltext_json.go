@@ -369,24 +369,6 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if txn == nil {
 		return false
 	}
-	eng := proc.GetSessionInfo().StorageEngine
-	if eng == nil {
-		return false
-	}
-	_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), txn, scanNode.TableDef.TblId)
-	if err != nil {
-		logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
-		return false
-	}
-	commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
-	if !ok {
-		return false
-	}
-	sourceCommitTS, err := commitTSProvider.SourceCommitTS(proc.GetTopContext())
-	if err != nil {
-		logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
-		return false
-	}
 	// Resolve the index's hidden tables so the freshness check can read the loaded
 	// generation's build_ts (cache, keyed by the storage table) or the durable
 	// MAX(build_ts) from the metadata table on a cold cache.
@@ -399,6 +381,33 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	// current read), computed exactly as the search does, so the freshness check
 	// targets the same snapshot-bound index generation the search will load.
 	scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot)
+
+	// A historical read sees a fixed past state; its coverage bar is the snapshot TS
+	// itself (build_ts >= snapshot ⇒ the index processed everything up to that point),
+	// so SourceCommitTS -- the current-read "max outstanding source commit" that lets an
+	// idle table's watermark catch up -- is neither needed nor meaningful. Only a current
+	// read computes it, from the source relation's partition state.
+	var sourceCommitTS types.TS
+	if scanSnapshotTS == nil {
+		eng := proc.GetSessionInfo().StorageEngine
+		if eng == nil {
+			return false
+		}
+		_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), txn, scanNode.TableDef.TblId)
+		if err != nil {
+			logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
+			return false
+		}
+		commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
+		if !ok {
+			return false
+		}
+		sourceCommitTS, err = commitTSProvider.SourceCommitTS(proc.GetTopContext())
+		if err != nil {
+			logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
+			return false
+		}
+	}
 	// proc.Ctx is canceled during planning; use the top context.
 	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
 		CNUUID:             proc.GetService(),

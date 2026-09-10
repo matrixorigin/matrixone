@@ -157,17 +157,29 @@ func TestCoversSnapshotFailsClosed(t *testing.T) {
 	}
 }
 
-// A historical ({snapshot=...}) read targets the snapshot-bound generation; on a cold
-// cache the metadata MAX(build_ts) read runs on a cloned txn. Covered when it reaches
-// the source commit.
+// A historical ({snapshot=...}) read's bar is the snapshot TS, not SourceCommitTS: with
+// build_ts (200) past the snapshot (50) it is covered even though SourceCommitTS (300)
+// exceeds build_ts -- SourceCommitTS is ignored for a snapshot read. The cold-cache
+// metadata read runs on a cloned txn.
 func TestCoversSnapshotHistorical(t *testing.T) {
 	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 200)
-	r := gateReq(100)
+	r := gateReq(300) // SourceCommitTS deliberately > build_ts; must be ignored
 	histTS := timestamp.Timestamp{PhysicalTime: 50}
 	r.ScanSnapshotTS = &histTS
 	covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
 	require.True(t, covered)
+}
+
+// A historical read declines when build_ts has not reached the snapshot TS.
+func TestCoversSnapshotHistoricalBehind(t *testing.T) {
+	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 50)
+	r := gateReq(0) // no SourceCommitTS at all; the bar is the snapshot
+	histTS := timestamp.Timestamp{PhysicalTime: 100}
+	r.ScanSnapshotTS = &histTS
+	covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
+	require.NoError(t, err)
+	require.False(t, covered)
 }
 
 // A dropped row alongside a live one is ignored rather than poisoning the answer:
