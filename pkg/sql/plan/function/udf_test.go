@@ -38,22 +38,47 @@ func TestPythonTypeContractPreservesDeclaredShape(t *testing.T) {
 
 	routine := &Udf{Language: "python", Body: string(body), ArgsType: []types.Type{types.T_decimal64.ToType()}}
 	require.NoError(t, routine.LoadPythonTypeContract())
+	routine.Args = []*Arg{{Type: "decimal"}}
+	require.NoError(t, routine.ValidatePythonTypeContract())
 	require.Equal(t, argument, routine.GetArgsType()[0])
 	require.Equal(t, returnType, routine.GetRetType())
 	require.Equal(t, int32(6), routine.GetArgsPlanType()[0].Scale)
 	require.Equal(t, int32(64), routine.GetRetPlanType().Width)
 }
 
-func TestPythonTypeContractKeepsLegacyFallback(t *testing.T) {
+func TestPythonTypeContractRejectsMissingReturnDescriptor(t *testing.T) {
 	routine := &Udf{
 		Language: "python",
 		Body:     `{"handler":"legacy","source":"def legacy(ctx, x): return x"}`,
 		ArgsType: []types.Type{types.T_int32.ToType()},
 		RetType:  "int",
 	}
+	require.ErrorContains(t, routine.LoadPythonTypeContract(), "return descriptor")
+}
+
+func TestPythonTypeContractRejectsArgumentCountMismatch(t *testing.T) {
+	argument, err := NewPythonTypeDescriptor(types.T_int32.ToType())
+	require.NoError(t, err)
+	returnType, err := NewPythonTypeDescriptor(types.T_int32.ToType())
+	require.NoError(t, err)
+	body, err := json.Marshal(PythonRoutineBody{ArgTypes: []PythonTypeDescriptor{argument}, ReturnType: &returnType})
+	require.NoError(t, err)
+	routine := &Udf{Language: "python", Body: string(body)}
 	require.NoError(t, routine.LoadPythonTypeContract())
-	require.Equal(t, types.T_int32.ToType(), routine.GetArgsType()[0])
-	require.Equal(t, types.T_int32.ToType(), routine.GetRetType())
+	require.ErrorContains(t, routine.ValidatePythonTypeContract(), "descriptors for 0 arguments")
+}
+
+func TestPythonTypeContractReloadReplacesDescriptors(t *testing.T) {
+	argument, err := NewPythonTypeDescriptor(types.T_int32.ToType())
+	require.NoError(t, err)
+	returnType, err := NewPythonTypeDescriptor(types.T_int32.ToType())
+	require.NoError(t, err)
+	body, err := json.Marshal(PythonRoutineBody{ArgTypes: []PythonTypeDescriptor{argument}, ReturnType: &returnType})
+	require.NoError(t, err)
+	routine := &Udf{Language: "python", Body: string(body)}
+	require.NoError(t, routine.LoadPythonTypeContract())
+	require.NoError(t, routine.LoadPythonTypeContract())
+	require.Len(t, routine.PythonArgTypes, 1)
 }
 
 func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
