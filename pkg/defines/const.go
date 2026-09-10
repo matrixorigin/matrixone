@@ -93,8 +93,8 @@ const (
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
-	MORPCVersion58     int64 = 58 // lossless physical/logical NoFull CDC start watermark
-	MORPCLatestVersion       = MORPCVersion58
+	MORPCVersion60     int64 = 60 // lossless physical/logical NoFull CDC start watermark
+	MORPCLatestVersion       = MORPCVersion60
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
