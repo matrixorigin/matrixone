@@ -16,10 +16,12 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,40 +46,58 @@ var randomPorts = allocatedPorts{
 }
 
 func getAvailablePort() int {
-	genPort := func() int {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
-		return rand.Intn(65535-21024) + 21024
+	port, err := randomPorts.allocate(probeTestPort)
+	if err != nil {
+		panic(err) // Preserve the existing fixture API, but fail promptly with the cause.
 	}
-	checkPort := func(p int) bool {
-		randomPorts.Lock()
-		defer randomPorts.Unlock()
-		_, ok := randomPorts.ports[p]
-		if ok {
-			return false
+	return port
+}
+
+const maxPortAllocationAttempts = 128
+
+func (a *allocatedPorts) allocate(probe func(int) error) (int, error) {
+	a.Lock()
+	defer a.Unlock()
+	for range maxPortAllocationAttempts {
+		port := rand.Intn(65535-21024) + 21024
+		if _, exists := a.ports[port]; exists {
+			continue
 		}
-		// A port table snapshot is unavailable on macOS and racy on every
-		// platform. Probe both protocols before releasing the sockets so test
-		// fixtures do not select a port already in use.
-		addr := fmt.Sprintf("127.0.0.1:%d", p)
-		tcp, err := net.Listen("tcp", addr)
-		if err != nil {
-			return false
+		if err := probe(port); err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			return 0, fmt.Errorf("probe test port %d: %w", port, err)
 		}
-		defer tcp.Close()
-		udp, err := net.ListenPacket("udp", addr)
-		if err != nil {
-			return false
-		}
-		udp.Close()
-		randomPorts.ports[p] = struct{}{}
-		return true
+		a.ports[port] = struct{}{}
+		return port, nil
 	}
-	for {
-		p := genPort()
-		if checkPort(p) {
-			return p
+	return 0, fmt.Errorf("no available test port after %d attempts", maxPortAllocationAttempts)
+}
+
+func probeTestPort(port int) error {
+	// Match wildcard listeners and reject existing loopback listeners too:
+	// macOS can allow a wildcard TCP bind beside an existing specific bind.
+	// Each probe closes before the next; no socket is reserved until use.
+	for _, host := range []string{DefaultListenHost, DefaultServiceHost} {
+		if err := probeTestPortAddress(fmt.Sprintf("%s:%d", host, port)); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func probeTestPortAddress(addr string) error {
+	tcp, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return err
+	}
+	defer tcp.Close()
+	udp, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		return err
+	}
+	return udp.Close()
 }
 
 var getClientConfig = func(readOnly bool, svcAddress ...string) ClientConfig {

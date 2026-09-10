@@ -919,6 +919,8 @@ func TestGetCheckerState(t *testing.T) {
 
 func TestSetInitialClusterInfo(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// Keep background ID preallocation out of the exact watermark assertions.
+		store.tickerStopper.Stop()
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)

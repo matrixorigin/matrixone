@@ -1175,6 +1175,29 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			}
 			configs := make([]Config, 0, nodeCount)
 			services := make([]*Service, 0, nodeCount)
+			defer func() {
+				testLogger.Info("going to close all services")
+				var wg sync.WaitGroup
+				var closeErr error
+				var closeErrMu sync.Mutex
+				for _, s := range services {
+					if s != nil {
+						selected := s
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							if err := selected.Close(); err != nil {
+								closeErrMu.Lock()
+								closeErr = errors.Join(closeErr, err)
+								closeErrMu.Unlock()
+							}
+							testLogger.Info("closed a service")
+						}()
+					}
+				}
+				wg.Wait()
+				require.NoError(t, closeErr)
+			}()
 			for i := 0; i < nodeCount; i++ {
 				cfg := DefaultConfig()
 				cfg.FS = vfs.NewStrictMem()
@@ -1203,29 +1226,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				require.NoError(t, err)
 				services = append(services, service)
 			}
-			defer func() {
-				testLogger.Info("going to close all services")
-				var wg sync.WaitGroup
-				var closeErr error
-				var closeErrMu sync.Mutex
-				for _, s := range services {
-					if s != nil {
-						selected := s
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							if err := selected.Close(); err != nil {
-								closeErrMu.Lock()
-								closeErr = errors.Join(closeErr, err)
-								closeErrMu.Unlock()
-							}
-							testLogger.Info("closed a service")
-						}()
-					}
-				}
-				wg.Wait()
-				require.NoError(t, closeErr)
-			}()
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)
