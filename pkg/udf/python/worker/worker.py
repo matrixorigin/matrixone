@@ -516,6 +516,7 @@ def _canonical_descriptor(descriptor: Dict[str, Any]) -> bytes:
     for key in _DESCRIPTOR_TEXT_KEYS:
         if key in descriptor and type(descriptor[key]) is not str:
             raise ValueError(f"TYPE_CONTRACT: descriptor {key} must be text")
+    _validate_descriptor_domain(descriptor)
     order = ("type_id", "width", "scale", "charset", "offset_width", "json_encoding", "temporal_encoding")
     result = {}
     for key in order:
@@ -523,6 +524,62 @@ def _canonical_descriptor(descriptor: Dict[str, Any]) -> bytes:
         if key == "type_id" or value not in (None, 0, ""):
             result[key] = value
     return json.dumps(result, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def _validate_descriptor_domain(descriptor: Dict[str, Any]) -> None:
+    type_id = int(descriptor["type_id"])
+    width = int(descriptor.get("width") or 0)
+    scale = int(descriptor.get("scale") or 0)
+    charset = int(descriptor.get("charset") or 0)
+    expected_offset_width = 0 if type_id in (UUID, VECF32, VECF64) else 32
+    if width < 0:
+        raise ValueError("TYPE_CONTRACT: descriptor width must be non-negative")
+    if scale < 0:
+        raise ValueError("TYPE_CONTRACT: descriptor scale must be non-negative")
+    if int(descriptor.get("offset_width") or expected_offset_width) != expected_offset_width:
+        raise ValueError(
+            f"TYPE_CONTRACT: descriptor offset_width must be {expected_offset_width}"
+        )
+    json_encoding = descriptor.get("json_encoding")
+    if json_encoding not in (None, "") and (type_id != JSON or json_encoding != "canonical_text"):
+        raise ValueError("TYPE_CONTRACT: unsupported JSON encoding")
+    temporal_encoding = descriptor.get("temporal_encoding")
+    if temporal_encoding not in (None, "") and (
+        type_id not in (DATE, DATETIME, TIMESTAMP) or temporal_encoding != "sql_zero_struct"
+    ):
+        raise ValueError("TYPE_CONTRACT: unsupported temporal encoding")
+
+    if type_id in (BOOL, INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64, JSON):
+        if width or scale or charset:
+            raise ValueError("TYPE_CONTRACT: descriptor carries unused fields")
+    elif type_id in (DECIMAL64, DECIMAL128):
+        maximum = 18 if type_id == DECIMAL64 else 38
+        if width < 1 or width > maximum:
+            raise ValueError("TYPE_CONTRACT: decimal precision is outside the supported range")
+        if scale > width:
+            raise ValueError("TYPE_CONTRACT: decimal scale exceeds precision")
+        if charset:
+            raise ValueError("TYPE_CONTRACT: decimal descriptor carries a charset")
+    elif type_id == DATE:
+        if scale or charset:
+            raise ValueError("TYPE_CONTRACT: DATE descriptor has invalid scale or charset")
+    elif type_id in (TIME, DATETIME, TIMESTAMP):
+        if scale > 6 or charset:
+            raise ValueError("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
+    elif type_id in (CHAR, VARCHAR, TEXT):
+        if charset > 3:
+            raise ValueError("TYPE_CONTRACT: unsupported text charset")
+    elif type_id in (BINARY, VARBINARY, BLOB):
+        if charset != 1:
+            raise ValueError("TYPE_CONTRACT: binary descriptor must use the binary charset")
+    elif type_id == UUID:
+        if width or scale or charset:
+            raise ValueError("TYPE_CONTRACT: UUID descriptor carries unused fields")
+    elif type_id in (VECF32, VECF64):
+        if width < 1 or width > 65535 or scale or charset:
+            raise ValueError("TYPE_CONTRACT: vector dimension or metadata is outside the supported range")
+    else:
+        raise ValueError(f"TYPE_CONTRACT: unsupported type id {type_id}")
 
 
 def _physical_fingerprint(descriptor: Dict[str, Any]) -> str:
