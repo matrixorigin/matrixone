@@ -9,13 +9,35 @@ case_tag varchar(64) not null,
 payload json null,
 primary key (id)
 );
+create table load_observations (
+id bigint not null,
+trace_id varchar(128) not null,
+case_tag varchar(64) not null,
+payload json null,
+primary key (id)
+);
 create table sql_null_observations (
 id bigint primary key,
 payload json null
 );
 create table malformed_observations (
-raw_data json not null
+id bigint not null,
+trace_id varchar(128) not null,
+case_tag varchar(64) not null,
+payload json not null
 );
+load data infile {'filepath'='$resources/json_variant/json_variant_load_valid.jl','format'='jsonline','jsondata'='object'} into table load_observations;
+select count(*) as loaded_rows from load_observations;
+➤ loaded_rows[-5,64,0]  𝄀
+3
+select id,
+json_type(json_extract(payload, '$.value')) as value_type
+from load_observations
+order by id;
+➤ id[-5,64,0]  ¦  value_type[12,65535,0]  𝄀
+30001  ¦  INTEGER  𝄀
+30002  ¦  STRING  𝄀
+30003  ¦  BOOLEAN
 insert into observations values
 (1, 'trace-edge-missing', 'missing_path',
 '{"kind":"edge","attr":{"present":"yes"}}'),
@@ -158,8 +180,8 @@ where json_extract_string(payload, '$.other') = 'deployment'
 order by id;
 ➤ id[-5,64,0]  𝄀
 4
-insert into malformed_observations values ('{"id":"not-an-integer","payload":');
-invalid input: json text {"id":"not-an-integer","payload":
+load data infile {'filepath'='$resources/json_variant/json_variant_load_malformed.jl','format'='jsonline','jsondata'='object'} into table malformed_observations;
+invalid input: the line is not a well-formed json object
 select count(*) as accepted_rows from malformed_observations;
 ➤ accepted_rows[-5,64,0]  𝄀
 0

@@ -19,14 +19,34 @@ create table observations (
     primary key (id)
 );
 
+create table load_observations (
+    id bigint not null,
+    trace_id varchar(128) not null,
+    case_tag varchar(64) not null,
+    payload json null,
+    primary key (id)
+);
+
 create table sql_null_observations (
     id bigint primary key,
     payload json null
 );
 
 create table malformed_observations (
-    raw_data json not null
+    id bigint not null,
+    trace_id varchar(128) not null,
+    case_tag varchar(64) not null,
+    payload json not null
 );
+
+-- C001 ingestion smoke: load JSON Lines through the public JSON loader and
+-- preserve scalar types in the target JSON column.
+load data infile {'filepath'='$resources/json_variant/json_variant_load_valid.jl','format'='jsonline','jsondata'='object'} into table load_observations;
+select count(*) as loaded_rows from load_observations;
+select id,
+       json_type(json_extract(payload, '$.value')) as value_type
+from load_observations
+order by id;
 
 -- C001-C008: missing paths, JSON null, scalar types, arrays, deep paths,
 -- large values, key reordering, and path evolution.
@@ -164,8 +184,8 @@ from observations
 where json_extract_string(payload, '$.other') = 'deployment'
 order by id;
 
--- C013: malformed JSON is rejected and cannot add a row.
-insert into malformed_observations values ('{"id":"not-an-integer","payload":');
+-- C013: malformed JSON Lines are rejected and cannot add a row.
+load data infile {'filepath'='$resources/json_variant/json_variant_load_malformed.jl','format'='jsonline','jsondata'='object'} into table malformed_observations;
 select count(*) as accepted_rows from malformed_observations;
 
 -- C015: direct JSON INSERT persists typed values.
