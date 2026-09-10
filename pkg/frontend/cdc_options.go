@@ -43,22 +43,23 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName            string
+	TaskId              string
+	UserInfo            *CDCUserInfo
+	Exclude             string
+	StartTs             string
+	EndTs               string
+	MaxSqlLength        int64
+	PitrTables          string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri              string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo          cdc.UriInfo
+	SinkUri             string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo         cdc.UriInfo
+	ExtraOpts           string // json encoded extra opts: map[string]any
+	SinkType            string
+	NoFull              bool
+	startTsFromSnapshot bool
+	ConfigFile          string
 
 	// control options
 	UseConsole bool
@@ -75,6 +76,7 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.PitrTables = ""
 	opts.SinkType = ""
 	opts.NoFull = false
+	opts.startTsFromSnapshot = false
 	opts.UseConsole = false
 	opts.ConfigFile = ""
 	opts.SrcUriInfo = cdc.UriInfo{}
@@ -94,6 +96,7 @@ func (opts *CDCCreateTaskOptions) setNoFullStartTS(txnOp client.TxnOperator) {
 			// discard LogicalTime and move the watermark backwards within the
 			// same physical timestamp.
 			opts.StartTs = snapshotTS.DebugString()
+			opts.startTsFromSnapshot = true
 		}
 	}
 }
@@ -272,13 +275,20 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
 	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// remain eligible for legacy executors because they cannot partially commit
-	// an initial snapshot.
+	// with an automatically persisted HLC start also require the new executor
+	// capability; older executors cannot parse the lossless timestamp format.
+	if opts.NoFull && opts.StartTs != "" && opts.startTsFromSnapshot {
+		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
+	}
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
 		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
 		if err = validateStableInitialSnapshotProtocol(
 			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
+			return
+		}
+	} else if opts.startTsFromSnapshot {
+		if err = validateStableInitialSnapshotProtocol(ctx, true, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
 	}
@@ -303,7 +313,8 @@ func validateStableInitialSnapshotProtocol(
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
-	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+	if (!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)) ||
+		(opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts)) {
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{

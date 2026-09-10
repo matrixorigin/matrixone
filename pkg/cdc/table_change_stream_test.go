@@ -993,6 +993,18 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "sinker reset should not occur on fatal stale read")
 }
 
+func TestTableChangeStream_NoFullStaleReadDoesNotAdvanceDurableStart(t *testing.T) {
+	startTs := types.BuildTS(100, 5)
+	h := newTableStreamHarness(t, withHarnessNoFull(true), withHarnessStartTs(startTs))
+	defer h.Close()
+
+	h.SetCollectError(moerr.NewErrStaleReadNoCtx("db1", "t1"))
+	err := h.RunStream(h.NewActiveRoutine())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot recover")
+	require.False(t, h.Stream().GetRetryable())
+}
+
 func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
