@@ -81,6 +81,35 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 	return c
 }
 
+// startArrowLoadClusterWithForceModes provisions one CN for each ownership
+// policy in the fallback test. Both CNs use the same storage and fixture, so
+// the policy comparison pays for one cluster lifecycle while still compiling
+// and executing each mode through an independent public frontend.
+func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
+	t.Helper()
+	nextCN := 0
+	c, err := embed.StartTestCluster(
+		embed.WithCNCount(2),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			forceMaterialize := nextCN == 1
+			nextCN++
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ArrowLoad.Enabled = true
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = true
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = forceMaterialize
+			})
+		}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	return c
+}
+
 // adjustArrowLoadCluster changes only the next CN generation's rollout
 // settings. Callers close the current generation before adjustment and restart
 // afterward, so an admitted statement always keeps the policy snapshot carried
