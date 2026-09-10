@@ -178,8 +178,8 @@ test('entrypoint routes each scope through one required check', () => {
   }
 });
 
-test('entrypoint enables the complete race-UT shard contract', () => {
+test('entrypoint runs the complete race-UT suite on one runner', () => {
   const caller = entrypointJobs()['matrixone-ci'];
   assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
-  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: true$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: false$/m);
 });
