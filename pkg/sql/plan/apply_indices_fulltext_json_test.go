@@ -769,8 +769,9 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
 					{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
 				},
-				Pkey:    &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
-				Indexes: []*plan.IndexDef{idx},
+				Name2ColIndex: map[string]int32{"id": 0, "j": 1},
+				Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Indexes:       []*plan.IndexDef{idx},
 			},
 		}
 		return &QueryBuilder{compCtx: mockCtx}, scan
@@ -830,4 +831,24 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	b, scan = newCase(false)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
+
+	// composite/hidden primary key -> skip: table_changes drops the hidden pk column, so the tail
+	// cannot be anchored; a partial plan would hard-error at the splice, so decline to a full scan.
+	covers(false, nil)
+	buildTS(types.BuildTS(100, 0))
+	b, scan = newCase(true)
+	scan.TableDef.Cols = append(scan.TableDef.Cols,
+		&plan.ColDef{Name: "__mo_cpkey_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_varchar)}})
+	scan.TableDef.Name2ColIndex["__mo_cpkey_col"] = 2
+	scan.TableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey_col", Names: []string{"a", "b"}}
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind, "composite/hidden pk cannot anchor the tail -> full scan")
+
+	// build_ts already at/after the read snapshot -> empty (build_ts, snapshot] window -> skip; the
+	// index already covers this read and table_changes would reject from >= to.
+	covers(false, nil)
+	buildTS(types.BuildTS(2_000_000_000_000_000_000, 0)) // > the fakeCoverageTxn snapshot (1.7e18)
+	b, scan = newCase(true)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind, "empty window (build_ts >= snapshot) -> full scan")
 }

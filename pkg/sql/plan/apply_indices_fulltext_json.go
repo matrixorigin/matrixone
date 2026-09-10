@@ -526,6 +526,21 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if validateTableChangesSource(scanNode.ObjRef, scanNode.TableDef) != nil {
 		return jsonProbeSkip, types.TS{}
 	}
+	// table_changes emits only non-hidden source columns, so a composite (or otherwise hidden)
+	// primary key -- whose pk column it drops -- cannot anchor the tail's pk projection. Decline to a
+	// full scan rather than promise a partial plan buildJSONProbeTail cannot build.
+	pkPos, ok := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	if !ok || int(pkPos) >= len(scanNode.TableDef.Cols) || scanNode.TableDef.Cols[pkPos].Hidden {
+		return jsonProbeSkip, types.TS{}
+	}
+	// The tail spans (build_ts, snapshot]. When build_ts has already reached the read snapshot -- which
+	// happens when the coverage bar (SourceCommitTS) exceeds it -- the window is empty and
+	// table_changes would reject from >= to; the index already covers this read, so a full scan is
+	// correct and cheap enough (this is a rare bar/snapshot skew).
+	readTS := types.TimestampToTS(txn.SnapshotTS())
+	if !buildTS.LT(&readTS) {
+		return jsonProbeSkip, types.TS{}
+	}
 	return jsonProbePartial, buildTS
 }
 
@@ -826,9 +841,10 @@ func (builder *QueryBuilder) dedupFulltextDocIDs(ctx *BindContext, ftNodeID int3
 	if builder.jsonProbeFtNodes == nil {
 		builder.jsonProbeFtNodes = make(map[int32]bool)
 	}
-	// Recorded against the SCAN, not the group: the scan is what the score-sort
-	// and runtime-filter passes still hold ids for, and both must know this
-	// stream is a probe.
+	// Record the immediate child, not the group: on the covered path that is the fulltext2_search
+	// SCAN (the id the score-sort/runtime-filter passes hold in ret_filter_node_ids); on the partial
+	// path the caller passes the UNION and separately marks the scan id at the splice. Either way the
+	// stream feeding this group is a probe.
 	builder.jsonProbeFtNodes[ftNodeID] = true
 
 	return nodeID, &plan.Expr{

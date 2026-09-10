@@ -217,10 +217,6 @@ func indexJobLive(ctx context.Context, req coverage.Request) (bool, error) {
 }
 
 // maxDurableBuildTS reads MAX(build_ts) over the index's metadata table -- base + cdc_tail --
-// the coverage a fresh (cold-cache) load would see. Runs in the caller's tenant, where the
-// index's hidden tables live. Returns 0 (declines) on a missing column (pre-migration index),
-// an unresolved table, or any read error: a safe under-report.
-// maxDurableBuildTS reads MAX(build_ts) over the index's metadata table -- base + cdc_tail --
 // on txn, the operator the caller already snapshot-aligned to the generation being measured
 // (the current txn, or one cloned at the read's snapshot). Returns 0 (declines) on a missing
 // column (pre-migration index), an unresolved table, or any read error: a safe under-report.
