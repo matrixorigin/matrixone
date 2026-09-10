@@ -546,6 +546,8 @@ class WorkerContractTest(unittest.TestCase):
             worker._decode_control(json.dumps({"version": True, "kind": "InputBatch", "tuple": tuple_value}).encode())
         with self.assertRaisesRegex(ValueError, "invalid control field sequence"):
             worker._required_uint64({"sequence": "1"}, "sequence")
+        with self.assertRaisesRegex(ValueError, "invalid invocation field timeout"):
+            worker._required_positive_float({"timeout": float("nan")}, "timeout", 60.0)
 
     def test_result_ack_rejects_zero_sequence(self):
         state = worker._InvocationState({}, 1)
