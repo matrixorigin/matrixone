@@ -5806,6 +5806,42 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	if scale > 0 {
+		var power types.Decimal128
+		if scale <= 19 {
+			power = types.Decimal128{B0_63: types.Pow10[scale]}
+		} else {
+			power, _ = (types.Decimal128{B0_63: types.Pow10[19]}).Mul128(types.Decimal128{B0_63: types.Pow10[scale-19]})
+		}
+		quotient, _ := value.Div128Trunc(power)
+		product, _ := quotient.Mul128(power)
+		remainder, _ := value.Sub128(product)
+		halfPower, _ := power.Div128Trunc(types.Decimal128{B0_63: 2})
+		if remainder.Compare(halfPower) >= 0 {
+			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
+		}
+		value = quotient
+	}
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if value.B64_127 != 0 || value.B0_63 > limit {
+		return limit
+	}
+	if negative {
+		return -value.B0_63
+	}
+	return value.B0_63
+}
+
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5905,6 +5941,26 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return 0, true
 			}
 			return uint64(int64(val)), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
