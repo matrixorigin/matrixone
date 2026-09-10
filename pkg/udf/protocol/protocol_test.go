@@ -126,6 +126,14 @@ func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestFencingTupleRejectsInvalidUTF8(t *testing.T) {
+	tuple := testTuple()
+	tuple.StatementID = string([]byte{0xff})
+	require.ErrorContains(t, tuple.Validate(), "invalid UTF-8")
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
+	require.ErrorContains(t, err, "invalid UTF-8")
+}
+
 func TestSequenceKeepsHalfCloseIndependentFromResults(t *testing.T) {
 	var sequence Sequence
 	require.NoError(t, sequence.AcceptInput(1))
