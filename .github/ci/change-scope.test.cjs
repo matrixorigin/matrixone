@@ -96,6 +96,12 @@ function results() {
   return needs;
 }
 
+function entrypointJobs() {
+  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
+  return Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
+    .map(match => [match[1], match[2]]));
+}
+
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
   const jobs = {
     docs: ['docs-check'], ut: ['matrixone-ci'],
@@ -132,9 +138,7 @@ test('a successful eligibility job cannot hide skipped UT coverage', () => {
 });
 
 test('entrypoint routes each scope through one required check', () => {
-  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
-  const blocks = Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
-    .map(match => [match[1], match[2]]));
+  const blocks = entrypointJobs();
   const routed = ['docs-check', 'bvt-group-plan', 'matrixone-shared-build', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-upgrade-ci', 'matrixone-compose-ci',
     'matrixone-standalone-ci', 'matrixone-coverage-merge'];
@@ -172,4 +176,10 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
     assert.match(blocks[job], /persist-credentials: false/);
   }
+});
+
+test('entrypoint enables the complete race-UT shard contract', () => {
+  const caller = entrypointJobs()['matrixone-ci'];
+  assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: true$/m);
 });
