@@ -140,3 +140,25 @@ func TestGatewayFinishRejectsLateHalfStreamControls(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayRejectsArrowBodyOnControlFrame(t *testing.T) {
+	tuple := validInvocation().Tuple
+	sequence := protocol.Sequence{}
+	require.NoError(t, sequence.AcceptInput(1))
+	require.NoError(t, sequence.EndInput(1))
+	require.NoError(t, sequence.AcceptResult(1))
+	require.NoError(t, sequence.AcknowledgeResults(1))
+	control := gatewayControl(t, "Finish", tuple, func(value *protocol.Control) {
+		value.Status = statusOK
+		value.FinishID = "finish-1"
+		value.LastSequence = 1
+	})
+	control.DataBody = []byte("hidden Arrow payload")
+	gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}
+	err := gateway.receiveFinish(
+		context.Background(), nil,
+		&gatewayResultStream{results: []*flight.FlightData{control}},
+		tuple, 1, 1, &sequence,
+	)
+	require.ErrorContains(t, err, "unexpected Arrow data")
+}
