@@ -30,7 +30,11 @@ package collationkey
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -253,6 +257,109 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	}
 }
 
+func TestDecimalScaleBoundariesDoNotNarrowFractionLength(t *testing.T) {
+	domain := Domain{Type: Decimal, Width: 8, Scale: 0}
+	want, err := EncodePart(nil, Part{Domain: domain, Value: []byte("1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fractionalLength := range []int{32767, 32768, 65535, 65536} {
+		value := "1." + strings.Repeat("0", fractionalLength)
+		got, err := EncodePart(nil, Part{Domain: domain, Value: []byte(value)})
+		if err != nil {
+			t.Fatalf("fractional length %d: %v", fractionalLength, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("fractional length %d changed the canonical integer: %X != %X", fractionalLength, got, want)
+		}
+	}
+	for _, fractionalLength := range []int{32768, 65536} {
+		value := "1." + strings.Repeat("0", fractionalLength-1) + "1"
+		if _, err := EncodePart(nil, Part{Domain: domain, Value: []byte(value)}); !errors.Is(err, ErrInvalidValue) {
+			t.Fatalf("fractional length %d with discarded non-zero digits: %v", fractionalLength, err)
+		}
+	}
+	for _, value := range []string{".", "+.", "-."} {
+		if _, err := EncodePart(nil, Part{Domain: domain, Value: []byte(value)}); !errors.Is(err, ErrInvalidValue) {
+			t.Fatalf("digitless decimal %q was accepted: %v", value, err)
+		}
+	}
+	for _, value := range []string{".1", "1."} {
+		if _, err := EncodePart(nil, Part{Domain: Domain{Type: Decimal, Width: 8, Scale: 1}, Value: []byte(value)}); err != nil {
+			t.Fatalf("legal decimal spelling %q was rejected: %v", value, err)
+		}
+	}
+}
+
+func TestNormalizeTextBudgetCountsRunes(t *testing.T) {
+	spec, _, err := domainSpec(generalDomain(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := normalizeText(generalDomain(0), spec, []byte("😀"), 4); err != nil || len(got) != 4 {
+		t.Fatalf("one four-byte rune with four-byte budget: len=%d err=%v", len(got), err)
+	}
+	if _, err := normalizeText(generalDomain(0), spec, []byte("😀"), 3); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("one four-byte rune exceeded three-byte payload budget: %v", err)
+	}
+}
+
+func TestEncodeCompositeMaxKeyBytesBoundaries(t *testing.T) {
+	payloadBudget := MaxKeyBytes - envelopeHeader - partFixedHeader - 6
+	value := make([]byte, payloadBudget+1)
+	for i := range value {
+		value[i] = 'x'
+	}
+	cases := []struct {
+		name string
+		size int
+		err  bool
+	}{
+		{name: "limit-1", size: payloadBudget - 1},
+		{name: "limit", size: payloadBudget},
+		{name: "limit+1", size: payloadBudget + 1, err: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := EncodePart(nil, Part{Domain: binaryDomain(0), Value: value[:tc.size]})
+			if tc.err {
+				if !errors.Is(err, ErrMalformedKey) {
+					t.Fatalf("oversized envelope error=%v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLen := envelopeHeader + partFixedHeader + 6 + tc.size
+			if len(got) != wantLen || len(got) > MaxKeyBytes {
+				t.Fatalf("encoded len=%d want=%d", len(got), wantLen)
+			}
+			if err := ValidateEncoded(got); err != nil {
+				t.Fatalf("ValidateEncoded: %v", err)
+			}
+			got = nil
+			runtime.GC()
+		})
+	}
+	t.Run("existing prefix is outside envelope limit", func(t *testing.T) {
+		prefix := make([]byte, MaxKeyBytes-1)
+		got, err := EncodePart(prefix, Part{Domain: binaryDomain(0), Value: []byte("x")})
+		if err != nil {
+			t.Fatalf("existing prefix consumed the new envelope budget: %v", err)
+		}
+		if len(got) != len(prefix)+envelopeHeader+partFixedHeader+6+1 {
+			t.Fatalf("encoded len=%d with prefix, want %d", len(got), len(prefix)+envelopeHeader+partFixedHeader+6+1)
+		}
+		if !bytes.Equal(got[:len(prefix)], prefix) {
+			t.Fatal("existing prefix was modified")
+		}
+		got = nil
+		prefix = nil
+		runtime.GC()
+	})
+}
+
 func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	valid, err := EncodePart(nil, Part{Domain: generalDomain(0), Value: []byte("Alpha")})
 	if err != nil {
@@ -293,20 +400,55 @@ func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 		t.Fatal("non-canonical parameters accepted")
 	}
 	badWeight := append([]byte(nil), valid...)
-	badWeight[len(badWeight)-4] = 1
+	badWeight[len(badWeight)-4] = 0
+	badWeight[len(badWeight)-3] = 0
+	badWeight[len(badWeight)-2] = 0xd8
+	badWeight[len(badWeight)-1] = 0
 	if err := ValidateEncoded(badWeight); err == nil {
-		t.Fatal("non-canonical general-ci weight accepted")
+		t.Fatal("non-frozen general-ci weight accepted")
 	}
 	badNullPayload := append([]byte(nil), valid...)
 	badNullPayload[7] = 1
 	if err := ValidateEncoded(badNullPayload); err == nil {
 		t.Fatal("NULL part with payload accepted")
 	}
+	validGeneralPrefix, err := EncodePart(nil, Part{Domain: generalDomain(1), Value: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validGeneralPrefix = append(validGeneralPrefix, 0, 0, 0, 'A')
+	binary.BigEndian.PutUint32(validGeneralPrefix[19:23], 8)
+	if err := ValidateEncoded(validGeneralPrefix); err == nil {
+		t.Fatal("general-ci payload beyond character prefix accepted")
+	}
+	validBinaryPrefix, err := EncodePart(nil, Part{Domain: binaryDomain(1), Value: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validBinaryPrefix = append(validBinaryPrefix, 'b')
+	binary.BigEndian.PutUint32(validBinaryPrefix[19:23], 2)
+	if err := ValidateEncoded(validBinaryPrefix); err == nil {
+		t.Fatal("binary payload beyond byte prefix accepted")
+	}
+	validUTF8Bin, err := EncodePart(nil, Part{Domain: binTextDomain(0), Value: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validUTF8Bin = append(validUTF8Bin, ' ')
+	binary.BigEndian.PutUint32(validUTF8Bin[19:23], 2)
+	if err := ValidateEncoded(validUTF8Bin); err == nil {
+		t.Fatal("utf8-bin trailing PAD SPACE accepted")
+	}
 	if _, err := EncodeComposite(nil, make([]Part, MaxParts+1)); err == nil {
 		t.Fatal("too many parts accepted")
 	}
-	if _, err := EncodeComposite(make([]byte, MaxKeyBytes-1), []Part{{Domain: generalDomain(0), Value: []byte("a")}}); err == nil {
-		t.Fatal("key exceeding maximum size accepted")
+	prefix := []byte("existing destination prefix")
+	withPrefix, err := EncodeComposite(prefix, []Part{{Domain: generalDomain(0), Value: []byte("a")}})
+	if err != nil {
+		t.Fatalf("existing destination prefix changed envelope budget: %v", err)
+	}
+	if !bytes.Equal(withPrefix[:len(prefix)], prefix) {
+		t.Fatal("existing destination prefix was overwritten")
 	}
 	validDecimal, err := EncodePart(nil, Part{Domain: Domain{Type: Decimal, Width: 8, Scale: 2}, Value: []byte("1.20")})
 	if err != nil {
@@ -321,6 +463,11 @@ func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
 	badDecimalScale[23] = 0xff
 	if err := ValidateEncoded(badDecimalScale); err == nil {
 		t.Fatal("out-of-range decimal scale accepted")
+	}
+	badDecimalDeclaredScale := append([]byte(nil), validDecimal...)
+	binary.BigEndian.PutUint32(badDecimalDeclaredScale[23:27], 3)
+	if err := ValidateEncoded(badDecimalDeclaredScale); err == nil {
+		t.Fatal("decimal payload scale beyond declared scale accepted")
 	}
 	badDecimalCoeff := append([]byte(nil), validDecimal...)
 	badDecimalCoeff[31] = 0

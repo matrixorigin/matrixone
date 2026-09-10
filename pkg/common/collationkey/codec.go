@@ -44,6 +44,8 @@ const (
 	MaxKeyBytes     = 64 << 20
 	maxParameter    = 1<<16 - 1
 	maxPayload      = 1<<32 - 1
+	envelopeHeader  = 4 + 1 + 2
+	partFixedHeader = 1 + 1 + 2 + 2 + 4
 )
 
 // TypeFamily identifies the type family whose value is normalized.  A family
@@ -153,6 +155,33 @@ var familySpecs = [...]familySpec{
 }
 
 var registryDigest = buildRegistryDigest()
+
+// The validator must recognize the same finite set of weights that the
+// frozen general-ci table can emit.  Checking only the uint16 range would
+// accept arbitrary reader-mutated payloads as if they were canonical keys.
+var generalCIWeightSet = buildGeneralCIWeightSet()
+
+func buildGeneralCIWeightSet() [1 << 16]bool {
+	var weights [1 << 16]bool
+	for plane, table := range planeTable {
+		if table == nil {
+			base := rune(plane << 8)
+			for i := 0; i < 1<<8; i++ {
+				r := base + rune(i)
+				if r <= utf8.MaxRune && !(r >= 0xD800 && r <= 0xDFFF) {
+					weights[uint16(r)] = true
+				}
+			}
+			continue
+		}
+		for _, weight := range table {
+			weights[weight] = true
+		}
+	}
+	// Every supplementary-plane scalar maps to the frozen replacement weight.
+	weights[0xFFFD] = true
+	return weights
+}
 
 // RegistryDigest returns the immutable registry digest used by metadata and
 // capability records.  The returned slice is a copy.
@@ -301,23 +330,36 @@ func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 		return dst, wrapCodecError(ErrMalformedKey, "part count %d", len(parts))
 	}
 	start := len(dst)
-	if start+7 > MaxKeyBytes {
+	if MaxKeyBytes < envelopeHeader {
 		return dst, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
 	dst = append(dst, magic...)
 	dst = append(dst, CodecVersion)
 	dst = appendU16(dst, uint16(len(parts)))
+	used := envelopeHeader
 	for _, part := range parts {
 		spec, params, err := domainSpec(part.Domain)
 		if err != nil {
 			return dst[:start], err
 		}
-		payload, err := normalize(part.Domain, spec, part.Value, part.Null)
+		remaining, ok := keyRemaining(used)
+		if len(params) > maxParameter || !ok || remaining < partFixedHeader || len(params) > remaining-partFixedHeader {
+			return dst[:start], wrapCodecError(ErrMalformedKey, "encoded part is too large")
+		}
+		partOverhead := partFixedHeader + len(params)
+		if partOverhead > remaining {
+			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+		}
+		payloadBudget := MaxKeyBytes - used - partOverhead
+		payload, err := normalizeLimited(part.Domain, spec, part.Value, part.Null, payloadBudget)
 		if err != nil {
 			return dst[:start], err
 		}
 		if len(params) > maxParameter || len(payload) > maxPayload {
 			return dst[:start], wrapCodecError(ErrMalformedKey, "encoded part is too large")
+		}
+		if len(payload) > payloadBudget {
+			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 		}
 		dst = append(dst, boolByte(part.Null), byte(part.Domain.Type))
 		dst = appendU16(dst, spec.id)
@@ -325,11 +367,16 @@ func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 		dst = append(dst, params...)
 		dst = appendU32(dst, uint32(len(payload)))
 		dst = append(dst, payload...)
-		if len(dst)-start > MaxKeyBytes {
-			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
-		}
+		used += partOverhead + len(payload)
 	}
 	return dst, nil
+}
+
+func keyRemaining(used int) (int, bool) {
+	if used < 0 || used > MaxKeyBytes {
+		return 0, false
+	}
+	return MaxKeyBytes - used, true
 }
 
 func boolByte(v bool) byte {
@@ -463,19 +510,39 @@ func validGeneralPayload(payload []byte) bool {
 		if binary.BigEndian.Uint32(payload[i:i+4]) > 0xffff {
 			return false
 		}
+		if !generalCIWeightSet[binary.BigEndian.Uint16(payload[i+2:i+4])] {
+			return false
+		}
 	}
-	return true
+	return len(payload) == 0 || binary.BigEndian.Uint32(payload[len(payload)-4:]) != uint32(' ')
 }
 
 func validatePayload(spec familySpec, params, payload []byte) error {
 	switch spec.typ {
 	case Text:
+		prefix, unit, ok := decodePrefixParams(params)
+		if !ok {
+			return wrapCodecError(ErrMalformedKey, "malformed text prefix parameters")
+		}
 		if spec.charset == CharsetUTF8MB4Bin {
-			if !utf8.Valid(payload) {
+			if !utf8.Valid(payload) || (len(payload) > 0 && payload[len(payload)-1] == ' ') {
 				return wrapCodecError(ErrMalformedKey, "malformed utf8-bin payload")
+			}
+			if prefix != 0 && unit == PrefixCharacters && uint64(utf8.RuneCount(payload)) > uint64(prefix) {
+				return wrapCodecError(ErrMalformedKey, "utf8-bin payload exceeds character prefix")
 			}
 		} else if !validGeneralPayload(payload) {
 			return wrapCodecError(ErrMalformedKey, "malformed general-ci payload")
+		} else if prefix != 0 && unit == PrefixCharacters && uint64(len(payload)/4) > uint64(prefix) {
+			return wrapCodecError(ErrMalformedKey, "general-ci payload exceeds character prefix")
+		}
+	case Binary:
+		prefix, unit, ok := decodePrefixParams(params)
+		if !ok || unit != PrefixBytes {
+			return wrapCodecError(ErrMalformedKey, "malformed binary prefix parameters")
+		}
+		if prefix != 0 && uint64(len(payload)) > uint64(prefix) {
+			return wrapCodecError(ErrMalformedKey, "binary payload exceeds byte prefix")
 		}
 	case SignedInteger, UnsignedInteger:
 		if len(params) != 3 || len(payload) != int(binary.BigEndian.Uint16(params[1:])) {
@@ -489,11 +556,24 @@ func validatePayload(spec familySpec, params, payload []byte) error {
 	return nil
 }
 
+func decodePrefixParams(params []byte) (uint32, PrefixUnit, bool) {
+	if len(params) != 6 || params[0] != 1 {
+		return 0, 0, false
+	}
+	prefix := binary.BigEndian.Uint32(params[1:5])
+	unit := PrefixUnit(params[5])
+	if unit != PrefixCharacters && unit != PrefixBytes {
+		return 0, 0, false
+	}
+	return prefix, unit, true
+}
+
 func validDecimalPayload(params, payload []byte) bool {
 	if len(params) != 5 || len(payload) < 9 || (payload[0] != 0 && payload[0] != 1) {
 		return false
 	}
 	width := int(binary.BigEndian.Uint16(params[1:3]))
+	targetScale := int64(int16(binary.BigEndian.Uint16(params[3:5])))
 	scale := int64(int32(binary.BigEndian.Uint32(payload[1:5])))
 	if scale < math.MinInt16 || scale > math.MaxInt16 {
 		return false
@@ -510,7 +590,7 @@ func validDecimalPayload(params, payload []byte) bool {
 	if coeff.Sign() == 0 {
 		return payload[0] == 0 && scale == 0
 	}
-	if payload[0] == 1 && coeff.Sign() == 0 {
+	if scale > targetScale {
 		return false
 	}
 	// normalizeDecimal removes every trailing decimal zero and decreases the
@@ -519,27 +599,37 @@ func validDecimalPayload(params, payload []byte) bool {
 }
 
 func normalize(domain Domain, spec familySpec, value []byte, isNull bool) ([]byte, error) {
+	return normalizeLimited(domain, spec, value, isNull, math.MaxInt)
+}
+
+func normalizeLimited(domain Domain, spec familySpec, value []byte, isNull bool, payloadBudget int) ([]byte, error) {
 	if isNull {
 		return nil, nil
 	}
+	if payloadBudget < 0 {
+		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+	}
 	switch spec.typ {
 	case Text:
-		return normalizeText(domain, spec, value)
+		return normalizeText(domain, spec, value, payloadBudget)
 	case Binary:
-		return normalizeBinary(domain, value), nil
+		return normalizeBinary(domain, value, payloadBudget)
 	case SignedInteger, UnsignedInteger:
 		if len(value) != int(domain.Width) {
 			return nil, wrapCodecError(ErrInvalidValue, "integer width %d, got %d", domain.Width, len(value))
 		}
+		if len(value) > payloadBudget {
+			return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+		}
 		return append([]byte(nil), value...), nil
 	case Decimal:
-		return normalizeDecimal(value, domain.Width, domain.Scale)
+		return normalizeDecimalLimited(value, domain.Width, domain.Scale, payloadBudget)
 	default:
 		return nil, ErrUnsupportedDomain
 	}
 }
 
-func normalizeText(domain Domain, spec familySpec, value []byte) ([]byte, error) {
+func normalizeText(domain Domain, spec familySpec, value []byte, payloadBudget int) ([]byte, error) {
 	if !utf8.Valid(value) {
 		return nil, wrapCodecError(ErrInvalidValue, "invalid UTF-8")
 	}
@@ -548,14 +638,18 @@ func normalizeText(domain Domain, spec familySpec, value []byte) ([]byte, error)
 	}
 	value = bytes.TrimRight(value, " ")
 	if spec.id == 0x0002 {
+		if len(value) > payloadBudget {
+			return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+		}
 		return append([]byte(nil), value...), nil
 	}
 	// One four-byte big-endian weight per rune is the frozen general-ci-v1
 	// payload rule. The table itself is immutable and package-local.
-	if len(value) > (MaxKeyBytes-32)/4 {
-		return nil, wrapCodecError(ErrInvalidValue, "text payload exceeds key limit")
+	runeCount := utf8.RuneCount(value)
+	if uint64(runeCount) > uint64(payloadBudget)/4 {
+		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
-	out := make([]byte, 0, len(value)*4)
+	out := make([]byte, 0, runeCount*4)
 	for len(value) > 0 {
 		r, size := utf8.DecodeRune(value)
 		if r == utf8.RuneError && size == 1 {
@@ -588,14 +682,25 @@ func prefixRunes(value []byte, prefix uint32) []byte {
 	return value[:off]
 }
 
-func normalizeBinary(domain Domain, value []byte) []byte {
-	if domain.Prefix > 0 && uint64(domain.Prefix) < uint64(len(value)) {
-		value = value[:domain.Prefix]
+func normalizeBinary(domain Domain, value []byte, payloadBudget int) ([]byte, error) {
+	payloadLen := uint64(len(value))
+	if domain.Prefix > 0 && uint64(domain.Prefix) < payloadLen {
+		payloadLen = uint64(domain.Prefix)
 	}
-	return append([]byte(nil), value...)
+	if payloadLen > uint64(payloadBudget) {
+		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+	}
+	return append([]byte(nil), value[:int(payloadLen)]...), nil
 }
 
 func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, error) {
+	return normalizeDecimalLimited(value, width, targetScale, math.MaxInt)
+}
+
+func normalizeDecimalLimited(value []byte, width uint16, targetScale int16, payloadBudget int) ([]byte, error) {
+	if payloadBudget < 9 {
+		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+	}
 	s := strings.TrimSpace(string(value))
 	if s == "" {
 		return nil, wrapCodecError(ErrInvalidValue, "empty decimal")
@@ -605,61 +710,91 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 		neg = s[0] == '-'
 		s = s[1:]
 	}
-	if s == "" || strings.Count(s, ".") > 1 {
+	if s == "" {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
 	}
-	parts := strings.SplitN(s, ".", 2)
-	whole, frac := parts[0], ""
-	if len(parts) == 2 {
-		frac = parts[1]
+	dot := strings.IndexByte(s, '.')
+	if dot >= 0 && strings.IndexByte(s[dot+1:], '.') >= 0 {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
 	}
-	if whole == "" {
-		whole = "0"
+	whole, frac := s, ""
+	if dot >= 0 {
+		whole, frac = s[:dot], s[dot+1:]
 	}
 	if !allDigits(whole) || !allDigits(frac) {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
 	}
-	inputScale := int16(len(frac))
-	coeffText := strings.TrimLeft(whole+frac, "0")
-	if coeffText == "" {
-		coeffText = "0"
-		neg = false
+	if whole == "" && frac == "" {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal requires digits")
 	}
-	coeff := new(big.Int)
-	if _, ok := coeff.SetString(coeffText, 10); !ok {
-		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient")
+
+	// Strip fractional trailing zeroes before counting the scale. This keeps
+	// equivalent spellings such as 1.20 and 1.2 on the same exact path and
+	// avoids narrowing a potentially very large input length to int16.
+	frac = strings.TrimRight(frac, "0")
+	inputScale := len(frac)
+	digits := strings.TrimLeft(whole+frac, "0")
+	if digits == "" {
+		return encodeDecimalPayload(false, 0, nil)
 	}
-	if int(inputScale) > int(targetScale) {
-		shift := int(inputScale) - int(targetScale)
-		div := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(shift)), nil)
-		q, r := new(big.Int), new(big.Int)
-		q.QuoRem(coeff, div, r)
-		if r.Sign() != 0 {
+
+	// Reducing the scale is exact only when every discarded decimal digit is
+	// zero. Work on the string first so values with 32768 or more fractional
+	// digits cannot wrap an int16 before this check.
+	target := int(targetScale)
+	scale := inputScale
+	if inputScale > target {
+		remove := inputScale - target
+		if remove > len(digits) || !allZero(digits[len(digits)-remove:]) {
 			return nil, wrapCodecError(ErrInvalidValue, "decimal precision exceeds declared scale")
 		}
-		coeff = q
-	} else if int(inputScale) < int(targetScale) {
-		mul := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(int(targetScale)-int(inputScale))), nil)
-		coeff.Mul(coeff, mul)
+		digits = strings.TrimLeft(digits[:len(digits)-remove], "0")
+		if digits == "" {
+			return encodeDecimalPayload(false, 0, nil)
+		}
+		scale = target
 	}
-	scale := targetScale
-	ten := big.NewInt(10)
-	for coeff.Sign() != 0 && new(big.Int).Mod(coeff, ten).Sign() == 0 {
+
+	// Canonical payloads remove coefficient trailing zeroes while decreasing
+	// the signed payload scale. The loop is bounded by the significant input
+	// digits, and every decrement is checked before it can leave int16.
+	for len(digits) > 0 && digits[len(digits)-1] == '0' {
 		if scale == math.MinInt16 {
 			return nil, wrapCodecError(ErrInvalidValue, "decimal scale underflow")
 		}
-		coeff.Quo(coeff, ten)
+		digits = digits[:len(digits)-1]
 		scale--
 	}
-	if coeff.Sign() == 0 {
-		scale = 0
+	if digits == "" {
+		return encodeDecimalPayload(false, 0, nil)
+	}
+	if len(digits) > maxDecimalDigits(width) {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient exceeds width %d", width)
+	}
+
+	coeff := new(big.Int)
+	if _, ok := coeff.SetString(digits, 10); !ok {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient")
 	}
 	coeffBytes := coeff.Bytes()
 	if len(coeffBytes) > int(width) {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient exceeds width %d", width)
 	}
-	out := make([]byte, 0, 1+4+4+len(coeffBytes))
-	if neg {
+	if len(coeffBytes) > payloadBudget-9 {
+		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+	}
+	return encodeDecimalPayload(neg, scale, coeffBytes)
+}
+
+func encodeDecimalPayload(negative bool, scale int, coeff []byte) ([]byte, error) {
+	if scale < math.MinInt16 || scale > math.MaxInt16 {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal scale out of range")
+	}
+	if len(coeff) > math.MaxUint32 {
+		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient is too large")
+	}
+	out := make([]byte, 0, 1+4+4+len(coeff))
+	if negative {
 		out = append(out, 1)
 	} else {
 		out = append(out, 0)
@@ -667,10 +802,25 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	var b [4]byte
 	binary.BigEndian.PutUint32(b[:], uint32(int32(scale)))
 	out = append(out, b[:]...)
-	binary.BigEndian.PutUint32(b[:], uint32(len(coeffBytes)))
+	binary.BigEndian.PutUint32(b[:], uint32(len(coeff)))
 	out = append(out, b[:]...)
-	out = append(out, coeffBytes...)
+	out = append(out, coeff...)
 	return out, nil
+}
+
+func allZero(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+func maxDecimalDigits(width uint16) int {
+	maximum := new(big.Int).Lsh(big.NewInt(1), uint(width)*8)
+	maximum.Sub(maximum, big.NewInt(1))
+	return len(maximum.String())
 }
 
 func allDigits(s string) bool {
