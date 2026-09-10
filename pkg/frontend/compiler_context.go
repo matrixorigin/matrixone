@@ -986,6 +986,10 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			if len(argList) != len(args) { // mismatch
 				continue
 			}
+			udf.Args = argList
+			if err = udf.ValidatePythonTypeContract(); err != nil {
+				return nil, err
+			}
 
 			toList := make([]types.T, len(args))
 			for j := range argList {
@@ -1001,7 +1005,6 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				continue
 			}
 
-			udf.Args = argList
 			matchedList = append(matchedList, &MatchUdf{
 				Udf:      udf,
 				Cost:     cost,

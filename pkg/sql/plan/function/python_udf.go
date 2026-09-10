@@ -266,7 +266,7 @@ func hasNullInput(inputs []*vector.Vector, row int) bool {
 }
 
 func routineArgumentTypes(routine *UdfWithContext) ([]types.Type, error) {
-	if len(routine.PythonArgTypes) != 0 {
+	if routine.Language == "python" {
 		args := make([]types.Type, len(routine.PythonArgTypes))
 		for i, descriptor := range routine.PythonArgTypes {
 			args[i] = descriptor.Type()
