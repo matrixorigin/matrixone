@@ -7,6 +7,7 @@ package python
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -214,4 +215,19 @@ func TestAppendArrowResultIgnoresNullDecimalPayload(t *testing.T) {
 	descriptor := TypeDescriptor{TypeID: int32(types.T_decimal64), Width: 18, OffsetWidth: 32}
 	require.NoError(t, AppendArrowResult(descriptor, decimals, result, mp))
 	require.True(t, result.GetResultVector().IsNull(0))
+}
+
+func TestDecimal128ToDecimal64ChecksSignedRange(t *testing.T) {
+	max, err := decimalFromArray(decimal128.New(0, math.MaxInt64), true)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal64(math.MaxInt64), max)
+
+	min, err := decimalFromArray(decimal128.New(-1, uint64(1)<<63), true)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal64(uint64(1)<<63), min)
+
+	_, err = decimalFromArray(decimal128.New(0, uint64(1)<<63), true)
+	require.ErrorContains(t, err, "does not fit Decimal64")
+	_, err = decimalFromArray(decimal128.New(-1, uint64(1)<<63-1), true)
+	require.ErrorContains(t, err, "does not fit Decimal64")
 }
