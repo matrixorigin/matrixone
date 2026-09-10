@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +43,7 @@ var (
 )
 
 type idAllocator struct {
+	mu sync.Mutex
 	// [nextID, lastID] is the range of IDs that can be assigned.
 	// the next ID to be assigned is nextID
 	nextID                uint64
@@ -56,6 +58,8 @@ func newIDAllocator() hakeeper.IDAllocator {
 }
 
 func (a *idAllocator) Next() (uint64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.nextID <= a.lastID {
 		v := a.nextID
 		a.nextID++
@@ -65,6 +69,8 @@ func (a *idAllocator) Next() (uint64, bool) {
 }
 
 func (a *idAllocator) Set(next uint64, last uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	// make sure that this id allocator never emit any id smaller than
 	// K8SIDRangeEnd
 	if next < hakeeper.K8SIDRangeEnd {
@@ -75,6 +81,8 @@ func (a *idAllocator) Set(next uint64, last uint64) {
 }
 
 func (a *idAllocator) Capacity() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.nextID <= a.lastID {
 		return (a.lastID - a.nextID) + 1
 	}
@@ -82,6 +90,8 @@ func (a *idAllocator) Capacity() uint64 {
 }
 
 func (a *idAllocator) discardForRestoreGeneration(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if generation > a.restoreGenerationSeen {
 		a.nextID = 1
 		a.lastID = 0
