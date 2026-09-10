@@ -5586,10 +5586,41 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+		!c.needsCoordinatorIgnoreCheck(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// An older CN resolves the same CHECK function ID but throws instead of
+// filtering invalid INSERT IGNORE rows. Keep only this filter local while
+// upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
+func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
+	if node == nil || len(node.FilterList) == 0 || c.proc == nil || !c.proc.GetStmtProfile().GetStatementIgnore() ||
+		supportsRemoteIgnoreCheck(c.proc.GetService()) {
+		return false
+	}
+	for _, expr := range node.FilterList {
+		if containsFunctionInExpr(expr, nil, isCheckConstraintFunction) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCheckConstraintFunction(functionID, _ int32) bool {
+	return functionID == function.CHECK_CONSTRAINT_ASSERT
+}
+
+func supportsRemoteIgnoreCheck(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, versionOK := value.(int64)
+	return ok && versionOK && version >= defines.MORPCVersion59
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
