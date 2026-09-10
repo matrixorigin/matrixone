@@ -544,9 +544,11 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 
 	// alter db
 	dbName := pub.DbName
-	dbId := pub.DbId
 	if ap.DbName != "" {
 		dbName = ap.DbName
+	}
+	dbId := pub.DbId
+	if dbName != pubsub.TableAll {
 		if _, ok := sysDatabases[dbName]; ok {
 			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
@@ -557,6 +559,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
 		}
+	} else {
+		// Account-level publications have no database catalog row.
+		dbId = 0
 	}
 
 	// alter tables
