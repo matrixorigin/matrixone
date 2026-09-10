@@ -166,8 +166,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                ResolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
-			MaxDigestLength:     int64(ResolveMaxDigestLength(proc)),
-			MaxDigestLengthSet:  true,
+			MaxDigestLength:        int64(ResolveMaxDigestLength(proc)),
+			MaxDigestLengthSet:     true,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
