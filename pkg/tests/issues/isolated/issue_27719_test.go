@@ -31,6 +31,7 @@ import (
 )
 
 func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {

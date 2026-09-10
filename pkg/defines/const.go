@@ -94,7 +94,8 @@ const (
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
 	MORPCVersion58     int64 = 58 // binary-string function semantics and runtime-domain metadata
-	MORPCLatestVersion       = MORPCVersion58
+	MORPCVersion59     int64 = 59 // typed numeric FORMAT arguments in remote expressions
+	MORPCLatestVersion       = MORPCVersion59
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

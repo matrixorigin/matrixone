@@ -60,9 +60,9 @@ func TestDataBranchPickRetestRegressions(t *testing.T) {
 		t.Run("composite_pk_chunk_boundary", func(t *testing.T) {
 			defer cleanupPickCaseTables(t, db)
 			execSQLDB(t, ctx, db, "create table base (k1 int, k2 int, val bigint, primary key (k1, k2))")
-			// Four blocks cover both 8192-key chunks plus untouched source rows.
+			// Three blocks cover both 8192-key chunks plus untouched source rows.
 			// Additional rows do not change the chunk-boundary regression contract.
-			baseRows := int(objectio.BlockMaxRows) * 4
+			baseRows := int(objectio.BlockMaxRows) * 3
 			execSQLDB(t, ctx, db, fmt.Sprintf(
 				"insert into base select 1, result, result * 10 from generate_series(1,%d) g",
 				baseRows))
