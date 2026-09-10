@@ -62,6 +62,38 @@ func TestEncodeRecordBatchUsesFlightPayloadFrames(t *testing.T) {
 	require.Equal(t, int64(3), decodedValues.Value(2))
 }
 
+func TestDecodeRecordBatchRequiresSchemaAndRecordHeaders(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	field, err := descriptor.Field("arg_0")
+	require.NoError(t, err)
+	builder := array.NewInt64Builder(memory.NewGoAllocator())
+	builder.Append(1)
+	values := builder.NewInt64Array()
+	defer values.Release()
+	record := array.NewRecordBatch(arrow.NewSchema([]arrow.Field{field}, nil), []arrow.Array{values}, 1)
+	defer record.Release()
+	frames, err := EncodeRecordBatch(record, DefaultMaxBatchBytes)
+	require.NoError(t, err)
+
+	_, err = DecodeRecordBatch(ArrowFrame{Header: frames[1].Header}, frames[1], DefaultMaxBatchBytes)
+	require.Error(t, err)
+	_, err = DecodeRecordBatch(frames[0], frames[0], DefaultMaxBatchBytes)
+	require.ErrorContains(t, err, "record frame header")
+	_, err = DecodeRecordBatch(ArrowFrame{Header: frames[0].Header, Body: []byte{1}}, frames[1], DefaultMaxBatchBytes)
+	require.ErrorContains(t, err, "schema frame body")
+}
+
+func TestAppendArrowResultRejectsMissingConsumer(t *testing.T) {
+	builder := array.NewInt64Builder(memory.NewGoAllocator())
+	builder.Append(1)
+	values := builder.NewInt64Array()
+	defer values.Release()
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	require.ErrorContains(t, AppendArrowResult(descriptor, values, nil, nil), "missing result wrapper")
+}
+
 func TestZeroArgumentRecordPreservesRows(t *testing.T) {
 	record := array.NewRecordBatch(arrow.NewSchema(nil, nil), nil, 3)
 	defer record.Release()

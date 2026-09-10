@@ -58,3 +58,21 @@ func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateActionAckCorrelatesTheRequestedFence(t *testing.T) {
+	request := protocol.Control{
+		Kind:        "AcknowledgeResults",
+		Tuple:       validInvocation().Tuple,
+		AckSequence: 3,
+	}
+	ack := protocol.Control{Kind: "Ack", Tuple: request.Tuple, Status: statusOK, AckSequence: 3}
+	require.NoError(t, validateActionAck(request.Kind, request, ack))
+	ack.AckSequence = 2
+	require.ErrorContains(t, validateActionAck(request.Kind, request, ack), "ACK sequence")
+
+	finish := protocol.Control{Kind: "AcknowledgeFinish", Tuple: request.Tuple, FinishID: "finish-1"}
+	finishAck := protocol.Control{Kind: "Ack", Tuple: request.Tuple, Status: statusOK, FinishID: "finish-1"}
+	require.NoError(t, validateActionAck(finish.Kind, finish, finishAck))
+	finishAck.FinishID = "finish-2"
+	require.ErrorContains(t, validateActionAck(finish.Kind, finish, finishAck), "finish ID")
+}

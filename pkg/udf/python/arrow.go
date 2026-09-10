@@ -540,11 +540,22 @@ func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arro
 	if len(schemaFrame.Header) == 0 || len(batchFrame.Header) == 0 || maxBytes <= 0 {
 		return nil, fmt.Errorf("invalid Arrow output frames")
 	}
-	if _, err := arrowipc.InspectMessage(context.Background(), schemaFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: 0, BodyEnvelopeBytes: 0, MaxDecodedRecordBytes: 1}); err != nil {
+	if len(schemaFrame.Body) != 0 {
+		return nil, fmt.Errorf("invalid Arrow schema frame body")
+	}
+	schemaInfo, err := arrowipc.InspectMessage(context.Background(), schemaFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: 0, BodyEnvelopeBytes: 0, MaxDecodedRecordBytes: 1})
+	if err != nil {
 		return nil, err
 	}
-	if _, err := arrowipc.InspectMessage(context.Background(), batchFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: maxBytes, BodyEnvelopeBytes: int64(len(batchFrame.Body)), Body: batchFrame.Body, ValidateBody: true, MaxDecodedRecordBytes: maxBytes}); err != nil {
+	if schemaInfo.HeaderType != arrowipc.MessageHeaderSchema {
+		return nil, fmt.Errorf("invalid Arrow schema frame header %d", schemaInfo.HeaderType)
+	}
+	batchInfo, err := arrowipc.InspectMessage(context.Background(), batchFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: maxBytes, BodyEnvelopeBytes: int64(len(batchFrame.Body)), Body: batchFrame.Body, ValidateBody: true, MaxDecodedRecordBytes: maxBytes})
+	if err != nil {
 		return nil, err
+	}
+	if batchInfo.HeaderType != arrowipc.MessageHeaderRecordBatch {
+		return nil, fmt.Errorf("invalid Arrow record frame header %d", batchInfo.HeaderType)
 	}
 	stream := make([]byte, 0, len(schemaFrame.Header)+len(batchFrame.Header)+len(batchFrame.Body)+32)
 	stream = appendIPCFrame(stream, schemaFrame.Header, schemaFrame.Body)
@@ -583,7 +594,13 @@ func appendIPCFrame(dst, header, body []byte) []byte {
 }
 
 func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
-	if input == nil || result == nil || input.Len() == 0 {
+	if input == nil {
+		return fmt.Errorf("TYPE_CONTRACT: missing Arrow result")
+	}
+	if result == nil {
+		return fmt.Errorf("python udf: missing result wrapper")
+	}
+	if input.Len() == 0 {
 		return nil
 	}
 	if mp == nil {
