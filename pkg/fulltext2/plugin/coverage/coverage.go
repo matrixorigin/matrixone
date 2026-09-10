@@ -128,14 +128,11 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, ty
 	// The build_ts of the generation a probe would search, read once here and returned so the
 	// partial-plan path reuses it as the table_changes lower bound rather than reading it again.
 	buildTS := types.BuildTS(searchedBuildTS(ctx, req), 0)
-	// The bar build_ts must reach. A historical read sees a fixed past state, so the bar
-	// is the snapshot TS itself (build_ts >= snapshot ⇒ every source commit up to it is
-	// indexed); SourceCommitTS is not used for a snapshot read. A current read uses the
-	// max outstanding source commit the query CN observes.
+	// The bar build_ts must reach: the max source commit the read must see, which the planner computes
+	// from the source relation's partition state AS OF THE READ (current txn, or a txn cloned at the
+	// snapshot). build_ts is read at the same point (the snapshot-bound generation for a historical
+	// read), so covered means the index reflects every source commit the read sees.
 	bar := req.SourceCommitTS
-	if req.ScanSnapshotTS != nil {
-		bar = types.TimestampToTS(*req.ScanSnapshotTS)
-	}
 	if bar.IsEmpty() {
 		return false, buildTS, nil
 	}

@@ -1,11 +1,12 @@
 -- #27926/#27941: a {snapshot=...} json_extract read must return the correct HISTORICAL
--- rows. A snapshot read is binary -- the snapshot-bound index generation either covers the
--- snapshot data (probe) or the read falls back to a table scan AS OF the snapshot -- never
--- partial. Either way the rows are exact, and the coverage gate must NEVER fire the probe
--- against a generation missing snapshot rows (that would drop them). Because the gate
--- declines to a table scan whenever the snapshot generation is not covered, the result is
--- deterministic no matter how far the async index has built -- so this asserts RESULTS
--- (not the plan, and with no readiness poll). fulltext2 is AlwaysAsync.
+-- rows. A snapshot read takes the SAME covered/partial/skip path as a current read, measured
+-- as of the snapshot: if the snapshot-bound generation has caught up to the source's last commit
+-- as of S it probes; if it is behind it is completed with a table_changes tail up to S; and it
+-- declines to a full scan on any uncertainty. Every path returns the exact historical rows, and
+-- the coverage gate must NEVER fire a bare probe against a generation missing snapshot rows (that
+-- would drop them). Because all three paths are exact, the result is deterministic no matter how
+-- far the async index has built -- so this asserts RESULTS (not the plan, and with no readiness
+-- poll). fulltext2 is AlwaysAsync.
 set experimental_fulltext2_index = 1;
 drop database if exists ft2_json_snap;
 create database ft2_json_snap;

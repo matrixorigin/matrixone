@@ -423,10 +423,11 @@ var coversSnapshotFn = indexplugin.CoversSnapshot
 
 // decideJSONProbe evaluates idx against scanNode's read and reports how a probe may use it, plus
 // (for jsonProbePartial) the build_ts the searched generation reached -- the lower bound of the
-// table_changes tail that fills the freshness gap. A synchronous index always covers. An async
-// index is asked; if it does not cover, a current read (scanSnapshot nil) with a known build_ts
-// is completed partially, while a historical read declines (snapshots are binary). Fails closed to
-// jsonProbeSkip on any uncertainty: a full scan is always correct, an unsound probe is not.
+// table_changes tail that fills the freshness gap. A synchronous index always covers. An async index
+// is asked, measuring build_ts and the coverage bar at the same read point (current, or the snapshot
+// for a historical read): if covered it probes, else -- current OR historical -- it is completed with
+// a tail up to that read point. Fails closed to jsonProbeSkip on any uncertainty: a full scan is
+// always correct, an unsound probe is not.
 //
 // No cost gate guards the partial path: the tail is emitted whenever the index is behind.
 func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.IndexDef) (jsonProbeKind, types.TS) {
@@ -454,36 +455,37 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if scanNode.ObjRef != nil {
 		dbName = scanNode.ObjRef.SchemaName
 	}
-	// The effective historical read TS for a {snapshot=...}/AS OF query (nil for a
-	// current read), computed exactly as the search does, so the freshness check
-	// targets the same snapshot-bound index generation the search will load.
+	// The effective read TS for a {snapshot=...}/AS OF query (nil for a current read), computed
+	// exactly as the search does, so the freshness check, the coverage bar, and the tail all target
+	// the same read point.
 	scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot)
 
-	// A historical read sees a fixed past state; its coverage bar is the snapshot TS
-	// itself (build_ts >= snapshot ⇒ the index processed everything up to that point),
-	// so SourceCommitTS -- the current-read "max outstanding source commit" that lets an
-	// idle table's watermark catch up -- is neither needed nor meaningful. Only a current
-	// read computes it, from the source relation's partition state.
-	var sourceCommitTS types.TS
-	if scanSnapshotTS == nil {
-		eng := proc.GetSessionInfo().StorageEngine
-		if eng == nil {
-			return jsonProbeSkip, types.TS{}
-		}
-		_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), txn, scanNode.TableDef.TblId)
-		if err != nil {
-			logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
-			return jsonProbeSkip, types.TS{}
-		}
-		commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
-		if !ok {
-			return jsonProbeSkip, types.TS{}
-		}
-		sourceCommitTS, err = commitTSProvider.SourceCommitTS(proc.GetTopContext())
-		if err != nil {
-			logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
-			return jsonProbeSkip, types.TS{}
-		}
+	// The coverage bar is the max source commit the read must see, read from the source relation's
+	// partition state AS OF THE READ: the current txn for a current read, or a txn cloned at the
+	// snapshot for a historical one. build_ts and the bar are thus measured at the same read point, so
+	// a snapshot whose index had caught up as of S is covered, and one that was behind is completed
+	// with a table_changes tail up to S -- exactly like a current read.
+	readTxn := txn
+	if scanSnapshotTS != nil {
+		readTxn = txn.CloneSnapshotOp(*scanSnapshotTS)
+	}
+	eng := proc.GetSessionInfo().StorageEngine
+	if eng == nil {
+		return jsonProbeSkip, types.TS{}
+	}
+	_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), readTxn, scanNode.TableDef.TblId)
+	if err != nil {
+		logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
+		return jsonProbeSkip, types.TS{}
+	}
+	commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return jsonProbeSkip, types.TS{}
+	}
+	sourceCommitTS, err := commitTSProvider.SourceCommitTS(proc.GetTopContext())
+	if err != nil {
+		logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
+		return jsonProbeSkip, types.TS{}
 	}
 	// proc.Ctx is canceled during planning; use the top context.
 	ctx := proc.GetTopContext()
@@ -507,13 +509,8 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if covered {
 		return jsonProbeCovered, types.TS{}
 	}
-	// Not covered. A historical read cannot be completed with a tail -- snapshots are binary and
-	// always have a snapshot-bound generation -- so decline. A current read that is merely behind is
-	// completed with a table_changes tail from the generation's build_ts, which CoversSnapshot
-	// returned above (no second read).
-	if scanSnapshotTS != nil {
-		return jsonProbeSkip, types.TS{}
-	}
+	// Not covered: complete the behind index with a table_changes tail from build_ts up to the read
+	// point (now for a current read, S for a snapshot). Both paths are identical.
 	if buildTS.IsEmpty() {
 		return jsonProbeSkip, types.TS{}
 	}
@@ -530,21 +527,17 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if !ok || int(pkPos) >= len(scanNode.TableDef.Cols) || scanNode.TableDef.Cols[pkPos].Hidden {
 		return jsonProbeSkip, types.TS{}
 	}
-	// The tail spans (build_ts, snapshot]. When build_ts has already reached the read snapshot -- which
-	// happens when the coverage bar (SourceCommitTS) exceeds it -- the window is empty and
-	// table_changes would reject from >= to; the index already covers this read, so a full scan is
-	// correct and cheap enough (this is a rare bar/snapshot skew).
+	// The tail spans (build_ts, readTS]. If build_ts has already reached the read point (a rare
+	// bar/snapshot skew on a current read; for a snapshot the covered branch handles build_ts>=S), the
+	// window is empty and table_changes would reject from >= to, so full-scan.
 	readTS := types.TimestampToTS(txn.SnapshotTS())
+	if scanSnapshotTS != nil {
+		readTS = types.TimestampToTS(*scanSnapshotTS)
+	}
 	if !buildTS.LT(&readTS) {
 		return jsonProbeSkip, types.TS{}
 	}
 	return jsonProbePartial, buildTS
-}
-
-// indexCoversSnapshot reports whether idx is current enough to back a mandatory probe.
-func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
-	kind, _ := builder.decideJSONProbe(scanNode, idx)
-	return kind == jsonProbeCovered
 }
 
 // buildJSONProbeTail builds the freshness-gap arm of a behind-index json probe: table_changes over
@@ -562,9 +555,13 @@ func (builder *QueryBuilder) buildJSONProbeTail(ctx *BindContext, scanNode *plan
 		return 0, false
 	}
 	// from is EXCLUSIVE in table_changes (it advances by one), and buildTS is the last commit the
-	// index reflects, so (buildTS, snapshot] is exactly the gap. to is the read snapshot; it must be
-	// <= the statement snapshot, which it is by construction.
+	// index reflects, so (buildTS, to] is exactly the gap. to is the READ point: the snapshot TS for a
+	// {snapshot=...}/AS OF read, else the current txn snapshot -- the same point the base scan and the
+	// bulk arm read at, so the tail spans no more than the read sees.
 	snap := txn.SnapshotTS()
+	if scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot); scanSnapshotTS != nil {
+		snap = *scanSnapshotTS
+	}
 	fromStr := fmt.Sprintf("%d-%d", p.buildTS.Physical(), p.buildTS.Logical())
 	toStr := fmt.Sprintf("%d-%d", snap.PhysicalTime, snap.LogicalTime)
 	exprs := []*plan.Expr{

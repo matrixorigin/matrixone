@@ -157,29 +157,30 @@ func TestCoversSnapshotFailsClosed(t *testing.T) {
 	}
 }
 
-// A historical ({snapshot=...}) read's bar is the snapshot TS, not SourceCommitTS: with
-// build_ts (200) past the snapshot (50) it is covered even though SourceCommitTS (300)
-// exceeds build_ts -- SourceCommitTS is ignored for a snapshot read. The cold-cache
-// metadata read runs on a cloned txn.
+// A historical ({snapshot=...}) read is covered when the snapshot-bound generation's build_ts has
+// reached the bar. The bar is SourceCommitTS (the source's last commit AS OF the snapshot, computed
+// by the planner on a txn cloned at S), the same rule as a current read; the snapshot TS only selects
+// which generation's build_ts is measured (cold-cache metadata read on a cloned txn).
 func TestCoversSnapshotHistorical(t *testing.T) {
-	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 200)
-	r := gateReq(300) // SourceCommitTS deliberately > build_ts; must be ignored
-	histTS := timestamp.Timestamp{PhysicalTime: 50}
+	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 200) // build_ts of the generation as of S
+	r := gateReq(150)                                        // bar = source last commit as of S
+	histTS := timestamp.Timestamp{PhysicalTime: 300}
 	r.ScanSnapshotTS = &histTS
 	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
-	require.True(t, covered)
+	require.True(t, covered) // 200 >= 150
 }
 
-// A historical read declines when build_ts has not reached the snapshot TS.
+// A historical read declines (planner completes it with a tail) when build_ts has not reached the
+// as-of-S bar.
 func TestCoversSnapshotHistoricalBehind(t *testing.T) {
-	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 50)
-	r := gateReq(0) // no SourceCommitTS at all; the bar is the snapshot
-	histTS := timestamp.Timestamp{PhysicalTime: 100}
+	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 50) // generation only built to 50 as of S
+	r := gateReq(100)                                       // bar = source last commit as of S
+	histTS := timestamp.Timestamp{PhysicalTime: 300}
 	r.ScanSnapshotTS = &histTS
 	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
-	require.False(t, covered)
+	require.False(t, covered) // 50 < 100
 }
 
 // A dropped row alongside a live one is ignored rather than poisoning the answer:

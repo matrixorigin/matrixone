@@ -48,6 +48,17 @@ func (fakeCoverageTxn) Txn() txn.TxnMeta {
 	return txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}}
 }
 
+// CloneSnapshotOp is used to read the source relation as of a historical snapshot; the mocked
+// engine ignores the operator, so returning the same fake is enough.
+func (f fakeCoverageTxn) CloneSnapshotOp(timestamp.Timestamp) client.TxnOperator { return f }
+
+// indexCoversSnapshot is a test-only convenience over decideJSONProbe: it collapses the 3-way
+// decision to the single covered/not-covered bit the older coverage tests assert on.
+func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
+	kind, _ := builder.decideJSONProbe(scanNode, idx)
+	return kind == jsonProbeCovered
+}
+
 func jpColExpr(pos int32) *plan.Expr {
 	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
 }
@@ -805,19 +816,20 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeCovered, kind)
 
-	// snapshot read, covered -> covered (skips the source-relation lookup)
+	// snapshot read, covered (index caught up as of S) -> covered
 	covers(true, types.TS{}, nil)
-	b, scan = newCase(false)
+	b, scan = newCase(true)
 	asSnapshot(scan)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeCovered, kind)
 
-	// snapshot read, not covered -> skip; snapshots are binary, never partial
+	// snapshot read, behind as of S -> partial (tail up to S), same as a current read
 	covers(false, types.BuildTS(100, 0), nil)
-	b, scan = newCase(false)
+	b, scan = newCase(true)
 	asSnapshot(scan)
-	kind, _ = b.decideJSONProbe(scan, idx)
-	require.Equal(t, jsonProbeSkip, kind)
+	kind, bts = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, int64(100), bts.Physical())
 
 	// coverage lookup error -> skip (fail closed)
 	covers(false, types.TS{}, moerr.NewInternalErrorNoCtx("boom"))
