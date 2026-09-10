@@ -506,6 +506,70 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_exchange_rejects_invalid_input_values_before_handler(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        fence = {
+            "account_id": 1,
+            "statement_id": "review",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invalid-input-values",
+            "lease_epoch": 1,
+        }
+        descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
+        child = pa.array([1.0, None], type=pa.float32())
+        invalid_vector = pa.FixedSizeListArray.from_arrays(child, 2)
+        batch = pa.RecordBatch.from_arrays(
+            [invalid_vector],
+            schema=pa.schema([worker._field("arg_0", descriptor)]),
+        )
+        payload = {
+            "mode": worker.MODE_VECTOR,
+            "null_policy": worker.NULL_CALL,
+            "abi_contract": worker.ABI_CONTRACT,
+            "adapter_version": worker.ADAPTER_VERSION,
+            "sdk_version": worker.SDK_VERSION,
+            "args": [descriptor],
+            "return": descriptor,
+            "source": "def f(ctx, x): return x",
+            "handler": "f",
+            "max_batch_bytes": 1 << 20,
+            "max_batch_rows": 1024,
+            "handler_timeout_seconds": 2,
+        }
+
+        def control(kind, **fields):
+            return worker._encode_control(dict(kind=kind, tuple=fence, **fields))
+
+        chunks = iter(
+            [
+                types.SimpleNamespace(
+                    data=batch,
+                    app_metadata=control("InputBatch", sequence=1),
+                ),
+            ]
+        )
+        reader = types.SimpleNamespace(schema=batch.schema, read_chunk=lambda: next(chunks))
+        writer = types.SimpleNamespace(
+            begin=lambda schema: None,
+            write_metadata=lambda data: None,
+            write_with_metadata=lambda record, data: None,
+        )
+        command = control("OpenInvocation", payload=payload)
+        try:
+            handler = mock.Mock()
+            with mock.patch.object(worker, "_run_handler_process", handler):
+                with self.assertRaisesRegex(ValueError, "child validity"):
+                    server.do_exchange(
+                        types.SimpleNamespace(is_cancelled=lambda: False),
+                        types.SimpleNamespace(command=command),
+                        reader,
+                        writer,
+                    )
+            handler.assert_not_called()
+        finally:
+            server.shutdown()
+
     @unittest.skipUnless(os.name == "posix", "process-group test")
     def test_descendant_is_killed_after_handler_leader_exits(self):
         with tempfile.TemporaryDirectory(prefix="mo-udf-owned-child-") as artifact:
