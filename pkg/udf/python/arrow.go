@@ -662,19 +662,27 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 				return err
 			}
 		case types.T_decimal64:
-			value, err := decimalFromArray(input.(*array.Decimal128).Value(i), true)
-			if err != nil {
-				return err
+			var value types.Decimal64
+			if !null {
+				converted, err := decimalFromArray(input.(*array.Decimal128).Value(i), true)
+				if err != nil {
+					return err
+				}
+				value = converted.(types.Decimal64)
 			}
-			if err = vector.MustFunctionResult[types.Decimal64](result).Append(value.(types.Decimal64), null); err != nil {
+			if err := vector.MustFunctionResult[types.Decimal64](result).Append(value, null); err != nil {
 				return err
 			}
 		case types.T_decimal128:
-			value, err := decimalFromArray(input.(*array.Decimal128).Value(i), false)
-			if err != nil {
-				return err
+			var value types.Decimal128
+			if !null {
+				converted, err := decimalFromArray(input.(*array.Decimal128).Value(i), false)
+				if err != nil {
+					return err
+				}
+				value = converted.(types.Decimal128)
 			}
-			if err = vector.MustFunctionResult[types.Decimal128](result).Append(value.(types.Decimal128), null); err != nil {
+			if err := vector.MustFunctionResult[types.Decimal128](result).Append(value, null); err != nil {
 				return err
 			}
 		case types.T_char, types.T_varchar, types.T_text:
