@@ -5620,7 +5620,7 @@ func supportsRemoteIgnoreCheck(service string) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, versionOK := value.(int64)
-	return ok && versionOK && version >= defines.MORPCVersion59
+	return ok && versionOK && version >= defines.MORPCVersion62
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
