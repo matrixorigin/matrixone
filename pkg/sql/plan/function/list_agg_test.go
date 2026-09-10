@@ -42,3 +42,18 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestMySQLNumericAggTypeCheckRejectsAndHandlesSpecialTypes(t *testing.T) {
+	result := mysqlNumericAggTypeCheck(nil)
+	require.Equal(t, failedAggParametersWrong, result.status)
+
+	result = mysqlNumericAggTypeCheck([]types.Type{types.T_any.ToType()})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, []types.Type{types.T_float64.ToType()}, result.finalType)
+
+	result = mysqlNumericAggTypeCheck([]types.Type{types.T_int64.ToType()})
+	require.Equal(t, succeedMatched, result.status)
+
+	result = mysqlNumericAggTypeCheck([]types.Type{types.T_bool.ToType()})
+	require.Equal(t, failedAggParametersWrong, result.status)
+}
