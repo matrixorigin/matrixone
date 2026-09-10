@@ -184,6 +184,11 @@ func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
 				[]types.Decimal128{{B0_63: 456}}),
 		},
 		{
+			name: "decimal256",
+			vec: buildFixedVec(t, mp, types.New(types.T_decimal256, 50, 10),
+				[]types.Decimal256{{B0_63: 456}}),
+		},
+		{
 			name: "date",
 			vec:  buildFixedVec(t, mp, types.T_date.ToType(), []types.Date{types.Date(1)}),
 		},
@@ -279,6 +284,60 @@ func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestJSONAggregatesPreserveExactDecimals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	d64, err := types.ParseDecimal64("0.12345678901234567", 18, 17)
+	require.NoError(t, err)
+	d128, err := types.ParseDecimal128("99999999999999999999999999999999999999", 38, 0)
+	require.NoError(t, err)
+	d256, err := types.ParseDecimal256("1234567890123456789012345678901234567890.1234567890", 50, 10)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		want string
+		vec  *vector.Vector
+	}{
+		{
+			name: "decimal64 fractional",
+			want: "0.12345678901234567",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 17), []types.Decimal64{d64}),
+		},
+		{
+			name: "decimal128 adjacent-value boundary",
+			want: "99999999999999999999999999999999999999",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal128, 38, 0), []types.Decimal128{d128}),
+		},
+		{
+			name: "decimal256",
+			want: "1234567890123456789012345678901234567890.1234567890",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal256, 50, 10), []types.Decimal256{d256}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+
+			array := runJSONArrayAggregate(t, mp, test.vec, nil)
+			arrayJSON, err := array.MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "["+test.want+"]", string(arrayJSON))
+			require.Equal(t, "DECIMAL", array.GetArrayElem(0).TYPE())
+
+			object := runJSONObjectAggregate(t, mp, test.vec)
+			objectJSON, err := object.MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "{\"v\": "+test.want+"}", string(objectJSON))
+			require.Equal(t, []byte("v"), object.GetObjectKey(0))
+			require.Equal(t, "DECIMAL", object.GetObjectVal(0).TYPE())
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func runJSONArrayAggregate(
 	t *testing.T,
 	mp *mpool.MPool,
@@ -309,6 +368,28 @@ func runJSONArrayAggregate(
 	if allocation != nil {
 		require.NoError(t, owner.ClearAllocationAccount(allocation))
 	}
+	return result
+}
+
+func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector) bytejson.ByteJson {
+	t.Helper()
+	exec, err := MakeAgg(
+		mp,
+		AggIdOfJsonObjectAgg,
+		false,
+		types.T_varchar.ToType(),
+		*input.GetType(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{keys, input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	result := types.DecodeJson(append([]byte(nil), results[0].GetBytesAt(0)...))
+	results[0].Free(mp)
+	keys.Free(mp)
+	exec.Free()
 	return result
 }
 
@@ -520,7 +601,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
 		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
-		{"unsupported", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, "", "unsupported type"},
+		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 
 	for _, tt := range cases {
