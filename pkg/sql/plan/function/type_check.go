@@ -355,6 +355,13 @@ func mathStringTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 		}
 		return newCheckResultWithSuccess(stringOverload)
 	}
+	// Temporal values must not be coerced through the new VARCHAR overload.
+	// ROUND(COALESCE(date_col, date_col)) must retain the historical planner
+	// error instead of becoming a numeric-prefix conversion of the year text.
+	switch inputs[0].Oid {
+	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+		return fixedTypeMatchExcept(overloads, inputs, stringOverload)
+	}
 
 	return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
 }
