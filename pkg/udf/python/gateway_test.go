@@ -131,7 +131,9 @@ func TestGatewayFinishRejectsLateHalfStreamControls(t *testing.T) {
 			require.NoError(t, sequence.AcknowledgeResults(1))
 			stream := &gatewayResultStream{results: []*flight.FlightData{
 				gatewayControl(t, kind, tuple, func(control *protocol.Control) {
-					control.Sequence = 1
+					if kind == "InputConsumed" {
+						control.Sequence = 1
+					}
 				}),
 			}}
 			gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}
