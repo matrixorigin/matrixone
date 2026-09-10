@@ -32,15 +32,19 @@ import (
 // JSON, numeric and ordinary string consumers must see the original bytes.
 type regexpStringParameter struct {
 	vector.FunctionParameterWrapper[types.Varlena]
-	parameters []*vector.Vector
-	converter  regexpReplacementDomainConverter
+	parameters   []*vector.Vector
+	converter    regexpReplacementDomainConverter
+	validateText bool
 }
 
-func newRegexpStringParameter(parameters []*vector.Vector, position int) *regexpStringParameter {
+func newRegexpStringParameter(
+	parameters []*vector.Vector, position int, validateText bool,
+) *regexpStringParameter {
 	return &regexpStringParameter{
 		FunctionParameterWrapper: vector.GenerateFunctionStrParameter(parameters[position]),
 		parameters:               parameters,
 		converter:                newRegexpReplacementDomainConverter(parameters[position]),
+		validateText:             validateText,
 	}
 }
 
@@ -54,7 +58,9 @@ func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
 	if p.converter.parameter.GetIsBinaryStringAt(int(row)) {
 		text = p.converter.forMatchDomain(text, int(row), matchingBinary)
 	} else {
-		text = regexpValidTextPrefix(text)
+		if p.validateText {
+			text = regexpValidTextPrefix(text)
+		}
 		if matchingBinary {
 			text = regexpTextToBinaryBytes(text)
 		}

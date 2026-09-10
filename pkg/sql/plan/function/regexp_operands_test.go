@@ -184,17 +184,67 @@ func TestRegexpOutputEncoding(t *testing.T) {
 	require.Equal(t, string(allBytes), regexpTextToBinaryBytes(regexpBinaryBytesToText(string(allBytes))))
 }
 
+func TestRegexpShortPredicateValidationDoesNotAllocate(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
+	require.NoError(t, err)
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		require.True(t, regexpMatchTextWithValidPrefix(reg, "abcdefghijklmnopqrstuvwxyz"))
+	}))
+}
+
 func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
-	subject := "a" + strings.Repeat("x", 1<<20)
 	op := newOpBuiltInRegexp()
 	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.ResetTimer()
-	for b.Loop() {
-		if !regexpMatchTextWithValidPrefix(reg, subject) {
-			b.Fatal("expected match")
-		}
+	for _, size := range []int{32, 1 << 20} {
+		subject := "a" + strings.Repeat("x", size-1)
+		b.Run(fmt.Sprintf("bytes_%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if !regexpMatchTextWithValidPrefix(reg, subject) {
+					b.Fatal("expected match")
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRegexpValueTextValidation(b *testing.B) {
+	subject := "a" + strings.Repeat("x", 1<<20-1)
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		run     func(*regexpSet, string, string) error
+	}{
+		{"instr_early", "^a", func(rs *regexpSet, pattern, subject string) error {
+			_, err := rs.regularInstr(pattern, subject, 1, 1, 0)
+			return err
+		}},
+		{"instr_miss", "z", func(rs *regexpSet, pattern, subject string) error {
+			_, err := rs.regularInstr(pattern, subject, 1, 1, 0)
+			return err
+		}},
+		{"substr_early", "^a", func(rs *regexpSet, pattern, subject string) error {
+			_, _, err := rs.regularSubstr(pattern, subject, 1, 1)
+			return err
+		}},
+		{"substr_miss", "z", func(rs *regexpSet, pattern, subject string) error {
+			_, _, err := rs.regularSubstr(pattern, subject, 1, 1)
+			return err
+		}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			op := newOpBuiltInRegexp()
+			rs := &op.regMap
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := tc.run(rs, tc.pattern, subject); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

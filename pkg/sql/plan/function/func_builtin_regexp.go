@@ -1093,8 +1093,8 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 }
 
 func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := newRegexpStringParameter(parameters, 0)
-	p2 := newRegexpStringParameter(parameters, 1)
+	p1 := newRegexpStringParameter(parameters, 0, false)
+	p2 := newRegexpStringParameter(parameters, 1, true)
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	switch len(parameters) {
@@ -1242,8 +1242,8 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 }
 
 func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := newRegexpStringParameter(parameters, 0)
-	p2 := newRegexpStringParameter(parameters, 1)
+	p1 := newRegexpStringParameter(parameters, 0, false)
+	p2 := newRegexpStringParameter(parameters, 1, true)
 
 	rs := vector.MustFunctionResult[int64](result)
 	switch len(parameters) {
@@ -1418,9 +1418,9 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 }
 
 func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := newRegexpStringParameter(parameters, 0)
-	p2 := newRegexpStringParameter(parameters, 1)
-	p3 := newRegexpStringParameter(parameters, 2)
+	p1 := newRegexpStringParameter(parameters, 0, true)
+	p2 := newRegexpStringParameter(parameters, 1, true)
+	p3 := newRegexpStringParameter(parameters, 2, true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	switch len(parameters) {
@@ -2004,11 +2004,27 @@ func (rs *regexpSet) regularSubstrWithMode(pat string, str string, pos, occurren
 	if !ok {
 		return false, "", moerr.NewInvalidInputNoCtxf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
 	}
+	if !subjectIsBinary {
+		prefix := regexpValidTextPrefix(str[:startByte])
+		if len(prefix) != startByte {
+			return rs.regularSubstrWithMode(pat, prefix, pos, occurrence, false)
+		}
+	}
 	occurrence = max(1, occurrence)
 	selected, found, err := rs.regexpNthMatchAtOrAfter(
 		reg, pat, str, startByte, subjectIsBinary, occurrence)
 	if err != nil {
 		return false, "", err
+	}
+	if !subjectIsBinary {
+		validationEnd := len(str)
+		if found {
+			validationEnd = selected[1]
+		}
+		prefix := regexpValidTextPrefix(str[:validationEnd])
+		if len(prefix) != validationEnd {
+			return rs.regularSubstrWithMode(pat, prefix, pos, occurrence, false)
+		}
 	}
 	if !found {
 		return false, "", nil
@@ -2089,6 +2105,12 @@ func (rs *regexpSet) regularInstrWithMode(pat string, str string, pos, occurrenc
 	if !ok {
 		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
 	}
+	if !subjectIsBinary {
+		prefix := regexpValidTextPrefix(str[:startByte])
+		if len(prefix) != startByte {
+			return rs.regularInstrWithMode(pat, prefix, pos, occurrence, retOption, false)
+		}
+	}
 	occurrence = max(1, occurrence)
 	// check retOption
 	if retOption < 0 || retOption > 1 {
@@ -2105,6 +2127,16 @@ func (rs *regexpSet) regularInstrWithMode(pat string, str string, pos, occurrenc
 		reg, pat, searchSubject, 0, subjectIsBinary, occurrence)
 	if err != nil {
 		return 0, err
+	}
+	if !subjectIsBinary {
+		validationEnd := len(str)
+		if found {
+			validationEnd = startByte + match[1]
+		}
+		prefix := regexpValidTextPrefix(str[:validationEnd])
+		if len(prefix) != validationEnd {
+			return rs.regularInstrWithMode(pat, prefix, pos, occurrence, retOption, false)
+		}
 	}
 	if !found {
 		return 0, nil
@@ -2573,6 +2605,13 @@ func (rs *regexpSet) getRegularLikeMatcherForPureMatchTypeWithMode(
 // bytes cannot invalidate the boolean result. A miss must inspect the complete
 // valid prefix because truncation can create an end-anchored match.
 func regexpMatchTextWithValidPrefix(reg *regexp.Regexp, str string) bool {
+	// Keep ordinary VARCHAR-sized rows on regexp.MatchString's zero-allocation
+	// path. Large values use the match boundary to avoid scanning an irrelevant
+	// suffix after an early successful match.
+	const eagerValidationLimit = 256
+	if len(str) <= eagerValidationLimit {
+		return reg.MatchString(regexpValidTextPrefix(str))
+	}
 	matched := reg.FindStringIndex(str)
 	if matched != nil {
 		prefix := regexpValidTextPrefix(str[:matched[1]])

@@ -86,6 +86,29 @@ func TestRegexpInvalidBinaryOperandArities(t *testing.T) {
 	}
 }
 
+func TestRegexpValueFunctionsValidateSubjectAtMatchBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, subject string
+		wantPos          int64
+		wantValue        string
+		wantMatch        bool
+	}{
+		{"^a", "a\xffz", 1, "a", true},
+		{"a$", "a\xffz", 1, "a", true},
+		{"z", "a\xffz", 0, "", false},
+		{".", "\xffa", 0, "", false},
+	} {
+		op := newOpBuiltInRegexp()
+		position, err := op.regMap.regularInstr(tc.pattern, tc.subject, 1, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, tc.wantPos, position, tc)
+		matched, value, err := op.regMap.regularSubstr(tc.pattern, tc.subject, 1, 1)
+		require.NoError(t, err)
+		require.Equal(t, tc.wantMatch, matched, tc)
+		require.Equal(t, tc.wantValue, value, tc)
+	}
+}
+
 func TestRegexpTerminalBoundaryAndOccurrence(t *testing.T) {
 	for _, tc := range []struct {
 		subject  string
