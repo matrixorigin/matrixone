@@ -1226,6 +1226,27 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	}
 }
 
+func TestOctNullability(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {
+		t.Run(typ.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(t.Context(), "oct", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			arg := &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			want := typ == types.T_int64 || typ == types.T_float64 || typ == types.T_time || typ == types.T_bit
+			require.Equal(t, want, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+			arg.Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+		})
+	}
+	for id := int32(0); id < OctStringOverloadStart; id++ {
+		op, err := GetFunctionById(t.Context(), EncodeOverloadID(OCT, id))
+		require.NoError(t, err)
+		arg := &plan.Expr{Typ: plan.Type{Id: int32(op.args[0]), NotNullable: true}}
+		require.True(t, DeduceNotNullable(EncodeOverloadID(OCT, id), []*plan.Expr{arg}))
+	}
+}
+
 func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
