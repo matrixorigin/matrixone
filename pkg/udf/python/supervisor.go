@@ -9,25 +9,23 @@ package python
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-type Supervisor struct {
-	cfg  Config
-	mu   sync.Mutex
-	cmd  *exec.Cmd
-	log  io.WriteCloser
-	done chan struct{}
-}
+var errSupervisorClosing = errors.New("python udf worker is shutting down")
 
-var supervisorNumber atomic.Int32
+type Supervisor struct {
+	cfg     Config
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	done    chan struct{}
+	closing bool
+}
 
 func NewSupervisor(cfg Config) (*Supervisor, error) {
 	if err := cfg.Validate(); err != nil {
@@ -39,6 +37,9 @@ func NewSupervisor(cfg Config) (*Supervisor, error) {
 func (s *Supervisor) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closing {
+		return errSupervisorClosing
+	}
 	if s.cmd != nil {
 		return nil
 	}
@@ -58,35 +59,28 @@ func (s *Supervisor) Start() error {
 	if executable == "" {
 		executable = "python"
 	}
-	exePath, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	logPath := filepath.Join(filepath.Dir(exePath), fmt.Sprintf("python-udf-worker-%d.log", supervisorNumber.Add(1)))
-	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(executable, "-u", workerPath, "--address="+s.cfg.Address)
 	prepareSupervisorCommand(cmd)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
+	// The MatrixOne service owns process logging. Inheriting stderr keeps
+	// worker diagnostics in the service log and avoids an unbounded, per-start
+	// file beside the binary.
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
 		return err
 	}
 	done := make(chan struct{})
-	s.cmd, s.log, s.done = cmd, logFile, done
-	go s.wait(cmd, logFile, done)
+	s.cmd, s.done = cmd, done
+	go s.wait(cmd, done)
 	logutil.Infof("started Python UDF worker: %s", cmd.String())
 	return nil
 }
 
-func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser, done chan struct{}) {
+func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}) {
 	err := cmd.Wait()
-	_ = log.Close()
 	s.mu.Lock()
 	if s.cmd == cmd {
-		s.cmd, s.log, s.done = nil, nil, nil
+		s.cmd, s.done = nil, nil
+		s.closing = false
 	}
 	s.mu.Unlock()
 	close(done)
@@ -97,12 +91,12 @@ func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser, done chan struct{})
 
 func (s *Supervisor) Close() error {
 	s.mu.Lock()
-	cmd, log, done := s.cmd, s.log, s.done
+	cmd, done := s.cmd, s.done
+	if cmd != nil {
+		s.closing = true
+	}
 	s.mu.Unlock()
 	if cmd == nil {
-		if log != nil {
-			return log.Close()
-		}
 		return nil
 	}
 	var closeErr error
