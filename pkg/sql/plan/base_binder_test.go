@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,6 +114,88 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindFuncExprImplByPlanExpr_OctKeepsNumericConsumersNumeric(t *testing.T) {
+	ctx := context.Background()
+	makeOct := func(value int64) *plan.Expr {
+		oct, err := BindFuncExprImplByPlanExpr(ctx, "oct", []*plan.Expr{
+			makePlan2Int64ConstExprWithType(value),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), oct.Typ.Id)
+		return oct
+	}
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makeOct(8),
+		makeOct(1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "+", result.GetF().GetFunc().GetObjName())
+	require.Equal(t, int32(types.T_float64), result.Typ.Id)
+	for _, arg := range result.GetF().Args {
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+
+	ordinaryText, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makePlan2StringConstExprWithType("1"),
+		makePlan2StringConstExprWithType("2"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "concat", ordinaryText.GetF().GetFunc().GetObjName())
+}
+
+func TestOctExactDecimal(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct{ input, want string }{
+		{"cast('9007199254740991' as decimal(18,0))", "377777777777777777"},
+		{"cast('9007199254740993' as decimal(18,0))", "400000000000000001"},
+		{"cast('9223372036854775807' as decimal(38,0))", "777777777777777777777"},
+		{"cast('9223372036854775808' as decimal(38,0))", "1000000000000000000000"},
+		{"cast('18446744073709551615' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('18446744073709551616' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('-18446744073709551615' as decimal(38,0))", "1"},
+		{"cast('-18446744073709551616' as decimal(38,0))", "0"},
+		{"cast('9007199254740993.9' as decimal(38,1))", "400000000000000001"},
+		{"cast('-1.9' as decimal(18,1))", "1777777777777777777777"},
+		{"cast('0.9' as decimal(18,1))", "0"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select oct("+tc.input+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			bound, err := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), bound.GetF().Args[0].Typ.Id)
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetLit())
+			require.Equal(t, tc.want, folded.GetLit().GetSval())
+		})
+	}
+}
+
+func TestOctDecimalColumnBinding(t *testing.T) {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, notNullable := range []bool{false, true} {
+			input := &plan.Expr{
+				Typ:  plan.Type{Id: int32(oid), Scale: 1, NotNullable: notNullable},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}
+			bound, err := BindFuncExprImplByPlanExpr(context.Background(), "oct", []*plan.Expr{input})
+			require.NoError(t, err)
+			cast := bound.GetF().Args[0]
+			require.Equal(t, int32(types.T_varchar), cast.Typ.Id)
+			require.GreaterOrEqual(t, cast.Typ.Width, int32(78))
+			require.Equal(t, notNullable, cast.Typ.NotNullable)
+			require.Equal(t, input.Typ, cast.GetF().Args[0].Typ)
+		}
+	}
 }
 
 func TestIsPositiveIntegerLiteral(t *testing.T) {
