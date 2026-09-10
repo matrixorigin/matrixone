@@ -93,6 +93,9 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	if len(parameters) == 0 || parameters[0] == nil {
 		return fmt.Errorf("python udf: missing routine descriptor")
 	}
+	if err := validatePythonRoutineDescriptor(parameters[0]); err != nil {
+		return err
+	}
 	if length < 0 {
 		return fmt.Errorf("python udf: negative input length %d", length)
 	}
@@ -127,10 +130,8 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	if length == 0 {
 		return result.PreExtendAndReset(0)
 	}
-	for index, input := range parameters[1:] {
-		if input == nil || (!input.IsConst() && input.Length() < length) {
-			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
-		}
+	if err := validatePythonInputVectors(parameters[1:], argTypes, length); err != nil {
+		return err
 	}
 	// FunctionExpressionExecutor passes an empty, non-nil select list when the
 	// caller selected every row.  In that state AnyNull is false and the
@@ -236,6 +237,41 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		if err := full.UnionOne(nullResult, 0, proc.Mp()); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validatePythonRoutineDescriptor(descriptor *vector.Vector) error {
+	if descriptor == nil {
+		return fmt.Errorf("python udf: missing routine descriptor")
+	}
+	if !descriptor.IsConst() {
+		return fmt.Errorf("python udf: routine descriptor must be constant")
+	}
+	if descriptor.Length() == 0 {
+		return fmt.Errorf("python udf: routine descriptor is empty")
+	}
+	return nil
+}
+
+func validatePythonInputVectors(inputs []*vector.Vector, args []types.Type, length int) error {
+	if len(inputs) != len(args) {
+		return fmt.Errorf("python udf: input column count %d does not match routine argument count %d", len(inputs), len(args))
+	}
+	for index, input := range inputs {
+		if input == nil {
+			return fmt.Errorf("python udf: input vector %d is nil", index)
+		}
+		if !input.IsConst() && input.Length() < length {
+			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
+		}
+		if input.GetType() == nil || !pythonTypesEqual(*input.GetType(), args[index]) {
+			actual := "<nil>"
+			if input.GetType() != nil {
+				actual = input.GetType().String()
+			}
+			return fmt.Errorf("python udf: input vector %d type %s does not match %s", index, actual, args[index].String())
 		}
 	}
 	return nil
