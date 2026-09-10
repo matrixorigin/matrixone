@@ -570,6 +570,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				false,
 				&cwft.schedulingTrace,
 				preparedRetry,
+				cwft.preparedStmt.groupConcatMaxLenFloor,
 			)
 			if err != nil {
 				cwft.completeRuntimeCacheCandidate(nil, err)
@@ -642,6 +643,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			false,
 			&cwft.schedulingTrace,
 			preparedExprRetry,
+			0,
 		)
 		if err != nil {
 			return nil, err
@@ -1463,6 +1465,7 @@ func initExecuteStmtParamWithResolverInSession(
 					true,
 					nil,
 					nil,
+					prepareStmt.groupConcatMaxLenFloor,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2864,6 +2867,7 @@ func createCompile(
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
 	preparedRetry *preparedExecutionRetry,
+	groupConcatMaxLenFloor uint64,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -2931,6 +2935,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))

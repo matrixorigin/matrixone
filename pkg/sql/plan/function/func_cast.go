@@ -4659,7 +4659,7 @@ func mysqlTimeOutOfRangeForCast(
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
 				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
@@ -4696,7 +4696,7 @@ func mysqlInvalidTimeForCast(
 		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
 		}
@@ -6767,7 +6767,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	if proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6789,7 +6789,7 @@ func appendIntegerNumericCoercionWarning(
 	if trimmed == "" || proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return

@@ -309,7 +309,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
-	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+	if err := refreshGroupConcatMaxLen(c.scopes, proc, c.groupConcatMaxLenFloor); err != nil {
 		return err
 	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
@@ -536,6 +536,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.groupConcatMaxLenFloor = 0
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -10081,6 +10082,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 
@@ -10303,3 +10305,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	}
 	return false
 }
+
+// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
+// physical compilation. Zero keeps ordinary statements fully dynamic.
+func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

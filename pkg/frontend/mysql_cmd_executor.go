@@ -2745,6 +2745,15 @@ func createPrepareStmtInSession(
 		return nil, err
 	}
 	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
+	groupConcatValue, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return nil, err
+	}
+	groupConcatLimit, validGroupConcat := groupConcatValue.(int64)
+	if !validGroupConcat || groupConcatLimit < 4 {
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "invalid group_concat_max_len: %v", groupConcatValue)
+	}
+	groupConcatFloor := uint64(groupConcatLimit)
 
 	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -2775,6 +2784,7 @@ func createPrepareStmtInSession(
 			true,
 			nil,
 			nil,
+			groupConcatFloor,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2797,6 +2807,7 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
+		groupConcatMaxLenFloor:       groupConcatFloor,
 		Name:                         preparePlan.GetDcl().GetPrepare().GetName(),
 		Sql:                          originSQL,
 		compile:                      comp,

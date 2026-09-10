@@ -261,6 +261,7 @@ func isSubscribedTable(
 					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
 			meta.AccountId, meta.DbName, tblName)
 
+		ctx = process.ContextWithWarningSink(ctx, proc.WarningSink)
 		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql)
 		if err != nil {
 			return sub,
