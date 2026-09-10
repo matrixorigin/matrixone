@@ -706,13 +706,16 @@ func (s *Schema) ReadFromBatch(
 }
 
 func (s *Schema) AppendColDef(def *ColDef) (err error) {
+	for _, existing := range s.ColDefs {
+		if strings.EqualFold(existing.Name, def.Name) {
+			return moerr.NewConstraintViolationNoCtxf("duplicate column \"%s\"", def.Name)
+		}
+	}
+	if _, existed := s.NameMap[def.Name]; existed {
+		return moerr.NewConstraintViolationNoCtxf("duplicate column \"%s\"", def.Name)
+	}
 	def.Idx = len(s.ColDefs)
 	s.ColDefs = append(s.ColDefs, def)
-	_, existed := s.NameMap[def.Name]
-	if existed {
-		err = moerr.NewConstraintViolationNoCtxf("duplicate column \"%s\"", def.Name)
-		return
-	}
 	s.NameMap[def.Name] = def.Idx
 	return
 }
@@ -944,7 +947,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	// sortColIdx is sort key index list. as of now, sort key is pk
 	sortColIdx := make([]int, 0)
 	// check duplicate column names
-	names := make(map[string]bool)
+	names := make([]string, 0, len(s.ColDefs))
 	for idx, def := range s.ColDefs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			panic(fmt.Sprintf("bad column idx %d, table %v", idx, s.Name))
@@ -958,10 +961,12 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 			def.SeqNum = uint16(idx)
 		}
 		// Check unique name
-		if _, ok := names[def.Name]; ok {
-			return moerr.NewInvalidInputNoCtxf("schema: duplicate column \"%s\"", def.Name)
+		for _, name := range names {
+			if strings.EqualFold(name, def.Name) {
+				return moerr.NewInvalidInputNoCtxf("schema: duplicate column \"%s\"", def.Name)
+			}
 		}
-		names[def.Name] = true
+		names = append(names, def.Name)
 		// Fake pk
 		if pkgcatalog.IsFakePkName(def.Name) {
 			def.FakePK = true

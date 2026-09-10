@@ -26,6 +26,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSchemaRejectsCaseInsensitiveDuplicateColumn(t *testing.T) {
+	schema := NewEmptySchema("duplicate_column_case")
+	require.NoError(t, schema.AppendCol("Id", types.T_int32.ToType()))
+
+	err := schema.AppendCol("id", types.T_int32.ToType())
+	require.Error(t, err)
+	require.Len(t, schema.ColDefs, 1)
+	require.Len(t, schema.NameMap, 1)
+
+	replayed := NewEmptySchema("duplicate_column_case_replayed")
+	replayed.ColDefs = []*ColDef{
+		{Name: "Id", Idx: 0},
+		{Name: "id", Idx: 1},
+	}
+	require.Error(t, replayed.Finalize(true))
+}
+
 func TestCoverage_DefsToSchema_FromPublicationProperty(t *testing.T) {
 	defs := []engine.TableDef{
 		&engine.AttributeDef{
