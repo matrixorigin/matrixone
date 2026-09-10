@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
@@ -146,6 +147,23 @@ func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
 	result := checkPythonUdf(nil, inputs)
 	require.Equal(t, succeedWithCast, result.status)
 	require.Equal(t, required, result.finalType[1])
+}
+
+func TestPythonExecutionValidatesDescriptorAndInputTypes(t *testing.T) {
+	empty, err := vector.NewConstBytes(types.T_text.ToType(), nil, 0, nil)
+	require.NoError(t, err)
+	require.ErrorContains(t, validatePythonRoutineDescriptor(empty), "descriptor is empty")
+
+	nonConst := vector.NewOffHeapVecWithTypeAndData(
+		types.T_text.ToType(), []byte("routine"), 1, 1,
+	)
+	require.ErrorContains(t, validatePythonRoutineDescriptor(nonConst), "must be constant")
+
+	input := vector.NewOffHeapVecWithTypeAndData(types.T_int32.ToType(), make([]byte, 4), 1, 1)
+	require.ErrorContains(t,
+		validatePythonInputVectors([]*vector.Vector{input}, []types.Type{types.T_int64.ToType()}, 1),
+		"does not match",
+	)
 }
 
 func TestPythonRoutineIsVolatile(t *testing.T) {
