@@ -673,6 +673,9 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	if err != nil {
 		return nil, err
 	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
@@ -717,6 +720,9 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
+		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
 
@@ -801,6 +807,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
 	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
 	if err != nil {
+		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
 
