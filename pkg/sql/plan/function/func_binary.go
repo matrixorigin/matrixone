@@ -187,6 +187,7 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 }
 
 func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
@@ -196,7 +197,7 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := parseStringToFloat(v, SQLCompatibilityMySQL)
+		floatVal, err1 := parseMathStringToFloat(v, isBinary, proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -501,6 +502,7 @@ func FloorDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
@@ -510,7 +512,7 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := parseStringToFloat(v, SQLCompatibilityMySQL)
+		floatVal, err1 := parseMathStringToFloat(v, isBinary, proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -520,6 +522,7 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 func generalStringMathMulti(funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	cb mathMultiFun[float64], selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
@@ -529,7 +532,7 @@ func generalStringMathMulti(funcName string, ivecs []*vector.Vector, result vect
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		value, err := parseStringToFloat(v, SQLCompatibilityMySQL)
+		value, err := parseMathStringToFloat(v, isBinary, proc)
 		if err != nil {
 			return 0, err
 		}

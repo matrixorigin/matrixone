@@ -91,8 +91,9 @@ func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func AbsStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isBinary := ivecs[0].GetIsBin()
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		value, err := parseStringToFloat(v, SQLCompatibilityMySQL)
+		value, err := parseMathStringToFloat(v, isBinary, proc)
 		if err != nil {
 			return 0, err
 		}
@@ -173,8 +174,9 @@ func SignFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func SignStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isBinary := ivecs[0].GetIsBin()
 	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
-		value, err := parseStringToFloat(v, SQLCompatibilityMySQL)
+		value, err := parseMathStringToFloat(v, isBinary, proc)
 		if err != nil {
 			return 0, err
 		}

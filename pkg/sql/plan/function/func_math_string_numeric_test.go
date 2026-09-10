@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -60,6 +61,37 @@ func TestExactMathStringNumericPrefixExecutors(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5, 0}, []bool{false, true}), AbsStr)
 	ok, info = testCase.Run()
 	require.True(t, ok, "NULL propagation: %s", info)
+}
+
+func TestMathStringExecutorsPreserveBinaryLiteralProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{
+		{0x31}, // X'31' is the numeric value 0x31, not the text number 1.
+		{0x32},
+	}, nil)
+	input.SetIsBin(true)
+
+	assertFloat64 := func(name string, fn binaryStringTestFn, expected []float64, args ...*vector.Vector) {
+		t.Helper()
+		result := runBinaryStringBytesFn(t, proc, fn, types.T_float64.ToType(), args...)
+		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()), name)
+	}
+	assertInt64 := func(name string, fn binaryStringTestFn, expected []int64, args ...*vector.Vector) {
+		t.Helper()
+		result := runBinaryStringBytesFn(t, proc, fn, types.T_int64.ToType(), args...)
+		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[int64](result.GetResultVector()), name)
+	}
+
+	assertFloat64("abs", AbsStr, []float64{49, 50}, input)
+	assertInt64("sign", SignStr, []int64{1, 1}, input)
+	assertFloat64("ceil", CeilStr, []float64{49, 50}, input)
+	assertFloat64("floor", FloorStr, []float64{49, 50}, input)
+	digits, err := vector.NewConstFixed[int64](types.T_int64.ToType(), 0, input.Length(), proc.Mp())
+	require.NoError(t, err)
+	assertFloat64("round", RoundStr, []float64{49, 50}, input,
+		digits)
+	assertFloat64("truncate", TruncateStr, []float64{49, 50}, input,
+		digits)
 }
 
 func TestExactMathStringNumericPrefixTypeMatching(t *testing.T) {

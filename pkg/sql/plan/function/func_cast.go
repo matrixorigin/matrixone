@@ -6687,6 +6687,21 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
+// parseMathStringToFloat is the direct string-math executor counterpart of an
+// implicit string-to-DOUBLE cast. Keep binary literal provenance and warning
+// behavior intact for the historical string overloads that still call the
+// direct executor (for example CEIL/FLOOR's BOOL compatibility fallback).
+func parseMathStringToFloat(s string, isBinary bool, proc *process.Process) (float64, error) {
+	value, err := parseBytesToFloat([]byte(s), isBinary, 64, SQLCompatibilityMySQL)
+	if err != nil {
+		return 0, err
+	}
+	if !isBinary {
+		appendNumericCoercionWarning(proc, s)
+	}
+	return value, nil
+}
+
 // ParsePreparedStringToFloat64 applies the same compatibility contract as an
 // implicit string-to-DOUBLE cast to a prepared parameter whose plan has
 // already stabilized in the DOUBLE result domain.
