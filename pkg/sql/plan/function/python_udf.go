@@ -112,24 +112,9 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return fmt.Errorf("python udf: decode Python type contract: %w", err)
 	}
 
-	body := PythonRoutineBody{}
-	if err := json.Unmarshal([]byte(routine.Body), &body); err != nil {
+	body, err := DecodePythonRoutineBody(routine.Body)
+	if err != nil {
 		return fmt.Errorf("python udf: decode Python routine body: %w", err)
-	}
-	if body.Handler == "" || body.Source == "" {
-		return fmt.Errorf("python udf: routine handler and source are required")
-	}
-	if body.Mode != "SCALAR" && body.Mode != "VECTOR" {
-		return fmt.Errorf("python udf: unsupported mode %q", body.Mode)
-	}
-	if body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull {
-		return fmt.Errorf("python udf: unsupported NULL policy %q", body.NullPolicy)
-	}
-	if body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
-		return fmt.Errorf("python udf: unsupported Python ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
-	}
-	if body.SDKVersion != udf.PythonSDKVersion {
-		return fmt.Errorf("python udf: unsupported Python SDK %q", body.SDKVersion)
 	}
 	argTypes, err := routineArgumentTypes(routine)
 	if err != nil {

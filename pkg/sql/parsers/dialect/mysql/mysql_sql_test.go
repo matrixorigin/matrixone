@@ -142,6 +142,18 @@ func TestPythonFunctionOptions(t *testing.T) {
 	require.ErrorContains(t, sqlOptions.(*tree.CreateFunction).Valid(), "require LANGUAGE PYTHON")
 }
 
+func TestPythonFunctionImportIsRejectedBeforeExecution(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create function py (x int) returns int language python import 'udf.py' handler 'py'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	create, ok := stmt.(*tree.CreateFunction)
+	require.True(t, ok)
+	require.True(t, create.Import)
+	require.ErrorContains(t, create.Valid(), "immutable artifact catalog")
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)

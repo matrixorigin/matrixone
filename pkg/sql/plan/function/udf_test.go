@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,8 +32,15 @@ func TestPythonTypeContractPreservesDeclaredShape(t *testing.T) {
 	returnDescriptor, err := NewPythonTypeDescriptor(returnType)
 	require.NoError(t, err)
 	body, err := json.Marshal(PythonRoutineBody{
-		ArgTypes:   []PythonTypeDescriptor{argumentDescriptor},
-		ReturnType: &returnDescriptor,
+		Handler:        "identity",
+		Source:         "def identity(ctx, x): return x",
+		Mode:           "SCALAR",
+		NullPolicy:     udf.NullCallHandler,
+		ABIContract:    udf.PythonABIContract,
+		AdapterVersion: udf.PythonAdapterVersion,
+		SDKVersion:     udf.PythonSDKVersion,
+		ArgTypes:       []PythonTypeDescriptor{argumentDescriptor},
+		ReturnType:     &returnDescriptor,
 	})
 	require.NoError(t, err)
 
@@ -49,7 +57,10 @@ func TestPythonTypeContractPreservesDeclaredShape(t *testing.T) {
 func TestPythonTypeContractRejectsMissingReturnDescriptor(t *testing.T) {
 	routine := &Udf{
 		Language: "python",
-		Body:     `{"handler":"legacy","source":"def legacy(ctx, x): return x"}`,
+		Body: `{"handler":"legacy","source":"def legacy(ctx, x): return x",` +
+			`"mode":"SCALAR","null_policy":"CALLED_ON_NULL_INPUT",` +
+			`"abi_contract":"PYTHON_ARROW","adapter_version":"2026-09",` +
+			`"sdk_version":"1.0"}`,
 		ArgsType: []types.Type{types.T_int32.ToType()},
 		RetType:  "int",
 	}
@@ -61,7 +72,17 @@ func TestPythonTypeContractRejectsArgumentCountMismatch(t *testing.T) {
 	require.NoError(t, err)
 	returnType, err := NewPythonTypeDescriptor(types.T_int32.ToType())
 	require.NoError(t, err)
-	body, err := json.Marshal(PythonRoutineBody{ArgTypes: []PythonTypeDescriptor{argument}, ReturnType: &returnType})
+	body, err := json.Marshal(PythonRoutineBody{
+		Handler:        "identity",
+		Source:         "def identity(ctx, x): return x",
+		Mode:           "SCALAR",
+		NullPolicy:     udf.NullCallHandler,
+		ABIContract:    udf.PythonABIContract,
+		AdapterVersion: udf.PythonAdapterVersion,
+		SDKVersion:     udf.PythonSDKVersion,
+		ArgTypes:       []PythonTypeDescriptor{argument},
+		ReturnType:     &returnType,
+	})
 	require.NoError(t, err)
 	routine := &Udf{Language: "python", Body: string(body)}
 	require.NoError(t, routine.LoadPythonTypeContract())
@@ -73,12 +94,44 @@ func TestPythonTypeContractReloadReplacesDescriptors(t *testing.T) {
 	require.NoError(t, err)
 	returnType, err := NewPythonTypeDescriptor(types.T_int32.ToType())
 	require.NoError(t, err)
-	body, err := json.Marshal(PythonRoutineBody{ArgTypes: []PythonTypeDescriptor{argument}, ReturnType: &returnType})
+	body, err := json.Marshal(PythonRoutineBody{
+		Handler:        "identity",
+		Source:         "def identity(ctx, x): return x",
+		Mode:           "SCALAR",
+		NullPolicy:     udf.NullCallHandler,
+		ABIContract:    udf.PythonABIContract,
+		AdapterVersion: udf.PythonAdapterVersion,
+		SDKVersion:     udf.PythonSDKVersion,
+		ArgTypes:       []PythonTypeDescriptor{argument},
+		ReturnType:     &returnType,
+	})
 	require.NoError(t, err)
 	routine := &Udf{Language: "python", Body: string(body)}
 	require.NoError(t, routine.LoadPythonTypeContract())
 	require.NoError(t, routine.LoadPythonTypeContract())
 	require.Len(t, routine.PythonArgTypes, 1)
+}
+
+func TestPythonRoutineBodyRejectsUnknownAndTrailingData(t *testing.T) {
+	valid, err := json.Marshal(PythonRoutineBody{
+		Handler:        "identity",
+		Source:         "def identity(ctx): return 1",
+		Mode:           "SCALAR",
+		NullPolicy:     udf.NullCallHandler,
+		ABIContract:    udf.PythonABIContract,
+		AdapterVersion: udf.PythonAdapterVersion,
+		SDKVersion:     udf.PythonSDKVersion,
+		ReturnType:     func() *PythonTypeDescriptor { d, _ := NewPythonTypeDescriptor(types.T_int32.ToType()); return &d }(),
+	})
+	require.NoError(t, err)
+
+	var withUnknown map[string]any
+	require.NoError(t, json.Unmarshal(valid, &withUnknown))
+	withUnknown["future_field"] = true
+	unknown, err := json.Marshal(withUnknown)
+	require.NoError(t, err)
+	require.ErrorContains(t, func() error { _, err := DecodePythonRoutineBody(string(unknown)); return err }(), "unknown field")
+	require.ErrorContains(t, func() error { _, err := DecodePythonRoutineBody(string(valid) + string(valid)); return err }(), "multiple JSON values")
 }
 
 func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
