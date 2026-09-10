@@ -297,6 +297,21 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	if !bytes.Equal(zero, positiveZero) {
 		t.Fatalf("zero signs/scales were not canonicalized: %X != %X", zero, positiveZero)
 	}
+	zeroScale := Domain{Type: Decimal, Width: 8, Scale: 0}
+	integerLiteral, err := EncodePart(nil, Part{Domain: zeroScale, Value: []byte("10")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decimalLiteral, err := EncodePart(nil, Part{Domain: zeroScale, Value: []byte("10.0")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(integerLiteral, decimalLiteral) {
+		t.Fatalf("zero-scale decimal equivalents differ: %X != %X", integerLiteral, decimalLiteral)
+	}
+	if err := ValidateEncoded(integerLiteral); err != nil {
+		t.Fatalf("zero-scale decimal key is not canonical: %v", err)
+	}
 	if _, err := EncodePart(nil, Part{Domain: Domain{Type: SignedInteger, Width: 33}, Value: make([]byte, 33)}); err == nil {
 		t.Fatal("oversized integer domain was accepted")
 	}

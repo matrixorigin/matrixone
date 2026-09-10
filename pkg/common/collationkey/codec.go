@@ -605,9 +605,14 @@ func validDecimalPayload(params, payload []byte) bool {
 	if payload[0] == 1 && coeff.Sign() == 0 {
 		return false
 	}
-	// normalizeDecimal removes every trailing decimal zero and decreases the
-	// scale, so a non-zero coefficient divisible by ten is not canonical.
-	return new(big.Int).Mod(coeff, big.NewInt(10)).Sign() != 0
+	// normalizeDecimal removes trailing decimal zeros while the scale is
+	// positive. At scale zero the coefficient's trailing zero is part of the
+	// integer value (10 is not equivalent to 1), so it is canonical and must
+	// remain encoded.
+	if scale > 0 && new(big.Int).Mod(coeff, big.NewInt(10)).Sign() == 0 {
+		return false
+	}
+	return true
 }
 
 func normalize(domain Domain, spec familySpec, value []byte, isNull bool) ([]byte, error) {
@@ -742,10 +747,11 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	}
 	scale := targetScale
 	ten := big.NewInt(10)
-	for coeff.Sign() != 0 && new(big.Int).Mod(coeff, ten).Sign() == 0 {
-		if scale == math.MinInt16 {
-			return nil, wrapCodecError(ErrInvalidValue, "decimal scale underflow")
-		}
+	// Keep a zero scale as the canonical lower bound. Removing another
+	// coefficient zero at scale 0 would require a negative scale, but the
+	// encoded decimal contract rejects negative scales; retaining the zero
+	// keeps values such as 10 and 10.0 identical after conversion.
+	for coeff.Sign() != 0 && scale > 0 && new(big.Int).Mod(coeff, ten).Sign() == 0 {
 		coeff.Quo(coeff, ten)
 		scale--
 	}

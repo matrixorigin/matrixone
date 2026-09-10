@@ -59,11 +59,20 @@ func TestMakeCollationKeyV2ExprUsesPlannerOnlyFunction(t *testing.T) {
 
 func TestMakeCollationCompositeKeyV2ExprFramesAllParts(t *testing.T) {
 	values := []*planpb.Expr{
-		{Typ: v2PlannerTextType(uint32(types.CharsetUTF8))},
-		{Typ: v2PlannerTextType(uint32(types.CharsetUTF8MB4Bin))},
+		{Typ: func() planpb.Type {
+			typ := v2PlannerTextType(uint32(types.CharsetUTF8))
+			typ.NotNullable = true
+			return typ
+		}()},
+		{Typ: func() planpb.Type {
+			typ := v2PlannerTextType(uint32(types.CharsetUTF8MB4Bin))
+			typ.NotNullable = true
+			return typ
+		}()},
 	}
 	expr, err := makeCollationCompositeKeyV2Expr(values, []int{2, 8})
 	require.NoError(t, err)
+	require.True(t, expr.Typ.NotNullable)
 	require.Equal(t, function.CollationCompositeKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
 	require.Len(t, expr.GetF().GetArgs(), 6)
 	require.Equal(t, int64(2), expr.GetF().GetArgs()[1].GetLit().GetI64Val())
@@ -73,6 +82,11 @@ func TestMakeCollationCompositeKeyV2ExprFramesAllParts(t *testing.T) {
 
 	_, err = makeCollationCompositeKeyV2Expr(values, []int{1})
 	require.Error(t, err)
+
+	values[1].Typ.NotNullable = false
+	expr, err = makeCollationCompositeKeyV2Expr(values, []int{2, 8})
+	require.NoError(t, err)
+	require.False(t, expr.Typ.NotNullable)
 }
 
 func TestMakeUniqueIndexKeyExprFromInputExprsRejectsUnsupportedV2Part(t *testing.T) {

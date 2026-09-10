@@ -169,8 +169,16 @@ func makeCollationCompositeKeyV2Expr(values []*planpb.Expr, prefixes []int) (*pl
 			makePlan2Int64ConstExprWithType(charset),
 		)
 	}
+	resultType := collationKeyV2OutputType(values[0].Typ)
+	// The composite materializer emits SQL NULL when any source part is NULL.
+	// Carry that contract into the planner type instead of looking only at the
+	// first part; otherwise a nullable later part can be incorrectly treated as
+	// non-nullable by null-elimination and constraint planning.
+	for _, value := range values[1:] {
+		resultType.NotNullable = resultType.NotNullable && value.Typ.NotNullable
+	}
 	return &planpb.Expr{
-		Typ: collationKeyV2OutputType(values[0].Typ),
+		Typ: resultType,
 		Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: &planpb.ObjectRef{
 				Obj:     function.CollationCompositeKeyV2FunctionEncodedID,
