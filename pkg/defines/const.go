@@ -97,7 +97,8 @@ const (
 	MORPCVersion59     int64 = 59 // typed numeric FORMAT arguments in remote expressions
 	MORPCVersion60     int64 = 60 // row-dependent expression defaults
 	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
-	MORPCLatestVersion       = MORPCVersion61
+	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
+	MORPCLatestVersion       = MORPCVersion62
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
