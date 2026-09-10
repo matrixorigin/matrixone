@@ -106,6 +106,21 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key gro
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
 
 -- @case
+-- @desc:issue #28300 - DISTINCT aggregates preserve their empty correlated result
+-- @label:bvt
+create table distinct_parent (id int primary key);
+create table distinct_child (parent_id int, v int);
+insert into distinct_parent values (1), (2), (3);
+insert into distinct_child values (1, 10), (1, 10), (1, 20), (1, null), (2, null);
+select p.id,
+       (select count(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 2 else 0 end as count_ok,
+       (select sum(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 30 else null end as sum_ok,
+       (select avg(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 15.0 else null end as avg_ok,
+       (select group_concat(distinct c.v order by c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then '10,20' else null end as concat_ok
+from distinct_parent p
+order by p.id;
+
+-- @case
 -- @desc:ONLY_FULL_GROUP_BY allows inner HAVING to reference an ungrouped outer row
 -- @label:bvt
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';
