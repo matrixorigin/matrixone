@@ -50,9 +50,13 @@ func Cos(v float64) (float64, error) {
 func Cot(v float64) (float64, error) {
 	if v == 0 {
 		return 0, moerr.NewInvalidArgNoCtx("cot", "0")
-	} else {
-		return math.Tan(math.Pi/2.0 - v), nil
 	}
+
+	r := 1 / math.Tan(v)
+	if math.IsInf(r, 0) {
+		return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cot(%v)'", v)
+	}
+	return r, nil
 }
 
 func Exp(v float64) (float64, error) {
