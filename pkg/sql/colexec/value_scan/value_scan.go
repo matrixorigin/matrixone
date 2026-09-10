@@ -295,6 +295,7 @@ func (valueScan *ValueScan) InitExprExecList(proc *process.Process) error {
 		var exprExecList []colexec.ExpressionExecutor
 		for j, data := range col.Data {
 			if data == nil || data.Expr == nil {
+				freeExpressionExecLists([][]colexec.ExpressionExecutor{exprExecList})
 				freeExpressionExecLists(exprExecLists)
 				valueScan.ExprExecLists = nil
 				return moerr.NewInternalErrorNoCtxf(
