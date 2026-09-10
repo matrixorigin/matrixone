@@ -144,6 +144,12 @@ select a, b from t_ctas order by a;
 a    b
 10    11
 20    21
+select a, b, c from t_ctas_target_only;
+a    b    c
+1    2    7
+select a = b as same_source, c from t_ctas_target_only_volatile;
+same_source    c
+1    7
 create table t_ctas_expression (
 a int default (1 + 1),
 b int default (a + 1)

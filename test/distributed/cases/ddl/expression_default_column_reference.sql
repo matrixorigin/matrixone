@@ -128,6 +128,19 @@ create table t_ctas (
 insert into t_ctas (a) values (20);
 select a, b from t_ctas order by a;
 
+-- Target-only defaults are omitted from the CTAS source projection so the
+-- normal INSERT dependency materializer owns their row image.
+create table t_ctas_target_only (
+    a int default 1,
+    b int default (a + 1)
+) as select 7 as c;
+select a, b, c from t_ctas_target_only;
+create table t_ctas_target_only_volatile (
+    a double default (rand()),
+    b double default (a)
+) as select 7 as c;
+select a = b as same_source, c from t_ctas_target_only_volatile;
+
 -- CTAS must not publish an order that SHOW CREATE/LIKE cannot replay.
 -- @regex("defined after it", true)
 create table t_ctas_expression (

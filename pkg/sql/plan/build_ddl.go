@@ -3463,47 +3463,94 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 
-		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
+		// Insert into the new table from the SELECT source.  The ordinary path
+		// keeps the historical implicit target list.  A target-only dependency
+		// path below uses an explicit source list so omitted target columns are
+		// evaluated by the target INSERT implementation.
 		var insertSqlBuilder strings.Builder
-		if stmt.CTASConflict == "ignore" {
-			insertSqlBuilder.WriteString("insert ignore into ")
-		} else if stmt.CTASConflict == "replace" {
-			insertSqlBuilder.WriteString("replace into ")
-		} else {
-			insertSqlBuilder.WriteString("insert into ")
-		}
 		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
 		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
 		targetFmtCtx.WriteByte('.')
 		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.TableDef.Name))
-		insertSqlBuilder.WriteString(targetFmtCtx.String())
-		insertSqlBuilder.WriteString(" select ")
+		targetName := targetFmtCtx.String()
 
 		cols := createTable.TableDef.Cols
-		firstCol := true
-		for i := range cols {
-			// Generated columns are computed by the target table. They are not
-			// implicit INSERT targets, so do not add a placeholder before the
-			// source projection. Otherwise a destination-only generated column
-			// shifts the source columns and makes CTAS fail with a column-count
-			// error.
-			if cols[i].GeneratedCol != nil {
-				continue
+		if ctasNeedsExplicitSourceProjection(cols, sourceColumnDefs) {
+			// Target-only expression defaults are evaluated by the ordinary INSERT
+			// default path.  Keeping them in this SELECT would bind references such
+			// as b DEFAULT (a + 1) against the source query, where a does not exist,
+			// and would also replay volatile defaults independently of their stored
+			// row values.  Supply only source columns explicitly and omit every
+			// target-only column so the target's dependency materializer owns them.
+			sourceTargets := make([]struct {
+				source *ColDef
+				target *ColDef
+			}, 0, len(sourceColumnDefs))
+			for _, sourceCol := range sourceColumnDefs {
+				finalCol := findCTASColumn(cols, sourceCol.Name)
+				if finalCol == nil {
+					return moerr.NewInvalidInputf(ctx.GetContext(),
+						"CTAS source column '%s' is missing from the target", sourceCol.Name)
+				}
+				if finalCol.GeneratedCol == nil {
+					sourceTargets = append(sourceTargets, struct {
+						source *ColDef
+						target *ColDef
+					}{source: sourceCol, target: finalCol})
+				}
 			}
-			// insert default values if col[i] only in create clause
-			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
+			if len(sourceTargets) == 0 {
+				return moerr.NewInvalidInput(ctx.GetContext(),
+					"CTAS cannot materialize source columns for a generated target")
+			}
+			writeCTASInsertPrefix(&insertSqlBuilder, stmt.CTASConflict, targetName)
+			insertSqlBuilder.WriteString(" (")
+			firstCol := true
+			for _, sourceTarget := range sourceTargets {
 				if !firstCol {
 					insertSqlBuilder.WriteString(", ")
 				}
-				insertSqlBuilder.WriteString(defaultMap[cols[i].Name])
+				writeCTASIdentifier(&insertSqlBuilder, sourceTarget.target.Name)
 				firstCol = false
 			}
+			insertSqlBuilder.WriteString(") select ")
+			firstCol = true
+			for _, sourceTarget := range sourceTargets {
+				if !firstCol {
+					insertSqlBuilder.WriteString(", ")
+				}
+				writeCTASIdentifier(&insertSqlBuilder, "__mo_ctas_source")
+				insertSqlBuilder.WriteByte('.')
+				writeCTASIdentifier(&insertSqlBuilder, sourceTarget.source.Name)
+				firstCol = false
+			}
+		} else {
+			writeCTASInsertPrefix(&insertSqlBuilder, stmt.CTASConflict, targetName)
+			insertSqlBuilder.WriteString(" select ")
+			firstCol := true
+			for i := range cols {
+				// Generated columns are computed by the target table. They are not
+				// implicit INSERT targets, so do not add a placeholder before the
+				// source projection. Otherwise a destination-only generated column
+				// shifts the source columns and makes CTAS fail with a column-count
+				// error.
+				if cols[i].GeneratedCol != nil {
+					continue
+				}
+				if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
+					if !firstCol {
+						insertSqlBuilder.WriteString(", ")
+					}
+					insertSqlBuilder.WriteString(defaultMap[cols[i].Name])
+					firstCol = false
+				}
+			}
+			if !firstCol {
+				insertSqlBuilder.WriteString(", ")
+			}
+			// add all cols from select clause
+			insertSqlBuilder.WriteString("*")
 		}
-		if !firstCol {
-			insertSqlBuilder.WriteString(", ")
-		}
-		// add all cols from select clause
-		insertSqlBuilder.WriteString("*")
 
 		// from
 		// The generated INSERT ... SELECT is re-parsed by the internal SQL
@@ -3810,6 +3857,53 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	return nil
+}
+
+func findCTASColumn(cols []*ColDef, name string) *ColDef {
+	for _, col := range cols {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return col
+		}
+	}
+	return nil
+}
+
+func writeCTASIdentifier(builder *strings.Builder, name string) {
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	fmtCtx.WriteIdentifier(tree.Identifier(name))
+	builder.WriteString(fmtCtx.String())
+}
+
+func writeCTASInsertPrefix(builder *strings.Builder, conflict, targetName string) {
+	switch conflict {
+	case "ignore":
+		builder.WriteString("insert ignore into ")
+	case "replace":
+		builder.WriteString("replace into ")
+	default:
+		builder.WriteString("insert into ")
+	}
+	builder.WriteString(targetName)
+}
+
+func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
+	sourceNames := make(map[string]struct{}, len(sourceCols))
+	for _, col := range sourceCols {
+		if col != nil {
+			sourceNames[strings.ToLower(col.Name)] = struct{}{}
+		}
+	}
+	for _, col := range cols {
+		if col == nil || col.GeneratedCol != nil || col.Default == nil ||
+			col.Default.Expr == nil {
+			continue
+		}
+		if _, exists := sourceNames[strings.ToLower(col.Name)]; !exists &&
+			exprHasLocalColumnRef(col.Default.Expr) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendCheckDef(
