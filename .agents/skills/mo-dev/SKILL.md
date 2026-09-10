@@ -129,12 +129,13 @@ merge_base=$(git merge-base HEAD "$base_ref")
 tracked_go=$(git diff --name-only "$merge_base" -- '*.go')
 untracked_go=$(git ls-files --others --exclude-standard -- '*.go')
 changed_go=$(printf '%s\n%s\n' "$tracked_go" "$untracked_go" |
-  sort -u | while IFS= read -r file; do
-    if [ -f "$file" ]; then printf '%s\n' "$file"; fi
-  done)
+  sort -u | sed '/^$/d')
+existing_go=$(printf '%s\n' "$changed_go" | while IFS= read -r file; do
+  if [ -n "$file" ] && [ -f "$file" ]; then printf '%s\n' "$file"; fi
+done)
 
-if [ -n "$changed_go" ]; then
-  format_files=$(printf '%s\n' "$changed_go" | xargs -r gofmt -l)
+if [ -n "$existing_go" ]; then
+  format_files=$(printf '%s\n' "$existing_go" | xargs -r gofmt -l)
   if [ -n "$format_files" ]; then
     printf 'gofmt required for:\n%s\n' "$format_files" >&2
     exit 1
@@ -142,12 +143,19 @@ if [ -n "$changed_go" ]; then
 fi
 
 changed_dirs=$(printf '%s\n' "$changed_go" | while IFS= read -r file; do
-  [ -n "$file" ] && dirname -- "$file"
+  if [ -n "$file" ]; then dirname -- "$file"; fi
 done | sort -u)
 changed_pkgs=$(printf '%s\n' "$changed_dirs" | while IFS= read -r dir; do
-  if [ -n "$dir" ] && [ -d "$dir" ]; then
-    go list -mod=readonly "./${dir#./}"
+  if [ -z "$dir" ]; then continue; fi
+  if [ ! -d "$dir" ]; then
+    printf 'changed Go directory was removed; select affected consumers explicitly: %s\n' "$dir" >&2
+    exit 1
   fi
+  if ! find "$dir" -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then
+    printf 'changed Go directory has no current Go files; select affected consumers explicitly: %s\n' "$dir" >&2
+    exit 1
+  fi
+  GOWORK=off go list -mod=readonly "./${dir#./}" || exit 1
 done | sort -u)
 if [ -n "$changed_go" ] && [ -z "$changed_pkgs" ]; then
   printf 'changed Go files exist, but no package was discovered\n' >&2
@@ -156,7 +164,7 @@ fi
 
 if [ -n "$changed_pkgs" ]; then
   GOWORK=off go vet -mod=readonly $changed_pkgs
-  golangci-lint run -c .golangci.yml --new-from-rev "$merge_base" $changed_pkgs
+  GOWORK=off golangci-lint run -c .golangci.yml --new-from-rev "$merge_base" $changed_pkgs
 fi
 ```
 
@@ -164,8 +172,10 @@ Use the CGo setup and wrapper from
 [cgo-build-test.md](references/cgo-build-test.md) when the selected closure is
 CGo-direct/transitive. Add directly affected consumers when an exported/API,
 protocol, generated-code, or shared lifecycle contract changed; the package
-list must not be a guessed single leaf. If no Go file changed, run the smallest
-checker for the changed artifact.
+list must not be a guessed single leaf. A deleted-only package directory must
+stop this helper and be handled by explicitly selecting its existing consumers;
+do not replace that decision with `./...`. If no Go file changed, run the
+smallest checker for the changed artifact.
 
 `make static-check-analysis`, `make static-check`, `golangci-lint run ./...`,
 and equivalent whole-repository commands are the CI/full-scan path, not the
