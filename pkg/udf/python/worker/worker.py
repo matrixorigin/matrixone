@@ -1211,12 +1211,17 @@ class RoutineFlightServer(flight.FlightServerBase):
             if mode not in (MODE_SCALAR, MODE_VECTOR) or null_policy not in (NULL_CALL, NULL_RETURN): raise ValueError("PROTOCOL: unsupported call mode or NULL policy")
             if abi_contract != ABI_CONTRACT or adapter_version != ADAPTER_VERSION: raise ValueError("PROTOCOL: unsupported Python ABI contract")
             if sdk_version != SDK_VERSION: raise ValueError("PROTOCOL: unsupported Python SDK")
-            state = self._admit(key)
-            state.tuple = open_control["tuple"]
             source = _required_string(payload, "source")
             handler_name = _required_string(payload, "handler")
-            schema = None
+            # Validate the complete frozen type contract before reserving a
+            # ledger entry.  A malformed Open is rejected before it can leave
+            # a terminal tombstone behind.
+            for index, descriptor in enumerate(args):
+                _field(f"arg_{index}", descriptor)
             result_field = _field("result", result_descriptor)
+            state = self._admit(key)
+            state.tuple = open_control["tuple"]
+            schema = None
             result_schema = pa.schema([result_field])
             writer.begin(result_schema)
             writer_started = True

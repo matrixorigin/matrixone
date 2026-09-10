@@ -372,6 +372,53 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_invalid_open_does_not_consume_terminal_ledger(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        fence = {
+            "account_id": 1,
+            "statement_id": "review",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invalid-open",
+            "lease_epoch": 1,
+        }
+        payload = {
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "abi_contract": worker.ABI_CONTRACT,
+            "adapter_version": worker.ADAPTER_VERSION,
+            "sdk_version": worker.SDK_VERSION,
+            "args": [{"type_id": worker.INT64, "offset_width": 32}],
+            "return": {"type_id": 999, "offset_width": 32},
+            "source": "def f(ctx, x): return x",
+            "handler": "f",
+            "max_batch_bytes": 1 << 20,
+            "max_batch_rows": 1024,
+            "handler_timeout_seconds": 2,
+        }
+        command = worker._encode_control(
+            {"kind": "OpenInvocation", "tuple": fence, "payload": payload}
+        )
+        reader = types.SimpleNamespace(schema=None, read_chunk=lambda: (_ for _ in ()).throw(StopIteration))
+        writer = types.SimpleNamespace(
+            begin=lambda schema: None,
+            write_metadata=lambda data: None,
+            write_with_metadata=lambda record, data: None,
+        )
+        key = worker._tuple_key(fence)
+        try:
+            with self.assertRaisesRegex(ValueError, "unsupported type id"):
+                server.do_exchange(
+                    types.SimpleNamespace(is_cancelled=lambda: False),
+                    types.SimpleNamespace(command=command),
+                    reader,
+                    writer,
+                )
+            self.assertNotIn(key, server._active)
+            self.assertNotIn(key, server._terminal)
+        finally:
+            server.shutdown()
+
     @unittest.skipUnless(os.name == "posix", "process-group test")
     def test_descendant_is_killed_after_handler_leader_exits(self):
         with tempfile.TemporaryDirectory(prefix="mo-udf-owned-child-") as artifact:
