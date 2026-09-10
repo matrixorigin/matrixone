@@ -123,7 +123,8 @@ const (
 	TaskCode_DataBranchLineageGC TaskCode = 13
 	// CDC initial snapshot with persisted stable-epoch retry semantics. Keeping
 	// a distinct code prevents older CNs from claiming protocol-marked tasks.
-	TaskCode_InitCdcStableEpoch TaskCode = 14
+	TaskCode_InitCdcStableEpoch   TaskCode = 14
+	TaskCode_InitCdcLosslessStart TaskCode = 15
 )
 
 var TaskCode_name = map[int32]string{
@@ -140,6 +141,7 @@ var TaskCode_name = map[int32]string{
 	12: "SQLTask",
 	13: "DataBranchLineageGC",
 	14: "InitCdcStableEpoch",
+	15: "InitCdcLosslessStart",
 }
 
 var TaskCode_value = map[string]int32{
@@ -156,6 +158,7 @@ var TaskCode_value = map[string]int32{
 	"SQLTask":                 12,
 	"DataBranchLineageGC":     13,
 	"InitCdcStableEpoch":      14,
+	"InitCdcLosslessStart":    15,
 }
 
 func (x TaskCode) String() string {

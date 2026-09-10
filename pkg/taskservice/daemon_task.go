@@ -66,7 +66,8 @@ const (
 
 func isCDCTaskCode(code task.TaskCode) bool {
 	return code == task.TaskCode_InitCdc ||
-		code == task.TaskCode_InitCdcStableEpoch
+		code == task.TaskCode_InitCdcStableEpoch ||
+		code == task.TaskCode_InitCdcLosslessStart
 }
 
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
