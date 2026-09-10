@@ -95,6 +95,15 @@ func TestInsertRowAliasInsideSQLPrepare(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, tree.Identifier("n"), insertStmt.RowAlias.Alias)
 	require.Equal(t, tree.IdentifierList{"x", "y"}, insertStmt.RowAlias.Cols)
+
+	stmt, err = ParseOne(context.Background(),
+		"prepare s from insert into t(a, g) values (?, default) as n(x, y) on duplicate key update a = n.x + ?", 1)
+	require.NoError(t, err)
+	prepared, ok = stmt.(*tree.PrepareStmt)
+	require.True(t, ok)
+	insertStmt, ok = prepared.Stmt.(*tree.Insert)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{"x", "y"}, insertStmt.RowAlias.Cols)
 }
 
 func TestInsertRowAliasSubqueryAndExpressionFormsParse(t *testing.T) {
