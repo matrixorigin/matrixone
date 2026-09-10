@@ -35,6 +35,13 @@ or repeated full-suite runs.
 7. **Review and deliver.** Run `mo-self-review` on the final scope, resolve every
    blocker, inspect the delivery diff, and report the compact evidence record.
 
+For tests and diagnostic probes, acquire each resource only after its preceding
+step succeeds and schedule its cleanup immediately in the same lexical scope.
+When a loop performs repeated queries or opens rows/statements, use a small
+helper or per-iteration closure so `defer` releases the resource before the
+next iteration; a cleanup call at the bottom of a test is not equivalent on an
+early assertion failure.
+
 For diagnosis-only requests, stop after proving and explaining the cause; do not
 turn diagnosis into an implementation without authorization.
 
@@ -64,6 +71,8 @@ Read a reference when its trigger applies:
 | **G-OPERATOR** | Editing/reviewing `colexec`, process signals, pipeline spool/protocol, or a distributed pipeline hang | Read the operator/pipeline reference before editing or concluding. Trace sender and receiver plus reset/cleanup terminal paths. |
 | **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or scenario-overfit risk | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. |
 | **G-INDEXPLUGIN** | Index algorithm dispatch/plugin/registry/ISCP paths change | Read the index-plugin reference and its review section. New SQL/catalog per-algorithm dispatch is forbidden. |
+| **G-STATIC-INCREMENTAL** | Any Go source/test edit or SCA failure | Derive the changed package closure from the merge base (including local staged/unstaged files), run gofmt/vet/lint only for that closure first, and escalate to the full repository scan only under the rules below. |
+| **G-CI-TRIAGE** | A CI job fails, hangs, is cancelled, or is unexpectedly skipped | Capture the exact job step, SHA, platform/toolchain, and terminal result; classify code/static/test failure separately from network/cache/quota/disk/runner failure before changing code or deciding to rerun. |
 | **G-EVIDENCE** | Before claiming pass/done or attributing a failure | Apply semantic evidence validity. Pending/empty selection/partial output is not a pass; a “pre-existing” claim requires the same failure at the verified clean baseline. |
 
 ## First-principles change rules
@@ -106,6 +115,74 @@ truth. In particular:
   are unchanged; unrelated docs or PR metadata do not invalidate it;
 - retain real terminal status and diagnose silence by polling the existing
   process, not by launching duplicates.
+
+### Incremental static checks (default)
+
+Do not run a repository-wide SCA for every edit. Resolve the merge base once,
+include committed and local tracked/untracked Go files, inspect the resulting
+package list, and run the configured checks only on that list:
+
+```bash
+base_ref=${REVIEW_BASE:-origin/main}
+merge_base=$(git merge-base HEAD "$base_ref")
+changed_go=$( {
+  git diff --name-only "$merge_base" -- '*.go'
+  git ls-files --others --exclude-standard -- '*.go'
+} | sort -u )
+changed_dirs=$(printf '%s\n' "$changed_go" |
+  sed '/^$/d' | xargs -r -n1 dirname | sort -u)
+changed_pkgs=$(printf '%s\n' "$changed_dirs" |
+  sed '/^$/d; s#^\./##; s#^#./#' | xargs -r go list)
+
+test -z "$changed_go" || printf '%s\n' "$changed_go" | xargs -r gofmt -d
+test -z "$changed_pkgs" || GOWORK=off go vet -mod=readonly $changed_pkgs
+test -z "$changed_pkgs" || golangci-lint run -c .golangci.yml \
+  --new-from-rev "$merge_base" $changed_pkgs
+```
+
+Use the CGo setup and wrapper from
+[cgo-build-test.md](references/cgo-build-test.md) when the selected closure is
+CGo-direct/transitive. Add directly affected consumers when an exported/API,
+protocol, generated-code, or shared lifecycle contract changed; the package
+list must not be a guessed single leaf. If no Go file changed, run the smallest
+checker for the changed artifact.
+
+`make static-check-analysis`, `make static-check`, `golangci-lint run ./...`,
+and equivalent whole-repository commands are the CI/full-scan path, not the
+default edit loop. Escalate to one only when SCA configuration/toolchain or
+workflow files changed, the affected consumer closure cannot be bounded, a
+release/pre-push gate explicitly requires it, or a CI failure must be
+reproduced. Record incremental and full results separately; a focused pass is
+not evidence that full CI SCA is green. Never suppress a finding or delete
+cleanup merely to make a static check pass.
+
+### CI and environment diagnosis
+
+When a CI check is red or silent, do not infer the cause from the check name or
+partial output. Inspect the failing step and terminal log at the exact checked
+SHA, then classify it before editing:
+
+- **Code/static/test:** reproduce the smallest affected package/test locally
+  with the same mode (race, coverage, tags, CGo, platform where possible), and
+  fix the violated contract. Run static checks before an expensive cluster or
+  end-to-end test.
+- **Infrastructure:** network/API fetch failures, rate limits, unavailable
+  caches, runner/toolchain setup, disk exhaustion, or a cancelled/evicted job
+  are not product failures. Preserve the log, rerun only a clearly transient
+  job when authorized, and do not add sleeps, retries, skips, or product
+  workarounds to hide it.
+- **Ambiguous/hung:** keep the existing run as the source of truth; poll for a
+  terminal result, inspect the process/stack and resource state, and avoid
+  launching a duplicate service or test that can contend for ports, native
+  artifacts, or global state. A timeout is evidence of a liveness failure until
+  the wait-for path is explained.
+
+For local native/integration work, preflight the selected toolchain, disk and
+temporary directory, active test-owned processes/ports, and CGo artifact
+provenance. Use the repository wrapper and an explicit temporary directory;
+clean only artifacts owned by the test. Report environment failures separately
+from code evidence, and never claim CI green from a pending, skipped, cancelled,
+or unrelated check.
 
 Ordinary pure-Go examples:
 

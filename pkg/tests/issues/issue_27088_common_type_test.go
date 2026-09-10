@@ -120,35 +120,37 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed_around")
 			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE"} {
 				mustExec(t, ctx, conn, "SET @bool_mixed = "+value)
-				rows, err := conn.QueryContext(ctx,
-					"EXECUTE bool_mixed_around USING @bool_mixed, @bool_mixed, @bool_mixed")
-				require.NoError(t, err)
-				columns, err := rows.ColumnTypes()
-				require.NoError(t, err)
-				require.Len(t, columns, 3)
-				require.Equal(t, "TEXT", columns[0].DatabaseTypeName(), "direct parameter before numeric sibling")
-				require.Equal(t, "TEXT", columns[2].DatabaseTypeName(), "direct parameter after numeric sibling")
-				require.True(t, rows.Next())
-				var before, after sql.NullString
-				var numeric sql.NullFloat64
-				require.NoError(t, rows.Scan(&before, &numeric, &after))
-				require.False(t, rows.Next())
-				require.NoError(t, rows.Err())
-				require.Equal(t, value == "NULL", !before.Valid, value)
-				require.Equal(t, value == "NULL", !after.Valid, value)
-				if value != "NULL" {
-					require.Equal(t, strings.ToLower(value), before.String, value)
-					require.Equal(t, strings.ToLower(value), after.String, value)
-				}
-				require.Equal(t, value == "NULL", !numeric.Valid, value)
-				if value != "NULL" {
-					want := float64(0)
-					if value == "TRUE" {
-						want = 1
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed_around USING @bool_mixed, @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 3)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(), "direct parameter before numeric sibling")
+					require.Equal(t, "TEXT", columns[2].DatabaseTypeName(), "direct parameter after numeric sibling")
+					require.True(t, rows.Next())
+					var before, after sql.NullString
+					var numeric sql.NullFloat64
+					require.NoError(t, rows.Scan(&before, &numeric, &after))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, value == "NULL", !before.Valid, value)
+					require.Equal(t, value == "NULL", !after.Valid, value)
+					if value != "NULL" {
+						require.Equal(t, strings.ToLower(value), before.String, value)
+						require.Equal(t, strings.ToLower(value), after.String, value)
 					}
-					require.Equal(t, want, numeric.Float64, value)
-				}
-				require.NoError(t, rows.Close())
+					require.Equal(t, value == "NULL", !numeric.Valid, value)
+					if value != "NULL" {
+						want := float64(0)
+						if value == "TRUE" {
+							want = 1
+						}
+						require.Equal(t, want, numeric.Float64, value)
+					}
+				}()
 			}
 			stmt, err := conn.PrepareContext(ctx, query)
 			require.NoError(t, err)
