@@ -1526,6 +1526,54 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("DECIMAL SUBSTRING_INDEX sender and receiver boundary", func(t *testing.T) {
+		makeSubstringIndexExpr := func(overloadIndex int32) *planpb.Expr {
+			return &planpb.Expr{
+				Typ: planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{
+						Obj:     int64(planfunction.SUBSTRING_INDEX)<<32 | int64(overloadIndex),
+						ObjName: "substring_index",
+					},
+				}},
+			}
+		}
+		for _, overloadIndex := range []int32{3, 4} {
+			expr := makeSubstringIndexExpr(overloadIndex)
+			remotePipeline := &pipeline.Pipeline{
+				InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+			}
+			scope := makeScope(expr)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+			require.ErrorContains(t, err,
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.ErrorContains(t, err,
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+			encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.NoError(t, err)
+			decoded, err := decodeScope(encoded, proc, true, nil)
+			require.NoError(t, err)
+			decoded.release()
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+			_, err = decodeScope(encoded, proc, true, nil)
+			require.ErrorContains(t, err,
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{makeSubstringIndexExpr(0)}}},
+		}))
+	})
+
 	t.Run("typed FORMAT rejects nil first argument", func(t *testing.T) {
 		badExpr := &planpb.Expr{
 			Typ: planpb.Type{Id: int32(types.T_varchar)},

@@ -193,20 +193,23 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. A struct makes compatibility call sites name every capability
-// instead of relying on positional booleans.
+// MORPC v59. DecimalSubstringIndex requires MORPC v60. A struct makes
+// compatibility call sites name every capability instead of relying on
+// positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
+	DecimalSubstringIndex    bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
-		features.FormatNumericArguments
+		features.FormatNumericArguments ||
+		features.DecimalSubstringIndex
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -235,10 +238,28 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if formatNumericArguments {
 				features.FormatNumericArguments = true
 			}
+			if !features.DecimalSubstringIndex && isDecimalSubstringIndexFunction(fn) {
+				features.DecimalSubstringIndex = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+func isDecimalSubstringIndexFunction(function *Function) bool {
+	if function == nil || function.Func == nil {
+		return false
+	}
+	const (
+		substringIndexFunctionID  int32 = 215
+		firstDecimalOverloadIndex int32 = 3
+		lastDecimalOverloadIndex  int32 = 4
+	)
+	functionID := int32(function.Func.Obj >> 32)
+	overloadIndex := int32(function.Func.Obj)
+	return functionID == substringIndexFunctionID &&
+		overloadIndex >= firstDecimalOverloadIndex && overloadIndex <= lastDecimalOverloadIndex
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric

@@ -2063,6 +2063,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
 		)
 	}
+	if features.DecimalSubstringIndex &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion60) {
+		return moerr.NewNotSupportedNoCtx(
+			"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60",
+		)
+	}
 	return nil
 }
 
