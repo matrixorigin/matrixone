@@ -218,6 +218,9 @@ func validatePythonTypeDescriptor(descriptor PythonTypeDescriptor) error {
 	if !reflect.DeepEqual(canonical, descriptor) {
 		return fmt.Errorf("descriptor is not canonical for %s", typ.String())
 	}
+	if _, err := descriptor.Fingerprint(); err != nil {
+		return fmt.Errorf("descriptor has no valid Arrow physical type: %w", err)
+	}
 	return nil
 }
 func type2PlanType(typ types.Type) *plan.Type {
