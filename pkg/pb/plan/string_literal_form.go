@@ -193,7 +193,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. DecimalSubstringIndex requires MORPC v60. A struct makes
+// MORPC v59. DecimalSubstringIndex requires MORPC v61. A struct makes
 // compatibility call sites name every capability instead of relying on
 // positional booleans.
 type RemoteExpressionFeatures struct {

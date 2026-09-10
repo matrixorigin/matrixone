@@ -1545,16 +1545,16 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}
 			scope := makeScope(expr)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
 			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
 			require.ErrorContains(t, err,
-				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 61")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 			_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
 			require.ErrorContains(t, err,
-				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 61")
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 			encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
 			require.NoError(t, err)
@@ -1562,10 +1562,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			require.NoError(t, err)
 			decoded.release()
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
 			_, err = decodeScope(encoded, proc, true, nil)
 			require.ErrorContains(t, err,
-				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60")
+				"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 61")
 		}
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)

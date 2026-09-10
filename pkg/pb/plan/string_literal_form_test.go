@@ -355,7 +355,7 @@ func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion60DecimalSubstringIndex(t *testing.T) {
+func TestRequiresMORPCVersion61DecimalSubstringIndex(t *testing.T) {
 	makeExpr := func(functionID, overloadIndex int32) *Expr {
 		return &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
 			Func: &ObjectRef{

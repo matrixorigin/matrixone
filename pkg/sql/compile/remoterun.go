@@ -2064,9 +2064,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.DecimalSubstringIndex &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion60) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion61) {
 		return moerr.NewNotSupportedNoCtx(
-			"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 60",
+			"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 61",
 		)
 	}
 	return nil
