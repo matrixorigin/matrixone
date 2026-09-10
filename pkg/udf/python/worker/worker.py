@@ -63,6 +63,16 @@ _CONTROL_KEYS = frozenset(
         "payload",
     }
 )
+_TUPLE_KEYS = frozenset(
+    {
+        "account_id",
+        "statement_id",
+        "group_id",
+        "group_epoch",
+        "invocation_id",
+        "lease_epoch",
+    }
+)
 _DESCRIPTOR_KEYS = frozenset(
     {
         "type_id",
@@ -283,6 +293,8 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
 
 
 def _tuple_key(value: Dict[str, Any]) -> tuple:
+    if not isinstance(value, dict) or set(value) - _TUPLE_KEYS:
+        raise ValueError("PROTOCOL: unsupported fencing tuple field")
     string_fields = ("statement_id", "group_id", "invocation_id")
     if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in string_fields):
         raise ValueError("PROTOCOL: incomplete fencing tuple")
