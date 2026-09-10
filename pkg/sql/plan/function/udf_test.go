@@ -135,6 +135,27 @@ func TestPythonRoutineBodyRejectsUnknownAndTrailingData(t *testing.T) {
 	require.ErrorContains(t, func() error { _, err := DecodePythonRoutineBody(string(valid) + string(valid)); return err }(), "multiple JSON values")
 }
 
+func TestPythonTypeContractRejectsUnrepresentableArrowPrecision(t *testing.T) {
+	returnDescriptor := PythonTypeDescriptor{
+		TypeID:      int32(types.T_decimal128),
+		Width:       39,
+		OffsetWidth: 32,
+	}
+	body, err := json.Marshal(PythonRoutineBody{
+		Handler:        "identity",
+		Source:         "def identity(ctx): return 1",
+		Mode:           "SCALAR",
+		NullPolicy:     udf.NullCallHandler,
+		ABIContract:    udf.PythonABIContract,
+		AdapterVersion: udf.PythonAdapterVersion,
+		SDKVersion:     udf.PythonSDKVersion,
+		ReturnType:     &returnDescriptor,
+	})
+	require.NoError(t, err)
+	routine := &Udf{Language: "python", Body: string(body)}
+	require.ErrorContains(t, routine.LoadPythonTypeContract(), "precision")
+}
+
 func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
 	received := types.New(types.T_decimal64, 18, 2)
 	required := types.New(types.T_decimal64, 18, 6)
