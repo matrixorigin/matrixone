@@ -129,6 +129,20 @@ func TestZeroArgumentRecordPreservesRows(t *testing.T) {
 	require.Equal(t, int64(0), decoded.NumCols())
 }
 
+func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewConstNull(types.T_int64.ToType(), 0, mp)
+	defer input.Free(mp)
+
+	_, _, err := BuildInputRecordRange(
+		[]*vector.Vector{input},
+		[]types.Type{types.T_int64.ToType()},
+		0,
+		1,
+	)
+	require.ErrorContains(t, err, "shorter than batch range")
+}
+
 func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
 	allocator := memory.NewGoAllocator()
 	stringBuilder := array.NewStringBuilder(allocator)
