@@ -6415,7 +6415,8 @@ const (
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
-	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+	if (!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)) ||
+		(opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts)) {
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{
@@ -6596,22 +6597,23 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName            string
+	TaskId              string
+	UserInfo            *CDCUserInfo
+	Exclude             string
+	StartTs             string
+	EndTs               string
+	MaxSqlLength        int64
+	PitrTables          string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri              string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo          cdc.UriInfo
+	SinkUri             string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo         cdc.UriInfo
+	ExtraOpts           string // json encoded extra opts: map[string]any
+	SinkType            string
+	NoFull              bool
+	startTsFromSnapshot bool
+	ConfigFile          string
 
 	// control options
 	UseConsole bool
@@ -6622,6 +6624,7 @@ func setNoFullStartTS(opts *CDCCreateTaskOptions, txnOp client.TxnOperator) {
 		snapshotTS := txnOp.SnapshotTS()
 		if !snapshotTS.IsEmpty() {
 			opts.StartTs = snapshotTS.DebugString()
+			opts.startTsFromSnapshot = true
 		}
 	}
 }
@@ -6797,13 +6800,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// remain eligible for legacy executors because they cannot partially commit
-	// an initial snapshot.
+	if opts.NoFull && opts.startTsFromSnapshot {
+		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
+	}
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
 		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
 		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+			return
+		}
+	} else if opts.startTsFromSnapshot {
+		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
 			return
 		}
 	}
