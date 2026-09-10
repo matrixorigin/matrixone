@@ -16,10 +16,17 @@ select result, result % 50, cast(result % 50 as char(3)), result
 from generate_series(1, 10000) g;
 analyze table t(k, ck);
 
--- COST is the session default; SORT and HASH are explicit comparison controls.
+-- SORT is the session default; COST and HASH are explicit comparison controls.
 select @@window_partition_algorithm;
 
--- The compatible INT key is admitted by the cost model.
+-- The default stays on the legacy path until the multi-scope acceptance gate
+-- and independent design approval are complete.
+-- @regex("Hash Partition",false)
+explain (check '["Partition"]')
+select sum(v) over (partition by k) from t;
+
+set window_partition_algorithm = 'COST';
+-- COST is an explicit validation control for the admission model.
 -- @regex("Hash Partition",true)
 explain (check '["Hash Partition"]')
 select sum(v) over (partition by k) from t;

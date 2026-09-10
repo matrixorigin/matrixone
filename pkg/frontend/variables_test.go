@@ -46,7 +46,7 @@ func TestWindowPartitionAlgorithmVariable(t *testing.T) {
 	assert.Equal(t, ScopeSession, sv.Scope)
 	assert.True(t, sv.Dynamic)
 	assert.False(t, sv.SetVarHintApplies)
-	assert.Equal(t, "COST", sv.Default)
+	assert.Equal(t, "SORT", sv.Default)
 
 	for _, value := range []string{"cost", "sort", "hash"} {
 		converted, err := sv.Type.Convert(value)
