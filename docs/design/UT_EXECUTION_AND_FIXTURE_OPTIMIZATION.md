@@ -22,6 +22,11 @@ UT 运行期间默认每 60 秒写一条 heartbeat，记录最近 stage/label、
 当前 reusable `matrixorigin/CI` workflow 只打印 `top.txt`，没有上传 `ut-report`；要在
 GitHub UI 下载原始现场，需要在该 workflow 增加 always-run 的 `actions/upload-artifact`
 步骤。这个上传步骤属于 CI 基础设施 PR，不能由 MatrixOne 的 `make ut` 单独完成。
+CI PR 合并后，失败或取消的 job 会生成
+`ut-diagnostics-<run-id>-<attempt>-<shard>` artifact；可用
+`gh run download <run-id> -n <artifact-name>` 下载，再运行
+`python3 optools/summarize_ut_slow_cases.py ut-report/ut-report.json` 查看已完成的慢
+case，结合 `ut-report/ut-checkpoint.log` 和 helper report 判断卡点。
 
 ## Revision 7: bounded light/issues overlap on one runner
 
