@@ -2710,6 +2710,64 @@ func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 	}
 }
 
+func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
+	measure := func(rowCount int) float64 {
+		proc := testutil.NewProcess(t)
+		values := make([]float64, rowCount)
+		for i := range values {
+			values[i] = 710
+		}
+
+		input := newVectorByType(proc.Mp(), types.T_float64.ToType(), values, nil)
+		defer input.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+		defer result.Free()
+		if err := result.PreExtendAndReset(rowCount); err != nil {
+			t.Fatal(err)
+		}
+
+		return testing.AllocsPerRun(100, func() {
+			if err := result.PreExtendAndReset(rowCount); err != nil {
+				panic(err)
+			}
+			if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+				panic(err)
+			}
+		})
+	}
+
+	oneRowAllocs := measure(1)
+	batchAllocs := measure(8192)
+	require.LessOrEqual(t, batchAllocs, oneRowAllocs+16,
+		"EXP overflow handling must not allocate per row: one row=%v, 8192 rows=%v",
+		oneRowAllocs, batchAllocs)
+}
+
+func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {
+	const rowCount = 8192
+	proc := testutil.NewProcess(b)
+	values := make([]float64, rowCount)
+	for i := range values {
+		values[i] = 710
+	}
+
+	input := newVectorByType(proc.Mp(), types.T_float64.ToType(), values, nil)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+	defer result.Free()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := result.PreExtendAndReset(rowCount); err != nil {
+			b.Fatal(err)
+		}
+		if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestBuiltInCurrentTimestamp_ScaleValidation tests scale validation for builtInCurrentTimestamp
 func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 	proc := testutil.NewProcess(t)
