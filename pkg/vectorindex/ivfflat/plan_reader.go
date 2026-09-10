@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -63,6 +64,7 @@ type planReader struct {
 
 	recordExplainDiagnostics bool
 	explainDiagnostics       []*plan.Query
+	executionStats           *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ engine.Reader = (*planReader)(nil)
@@ -87,6 +89,9 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		req:                      req,
 		recordExplainDiagnostics: req.CollectExplainDiagnostics,
 	}
+	if req.CollectExplainDiagnostics {
+		r.executionStats = new(vectorindex.IvfExecutionDiagnostic)
+	}
 	r.scanner = &relationScanner{
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
@@ -94,6 +99,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
+		executionStats: r.executionStats,
 	}
 	if req.Identity.PhysicalAccountID != nil {
 		accountID := *req.Identity.PhysicalAccountID
@@ -136,6 +142,7 @@ func (r *planReader) Close() error {
 	r.includeData = nil
 	r.includeNulls = nil
 	r.explainDiagnostics = nil
+	r.executionStats = nil
 	r.scanner = nil
 	r.req.MembershipFilter = nil
 	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
@@ -217,10 +224,33 @@ func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
 func (r *planReader) initialize() error {
+	var err error
 	if r.generation != nil {
-		return r.generation.search(r)
+		err = r.generation.search(r)
+	} else {
+		err = r.prepareSearch(false)
 	}
-	return r.prepareSearch(false)
+	if err != nil {
+		return err
+	}
+	r.publishExecutionDiagnostic()
+	return nil
+}
+
+func (r *planReader) publishExecutionDiagnostic() {
+	if r == nil || !r.recordExplainDiagnostics || r.executionStats == nil {
+		return
+	}
+	if r.scanner == nil || r.scanner.partitionIndex == 0 {
+		r.executionStats.SearchCount++
+	}
+	r.executionStats.OutputRows += uint64(len(r.keys))
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfExecutionDiagnostic(*r.executionStats))
+	r.executionStats = nil
+	if r.scanner != nil {
+		r.scanner.executionStats = nil
+	}
 }
 
 func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
@@ -628,6 +658,7 @@ type relationScanner struct {
 	partitionIndex int32
 	ownsInMemory   bool
 	txnOffset      int
+	executionStats *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
@@ -667,6 +698,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
+	statsStart := time.Now()
 
 	partitionCount := req.PartitionCount
 	if partitionCount <= 0 {
@@ -698,6 +730,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if err != nil {
 		return res, err
 	}
+	selectedBlocks := 0
+	if relData != nil {
+		selectedBlocks = relData.DataCnt()
+	}
 	readers, err := rel.BuildReaders(
 		ctx,
 		s.proc,
@@ -711,6 +747,14 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	)
 	if err != nil {
 		return res, err
+	}
+	readerTopStats := make([]objectio.IndexReaderTopStats, len(readers))
+	if s.executionStats != nil && tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		for i, reader := range readers {
+			if provider, ok := reader.(engine.ExplainVectorTopStatsReader); ok {
+				provider.SetExplainVectorTopStats(&readerTopStats[i])
+			}
+		}
 	}
 	var filterExecutor colexec.ExpressionExecutor
 	if req.Filter != nil {
@@ -836,7 +880,59 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			return res, err
 		}
 	}
+	if s.executionStats != nil {
+		s.recordRelationExecutionStats(
+			tableDef.TableType,
+			selectedBlocks,
+			len(readers),
+			resultRowCount(res.Batches),
+			time.Since(statsStart),
+			readerTopStats,
+		)
+	}
 	return res, nil
+}
+
+func (s *relationScanner) recordRelationExecutionStats(
+	tableType string,
+	blocks int,
+	readers int,
+	rows int,
+	elapsed time.Duration,
+	topStats []objectio.IndexReaderTopStats,
+) {
+	if s == nil || s.executionStats == nil {
+		return
+	}
+	blockCount := uint64(max(blocks, 0))
+	rowCount := uint64(max(rows, 0))
+	elapsedNS := uint64(max(elapsed.Nanoseconds(), int64(0)))
+	switch tableType {
+	case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+		s.executionStats.MetadataBlocks += blockCount
+		s.executionStats.MetadataRows += rowCount
+		s.executionStats.MetadataTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+		s.executionStats.CentroidBlocks += blockCount
+		s.executionStats.CentroidRows += rowCount
+		s.executionStats.CentroidTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Entries:
+		s.executionStats.ReaderCount += uint64(max(readers, 0))
+		s.executionStats.EntryBlocksSelected += blockCount
+		s.executionStats.EntryOutputRows += rowCount
+		s.executionStats.EntryTimeNS += elapsedNS
+		for _, stats := range topStats {
+			s.executionStats.EntryBlocksRead += stats.BlocksRead
+			s.executionStats.StorageFilterInputRows += stats.StorageFilterInputRows
+			s.executionStats.StorageFilterOutputRows += stats.StorageFilterOutputRows
+			s.executionStats.VectorRowsScored += stats.VectorRowsScored
+			s.executionStats.VectorChunksRead += stats.VectorChunksRead
+			s.executionStats.VectorChunkCacheHits += stats.VectorChunkCacheHits
+			s.executionStats.VectorCompressedBytes += stats.VectorCompressedBytes
+			s.executionStats.VectorDecodedBytes += stats.VectorDecodedBytes
+			s.executionStats.TopKOutputRows += stats.TopKOutputRows
+		}
+	}
 }
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:

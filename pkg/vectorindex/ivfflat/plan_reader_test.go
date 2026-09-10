@@ -2168,7 +2168,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 	}
 
 	metadataDef := &plan.TableDef{
-		Name: "metadata_init",
+		Name:      "metadata_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
@@ -2179,7 +2180,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		},
 	}
 	centroidDef := &plan.TableDef{
-		Name: "centroids_init",
+		Name:      "centroids_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2192,7 +2194,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		},
 	}
 	entriesDef := &plan.TableDef{
-		Name: "entries_init",
+		Name:      "entries_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2432,11 +2435,24 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		require.Equal(t, 1, reader.closed)
 	}
 	if generation != nil {
-		var roundCount int
+		var roundCount, executionCount int
+		var executionSummary vectorindex.IvfExecutionDiagnostic
 		for ds := range diagnostics {
-			roundCount += len(ds)
+			for _, diagnostic := range ds {
+				if _, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(diagnostic); ok {
+					roundCount++
+					continue
+				}
+				if execution, ok := vectorindex.DecodeIvfExecutionDiagnostic(diagnostic); ok {
+					executionCount++
+					executionSummary.Merge(execution)
+				}
+			}
 		}
 		require.Equal(t, 1, roundCount)
+		require.Equal(t, len(readers), executionCount)
+		require.Equal(t, uint64(1), executionSummary.SearchCount)
+		require.Equal(t, uint64(len(readers)), executionSummary.ReaderCount)
 		first := readers[0].(*planReader)
 		childCtx, sharedCtx := first.proc.Ctx, generation.proc.Ctx
 		require.NoError(t, first.Close())

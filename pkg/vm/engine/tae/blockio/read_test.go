@@ -907,9 +907,34 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		cacheVectors,
 		queryMP,
 		fs,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, sels)
+	topStats := new(objectio.IndexReaderTopStats)
+	statsSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&info,
+		&blockReadTestDataSource{},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		func(vectors containers.Vectors) []int64 {
+			require.Equal(t, 5, vectors[0].Length())
+			return []int64{0, 2}
+		},
+		nil,
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		topStats,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2}, statsSels)
+	require.Equal(t, uint64(5), topStats.StorageFilterInputRows)
+	require.Equal(t, uint64(2), topStats.StorageFilterOutputRows)
 	selected := batch.NewWithSize(2)
 	selected.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	selected.Vecs[1] = vector.NewOffHeapVecWithType(objectio.RowidType)

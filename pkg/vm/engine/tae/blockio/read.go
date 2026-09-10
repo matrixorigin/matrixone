@@ -72,6 +72,7 @@ func ReadDataByFilter(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	stats *objectio.IndexReaderTopStats,
 ) (sels []int64, err error) {
 	if cachedSearch != nil {
 		cacheVectors.Free(mp)
@@ -113,6 +114,9 @@ func ReadDataByFilter(
 		defer release()
 		defer deleteMask.Release()
 
+		if stats != nil && len(cacheVectors) > 0 {
+			stats.StorageFilterInputRows += uint64(cacheVectors[0].Length())
+		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
 			sels = removeIf(sels, func(i int64) bool {
@@ -124,6 +128,9 @@ func ReadDataByFilter(
 		return
 	}
 	sels, err = ds.ApplyTombstones(ctx, &info.BlockID, sels, engine.Policy_CheckAll)
+	if err == nil && stats != nil {
+		stats.StorageFilterOutputRows += uint64(len(sels))
+	}
 	return
 }
 
@@ -356,6 +363,10 @@ func blockDataRead(
 	)
 
 	searchFunc := filter.DecideSearchFunc(info.IsSorted())
+	var topStats *objectio.IndexReaderTopStats
+	if orderByLimit != nil {
+		topStats = orderByLimit.Stats
+	}
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
@@ -372,6 +383,7 @@ func blockDataRead(
 			cacheVectors,
 			mp,
 			fs,
+			topStats,
 		); err != nil {
 			return err
 		}
