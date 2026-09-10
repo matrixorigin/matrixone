@@ -6,14 +6,49 @@
 package python
 
 import (
+	"context"
+	"io"
 	"testing"
+	"time"
 
+	"github.com/apache/arrow-go/v18/arrow/flight/gen/flight"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
+
+type gatewayResultStream struct {
+	grpc.ClientStream
+	results []*flight.FlightData
+	index   int
+}
+
+func (s *gatewayResultStream) Recv() (*flight.FlightData, error) {
+	if s.index == len(s.results) {
+		return nil, io.EOF
+	}
+	result := s.results[s.index]
+	s.index++
+	return result, nil
+}
+
+func (s *gatewayResultStream) Send(*flight.FlightData) error {
+	return nil
+}
+
+func gatewayControl(t *testing.T, kind string, tuple protocol.FencingTuple, fields ...func(*protocol.Control)) *flight.FlightData {
+	t.Helper()
+	control := protocol.Control{Kind: kind, Tuple: tuple}
+	for _, field := range fields {
+		field(&control)
+	}
+	encoded, err := protocol.MarshalControl(control)
+	require.NoError(t, err)
+	return &flight.FlightData{AppMetadata: encoded}
+}
 
 func validInvocation() *udf.Invocation {
 	return &udf.Invocation{
@@ -83,4 +118,25 @@ func TestGatewayCloseIsTerminal(t *testing.T) {
 	require.NoError(t, gateway.Close())
 	require.ErrorIs(t, gateway.connect(), errGatewayClosed)
 	require.NoError(t, gateway.Close())
+}
+
+func TestGatewayFinishRejectsLateHalfStreamControls(t *testing.T) {
+	tuple := validInvocation().Tuple
+	for _, kind := range []string{"InputConsumed", "ResultSchema"} {
+		t.Run(kind, func(t *testing.T) {
+			sequence := protocol.Sequence{}
+			require.NoError(t, sequence.AcceptInput(1))
+			require.NoError(t, sequence.EndInput(1))
+			require.NoError(t, sequence.AcceptResult(1))
+			require.NoError(t, sequence.AcknowledgeResults(1))
+			stream := &gatewayResultStream{results: []*flight.FlightData{
+				gatewayControl(t, kind, tuple, func(control *protocol.Control) {
+					control.Sequence = 1
+				}),
+			}}
+			gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}
+			err := gateway.receiveFinish(context.Background(), nil, stream, tuple, 1, 1, &sequence)
+			require.ErrorContains(t, err, "arrived after result stream was drained")
+		})
+	}
 }
