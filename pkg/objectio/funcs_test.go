@@ -1020,6 +1020,41 @@ func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 	)
 }
 
+func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < rowCount; row++ {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			[]byte(fmt.Sprintf("key-%05d", row)),
+			false,
+			mp,
+		))
+	}
+	defer source.Free(mp)
+	search := CombineReadFilterSearch(
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-00123")}),
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-07111")}),
+	)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			rows := search.search(source, true)
+			if len(rows) != 2 || rows[0] != 123 || rows[1] != 7111 {
+				b.Fatalf("unexpected exact hits: %v", rows)
+			}
+		}
+	})
+	require.Less(
+		t,
+		result.AllocedBytesPerOp(),
+		int64(16<<10),
+		"combined exact search must not allocate an int64 mark per source row",
+	)
+}
+
 func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := vector.NewVec(types.T_varchar.ToType())
