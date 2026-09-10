@@ -245,6 +245,38 @@ func TestODKUResultSummaryOrderingAndSessionSplit(t *testing.T) {
 	require.Equal(t, base1, proc.NextODKUInputOrdinal(1))
 }
 
+func TestODKUResultMethodsHandlePartialProcesses(t *testing.T) {
+	var nilProc *Process
+	nilProc.ResetODKUResult()
+	nilProc.RecordODKUGenerated(0, 1)
+	nilProc.RecordODKUAction(0, 1, true)
+	nilProc.MergeODKUResultSummary(ODKUResultSummary{HasAction: true, LastActionID: 1})
+	require.Zero(t, nilProc.GetODKUResultSummary())
+	id, generated := nilProc.GetODKUProtocolID()
+	require.Zero(t, id)
+	require.False(t, generated)
+	require.Zero(t, nilProc.NextODKUInputOrdinal(1))
+	require.Zero(t, nilProc.NextODKURemoteOrdinalBase())
+	nilProc.SetODKUInputOrdinalBase(7)
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.ResetODKUResult()
+	proc.RecordODKUGenerated(0, 1)
+	proc.RecordODKUAction(0, 1, true)
+	proc.MergeODKUResultSummary(ODKUResultSummary{HasAction: true, LastActionID: 1})
+	require.Zero(t, proc.GetODKUResultSummary())
+	require.Zero(t, proc.NextODKUInputOrdinal(0))
+	require.Zero(t, proc.NextODKUInputOrdinal(-1))
+	require.Zero(t, proc.NextODKURemoteOrdinalBase())
+	proc.SetODKUInputOrdinalBase(7)
+	require.Zero(t, proc.NextODKUInputOrdinal(0))
+
+	var nilSummary *ODKUResultSummary
+	nilSummary.RecordGenerated(0, 1)
+	nilSummary.RecordAction(0, 1, true)
+	nilSummary.Merge(ODKUResultSummary{HasAction: true, LastActionID: 1})
+}
+
 func TestFoundRows(t *testing.T) {
 	var nilProc *Process
 	nilProc.BeginFoundRowsStatement(true)

@@ -184,19 +184,24 @@ select last_insert_id();
 drop table if exists t_odku_return_id;
 drop table if exists t_odku_marker;
 
--- A user AUTO_INCREMENT UNIQUE column coexists with MatrixOne's hidden
--- AUTO_INCREMENT primary key. ODKU provenance must select the user column.
+-- A user AUTO_INCREMENT UNIQUE column is distinct from the explicit primary
+-- key. ODKU provenance must select the user column.
 drop table if exists t_odku_user_auto_uk;
 create table t_odku_user_auto_uk (
+    pk int primary key,
     id int auto_increment unique,
     payload int
 );
-insert into t_odku_user_auto_uk (payload) values (10);
-insert into t_odku_user_auto_uk (id, payload) values (1, 10)
+insert into t_odku_user_auto_uk (pk, payload) values (1, 10);
+select last_insert_id();
+insert into t_odku_user_auto_uk (pk, payload) values (1, 20)
     on duplicate key update payload = values(payload);
-insert into t_odku_user_auto_uk (payload) values (20)
+select pk, id, payload from t_odku_user_auto_uk order by pk;
+select last_insert_id();
+insert into t_odku_user_auto_uk (pk, payload) values (2, 30)
     on duplicate key update payload = values(payload);
-select id, payload from t_odku_user_auto_uk order by id;
+select pk, id, payload from t_odku_user_auto_uk order by pk;
+select last_insert_id();
 drop table if exists t_odku_user_auto_uk;
 
 create table ai_duplicate_test (

@@ -79,6 +79,35 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
 }
 
+func TestRemoteODKUResultFromProcess(t *testing.T) {
+	require.Nil(t, remoteODKUResultFromProcess(process.ODKUResultSummary{}))
+
+	summary := process.ODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}
+	got := remoteODKUResultFromProcess(summary)
+	require.NotNil(t, got)
+	require.Equal(t, &remoteODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}, got)
+}
+
 func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
 	require.Equal(t, uint8(mpool.AllocationOwnerMax), resource.AllocationOwnerMaxID)
 	root := resource.NewRoot(resource.ConnExternal)
