@@ -1067,14 +1067,30 @@ class RoutineFlightServer(flight.FlightServerBase):
             terminal = key in self._terminal
         if state is None:
             if terminal:
-                yield _encode_control({"kind": "Ack", "tuple": control["tuple"], "status": "OK"})
+                yield _encode_control(
+                    {
+                        "kind": "Ack",
+                        "tuple": control["tuple"],
+                        "status": "OK",
+                        "ack_sequence": control.get("ack_sequence", 0),
+                        "finish_id": control.get("finish_id", ""),
+                    }
+                )
                 return
             raise ValueError("PROTOCOL: unknown invocation")
         if action.type == "AcknowledgeResults":
             state.ack_result(_required_uint64(control, "ack_sequence"))
         elif action.type == "AcknowledgeFinish":
             state.ack_finish(_required_string(control, "finish_id"))
-        yield _encode_control({"kind": "Ack", "tuple": control["tuple"], "status": "OK", "ack_sequence": control.get("ack_sequence", 0)})
+        yield _encode_control(
+            {
+                "kind": "Ack",
+                "tuple": control["tuple"],
+                "status": "OK",
+                "ack_sequence": control.get("ack_sequence", 0),
+                "finish_id": control.get("finish_id", ""),
+            }
+        )
 
     def do_exchange(self, context, descriptor, reader, writer):
         state = None
