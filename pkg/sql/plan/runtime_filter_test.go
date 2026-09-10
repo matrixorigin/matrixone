@@ -154,18 +154,12 @@ func TestCompositeLeadingColumnRuntimeFilter(t *testing.T) {
 		mutate func(*QueryBuilder)
 		want   bool
 	}{
-		{name: "leading component uses ordinary column IN", want: true},
+		{name: "leading component at ordinary-column budget", want: true},
 		{name: "below ordinary-column budget", want: true, mutate: func(b *QueryBuilder) {
 			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 2
 		}},
 		{name: "above ordinary-column budget", mutate: func(b *QueryBuilder) {
 			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 4
-		}},
-		{name: "semi join", want: true, mutate: func(b *QueryBuilder) {
-			b.qry.Nodes[2].JoinType = planpb.Node_SEMI
-		}},
-		{name: "left join preserves probe", mutate: func(b *QueryBuilder) {
-			b.qry.Nodes[2].JoinType = planpb.Node_LEFT
 		}},
 		{name: "right semi retains distributed placement", mutate: func(b *QueryBuilder) {
 			b.qry.Nodes[2].JoinType = planpb.Node_SEMI

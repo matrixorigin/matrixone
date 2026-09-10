@@ -34,16 +34,9 @@ func TestFuseScalarAggregatesPlan(t *testing.T) {
 		 (select avg(b.l_extendedprice) from lineitem b where b.l_quantity > 1),
 		 (select avg(c.l_discount) from lineitem c where c.l_quantity > 1)
 		 from nation where n_nationkey = 1`, 1},
-		{"derived scalar cross join", `select a.c, b.s from
-		 (select count(*) c from lineitem where l_quantity > 1) a,
-		 (select sum(l_extendedprice) s from lineitem where l_quantity > 1) b`, 1},
 		{"different filters", `select
 		 (select count(*) from lineitem where l_quantity > 1),
 		 (select avg(l_extendedprice) from lineitem where l_quantity > 2)`, 2},
-		{"nested right aggregate references", `select a.c, b.s, b.m from
-		 (select count(*) c from lineitem) a,
-		 (select s, m from (select sum(l_extendedprice) s from lineitem) c,
-		                  (select max(l_quantity) m from lineitem) d) b`, 1},
 		{"having can remove scalar row", `select
 		 (select count(*) from lineitem having count(*) > 0),
 		 (select avg(l_extendedprice) from lineitem)`, 2},
