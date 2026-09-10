@@ -14,7 +14,11 @@
 
 package compile
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // remoteWarningDiagnostic is carried in the existing terminal JSON envelope.
 // Keeping it out of the protobuf message preserves compatibility with older
@@ -24,41 +28,22 @@ type remoteWarningDiagnostic struct {
 	Message string `json:"message"`
 }
 
-type warningDiagnosticSink interface {
-	AppendWarningDiagnostic(code uint16, msg string)
-}
+type warningDiagnosticSink = process.WarningDiagnosticAppender
 
 // warningDiagnosticBatchSink carries the total number of diagnostics separately
 // from the bounded records retained for SHOW WARNINGS. Remote fragments may
 // produce one warning per input row, but only the engine's diagnostic capacity
 // needs to cross the wire.
-type warningDiagnosticBatchSink interface {
-	AppendWarningBatch(total uint64, codes []uint16, messages []string)
-}
+type warningDiagnosticBatchSink = process.WarningDiagnosticBatchAppender
+
+type warningDiagnosticCountSink = process.WarningDiagnosticCountAppender
 
 // appendWarningBatchToSink preserves the bounded diagnostic batch when the
 // sink supports it and falls back to the legacy one-record interface for
 // older sessions. The sink is captured by the remote sender for one execution
 // attempt, so a closed collector rejects late callbacks from a failed retry.
 func appendWarningBatchToSink(destination any, total uint64, codes []uint16, messages []string) {
-	if destination == nil || total == 0 {
-		return
-	}
-	if sink, ok := destination.(warningDiagnosticBatchSink); ok {
-		sink.AppendWarningBatch(total, codes, messages)
-		return
-	}
-	sink, ok := destination.(warningDiagnosticSink)
-	if !ok {
-		return
-	}
-	limit := len(codes)
-	if len(messages) < limit {
-		limit = len(messages)
-	}
-	for i := 0; i < limit; i++ {
-		sink.AppendWarningDiagnostic(codes[i], messages[i])
-	}
+	process.AppendWarningBatchToSink(destination, total, codes, messages)
 }
 
 const remoteWarningRetentionLimit = 64
@@ -70,6 +55,7 @@ type remoteWarningCollector struct {
 	mu           sync.Mutex
 	warningCount uint64
 	warnings     []remoteWarningDiagnostic
+	warningBytes int
 	maxRetained  int
 	closed       bool
 }
@@ -85,6 +71,22 @@ func (s *remoteWarningCollector) AppendWarningDiagnostic(code uint16, msg string
 		return
 	}
 	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
+}
+
+func (s *remoteWarningCollector) AppendWarningCount(total uint64) {
+	if s == nil || total == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	if ^uint64(0)-s.warningCount < total {
+		s.warningCount = ^uint64(0)
+	} else {
+		s.warningCount += total
+	}
 }
 
 func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
@@ -105,11 +107,27 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	if limit <= 0 {
 		limit = remoteWarningRetentionLimit
 	}
-	for i := 0; i < len(codes) && i < len(messages) && len(s.warnings) < limit; i++ {
+	batchLimit := len(codes)
+	if len(messages) < batchLimit {
+		batchLimit = len(messages)
+	}
+	if uint64(batchLimit) > total {
+		batchLimit = int(total)
+	}
+	for i := 0; i < batchLimit && len(s.warnings) < limit; i++ {
+		remaining := process.WarningDiagnosticMaxBytes - s.warningBytes
+		if remaining <= 0 {
+			break
+		}
+		if remaining > process.WarningDiagnosticMaxMessageBytes {
+			remaining = process.WarningDiagnosticMaxMessageBytes
+		}
+		message := process.BoundWarningMessage(messages[i], remaining)
 		s.warnings = append(s.warnings, remoteWarningDiagnostic{
 			Code:    codes[i],
-			Message: messages[i],
+			Message: message,
 		})
+		s.warningBytes += len(message)
 	}
 	s.mu.Unlock()
 }
@@ -134,7 +152,7 @@ func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWa
 	}
 	s.closed = true
 	total, warnings := s.warningCount, s.warnings
-	s.warningCount, s.warnings = 0, nil
+	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
 	if !success {
 		return 0, nil
 	}

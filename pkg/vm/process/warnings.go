@@ -14,17 +14,74 @@
 
 package process
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
 const warningDiagnosticRetentionLimit = 64
 
-// warningDiagnosticBatchAppender is intentionally optional. The execution
-// process.Session interface is shared by internal/background sessions and must
-// not acquire a dependency on frontend diagnostic storage.
-type warningDiagnosticBatchAppender interface {
+// WarningDiagnosticMaxMessageBytes bounds one retained warning message. The
+// warning count remains exact even when the human-readable record is
+// truncated or omitted.
+const WarningDiagnosticMaxMessageBytes = 4 << 10
+
+// WarningDiagnosticMaxBytes bounds the retained diagnostic payload for one
+// execution attempt. Producers may still format a transient value, but no
+// session, attempt collector, or terminal result retains more than this
+// budget.
+const WarningDiagnosticMaxBytes = 256 << 10
+
+// WarningDiagnosticBatchAppender carries an exact count separately from the
+// bounded records retained for SHOW WARNINGS. It is intentionally optional:
+// process.Session is shared by internal/background sessions.
+type WarningDiagnosticBatchAppender interface {
 	AppendWarningBatch(total uint64, codes []uint16, messages []string)
 }
 
-type warningDiagnosticAppender interface {
+// WarningDiagnosticAppender is the legacy one-record warning surface.
+type WarningDiagnosticAppender interface {
 	AppendWarningDiagnostic(code uint16, msg string)
+}
+
+// WarningDiagnosticCountAppender adds warnings which have no retained record.
+// The caller passes only the unrepresented part of a batch, so a sink that
+// implements both this interface and WarningDiagnosticAppender can preserve
+// the exact count without fabricating records.
+type WarningDiagnosticCountAppender interface {
+	AppendWarningCount(total uint64)
+}
+
+// BoundWarningMessage returns an owned, UTF-8-safe warning message no longer
+// than maxBytes. Cloning the result prevents a small retained slice from
+// keeping a large producer buffer alive. A deterministic suffix makes
+// truncation visible to clients.
+func BoundWarningMessage(message string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(message) <= maxBytes {
+		return strings.Clone(message)
+	}
+	const suffix = "… (truncated)"
+	if maxBytes <= len(suffix) {
+		candidate := []byte(suffix)
+		candidate = candidate[:maxBytes]
+		for len(candidate) > 0 && !utf8.Valid(candidate) {
+			candidate = candidate[:len(candidate)-1]
+		}
+		return string(candidate)
+	}
+	prefixBytes := maxBytes - len(suffix)
+	prefix := message[:prefixBytes]
+	for prefixBytes > 0 && !utf8.ValidString(prefix) {
+		prefixBytes--
+		prefix = message[:prefixBytes]
+	}
+	out := make([]byte, 0, maxBytes)
+	out = append(out, prefix...)
+	out = append(out, suffix...)
+	return string(out)
 }
 
 // AppendWarningBatch forwards row diagnostics to the process's current warning
@@ -36,24 +93,45 @@ func AppendWarningBatch(proc *Process, total uint64, codes []uint16, messages []
 	if proc == nil || total == 0 {
 		return
 	}
-	appendWarningBatchToSink(proc.GetWarningSink(), total, codes, messages)
+	AppendWarningBatchToSink(proc.GetWarningSink(), total, codes, messages)
 }
 
-func appendWarningBatchToSink(destination any, total uint64, codes []uint16, messages []string) {
+// AppendWarningBatchToSink forwards a batch while preserving the exact count
+// on sinks which expose the count separately. A record-only legacy sink is
+// intentionally best-effort: it cannot represent a count larger than its
+// retained diagnostics without inventing warning records.
+func AppendWarningBatchToSink(destination any, total uint64, codes []uint16, messages []string) {
 	if destination == nil || total == 0 {
-		return
-	}
-	if appender, ok := destination.(warningDiagnosticBatchAppender); ok {
-		appender.AppendWarningBatch(total, codes, messages)
-		return
-	}
-	appender, ok := destination.(warningDiagnosticAppender)
-	if !ok {
 		return
 	}
 	limit := len(codes)
 	if len(messages) < limit {
 		limit = len(messages)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	codes = codes[:limit]
+	messages = messages[:limit]
+	if appender, ok := destination.(WarningDiagnosticBatchAppender); ok {
+		appender.AppendWarningBatch(total, codes, messages)
+		return
+	}
+	appender, ok := destination.(WarningDiagnosticAppender)
+	counter, hasCounter := destination.(WarningDiagnosticCountAppender)
+	if !ok {
+		// A count-only sink cannot represent individual records. Forward the
+		// entire total instead of subtracting records that are not sent.
+		if hasCounter {
+			counter.AppendWarningCount(total)
+		}
+		return
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	if hasCounter && total > uint64(limit) {
+		counter.AppendWarningCount(total - uint64(limit))
 	}
 	for i := 0; i < limit; i++ {
 		appender.AppendWarningDiagnostic(codes[i], messages[i])
@@ -69,6 +147,7 @@ type WarningAccumulator struct {
 	Total    uint64
 	Codes    []uint16
 	Messages []string
+	bytes    int
 }
 
 func (a *WarningAccumulator) Add(code uint16, message string) {
@@ -79,8 +158,17 @@ func (a *WarningAccumulator) Add(code uint16, message string) {
 	if len(a.Codes) >= warningDiagnosticRetentionLimit {
 		return
 	}
+	remaining := WarningDiagnosticMaxBytes - a.bytes
+	if remaining <= 0 {
+		return
+	}
+	if remaining > WarningDiagnosticMaxMessageBytes {
+		remaining = WarningDiagnosticMaxMessageBytes
+	}
+	message = BoundWarningMessage(message, remaining)
 	a.Codes = append(a.Codes, code)
 	a.Messages = append(a.Messages, message)
+	a.bytes += len(message)
 }
 
 // AddCount records a warning that is not retained because its diagnostic is
@@ -98,7 +186,8 @@ func (a *WarningAccumulator) AddCount() {
 // Callers can use it to avoid formatting large internal keys once the bounded
 // diagnostic buffer is full.
 func (a *WarningAccumulator) NeedsDiagnostic() bool {
-	return a != nil && len(a.Codes) < warningDiagnosticRetentionLimit
+	return a != nil && len(a.Codes) < warningDiagnosticRetentionLimit &&
+		a.bytes < WarningDiagnosticMaxBytes
 }
 
 func (a *WarningAccumulator) Flush(proc *Process) {
@@ -109,4 +198,5 @@ func (a *WarningAccumulator) Flush(proc *Process) {
 	a.Total = 0
 	a.Codes = a.Codes[:0]
 	a.Messages = a.Messages[:0]
+	a.bytes = 0
 }

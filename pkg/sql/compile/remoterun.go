@@ -2362,7 +2362,7 @@ func validateRemoteIgnoreCheckPipelineProtocol(proc *process.Process, p *pipelin
 		return nil
 	}
 	return moerr.NewNotSupportedNoCtxf(
-		"INSERT IGNORE CHECK semantics require MORPC protocol version %d", defines.MORPCVersion62)
+		"INSERT IGNORE CHECK semantics require MORPC protocol version %d", defines.MORPCVersion63)
 }
 
 func validateRemoteBinaryStringPipelineProtocol(

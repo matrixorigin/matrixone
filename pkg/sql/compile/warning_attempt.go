@@ -30,7 +30,8 @@ func newWarningAttempt(proc *process.Process) *warningAttempt {
 	destination := proc.GetWarningSink()
 	_, single := destination.(warningDiagnosticSink)
 	_, batch := destination.(warningDiagnosticBatchSink)
-	if !single && !batch {
+	_, count := destination.(warningDiagnosticCountSink)
+	if !single && !batch && !count {
 		return nil
 	}
 	a := &warningAttempt{collector: &remoteWarningCollector{}, previous: make(map[*process.Process]any)}

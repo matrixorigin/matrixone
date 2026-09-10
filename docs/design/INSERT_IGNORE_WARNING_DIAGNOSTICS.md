@@ -93,25 +93,25 @@ evaluates once per input row and preserves the count.
 
 Older CNs know the existing assertion function ID but interpret a false result
 as an error.  Therefore IGNORE-aware CHECK execution is assigned reserved
-MORPC capability version 62.  The current mainline advertises v60; this PR
-deliberately keeps CHECK filters on the coordinator until all participating CNs
-advertise v62.  Remote source scans remain remote, and ordinary CHECK
-enforcement is unchanged.
+MORPC capability version 63.  The current mainline advertises v63; during a
+rolling upgrade this PR keeps CHECK filters on the coordinator until all
+participating CNs advertise v63.  Remote source scans remain remote, and
+ordinary CHECK enforcement is unchanged.
 
 Placement checks and a second serialization-time check prevent a scope compiled
-before a capability change from being sent with the new meaning.  Once the
-dependent protocol versions land, advancing the advertised latest version to
-v62 is a separate rollout change; no implicit protocol bump is hidden in this
-PR.
+before a capability change from being sent with the new meaning.  The v62
+VARCHAR OCT capability remains intact; this change does not reinterpret or
+lower any existing protocol version.
 
 ## Cost and failure containment
 
-Each accumulator and remote collector retains at most 64 records.  Counts use
-saturating `uint64` arithmetic.  Each producer stops formatting after its
-local retained capacity, while the attempt collector applies the same global
-bound; a large ignored statement therefore does not allocate or stringify
-every duplicate key.  The attempt binding map is proportional to live
-processes/scopes, not rows.
+Each accumulator and remote collector retains at most 64 records and at most
+256 KiB of message bytes; an individual message is capped at 4 KiB.  Counts
+use saturating `uint64` arithmetic and are independent of either bound.  Each
+producer stops formatting after its local retained capacity, while the attempt
+collector applies the same global bound; a large ignored statement therefore
+does not retain or transmit every duplicate key.  The attempt binding map is
+proportional to live processes/scopes, not rows.
 No goroutine, timer, retry loop, or unbounded queue is introduced.  Key
 formatting has a recoverable diagnostic boundary: an invalid internal tuple
 returns an internal rendering error to the IGNORE caller, which increments the

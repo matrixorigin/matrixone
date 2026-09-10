@@ -61,7 +61,8 @@ func TestIgnoreCheckCoordinatorCompatibility(t *testing.T) {
 		{"malformed-ignore", "59", true, true},
 		{"pending-v60", int64(60), true, true},
 		{"pending-v61", int64(61), true, true},
-		{"new-ignore", defines.MORPCVersion62, true, false},
+		{"pending-v62-oct-only", defines.MORPCVersion62, true, true},
+		{"new-ignore", defines.MORPCVersion63, true, false},
 		{"old-ordinary", defines.MORPCVersion58, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,19 +100,19 @@ func TestIgnoreCheckRemoteEncodingRechecksCapability(t *testing.T) {
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
 	rt := runtime.ServiceRuntime(proc.GetService())
-	restoreRuntimeVariableForTest(t, proc.GetService(), runtime.MOProtocolVersion, defines.MORPCVersion62)
+	restoreRuntimeVariableForTest(t, proc.GetService(), runtime.MOProtocolVersion, defines.MORPCVersion63)
 	op := filter.NewArgument()
 	op.FilterExprs = []*plan.Expr{ignoreCheckTestExpr()}
 	defer op.Release()
 	scope := &Scope{Proc: proc, RootOp: op}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion62)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
 	_, err := encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
 	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "INSERT IGNORE CHECK semantics require MORPC protocol version 62")
+	require.ErrorContains(t, err, "INSERT IGNORE CHECK semantics require MORPC protocol version 63")
 	_, err = encodeScope(scope)
-	require.ErrorContains(t, err, "INSERT IGNORE CHECK semantics require MORPC protocol version 62")
+	require.ErrorContains(t, err, "INSERT IGNORE CHECK semantics require MORPC protocol version 63")
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", false)
 	_, err = encodeRemoteScope(scope, proc)
 	require.NoError(t, err, "ordinary CHECK keeps its existing throwing semantics")
@@ -162,7 +163,7 @@ func TestIgnoreCheckProtocolFastPath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
-	restoreRuntimeVariableForTest(t, proc.GetService(), runtime.MOProtocolVersion, defines.MORPCVersion62)
+	restoreRuntimeVariableForTest(t, proc.GetService(), runtime.MOProtocolVersion, defines.MORPCVersion63)
 	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: make([]*plan.Expr, 1000)}}}
 	var err error
 	allocs := testing.AllocsPerRun(100, func() {

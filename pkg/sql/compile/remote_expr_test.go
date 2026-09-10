@@ -405,6 +405,31 @@ func TestRemoteWarningCollectorSaturatesCount(t *testing.T) {
 	require.Empty(t, retained)
 }
 
+func TestRemoteWarningCollectorBoundsMessageBytes(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningDiagnostic(1292, strings.Repeat("界", process.WarningDiagnosticMaxMessageBytes*2))
+	_, retained := collector.SnapshotWarnings()
+	require.Len(t, retained, 1)
+	require.LessOrEqual(t, len(retained[0].Message), process.WarningDiagnosticMaxMessageBytes)
+	require.Contains(t, retained[0].Message, "truncated")
+}
+
+func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, retained, 1)
+	collector.AppendWarningDiagnostic(1292, "next")
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
+	collector.AppendWarningBatch(0, []uint16{1292}, []string{"ignored"})
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
+}
+
 func TestScopeContainsVarExpr(t *testing.T) {
 	scope := newScope(Normal)
 	proj := projection.NewArgument()

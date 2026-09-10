@@ -15,7 +15,9 @@
 package process
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +26,38 @@ type warningTestSession struct {
 	total    uint64
 	codes    []uint16
 	messages []string
+}
+
+type legacyWarningSink struct {
+	total    uint64
+	codes    []uint16
+	messages []string
+}
+
+type countOnlyWarningSink struct {
+	total uint64
+}
+
+func (s *countOnlyWarningSink) AppendWarningCount(total uint64) {
+	if ^uint64(0)-s.total < total {
+		s.total = ^uint64(0)
+	} else {
+		s.total += total
+	}
+}
+
+func (s *legacyWarningSink) AppendWarningCount(total uint64) {
+	if ^uint64(0)-s.total < total {
+		s.total = ^uint64(0)
+	} else {
+		s.total += total
+	}
+}
+
+func (s *legacyWarningSink) AppendWarningDiagnostic(code uint16, message string) {
+	s.total++
+	s.codes = append(s.codes, code)
+	s.messages = append(s.messages, message)
 }
 
 func (*warningTestSession) GetTempTable(string, string) (string, bool) { return "", false }
@@ -71,4 +105,68 @@ func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	AppendWarningBatch(proc, 1, []uint16{1292}, []string{"truncated"})
 	require.Equal(t, uint64(1), session.total)
 	require.Equal(t, []uint16{1292}, session.codes)
+}
+
+func TestAppendWarningBatchLegacySinkPreservesUnretainedCount(t *testing.T) {
+	sink := new(legacyWarningSink)
+	codes := make([]uint16, warningDiagnosticRetentionLimit)
+	messages := make([]string, warningDiagnosticRetentionLimit)
+	for i := range codes {
+		codes[i] = 1062
+		messages[i] = "duplicate"
+	}
+	proc := &Process{Base: &BaseProcess{}, WarningSink: sink}
+	AppendWarningBatch(proc, warningDiagnosticRetentionLimit+36, codes, messages)
+	require.Equal(t, uint64(warningDiagnosticRetentionLimit+36), sink.total)
+	require.Len(t, sink.codes, warningDiagnosticRetentionLimit)
+
+	AppendWarningBatch(proc, 1, nil, nil)
+	require.Equal(t, uint64(warningDiagnosticRetentionLimit+37), sink.total)
+}
+
+func TestAppendWarningBatchCountOnlySinkReceivesEntireTotal(t *testing.T) {
+	sink := new(countOnlyWarningSink)
+	proc := &Process{Base: &BaseProcess{}, WarningSink: sink}
+	AppendWarningBatch(proc, warningDiagnosticRetentionLimit+3,
+		[]uint16{1062, 1062}, []string{"duplicate", "duplicate"})
+	require.Equal(t, uint64(warningDiagnosticRetentionLimit+3), sink.total)
+}
+
+func TestAppendWarningBatchClampsRecordsToTotal(t *testing.T) {
+	sink := new(legacyWarningSink)
+	proc := &Process{Base: &BaseProcess{}, WarningSink: sink}
+	AppendWarningBatch(proc, 1,
+		[]uint16{1062, 1062}, []string{"first", "second"})
+	require.Equal(t, uint64(1), sink.total)
+	require.Len(t, sink.codes, 1)
+}
+
+func TestAppendWarningBatchBatchSinkClampsRecordsToTotal(t *testing.T) {
+	sink := new(warningTestSession)
+	proc := &Process{Base: &BaseProcess{}, WarningSink: sink}
+	AppendWarningBatch(proc, 1,
+		[]uint16{1062, 1062}, []string{"first", "second"})
+	require.Equal(t, uint64(1), sink.total)
+	require.Len(t, sink.codes, 1)
+}
+
+func TestBoundWarningMessageIsOwnedAndUTF8Safe(t *testing.T) {
+	message := strings.Repeat("界", WarningDiagnosticMaxMessageBytes)
+	bounded := BoundWarningMessage(message, 32)
+	require.LessOrEqual(t, len(bounded), 32)
+	require.True(t, utf8.ValidString(bounded))
+	require.Contains(t, bounded, "truncated")
+}
+
+func TestWarningAccumulatorBoundsRetainedBytesWithoutLosingCount(t *testing.T) {
+	var accumulator WarningAccumulator
+	for i := 0; i < warningDiagnosticRetentionLimit+10; i++ {
+		accumulator.Add(1062, strings.Repeat("x", WarningDiagnosticMaxMessageBytes*2))
+	}
+	require.Equal(t, uint64(warningDiagnosticRetentionLimit+10), accumulator.Total)
+	require.Len(t, accumulator.Codes, warningDiagnosticRetentionLimit)
+	require.LessOrEqual(t, accumulator.bytes, WarningDiagnosticMaxBytes)
+	for _, message := range accumulator.Messages {
+		require.LessOrEqual(t, len(message), WarningDiagnosticMaxMessageBytes)
+	}
 }
