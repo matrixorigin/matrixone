@@ -977,7 +977,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 			}
 			require.NotNil(t, genCol)
 
-			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
+			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc, false)
 			require.NoError(t, err)
 			require.NotNil(t, gen)
 		})
@@ -1000,6 +1000,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		plan.Type{Id: int32(types.T_uint64)},
 		[]*ColDef{{Name: "ip_text", Typ: plan.Type{Id: int32(types.T_varchar), Width: 39}}},
 		proc,
+		false,
 	)
 	require.ErrorContains(t, err, "non-deterministic function 'uuid'")
 }
