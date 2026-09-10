@@ -5,7 +5,8 @@
 - Owner: iamlinjunhong
 - Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
-- Design revision: `window-hash-partition-2026-09-02-r4`
+- Follow-up repair PR: [matrixorigin/matrixone#28608](https://github.com/matrixorigin/matrixone/pull/28608)
+- Design revision: `window-hash-partition-2026-09-10-r5`
 - Last updated: 2026-09-10
 
 ## 1. Decision
@@ -144,19 +145,22 @@ hash_aux  = 16*N + G*(W + hash-entry-overhead)
 scales with the composite key width so near-unique multi-key inputs do not look
 artificially cheap despite emitting `N` separate batches. `16*N` accounts for
 the group-id and stable-selection arrays.
-Retained input batches are common to both blocking paths and are not used to make
-HASH look artificially worse. Overflow, missing statistics, invalid NDV, or an
-unbounded width estimate rejects HASH.
+The retained input working set is also part of HASH admission: the planner adds
+`N * Rowsize` to `hash_aux` before comparing it with `B`. An unknown, zero, or
+non-finite row-size estimate rejects HASH instead of admitting a payload-blind
+plan. Overflow, missing statistics, invalid NDV, or an unbounded width estimate
+also rejects HASH.
 
 `B` uses the configured aggregate spill threshold when one is present; otherwise
 it uses MatrixOne's existing per-worker default memory threshold. In `COST` mode,
 HASH is selected only when `N` is at least one vector batch, `hash_work <
-sort_work`, and `hash_aux <= B`. `HASH` mode retains the vector-batch,
-eligibility, statistics, and `hash_aux <= B` gates but skips the relative-work
-comparison. This deliberately favors SORT for small inputs and for high-NDV,
-wide keys in the default mode while allowing a controlled comparison on a
-known-safe input. Constants and the crossover are covered by table-driven
-planner tests and calibrated by the operator benchmark matrix before merge.
+sort_work`, and the complete retained-plus-auxiliary estimate fits `B`.
+`HASH` mode retains the vector-batch, eligibility, statistics, row-size, and
+complete-memory gates but skips the relative-work comparison. This deliberately
+favors SORT for small inputs and for high-NDV or wide-payload inputs in the
+default mode while allowing a controlled comparison on a known-safe input.
+Constants and the crossover are covered by table-driven planner tests and by
+the real-Window benchmark matrix below.
 
 Already ordered physical-property propagation is not currently available at
 this boundary. This revision therefore does not claim to recognize it. Once such
@@ -281,6 +285,8 @@ one owner before it can become a third optimizer candidate.
 - actual-memory threshold triggers exact sort fallback before output, and a
   multi-batch wide-row regression proves that post-trigger input is rejected
   rather than retained without bound.
+- the planner's wide-retained-payload COST and explicit-HASH controls both stay
+  on SORT when the complete working-set estimate exceeds the spill budget.
 
 ### Compile and distributed shape
 
@@ -302,43 +308,45 @@ Report wall time, allocations, bytes, and crossover. Merge requires a material
 win for the activating large-input cases and no material regression for small,
 ordered, or unsupported controls chosen as SORT.
 
-Initial single-scope operator calibration on Apple M4 (`-benchtime=3x`, 65,536
-INT32-key rows) produced:
+Revision r5 adds `BenchmarkWindowHashPartitionAcceptance` in
+`pkg/sql/colexec/window/window_benchmark_test.go` and
+`TestWindowHashPartitionAcceptanceConsumer`. Both construct the actual
+`Partition -> Window` pipeline; each input is split into two upstream batches,
+and the test compares HASH and SORT checksums for ordered and unordered windows.
+The benchmark uses a linear `CURRENT ROW` frame so the measured work is the
+partition consumer rather than quadratic unbounded-frame aggregation. Setup is
+outside the timed region, and `peak-mpool-B` is measured with an allocator peak
+epoch.
 
-| NDV | Sort | Hash | Hash effect |
-| ---: | ---: | ---: | ---: |
-| 64 | 9.39 ms | 1.15 ms | 8.2x faster |
-| 1,024 | 10.61 ms | 1.29 ms | 8.2x faster |
-| 16,384 | 13.59 ms | 5.36 ms | 2.5x faster |
-| 65,536 | 17.38 ms | 16.96 ms | only 2.5% faster; rejected by cost model |
+On the exact PR head plus this r5 working-tree change, on Apple M4 Darwin/arm64,
+the acceptance command was run once as warm-up and three times as measured
+rounds (`-benchtime=1x -benchmem -count=1`). The measured ranges below are the
+minimum and maximum of the three rounds; wall time is per operation:
 
-The near-unique result motivated the explicit per-group work term rather than an
-`N log N` versus `N` comparison alone.
+| Shape | SORT | HASH | Result |
+| --- | ---: | ---: | --- |
+| 1K, NDV 1, one fixed key, unordered | 1.74--3.28 ms | 0.58--1.06 ms | HASH wins |
+| 64K, NDV 1%, one fixed key, unordered | 80.8--95.0 ms | 30.4--53.7 ms | HASH wins |
+| 1M, NDV 1%, one fixed key, unordered | 1.66--1.80 s | 0.875--0.941 s | HASH wins |
+| 64K, NDV 100%, one fixed key, unordered | 0.759--0.819 s | 0.754--0.800 s | no material win; SORT control |
+| 1M, NDV 100%, one fixed key, unordered | 12.35--12.45 s | 12.06--12.30 s | no material win; SORT control |
 
-On `m1-27943`, the exact issue case (65,536 rows, one INT32 key, NDV 64) was
-repeated with `-benchtime=3x -benchmem -count=3`: SORT measured 10.76--12.32
-ms/op and HASH 1.50--1.60 ms/op, or roughly 7x faster. HASH used about 2.47 MB
-of peak operator working memory versus 12 KB for SORT and allocated about 6.30
-MB/op versus 4.74 MB/op. These numbers measure the blocking Partition
-prerequisite in isolation; the public SQL BVT remains the Window-consumer
-correctness oracle.
+The same three-round protocol covered all eight 64K/1%-NDV shape pairs formed
+by one or three fixed/variable-width keys and ordered/unordered windows. HASH
+was faster in every pair; representative ordered results were 1-key varlen:
+SORT 89.9--160.8 ms versus HASH 40.0--81.5 ms, and 3-key varlen: SORT
+141--191 ms versus HASH 52.2--89.7 ms. The near-unique controls also show why
+the cost model rejects automatic HASH: at 64K/100% the observed peak was about
+65 KiB for SORT versus 4.07 MiB for HASH, while the wall-time difference was
+small. The 1M/100% control reached about 67.8 MiB HASH peak versus 65 KiB SORT
+peak and likewise remains on SORT.
 
-The historical r2 operator matrix used `-benchtime=1x -benchmem` across 1K,
-64K, and 1M rows; NDV 1, 1%, and 100%; one/three fixed or varlen keys. It
-informed the cost-model shape but is not r3 end-to-end acceptance evidence. On
-the exact r3 head, a repeated local 1M, three-fixed-key HASH check (`-count=3
--benchtime=3x`) measured 137--153 ms/op and 48.1 MB `peak-mpool-B` at 1%-NDV,
-versus 1.216--1.222 s/op and 139.1 MB `peak-mpool-B` at 100%-NDV. The latter
-counterexample remains on SORT through the key-count-scaled per-group cost.
-
-This is deliberately an operator microbenchmark, not a claim about end-to-end
-SQL latency. Automatic HASH selection is enabled with the conservative
-eligibility and memory gates above. The public SQL BVT asserts the selected-HASH
-path for analyzed low-NDV input and retains SORT controls for unsupported or
-uneconomic inputs while preserving aggregate, ranking, value, ROWS, RANGE,
-ordered, and unordered Window result oracles. Further performance work should
-continue to compare selected HASH and SORT through a real Window consumer,
-including peak memory and multi-scope cases.
+These are real Window-consumer measurements, not the earlier Partition-only
+microbenchmarks. Automatic HASH remains enabled only behind the conservative
+eligibility, complete retained-working-set admission, cost, and exact fallback
+gates above. The independent approval of the default-enable decision remains an
+external review state; this revision records the reproducible evidence and does
+not substitute for that approval.
 
 ## 11. Rollout and observability
 
@@ -362,10 +370,10 @@ activation.
 - Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
 - Proposed cost/resource implementation: complete for conservative automatic
-  selection; benchmark calibration, mpool-owned index buffers, and a bounded
-  post-trigger fallback contract are implemented. Real-Window acceptance
-  measurements remain follow-up validation for tuning and rollout confidence.
+  selection; benchmark calibration, mpool-owned index buffers, a bounded
+  post-trigger fallback contract, and repeated real-Window acceptance evidence
+  are implemented. The measured matrix includes ordered/unordered, fixed/varlen,
+  one/three-key, multi-batch, and high-NDV SORT controls.
 - Default-enable decision: automatic HASH selection is enabled behind the
-  existing eligibility, cost, memory, and SORT-fallback gates. Unsupported or
-  uneconomic inputs remain on SORT while the selected-HASH versus SORT matrix
-  continues to be expanded.
+  existing eligibility, complete retained-working-set cost, memory, and
+  SORT-fallback gates. Unsupported or uneconomic inputs remain on SORT.

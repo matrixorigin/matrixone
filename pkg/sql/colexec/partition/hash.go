@@ -73,6 +73,7 @@ func (partition *Partition) prepareHash(proc *process.Process) (err error) {
 
 	exprs := make([]*plan.Expr, len(partition.OrderBySpecs))
 	keyWidth := int32(0)
+	hasVariableLengthKey := false
 	for i, spec := range partition.OrderBySpecs {
 		if spec == nil || spec.Expr == nil || spec.Expr.GetCol() == nil ||
 			!partitionhash.Compatible(types.T(spec.Expr.Typ.Id)) ||
@@ -80,7 +81,9 @@ func (partition *Partition) prepareHash(proc *process.Process) (err error) {
 			return moerr.NewInternalErrorNoCtx("invalid hash window partition key")
 		}
 		exprs[i] = spec.Expr
+		typ := types.T(spec.Expr.Typ.Id)
 		ctr.keyNullable = ctr.keyNullable || !spec.Expr.Typ.NotNullable
+		hasVariableLengthKey = hasVariableLengthKey || !typ.IsFixedLen()
 	}
 	if len(exprs) == 0 {
 		return moerr.NewInternalErrorNoCtx("hash window partition requires a key")
@@ -88,7 +91,12 @@ func (partition *Partition) prepareHash(proc *process.Process) (err error) {
 	for _, expr := range exprs {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
-	ctr.isStrHash = keyWidth > 8
+	// IntHashMap concatenates varlena bytes without component framing. A short
+	// composite VARCHAR key could therefore make ("a", "bc") and ("ab", "c")
+	// share one hash key. StrHashMap's varlena encoder frames every component,
+	// so any variable-length partition key must use it even when the estimated
+	// key width fits in the integer-map fast path.
+	ctr.isStrHash = keyWidth > 8 || hasVariableLengthKey
 
 	if len(ctr.partitionEval.Executor) == 0 {
 		ctr.partitionEval, err = colexec.MakeEvalVector(proc, exprs)
