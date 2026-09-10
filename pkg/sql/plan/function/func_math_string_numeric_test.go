@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -92,6 +93,24 @@ func TestMathStringExecutorsPreserveBinaryLiteralProvenance(t *testing.T) {
 		digits)
 	assertFloat64("truncate", TruncateStr, []float64{49, 50}, input,
 		digits)
+}
+
+func TestMathStringExecutorsEmitNumericCoercionWarnings(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"1.5tail", "abc", "", "ignored"}, []bool{false, false, false, true})},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{1.5, 0, 0, 0}, []bool{false, false, false, true}), AbsStr)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.Contains(t, warning.msg, "DOUBLE")
+	}
 }
 
 func TestExactMathStringNumericPrefixTypeMatching(t *testing.T) {
