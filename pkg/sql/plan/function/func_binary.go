@@ -7159,20 +7159,41 @@ func getCount[T number](typ types.Type, val T) int64 {
 }
 
 func getDecimalCount[T types.Decimal64 | types.Decimal128](typ types.Type, val T) int64 {
-	var v float64
+	var magnitude types.Decimal128
 	switch x := any(val).(type) {
 	case types.Decimal64:
-		v = types.Decimal64ToFloat64(x, typ.Scale)
+		magnitude = types.Decimal128FromInt64(int64(x))
 	case types.Decimal128:
-		v = types.Decimal128ToFloat64(x, typ.Scale)
+		magnitude = x
 	}
-	if v >= float64(math.MaxInt64) {
+	negative := magnitude.Sign()
+	if negative {
+		magnitude = magnitude.Minus()
+	}
+	// A valid DECIMAL scale is 0..38, so this divisor is nonzero and
+	// representable. Divide once to avoid both float conversion and double rounding.
+	divisor, _ := (types.Decimal128{B0_63: 1}).Scale(typ.Scale)
+	whole, _ := magnitude.Div128Trunc(divisor)
+	product, _ := whole.Mul128(divisor)
+	remainder, _ := magnitude.Sub128(product)
+	distance, _ := divisor.Sub128(remainder)
+	if remainder.Compare(distance) >= 0 {
+		whole = whole.Add128Unchecked(types.Decimal128{B0_63: 1})
+	}
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if whole.B64_127 != 0 || whole.B0_63 >= limit {
+		if negative {
+			return math.MinInt64
+		}
 		return math.MaxInt64
 	}
-	if v <= float64(math.MinInt64) {
-		return math.MinInt64
+	if negative {
+		return -int64(whole.B0_63)
 	}
-	return int64(math.Round(v))
+	return int64(whole.B0_63)
 }
 
 func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {

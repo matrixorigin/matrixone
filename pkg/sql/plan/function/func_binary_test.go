@@ -15517,3 +15517,36 @@ func TestTimeDiffZeroDatetimeReturnsNull(t *testing.T) {
 		})
 	}
 }
+
+func TestDecimalCountExactHalfBoundaries(t *testing.T) {
+	for _, scale := range []int32{18, 38} {
+		for _, sign := range []int64{1, -1} {
+			for _, tc := range []struct {
+				digits string
+				want   int64
+			}{
+				{"4" + strings.Repeat("9", int(scale)-1), 0},
+				{"5" + strings.Repeat("0", int(scale)-1), 1},
+				{"5" + strings.Repeat("0", int(scale)-2) + "1", 1},
+			} {
+				name := "0." + tc.digits
+				t.Run(fmt.Sprintf("%d/%s", sign, name), func(t *testing.T) {
+					// Construct the scaled integer directly. The decimal string parsers apply
+					// their own rounding, which would destroy the boundary under test.
+					d128, err := types.ParseDecimal128(tc.digits, 38, 0)
+					require.NoError(t, err)
+					if sign < 0 {
+						d128 = d128.Minus()
+					}
+					require.Equal(t, sign*tc.want, getDecimalCount(types.New(types.T_decimal128, 38, scale), d128))
+					if scale == 18 {
+						raw, err := strconv.ParseInt(tc.digits, 10, 64)
+						require.NoError(t, err)
+						require.Equal(t, sign*tc.want, getDecimalCount(
+							types.New(types.T_decimal64, 18, scale), types.Decimal64(sign*raw)))
+					}
+				})
+			}
+		}
+	}
+}

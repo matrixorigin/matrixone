@@ -38,6 +38,21 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		require.NoError(t, db.PingContext(ctx))
+		for _, tc := range []struct {
+			expression string
+			want       string
+		}{
+			{"cast(0.499999999999999999 as decimal(18,18))", ""},
+			{"cast(0.500000000000000000 as decimal(18,18))", "a"},
+			{"-cast(0.500000000000000001 as decimal(18,18))", "d"},
+			{"-cast(0.4999999999999999999999999999999999999 as decimal(38,37))", ""},
+			{"cast(0.5000000000000000000000000000000000000 as decimal(38,37))", "a"},
+		} {
+			var got string
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select substring_index('a,b,c,d', ',', "+tc.expression+")").Scan(&got))
+			require.Equal(t, tc.want, got, tc.expression)
+		}
 		database := testutils.GetDatabaseName(t)
 		_, err = db.ExecContext(ctx, "create database `"+database+"`")
 		require.NoError(t, err)
