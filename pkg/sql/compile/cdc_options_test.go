@@ -96,6 +96,11 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	lossless := (&CDCCreateTaskOptions{
+		TaskId: "no-full-hlc", NoFull: true,
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, lossless.Executor)
 }
 
 func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
