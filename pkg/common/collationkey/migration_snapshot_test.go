@@ -17,6 +17,7 @@ package collationkey
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"strings"
@@ -150,5 +151,67 @@ func TestMigrationGateSnapshotRejectsOversizedIdentity(t *testing.T) {
 	}
 	if _, err := EncodeMigrationGate(nil, gate); !errors.Is(err, ErrMigrationGate) {
 		t.Fatalf("oversized owner error = %v", err)
+	}
+}
+
+func TestMigrationSnapshotLowLevelMalformedGuards(t *testing.T) {
+	// The length-delimited readers are used on recovery input, so exercise the
+	// nil, negative, truncated, oversized and trailing cases directly.
+	if _, ok := readMigrationBytes(nil, nil); ok {
+		t.Fatal("readMigrationBytes accepted a nil offset")
+	}
+	off := -1
+	if _, ok := readMigrationBytes([]byte{0, 0, 0, 0}, &off); ok {
+		t.Fatal("readMigrationBytes accepted a negative offset")
+	}
+	off = 0
+	oversized := make([]byte, 4)
+	binary.BigEndian.PutUint32(oversized, MaxMigrationIdentityBytes+1)
+	if _, ok := readMigrationBytes(oversized, &off); ok {
+		t.Fatal("readMigrationBytes accepted an oversized identity")
+	}
+	off = 0
+	truncated := []byte{0, 0, 0, 2, 'x'}
+	if _, ok := readMigrationBytes(truncated, &off); ok {
+		t.Fatal("readMigrationBytes accepted a truncated identity")
+	}
+
+	off = 0
+	tooMany := make([]byte, 4)
+	binary.BigEndian.PutUint32(tooMany, MaxMigrationGateEntries+1)
+	if _, err := readMigrationMap(tooMany, &off); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("oversized map error = %v", err)
+	}
+
+	// Build two deliberately out-of-order and duplicate map payloads. The
+	// decoder must reject both before exposing any entry to the caller.
+	encodeMap := func(keys []string) []byte {
+		buf := make([]byte, 4)
+		binary.BigEndian.PutUint32(buf, uint32(len(keys)))
+		for _, key := range keys {
+			var n [4]byte
+			binary.BigEndian.PutUint32(n[:], uint32(len(key)))
+			buf = append(buf, n[:]...)
+			buf = append(buf, key...)
+			var value [8]byte
+			binary.BigEndian.PutUint64(value[:], 1)
+			buf = append(buf, value[:]...)
+		}
+		return buf
+	}
+	off = 0
+	if _, err := readMigrationMap(encodeMap([]string{"b", "a"}), &off); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("unsorted map error = %v", err)
+	}
+	off = 0
+	if _, err := readMigrationMap(encodeMap([]string{"a", "a"}), &off); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("duplicate map error = %v", err)
+	}
+
+	if _, err := appendMigrationMap(nil, map[string]uint64{"": 1}); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("empty map key error = %v", err)
+	}
+	if _, err := appendMigrationMap(nil, map[string]uint64{strings.Repeat("x", MaxMigrationIdentityBytes+1): 1}); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("oversized map key error = %v", err)
 	}
 }

@@ -148,3 +148,92 @@ func TestSidecarSnapshotRejectsInvalidDestinationAndMetadata(t *testing.T) {
 		t.Fatalf("oversized destination error = %v", err)
 	}
 }
+
+func TestSidecarSnapshotRejectsMalformedHeadersAndBounds(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(11)
+	key, err := EncodePart(nil, Part{
+		Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters},
+		Value:  []byte("snapshot-boundary"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := EncodeSidecarSnapshot(nil, SidecarSnapshot{
+		Metadata:   metadata,
+		RelationID: 123,
+		Revision:   1,
+		Entries: []SidecarEntry{{
+			Key:     key,
+			Locator: RowLocator{RelationID: 123, PartitionID: 4, PrimaryKey: []byte("pk")},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withDigest := func(body []byte) []byte {
+		out := append([]byte(nil), body...)
+		digest := sha256.Sum256(out[:len(out)-sidecarSnapshotDigest])
+		copy(out[len(out)-sidecarSnapshotDigest:], digest[:])
+		return out
+	}
+	badHeader := append([]byte(nil), valid...)
+	badHeader[0] = 'X'
+	if _, err := DecodeSidecarSnapshot(withDigest(badHeader)); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("header error = %v", err)
+	}
+	badVersion := append([]byte(nil), valid...)
+	badVersion[4]++
+	if _, err := DecodeSidecarSnapshot(withDigest(badVersion)); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("version error = %v", err)
+	}
+
+	// Keep the envelope above the minimum length while truncating each fixed
+	// field in turn. Recomputing the digest makes the decoder exercise the
+	// structural read guards rather than the checksum guard.
+	for _, trim := range []int{1, 8, 16, 24, 32, 40, 48} {
+		if trim >= len(valid)-sidecarSnapshotDigest {
+			continue
+		}
+		truncated := withDigest(valid[:len(valid)-trim])
+		if _, err := DecodeSidecarSnapshot(truncated); !errors.Is(err, ErrMalformedKey) {
+			t.Fatalf("truncated by %d error = %v", trim, err)
+		}
+	}
+
+	// Exercise the low-level offset guards directly as well. These helpers are
+	// deliberately tiny, but a malformed checkpoint must never panic on a nil
+	// or out-of-range offset.
+	if _, ok := readU32(nil, nil); ok {
+		t.Fatal("readU32 accepted a nil offset")
+	}
+	if _, ok := readU64(nil, nil); ok {
+		t.Fatal("readU64 accepted a nil offset")
+	}
+	off := -1
+	if _, ok := readU32([]byte{0, 0, 0, 0}, &off); ok {
+		t.Fatal("readU32 accepted a negative offset")
+	}
+	off = 2
+	if _, ok := readU64(make([]byte, 9), &off); ok {
+		t.Fatal("readU64 accepted a short tail")
+	}
+
+	// Validate shape failures that cannot be reached through a well-formed
+	// encoded snapshot.
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{Metadata: metadata}); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("zero relation error = %v", err)
+	}
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{
+		Metadata: metadata, RelationID: 123, Revision: 0,
+		Entries: []SidecarEntry{{Key: key, Locator: RowLocator{RelationID: 123, PrimaryKey: []byte("pk")}}},
+	}); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("zero revision error = %v", err)
+	}
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{
+		Metadata: metadata, RelationID: 123, Revision: 1,
+		Entries: []SidecarEntry{{Key: key, Locator: RowLocator{RelationID: 124, PrimaryKey: []byte("pk")}}},
+	}); !errors.Is(err, ErrSidecarRelation) {
+		t.Fatalf("relation mismatch error = %v", err)
+	}
+}
