@@ -333,6 +333,32 @@ func TestCeil(t *testing.T) {
 	}
 }
 
+func TestCeilFloorDecimal64CanReturnBigInt(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.New(types.T_decimal64, 10, 4)
+	negative := int64(-123456789)
+	values := []types.Decimal64{123456789, types.Decimal64(negative)}
+	nulls := []bool{false, false}
+
+	for _, test := range []struct {
+		name string
+		fn   fEvalFn
+		want []int64
+	}{
+		{name: "ceil", fn: CeilDecimal64, want: []int64{12346, -12345}},
+		{name: "floor", fn: FloorDecimal64, want: []int64{12345, -12346}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(inputType, values, nulls)},
+				NewFunctionTestResult(types.T_int64.ToType(), false, test.want, nulls),
+				test.fn)
+			succeeded, info := testCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initFloorTestCase() []tcTemp {
 	rfs := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
 		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
