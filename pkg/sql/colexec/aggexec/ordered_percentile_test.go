@@ -763,6 +763,39 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	restored.Free()
 }
 
+func TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	typ := types.New(types.T_varchar, 20, 0)
+	values := vector.NewVec(typ)
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, []byte("aa"), false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte("zz"), false, mp))
+	// Only the selected row carries an explicit binary runtime domain. The
+	// aggregate must keep that row-level metadata instead of reducing the
+	// retained arguments to raw bytes.
+	require.NoError(t, values.SetRuntimeStringDomainAtWithMP(
+		1, types.RuntimeStringBinary, mp))
+	require.NoError(t, values.SetStringSourceAtWithMP(
+		1, types.StringSourceCOMStmt, mp))
+
+	exec, err := makeOrderedPercentileExec(
+		mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeOrderedPercentileConfig([]byte("1"), false), 0))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	defer result[0].Free(mp)
+	exec.Free()
+
+	require.Equal(t, "zz", result[0].GetStringAt(0))
+	require.Equal(t, types.RuntimeStringBinary, result[0].GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, result[0].GetStringSourceAt(0))
+}
+
 func TestMakeSpecialOrderedPercentileExec(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
