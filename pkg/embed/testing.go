@@ -135,6 +135,31 @@ func (c *SharedTestCluster) Close() error {
 	return nil
 }
 
+// CloseIfActive releases an initialized shared fixture and resets a successful
+// release for a later test invocation. It is useful for a test package that
+// combines a short shared-cluster suite with later scenarios that need their
+// own topology. Callers must invoke it only after Run has returned; Run holds
+// the same mutex while the scenario body is executing.
+func (c *SharedTestCluster) CloseIfActive() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cluster == nil {
+		return nil
+	}
+	if err := c.cluster.Close(); err != nil {
+		// A failed close leaves ownership with this state, but prevents a later
+		// scenario from observing a partially closed fixture. A subsequent
+		// CloseIfActive call can retry the underlying cleanup.
+		c.closed = true
+		return err
+	}
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = false
+	return nil
+}
+
 func init() {
 	stats.SkipPanicONDuplicate.Store(true)
 }
@@ -329,4 +354,14 @@ func RunSingleCNBaseClusterTests(
 	}, func(c Cluster) {
 		fn(c)
 	})
+}
+
+// CloseSingleCNBaseClusterTests releases the process-local one-CN fixture if
+// it was initialized. A successful release leaves the fixture reusable for a
+// later test invocation, which keeps -count and shuffled test order valid. It
+// is a lifecycle boundary for packages that mix the canonical shared one-CN
+// suite with specialized clusters; unused fixtures are left reusable so a
+// later shared test still initializes normally.
+func CloseSingleCNBaseClusterTests() error {
+	return singleCNClusterState.CloseIfActive()
 }

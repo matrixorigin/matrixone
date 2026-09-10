@@ -24,47 +24,45 @@ import (
 )
 
 func TestArrowLoadForceMaterializeFallback(t *testing.T) {
-	for _, test := range []struct {
-		name             string
-		forceMaterialize bool
-	}{
-		{name: "borrow"},
-		{name: "materialize", forceMaterialize: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			c := startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
-				cnCount: 1, enabled: true, s3Enabled: true, distributedEnabled: true,
-				forceMaterialize: test.forceMaterialize,
-			})
-			db := openArrowLoadDB(t, c, 0)
-			mustExec(t, db, "create database if not exists arrow_materialize")
-			mustExec(t, db, "use arrow_materialize")
-			mustExec(t, db, "create table load_target(id bigint not null, payload varchar(128) not null)")
-			path, _ := fixtureLarge(t)
-			borrowedBefore := promtestutil.ToFloat64(
-				metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
-			)
-			copiedBefore := promtestutil.ToFloat64(
-				metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"),
-			)
+	c := startArrowLoadClusterWithForceModes(t)
+	path, _ := fixtureForceMaterialize(t)
 
-			mustExec(t, db, fmt.Sprintf(
-				"load data infile {'filepath'='%s','format'='arrow'} into table load_target", path))
-			require.Equal(t, int64(largeFixtureRows), queryCount(t, db, "select count(*) from load_target"))
-			borrowedDelta := promtestutil.ToFloat64(
-				metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
-			) - borrowedBefore
-			copiedDelta := promtestutil.ToFloat64(
-				metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"),
-			) - copiedBefore
-			if test.forceMaterialize {
-				require.Zero(t, borrowedDelta)
-				require.Greater(t, copiedDelta, float64(0))
-			} else {
-				require.Greater(t, borrowedDelta, float64(0))
-			}
-		})
-	}
+	t.Run("borrow", func(t *testing.T) {
+		borrowDB := openArrowLoadDB(t, c, 0)
+		mustExec(t, borrowDB, "create database if not exists arrow_materialize")
+		mustExec(t, borrowDB, "use arrow_materialize")
+		mustExec(t, borrowDB, "create table load_target_borrow(id bigint not null, payload varchar(128) not null)")
+		borrowedBefore := promtestutil.ToFloat64(
+			metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
+		)
+		mustExec(t, borrowDB, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table load_target_borrow", path))
+		require.Equal(t, int64(forceMaterializeFixtureRows), queryCount(t, borrowDB, "select count(*) from load_target_borrow"))
+		require.Greater(t,
+			promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"))-borrowedBefore,
+			float64(0))
+	})
+
+	t.Run("materialize", func(t *testing.T) {
+		materializeDB := openArrowLoadDB(t, c, 1)
+		mustExec(t, materializeDB, "create database if not exists arrow_materialize")
+		mustExec(t, materializeDB, "use arrow_materialize")
+		mustExec(t, materializeDB, "create table load_target_materialize(id bigint not null, payload varchar(128) not null)")
+		borrowedBefore := promtestutil.ToFloat64(
+			metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
+		)
+		copiedBefore := promtestutil.ToFloat64(
+			metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"),
+		)
+		mustExec(t, materializeDB, fmt.Sprintf(
+			"load data infile {'filepath'='%s','format'='arrow'} into table load_target_materialize", path))
+		require.Equal(t, int64(forceMaterializeFixtureRows), queryCount(t, materializeDB, "select count(*) from load_target_materialize"))
+		require.Zero(t,
+			promtestutil.ToFloat64(metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"))-borrowedBefore)
+		require.Greater(t,
+			promtestutil.ToFloat64(metric.ArrowLoadCopyBytesCounter.WithLabelValues("arrow_to_mo"))-copiedBefore,
+			float64(0))
+	})
 }
 
 // BenchmarkArrowLoadEndToEndMaterializeAB measures the complete SQL LOAD path
