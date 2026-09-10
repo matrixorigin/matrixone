@@ -41,7 +41,8 @@ SELECT TRUNCATE(NULL, 2) AS null_result;
 null_result
 null
 SELECT TRUNCATE(4.567, NULL) AS null_digits;
-invalid argument the second argument of the truncate, bad value not const
+null_digits
+null
 SELECT TRUNCATE(CAST(4.567 AS FLOAT), 2) AS float_truncate;
 float_truncate
 4.56
@@ -51,7 +52,12 @@ double_truncate
 CREATE TABLE t1(a DOUBLE, b INT);
 INSERT INTO t1 VALUES (4.567, 2), (4.567, 0), (-4.567, 2), (10.123456, 3), (-10.123456, 3);
 SELECT a, b, TRUNCATE(a, b) AS truncated FROM t1;
-invalid argument the second argument of the truncate, bad value not const
+a    b    truncated
+4.567    2    4.56
+4.567    0    4
+-4.567    2    -4.56
+10.123456    3    10.123
+-10.123456    3    -10.123
 DROP TABLE t1;
 CREATE TABLE t1(a DOUBLE);
 INSERT INTO t1 VALUES (4.567), (4.123), (-4.567), (10.999);

@@ -87,6 +87,18 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			var runtimeStringDomains []uint32
+			if vec.HasBinaryStringMetadata() {
+				runtimeStringDomains = make([]uint32, vec.Length())
+				for i := range runtimeStringDomains {
+					runtimeStringDomains[i] = uint32(vec.GetRuntimeStringDomainAt(i))
+				}
+			}
+			runtimeStringDomains, err = RuntimeStringDomainPrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), runtimeStringDomains)
+			if err != nil {
+				return procInfo, err
+			}
 			var stringSources []uint32
 			if vec.HasStringSourceMetadata() {
 				stringSources = make([]uint32, vec.Length())
@@ -126,6 +138,7 @@ func (proc *Process) BuildProcessInfo(
 				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
 			}
 			procInfo.PrepareParams.StringSources = stringSources
+			procInfo.PrepareParams.RuntimeStringDomains = runtimeStringDomains
 		}
 	}
 	{ // session info
@@ -281,6 +294,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	runtimeStringDomains, err := RuntimeStringDomainPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.RuntimeStringDomains,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -353,6 +374,17 @@ func (c *codecService) Decode(
 			prepareParamMetadata,
 			binaryStringMetadata,
 		)
+		if len(runtimeStringDomains) > 0 {
+			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
+			for i, domain := range runtimeStringDomains {
+				domains[i] = types.RuntimeStringDomain(domain)
+			}
+			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				return nil, err
+			}
+		}
 	}
 	return proc, nil
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -59,6 +60,99 @@ func TestCachedBatchPreservesPrepareParamKind(t *testing.T) {
 	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(1))
 	constantCache.CacheBatch(useCache, cacheID, constantCopy)
 	constantCache.free()
+}
+
+func TestSpoolCacheNeverDetachesBorrowedVectorBacking(t *testing.T) {
+	data := types.EncodeSlice([]int64{11})
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	bat := batch.NewOffHeap([]string{"v"})
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+
+	buffer := initSpoolBuffer(1)
+	cacheID, _ := buffer.getCacheID()
+	buffer.putCacheID(nil, cacheID, bat)
+	require.Empty(t, buffer.bytesCache[0].buffers)
+	require.Nil(t, lease.Bytes())
+}
+
+func TestSpoolRetainsBorrowedPayloadWithoutCopy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22})
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	source := batch.NewOffHeap([]string{"v"})
+	source.Vecs[0] = vec
+	source.SetRowCount(2)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, useCache)
+	require.Equal(t,
+		uintptr(unsafe.Pointer(unsafe.SliceData(source.Vecs[0].GetData()))),
+		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
+	)
+	source.Clean(mp)
+	require.Equal(t, []int64{11, 22}, vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0]))
+	require.NotNil(t, lease.Bytes())
+
+	cache.CacheBatch(useCache, cacheID, copied)
+	require.Nil(t, lease.Bytes())
+	cache.free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := []byte("first payload longer than twenty three bytes")
+	second := []byte("second payload longer than twenty three bytes")
+	area := append(append([]byte(nil), first...), second...)
+	lease, err := vector.NewRefCountedBufferLease(area, int64(cap(area)), nil)
+	require.NoError(t, err)
+
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+	descriptors[0].SetOffsetLen(0, uint32(len(first)))
+	descriptors[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
+	require.NoError(t, vec.InstallBorrowedArea(area, lease))
+	lease.Release()
+
+	source := batch.NewOffHeap([]string{"v"})
+	source.Vecs[0] = vec
+	source.SetRowCount(2)
+	sourceDataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))
+	sourceAreaPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetArea())))
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, useCache)
+	require.NotEqual(t, sourceDataPointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
+		"mutable varlena descriptors must not be shared")
+	require.Equal(t, sourceAreaPointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetArea()))),
+		"long-value payload should stay zero-copy")
+
+	source.Clean(mp)
+	require.Equal(t, string(first), copied.Vecs[0].GetStringAt(0))
+	require.Equal(t, string(second), copied.Vecs[0].GetStringAt(1))
+	require.NotNil(t, lease.Bytes())
+
+	cache.CacheBatch(useCache, cacheID, copied)
+	require.Nil(t, lease.Bytes())
+	cache.free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {

@@ -402,6 +402,135 @@ func TestFloor(t *testing.T) {
 	}
 }
 
+func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name       string
+		input      FunctionTestInput
+		expect     FunctionTestResult
+		selectList *FunctionSelectList
+	}{
+		{
+			name:  "typed null constant",
+			input: NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		},
+		{
+			name:  "non-null constant expands to every row",
+			input: NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"1.9", "1.9"}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1}, []bool{false, false}),
+		},
+		{
+			name: "nulls at first middle and last rows",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "1.9", "", "-1.1", ""},
+				[]bool{true, false, true, false, true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1, 0, -2, 0},
+				[]bool{true, false, true, false, true}),
+		},
+		{
+			name: "all null vector",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", ""}, []bool{true, true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0}, []bool{true, true}),
+		},
+		{
+			name: "unmasked malformed value remains error",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"not-a-number"}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "non-null empty string remains error",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{""}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "masked malformed row",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"1.9", "not-a-number", "-1.1"}, []bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 0, -2}, []bool{false, true, false}),
+			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+		},
+		{
+			name: "all masked malformed rows skip parsing",
+			input: NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"not-a-number", ""}, []bool{false, false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0}, []bool{true, true}),
+			selectList: &FunctionSelectList{AllNull: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			floorCase := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, FloorStr).
+				WithSelectList(tc.selectList)
+			succeeded, info := floorCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+
+	invalidSecondArg := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), FloorStr)
+	require.NoError(t, invalidSecondArg.result.PreExtendAndReset(invalidSecondArg.fnLength))
+	err := FloorStr(invalidSecondArg.parameters, invalidSecondArg.result, proc, invalidSecondArg.fnLength, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the second argument of the floor")
+	require.NotContains(t, err.Error(), "ceil")
+}
+
+func TestFloorStrDecimalPlacesMustBeConstant(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "constant decimal places",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1.9}, []bool{false}),
+		},
+		{
+			name: "nonconstant decimal places rejected",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+		{
+			name: "wrong decimal places type rejected",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.99"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int32.ToType(), []int32{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			floorCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorStr)
+			succeeded, info := floorCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initRoundTestCase() []tcTemp {
 	rfs := []float64{0, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
 		0, 2, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
@@ -3072,7 +3201,7 @@ func TestConvSemantics(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
 		},
 		{
-			name: "negative decimal overflow wraps modulo uint64",
+			name: "negative decimal overflow clamps to zero",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, []bool{false}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
@@ -3127,17 +3256,20 @@ func TestConvSemantics(t *testing.T) {
 	}
 }
 
-func TestConvInvalidInputReturnsError(t *testing.T) {
+func TestConvStringUsesNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	cases := []struct {
 		name  string
 		value string
 		base  int64
+		want  string
 	}{
-		{name: "invalid character", value: "g", base: 16},
-		{name: "prefix truncation", value: "10xyz", base: 10},
-		{name: "invalid digit for base", value: "2", base: 2},
+		{name: "valid prefix", value: "10xyz", base: 10, want: "A"},
+		{name: "invalid first character", value: "g", base: 16, want: "0"},
+		{name: "invalid first digit for base", value: "2", base: 2, want: "0"},
+		{name: "sign only", value: "+", base: 10, want: "0"},
+		{name: "whitespace only", value: "   ", base: 10, want: "0"},
 	}
 
 	for _, tc := range cases {
@@ -3148,7 +3280,7 @@ func TestConvInvalidInputReturnsError(t *testing.T) {
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.base}, []bool{false}),
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
 				},
-				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
 				Conv,
 			)
 			s, info := fcTC.Run()
@@ -3173,22 +3305,41 @@ func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestParseConvStrictStringEdgeCases(t *testing.T) {
+func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
 	t.Run("empty string returns zero values without error", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("", 10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nil, 10)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), signedVal)
 		require.Equal(t, uint64(0), unsignedVal)
 		require.False(t, signed)
 	})
 
-	t.Run("sign only is invalid", func(t *testing.T) {
-		_, _, _, err := parseConvStrictString("+", 10)
-		require.Error(t, err)
+	t.Run("sign only has no numeric prefix", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("+"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("unicode whitespace is not binary padding", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("\u30007x"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("negative unsigned overflow clamps to zero", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("-18446744073709551617tail"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
 	})
 
 	t.Run("negative base positive overflow saturates to max int64", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("9223372036854775808", -10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("9223372036854775808"), -10)
 		require.NoError(t, err)
 		require.True(t, signed)
 		require.Equal(t, int64(math.MaxInt64), signedVal)
@@ -3196,11 +3347,35 @@ func TestParseConvStrictStringEdgeCases(t *testing.T) {
 	})
 
 	t.Run("negative base negative overflow saturates to min int64", func(t *testing.T) {
-		signedVal, unsignedVal, signed, err := parseConvStrictString("-9223372036854775809", -10)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("-9223372036854775809"), -10)
 		require.NoError(t, err)
 		require.True(t, signed)
 		require.Equal(t, int64(math.MinInt64), signedVal)
 		require.Equal(t, uint64(0), unsignedVal)
+	})
+
+	t.Run("prefix stops at the first invalid digit", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("1z"), 16)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(1), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("base 36 accepts alphabetic digits", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("z1-tail"), 36)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(1261), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("positive unsigned overflow saturates", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix([]byte("18446744073709551616tail"), 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(math.MaxUint64), unsignedVal)
+		require.False(t, signed)
 	})
 }
 
@@ -3617,6 +3792,51 @@ func initFieldTestCase() []tcTemp {
 				[]uint64{2},
 				[]bool{false}),
 		},
+	}
+}
+
+func TestFieldDecimalExact(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal0 := types.New(types.T_decimal128, 20, 0)
+	decimal16 := types.New(types.T_decimal128, 20, 16)
+	cases := []struct {
+		name   string
+		typ    types.Type
+		values []types.Decimal128
+		first  []types.Decimal128
+		second []types.Decimal128
+		want   uint64
+	}{
+		{
+			name:   "integer boundary",
+			typ:    decimal0,
+			values: []types.Decimal128{{B0_63: 9007199254740993}},
+			first:  []types.Decimal128{{B0_63: 9007199254740992}},
+			second: []types.Decimal128{{B0_63: 9007199254740993}},
+			want:   2,
+		},
+		{
+			name:   "scale boundary",
+			typ:    decimal16,
+			values: []types.Decimal128{{B0_63: 10000000000000001}},
+			first:  []types.Decimal128{{B0_63: 10000000000000000}},
+			second: []types.Decimal128{{B0_63: 10000000000000001}},
+			want:   2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.values, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.first, []bool{false}),
+				NewFunctionTestInput(tc.typ, tc.second, []bool{false}),
+			}
+			fc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, []bool{false}),
+				FieldDecimal128)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -4984,6 +5204,44 @@ func TestFindInSet(t *testing.T) {
 	}
 }
 
+func TestFindInSetSetDefinition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"a", "A", "m", "z", "a", "x", "", "", "a"},
+				[]bool{false, false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{2, 2, 4, 7, 3, 7, 0, 2, 0},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"z,a,m"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{2, 2, 3, 1, 2, 0, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, false, true}),
+		FindInSet,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
+func TestFindInSetSetDefinitionEmptyMember(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", ""}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 2, 2}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{",a", ",a", "a,", "a,,b"}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 2, 2}, nil),
+		FindInSet,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 // INSTR
 func initInstrTestCase() []tcTemp {
 	cases := []struct {
@@ -5569,14 +5827,14 @@ func initTruncateTestCase() []tcTemp {
 		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
-	// truncate with NULL second argument should expect error, we want a const.
+	// NULL precision propagates to the result instead of being rejected.
 	testInputs = append(testInputs, tcTemp{
 		info: "test truncate with NULL second argument",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
 		},
-		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
 	return testInputs
@@ -5590,6 +5848,119 @@ func TestTruncate(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestMathPrecisionNullContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fn        fEvalFn
+		wantError bool
+	}{
+		{"ceil", CeilFloat64, true},
+		{"floor", FloorFloat64, true},
+		{"round", RoundFloat64, false},
+		{"truncate", TruncateFloat64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			for _, nullValue := range []bool{false, true} {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, []bool{nullValue}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				}, NewFunctionTestResult(types.T_float64.ToType(), tc.wantError, []float64{0}, []bool{true}), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+			if tc.wantError {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1}, nil),
+				}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), tc.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+		})
+	}
+}
+
+func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		flat []float64
+	}{
+		{"round", RoundFloat64, []float64{150, 149}},
+		{"truncate", TruncateFloat64, []float64{140, 149}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+			defer result.Free()
+			values := vector.NewVec(types.T_float64.ToType())
+			defer values.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(values, []float64{149, 149}, nil, proc.Mp()))
+			constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(-2), 2, proc.Mp())
+			require.NoError(t, err)
+			defer constant.Free(proc.Mp())
+			null := vector.NewConstNull(types.T_int64.ToType(), 2, proc.Mp())
+			defer null.Free(proc.Mp())
+			flat := vector.NewVec(types.T_int64.ToType())
+			defer flat.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(flat, []int64{-1, 0}, nil, proc.Mp()))
+			for _, step := range []struct {
+				name   string
+				digits *vector.Vector
+				want   []float64
+				mask   *FunctionSelectList
+			}{
+				{"const", constant, []float64{100, 100}, nil},
+				{"null", null, nil, nil},
+				{"flat", flat, tc.flat, nil},
+				{"masked", flat, tc.flat, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}},
+				{"all masked", flat, nil, &FunctionSelectList{AllNull: true}},
+				{"const again", constant, []float64{100, 100}, nil},
+			} {
+				t.Run(step.name, func(t *testing.T) {
+					require.NoError(t, result.PreExtendAndReset(2))
+					require.NoError(t, tc.fn([]*vector.Vector{values, step.digits}, result, proc, 2, step.mask))
+					actual := vector.GenerateFunctionFixedTypeParameter[float64](result.GetResultVector())
+					for i := uint64(0); i < 2; i++ {
+						value, isNull := actual.GetValue(i)
+						wantNull := step.want == nil || (step.mask != nil && !step.mask.SelectList[i])
+						require.Equal(t, wantNull, isNull)
+						if !wantNull {
+							require.Equal(t, step.want[i], value)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
+	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2, -1, 1, 0}, []bool{false, false, false, false, false, true})
+	expectedRound := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.5, 123.46, 120, -123.5, 0}, []bool{false, false, false, false, false, true})
+	expectedTruncate := NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{123, 123.4, 123.45, 120, -123.4, 0}, []bool{false, false, false, false, false, true})
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		want *FunctionTestResult
+	}{
+		{name: "round", fn: RoundFloat64, want: &expectedRound},
+		{name: "truncate", fn: TruncateFloat64, want: &expectedTruncate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits}, *tc.want, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 

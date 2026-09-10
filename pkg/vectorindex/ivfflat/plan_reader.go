@@ -46,11 +46,13 @@ import (
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
-	proc    *process.Process
-	spec    *plan.VectorIndexScan
-	req     searchplugin.Request
-	scanner *relationScanner
-	closed  bool
+	proc        *process.Process
+	spec        *plan.VectorIndexScan
+	req         searchplugin.Request
+	scanner     *relationScanner
+	closed      bool
+	generation  *planSearchGeneration
+	ownsContext bool
 
 	initialized  bool
 	keys         []any
@@ -72,6 +74,9 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	}
 	if spec == nil || spec.Index == nil || spec.SourceTable == nil {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan is missing source or index metadata")
+	}
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat required membership filter is unavailable")
 	}
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
@@ -132,6 +137,15 @@ func (r *planReader) Close() error {
 	r.includeNulls = nil
 	r.explainDiagnostics = nil
 	r.scanner = nil
+	r.req.MembershipFilter = nil
+	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
+		r.proc.Cancel(nil)
+	}
+	if r.generation != nil {
+		r.generation.release()
+		r.generation = nil
+	}
+	r.proc = nil
 	return nil
 }
 
@@ -203,6 +217,29 @@ func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
 func (r *planReader) initialize() error {
+	if r.generation != nil {
+		return r.generation.search(r)
+	}
+	return r.prepareSearch(false)
+}
+
+func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
+	p := sqlexec.NewSqlProcess(r.proc)
+	p.RelationScanner = r.scanner
+	p.IvfRuntimeFilterData = r.req.MembershipFilter
+	p.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	p.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
+	if r.generation != nil {
+		p.IvfMembershipFilterObject = r.generation.membership
+	}
+	p.IndexReaderParam = &plan.IndexReaderParam{
+		Limit: ivfUint64Expr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
+		OrigFuncName: r.spec.DistanceFunction, DistRange: r.req.DistanceRange,
+	}
+	return p
+}
+
+func (r *planReader) prepareSearch(prepareOnly bool) error {
 	if r.req.CandidateBudget == 0 {
 		return nil
 	}
@@ -272,16 +309,7 @@ func (r *planReader) initialize() error {
 		IncludeColumns:     includeColumns,
 		IncludeColumnTypes: includeTypes,
 	}
-	sqlproc := sqlexec.NewSqlProcess(r.proc)
-	sqlproc.RelationScanner = r.scanner
-	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
-	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
-	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        ivfUint64Expr(r.req.CandidateBudget),
-		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},
-		OrigFuncName: r.spec.DistanceFunction,
-		DistRange:    r.req.DistanceRange,
-	}
+	sqlproc := r.newSearchProcess()
 	version, err := GetVersion(sqlproc, tblcfg)
 	if err != nil {
 		return err
@@ -319,7 +347,7 @@ func (r *planReader) initialize() error {
 		if expectedDimensions <= 0 {
 			idxcfg.Ivfflat.Dimensions = uint(len(query))
 		}
-		return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
+		return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
 	}
 	query, err := r.queryFloat32()
 	if err != nil {
@@ -331,7 +359,17 @@ func (r *planReader) initialize() error {
 	if expectedDimensions <= 0 {
 		idxcfg.Ivfflat.Dimensions = uint(len(query))
 	}
-	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
+	return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
+}
+
+func preparePlanReaderSearch[T types.RealNumbers](r *planReader, sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, prepareOnly bool) error {
+	if prepareOnly {
+		r.generation.search = func(reader *planReader) error {
+			return searchPlanReader(reader, reader.newSearchProcess(), idxcfg, tblcfg, query, false)
+		}
+	}
+	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
 }
 
 func validateIvfQueryDimensions(expected int32, actual int) error {
@@ -387,6 +425,7 @@ func searchPlanReader[T types.RealNumbers](
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
+	prepareOnly bool,
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
@@ -397,11 +436,23 @@ func searchPlanReader[T types.RealNumbers](
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
 	}
+	if prepareOnly {
+		cursor := new(vectorindex.IvfSearchCursor)
+		_, _, err := cache.Cache.Search(sqlproc, key, algo, query, vectorindex.RuntimeConfig{
+			Probe: uint(max(uint32(1), r.spec.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
+		})
+		if err == nil {
+			r.generation.route = append([]int64(nil), cursor.RankedCentroidIDs...)
+		}
+		return err
+	}
 
 	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
 	if multiRound {
 		cursor = &vectorindex.IvfSearchCursor{}
+	} else if r.generation != nil {
+		cursor = &vectorindex.IvfSearchCursor{RankedCentroidIDs: r.generation.route}
 	}
 	limit := uint(r.req.CandidateBudget)
 	if uint64(limit) != r.req.CandidateBudget {
@@ -437,6 +488,7 @@ func searchPlanReader[T types.RealNumbers](
 			SearchRoundLimit:        firstRoundLimit,
 			BucketExpandStep:        uint(r.spec.BucketExpandStep),
 			SearchCursor:            cursor,
+			IvfRoutePrepared:        r.generation != nil && !multiRound,
 		}
 		keys, distances, err := cache.Cache.Search(sqlproc, key, algo, query, rt)
 		if err != nil {
@@ -477,13 +529,23 @@ func (r *planReader) recordSearchRoundDiagnostic(
 	if rowLimit == 0 {
 		rowLimit = resultLimit
 	}
+	rows := uint64(outputRows)
+	if generation := r.generation; generation != nil && generation.parallelism > 1 {
+		// Only single-round readers can share a generation at DOP > 1. Emit
+		// one logical round from its last completed shard, not one per reader.
+		generation.outputRows.Add(rows)
+		if generation.completed.Add(1) != generation.parallelism {
+			return
+		}
+		rows = generation.outputRows.Load()
+	}
 	r.explainDiagnostics = append(r.explainDiagnostics,
 		vectorindex.EncodeIvfSearchRoundDiagnostic(vectorindex.IvfSearchRoundDiagnostic{
 			Round:        uint64(cursor.Round),
 			BucketOffset: uint64(cursor.NextBucketOffset),
 			BucketCount:  uint64(cursor.CurrentBucketCount),
 			RowLimit:     uint64(rowLimit),
-			OutputRows:   uint64(outputRows),
+			OutputRows:   rows,
 			Exhausted:    cursor.Exhausted,
 		}))
 }
@@ -559,6 +621,7 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
 	proc           *process.Process
+	generation     *planSearchGeneration
 	accountID      *uint32
 	snapshot       *plan.Snapshot
 	partitionCount int32
@@ -571,12 +634,17 @@ var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
 
 func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res executor.Result, err error) {
 	res = executor.NewResult(s.proc.Mp())
+	if req.FilterHint.BF != nil {
+		defer req.FilterHint.BF.Free()
+	}
 	ctx := s.proc.Ctx
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
 	txn := s.proc.GetTxnOperator()
-	if s.snapshot != nil && s.snapshot.TS != nil &&
+	if s.generation != nil {
+		txn = s.generation.snapshot
+	} else if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		clone := s.proc.GetCloneTxnOperator()
@@ -637,7 +705,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		relData,
 		1,
 		txnOffset,
-		req.IndexParam != nil && !req.PostFilterTopOnly,
+		req.IndexParam != nil && (!req.PostFilterTopOnly || req.FilterBeforeTopK),
 		engine.Policy_CheckAll,
 		req.FilterHint,
 	)
@@ -667,14 +735,19 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		}
 	}()
 	var earlyColumns []int
-	if req.PostFilterTopOnly {
-		// Storage Top-K has its own bounded vector path. Late materialization is
-		// only for the exact-filter-first fallback that deliberately disables it.
+	if req.FilterBeforeTopK {
+		// Filtered storage Top-K needs only predicate inputs. Primary keys and
+		// projected INCLUDE columns that do not participate in the predicate
+		// are materialized for the final K rows, not every candidate.
+		earlyColumns = relationPredicateColumns(req.Columns, req.Filter)
+	} else if req.PostFilterTopOnly {
+		// Exact predicates must be evaluated from narrow scalar columns before
+		// the local fallback reads embeddings.
 		earlyColumns = relationFilterEarlyColumns(tableDef, req.Columns, req.Filter)
 	}
 
 	for _, reader := range readers {
-		if !req.PostFilterTopOnly {
+		if !req.PostFilterTopOnly && !req.FilterBeforeTopK {
 			reader.SetIndexParam(req.IndexParam)
 		}
 		for {
@@ -686,9 +759,23 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				end           bool
 				readErr       error
 				filterApplied bool
+				topKApplied   bool
 			)
 			if filterExecutor != nil && len(earlyColumns) > 0 {
-				if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
+				if topReader, ok := reader.(engine.FilteredTopKReader); ok && req.FilterBeforeTopK {
+					end, topKApplied, readErr = topReader.ReadWithFilterAndTopK(
+						ctx,
+						req.Columns,
+						earlyColumns,
+						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+						},
+						req.IndexParam,
+						s.proc.Mp(),
+						bat,
+					)
+					filterApplied = true
+				} else if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
 					end, readErr = lateReader.ReadWithFilter(
 						ctx,
 						req.Columns,
@@ -714,6 +801,12 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				bat.Clean(s.proc.Mp())
 				break
 			}
+			if topKApplied && !bat.IsEmpty() && len(bat.Vecs) != len(req.Columns)+1 {
+				bat.Clean(s.proc.Mp())
+				return res, moerr.NewInternalErrorNoCtxf(
+					"filtered storage Top-K returned %d vectors, expected %d",
+					len(bat.Vecs), len(req.Columns)+1)
+			}
 			if filterExecutor != nil && !filterApplied && !bat.IsEmpty() {
 				if readErr = filterRelationBatch(s.proc, filterExecutor, bat); readErr != nil {
 					bat.Clean(s.proc.Mp())
@@ -731,14 +824,14 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 				continue
 			}
 			res.Batches = append(res.Batches, bat)
-			if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly); ok && resultRowCount(res.Batches) > 2*vectorTopLimit {
+			if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok && resultRowCount(res.Batches) > 2*vectorTopLimit {
 				if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
 					return res, err
 				}
 			}
 		}
 	}
-	if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly); ok {
+	if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok {
 		if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
 			return res, err
 		}
@@ -837,6 +930,26 @@ func relationFilterEarlyColumns(
 		return nil
 	}
 	return early
+}
+
+// relationPredicateColumns returns exactly the output columns referenced by
+// the exact residual. Filter-before-TopK readers can postpone every other
+// column until the bounded winner set is known.
+func relationPredicateColumns(columns []string, filter *plan.Expr) []int {
+	if filter == nil || len(columns) < 2 {
+		return nil
+	}
+	referenced := make(map[int32]struct{})
+	if !collectRelationFilterColumns(filter, int32(len(columns)), referenced) ||
+		len(referenced) == 0 || len(referenced) >= len(columns) {
+		return nil
+	}
+	earlyColumns := make([]int, 0, len(referenced))
+	for pos := range referenced {
+		earlyColumns = append(earlyColumns, int(pos))
+	}
+	sort.Ints(earlyColumns)
+	return earlyColumns
 }
 
 func collectRelationFilterColumns(expr *plan.Expr, columnCount int32, columns map[int32]struct{}) bool {

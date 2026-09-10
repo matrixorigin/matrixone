@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -52,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -172,6 +170,12 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			if funcName != "round" && funcName != "truncate" {
+				return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+			}
+			return opBinaryFixedFixedToFixed[T, int64, T](ivecs, result, proc, length, cb, selectList)
+		}
+		if ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
@@ -500,63 +504,18 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "ceil"), "not const")
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", "floor"), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if ivec.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		for i := uint64(0); i < uint64(length); i++ {
-			if rsNull.Contains(i) {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			}
-			v, _ := ivec.GetStrValue(i)
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v, _ := ivec.GetStrValue(i)
-		floatVal, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(floorFloat64(floatVal, digits), false); err != nil {
-			return err
-		}
-	}
-	return nil
+		return floorFloat64(floatVal, digits), nil
+	}, selectList)
 }
 
 func roundUint64(x uint64, digits int64) uint64 {
@@ -916,6 +875,44 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+// coalesceSignedUnsignedIntegerResult handles the integer domain that cannot
+// be represented by either signed or unsigned BIGINT. The ordinary overload
+// cost ranking prefers uint64 -> int64, so it must not be used when a uint64
+// branch and a signed integer branch are both present. Decimal128 with a
+// zero scale and twenty integral digits exactly covers that combined domain.
+func coalesceSignedUnsignedIntegerResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasSigned := false
+	hasUint64 := false
+	for _, typ := range inputs {
+		switch {
+		case typ.Oid == types.T_any:
+			// An untyped NULL has no numeric domain and does not affect the
+			// common type selected from value-bearing branches.
+		case typ.Oid.IsSignedInt():
+			hasSigned = true
+		case typ.Oid.IsInteger():
+			if typ.Oid == types.T_uint64 {
+				hasUint64 = true
+			}
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasSigned || !hasUint64 {
+		return checkResult{}, false
+	}
+
+	target, overloadIndex, ok := coalesceDecimalResult(overloads, types.T_decimal128, inputs)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
+	castTypes := make([]types.Type, len(inputs))
+	for i := range castTypes {
+		castTypes[i] = target
+	}
+	return newCheckResultWithCast(overloadIndex, castTypes), true
+}
+
 func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	target, aligned, ok := textStringCommonType(inputs)
 	if !ok {
@@ -1006,6 +1003,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
+		if result, ok := coalesceSignedUnsignedIntegerResult(overloads, inputs); ok {
 			return result
 		}
 
@@ -1175,13 +1175,19 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionStrParameter(ivecs[i])
 	}
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sp, null := vecs[0].GetStrValue(i)
 		if null {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -1214,7 +1220,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			return err
 		}
 	}
-	return nil
+	return setConcatWsStringResultDomain(ivecs, result, proc)
 }
 
 func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3260,8 +3266,7 @@ func absInt64(v int64) int64 {
 func formatUnsignedToBase(val uint64, toBase int64) string {
 	base := absInt64(toBase)
 	if toBase < 0 {
-		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
-		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+		return strings.ToUpper(strconv.FormatInt(int64(val), int(base)))
 	}
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
@@ -3284,14 +3289,17 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-		if len(strings.TrimSpace(string(nStr))) == 0 {
+		// MySQL returns NULL for the empty string, but a non-empty string with
+		// no usable numeric prefix (including whitespace-only input) converts
+		// to zero.
+		if len(nStr) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
 		if err != nil {
 			return err
 		}
@@ -3319,71 +3327,105 @@ func formatSignedToBase(val int64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatInt(val, int(base)))
 }
 
-func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
-	s := strings.TrimSpace(n)
-	if len(s) == 0 {
+func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, error) {
+	// Numeric conversion accepts ASCII whitespace before the prefix. Do not
+	// use strings.TrimSpace here: binary operands are byte-oriented and a
+	// UTF-8 Unicode whitespace sequence is data, not padding. There is no need
+	// to scan the suffix or allocate a string: the first non-digit terminates
+	// the prefix, and the bounded accumulator can decide overflow in one pass.
+	pos := 0
+	for pos < len(n) && isConvWhitespace(n[pos]) {
+		pos++
+	}
+
+	negative := false
+	if pos < len(n) {
+		switch n[pos] {
+		case '+':
+			pos++
+		case '-':
+			negative = true
+			pos++
+		}
+	}
+
+	base := absInt64(fromBase)
+	if base < 2 || base > 36 || pos >= len(n) {
 		return 0, 0, false, nil
 	}
 
-	base := int(absInt64(fromBase))
-	signOffset := 0
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		signOffset = 1
+	firstDigit, ok := convDigitValue(n[pos])
+	if !ok || int64(firstDigit) >= base {
+		return 0, 0, false, nil
 	}
-	if signOffset == len(s) {
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-	}
-	for _, ch := range s[signOffset:] {
-		var digit int
-		switch {
-		case ch >= '0' && ch <= '9':
-			digit = int(ch - '0')
-		case ch >= 'A' && ch <= 'Z':
-			digit = int(ch-'A') + 10
-		case ch >= 'a' && ch <= 'z':
-			digit = int(ch-'a') + 10
-		default:
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		if digit >= base {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+
+	limit := uint64(math.MaxUint64)
+	if fromBase < 0 {
+		limit = uint64(math.MaxInt64)
+		if negative {
+			limit++ // abs(math.MinInt64)
 		}
 	}
 
-	if fromBase < 0 {
-		val, err := strconv.ParseInt(s, base, 64)
-		if err != nil {
-			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				if strings.HasPrefix(s, "-") {
+	value := uint64(0)
+	for pos < len(n) {
+		digit, ok := convDigitValue(n[pos])
+		if !ok || int64(digit) >= base {
+			break
+		}
+		if value > (limit-uint64(digit))/uint64(base) {
+			if fromBase < 0 {
+				if negative {
 					return math.MinInt64, 0, true, nil
 				}
 				return math.MaxInt64, 0, true, nil
 			}
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		return val, 0, true, nil
-	}
-
-	if strings.HasPrefix(s, "-") {
-		magnitudeStr := s[1:]
-		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
-		if !ok {
-			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
-		}
-		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
-		return 0, uint64(0) - reduced.Uint64(), false, nil
-	}
-
-	s = strings.TrimPrefix(s, "+")
-
-	uval, err := strconv.ParseUint(s, base, 64)
-	if err != nil {
-		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			if negative {
+				// A negative unsigned value whose magnitude is larger than
+				// UINT64_MAX converts to zero in MySQL.
+				return 0, 0, false, nil
+			}
 			return 0, math.MaxUint64, false, nil
 		}
-		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		value = value*uint64(base) + uint64(digit)
+		pos++
 	}
-	return 0, uval, false, nil
+
+	if fromBase < 0 {
+		if negative {
+			if value == uint64(math.MaxInt64)+1 {
+				return math.MinInt64, 0, true, nil
+			}
+			return -int64(value), 0, true, nil
+		}
+		return int64(value), 0, true, nil
+	}
+	if negative {
+		return 0, uint64(0) - value, false, nil
+	}
+	return 0, value, false, nil
+}
+
+func convDigitValue(ch byte) (uint8, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'A' && ch <= 'Z':
+		return ch - 'A' + 10, true
+	case ch >= 'a' && ch <= 'z':
+		return ch - 'a' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isConvWhitespace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -5331,11 +5373,60 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
+			if r == types.T_bit {
+				return newCheckResultWithSuccess(8)
+			}
 			if i < 2 {
 				return newCheckResultWithSuccess(0)
 			} else {
 				return newCheckResultWithSuccess(i - 1)
 			}
+		}
+	}
+	allIntegers := true
+	for _, input := range inputs {
+		if !input.IsIntOrUint() && input.Oid != types.T_any {
+			allIntegers = false
+			break
+		}
+	}
+	if allIntegers {
+		// MySQL's integer comparison uses the 64-bit representation, including
+		// signed/unsigned combinations. An SQL cast to INT64 would reject UINT64_MAX.
+		return newCheckResultWithSuccess(13)
+	}
+	// DECIMAL comparisons must remain exact. Choose a common decimal storage
+	// family, but retain each operand's scale so no value is rounded during
+	// overload resolution.
+	hasDecimal := false
+	decimalInputs := true
+	for _, input := range inputs {
+		if input.Oid.IsDecimal() {
+			hasDecimal = true
+		} else if !input.Oid.IsInteger() && input.Oid != types.T_any {
+			decimalInputs = false
+		}
+	}
+	if hasDecimal && decimalInputs {
+		target := types.New(types.T_decimal128, 38, 0)
+		for _, input := range inputs {
+			if input.Oid == types.T_decimal256 {
+				target = types.New(types.T_decimal256, 65, 0)
+				break
+			}
+		}
+		castTypes := make([]types.T, len(inputs))
+		targetTypes := make([]types.Type, len(inputs))
+		for i, input := range inputs {
+			castTypes[i] = target.Oid
+			targetTypes[i] = target
+			targetTypes[i].Scale = input.Scale
+		}
+		if c, _ := tryToMatch(inputs, castTypes); c != matchFailed {
+			if target.Oid == types.T_decimal256 {
+				return newCheckResultWithCast(12, targetTypes)
+			}
+			return newCheckResultWithCast(11, targetTypes)
 		}
 	}
 	castTypes := make([]types.T, len(inputs))
@@ -5352,6 +5443,120 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(10, targetTypes)
 	}
 	return newCheckResultWithSuccess(10)
+}
+
+func FieldInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	getters := make([]func(uint64) (uint64, bool), len(ivecs))
+	for i, vec := range ivecs {
+		getters[i] = fieldIntegerGetter(vec)
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(getters); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := getters[0](i)
+			v2, null2 := getters[j](i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if v1 == v2 {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fieldIntegerGetter(vec *vector.Vector) func(uint64) (uint64, bool) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](vec)
+		return func(i uint64) (uint64, bool) { v, n := p.GetValue(i); return uint64(v), n }
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](vec)
+		return func(i uint64) (uint64, bool) { return p.GetValue(i) }
+	default:
+		panic("FIELD integer overload received non-integer vector")
+	}
+}
+
+func FieldDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal128](ivecs, result, length, func(x, y types.Decimal128, sx, sy int32) bool {
+		return types.CompareDecimal128WithScale(x, y, sx, sy) == 0
+	})
+}
+
+func FieldDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return fieldDecimalValues[types.Decimal256](ivecs, result, length, decimal256Equal)
+}
+
+type fieldDecimalType interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func fieldDecimalValues[T fieldDecimalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, equal func(T, T, int32, int32) bool) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
+	for i := range ivecs {
+		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	}
+	nums := make([]uint64, length)
+	for j := 1; j < len(ivecs); j++ {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := fs[0].GetValue(i)
+			v2, null2 := fs[j].GetValue(i)
+			if nums[i] != 0 || null1 || null2 {
+				continue
+			}
+			if equal(v1, v2, fs[0].GetType().Scale, fs[j].GetType().Scale) {
+				nums[i] = uint64(j)
+			}
+		}
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(nums[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256Equal(x, y types.Decimal256, scaleX, scaleY int32) bool {
+	if scaleX == scaleY {
+		return x == y
+	}
+	if scaleX < scaleY {
+		x, err := x.Scale(scaleY - scaleX)
+		return err == nil && x == y
+	}
+	y, err := y.Scale(scaleX - scaleY)
+	return err == nil && x == y
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6563,28 +6768,6 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	return nil
 }
 
-// Slice from left to right, starting from 0
-func getSliceFromLeft(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[offset:]
-	return string(substrRune)
-}
-
-// Cut slices from right to left, starting from 1
-func getSliceFromRight(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[elemsize-offset:]
-	return string(substrRune)
-}
-
 func StrCmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
 }
@@ -6599,7 +6782,56 @@ func strcmp(s1, s2 string) (int8, error) {
 	return 1, nil
 }
 
-func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		if err = rs.AppendBytes(substringByDomain(v, s, 0, false, binary), false); err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+// Binary SUBSTRING uses byte offsets. Routing binary values through the text
+// implementation would decode invalid bytes as RuneError and could expand a
+// nominal 511-byte result beyond the planner's bound.
+func binarySubstringStartOffset(length int, start int64) (int, bool) {
+	if start > 0 {
+		offset := start - 1
+		if offset >= int64(length) {
+			return 0, false
+		}
+		return int(offset), true
+	}
+	if start < 0 {
+		if start < -int64(length) {
+			return 0, false
+		}
+		return length + int(start), true
+	}
+	return 0, false
+}
+
+func SubStringBinaryWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6607,67 +6839,28 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null1 := vs.GetStrValue(i)
 		s, null2 := starts.GetValue(i)
-
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var r string
-			if s > 0 {
-				r = getSliceFromLeft(functionUtil.QuickBytesToStr(v), s-1)
-			} else if s < 0 {
-				r = getSliceFromRight(functionUtil.QuickBytesToStr(v), -s)
-			} else {
-				r = ""
-			}
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
+			continue
+		}
+
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
 				return err
 			}
+			continue
+		}
+		if err = rs.AppendBytes(v[offset:], false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// Cut the slice with length from left to right, starting from 0
-func getSliceFromLeftWithLength(s string, offset int64, length int64) string {
-	if offset < 0 {
-		return ""
-	}
-	return getSliceOffsetLen(s, offset, length)
-}
-
-func getSliceOffsetLen(s string, offset int64, length int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset < 0 {
-		offset += elemsize
-		if offset < 0 {
-			return ""
-		}
-	}
-	if offset >= elemsize {
-		return ""
-	}
-
-	if length <= 0 {
-		return ""
-	} else {
-		end := offset + length
-		if end > elemsize {
-			end = elemsize
-		}
-		substrRune := sourceRune[offset:end]
-		return string(substrRune)
-	}
-}
-
-// From right to left, cut the slice with length from 1
-func getSliceFromRightWithLength(s string, offset int64, length int64) string {
-	return getSliceOffsetLen(s, -offset, length)
-}
-
-func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStringBinaryWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6677,26 +6870,106 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		v, null1 := vs.GetStrValue(i)
 		s, null2 := starts.GetValue(i)
 		l, null3 := lens.GetValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var r string
-			if s > 0 {
-				r = getSliceFromLeftWithLength(functionUtil.QuickBytesToStr(v), s-1, l)
-			} else if s < 0 {
-				r = getSliceFromRightWithLength(functionUtil.QuickBytesToStr(v), -s, l)
-			} else {
-				r = ""
-			}
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
+			continue
+		}
+
+		if l <= 0 {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
 				return err
 			}
+			continue
+		}
+		offset, ok := binarySubstringStartOffset(len(v), s)
+		if !ok {
+			if err = rs.AppendBytes(v[:0], false); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int64(len(v) - offset)
+		end := len(v)
+		if l < remaining {
+			end = offset + int(l)
+		}
+		if err = rs.AppendBytes(v[offset:end], false); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		if err = rs.AppendBytes(substringByDomain(v, s, l, true, binary), false); err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func substringByDomain(value []byte, start, length int64, withLength, binary bool) []byte {
+	if binary {
+		left, right := substringBounds(len(value), start, length, withLength)
+		return value[left:right]
+	}
+	runes := []rune(functionUtil.QuickBytesToStr(value))
+	left, right := substringBounds(len(runes), start, length, withLength)
+	return functionUtil.QuickStrToBytes(string(runes[left:right]))
+}
+
+func substringBounds(total int, start, length int64, withLength bool) (left, right int) {
+	if start == 0 {
+		return 0, 0
+	}
+	total64 := int64(total)
+	var offset int64
+	if start > 0 {
+		offset = start - 1
+		if offset >= total64 {
+			return 0, 0
+		}
+	} else {
+		if start < -total64 {
+			return 0, 0
+		}
+		offset = total64 + start
+	}
+	end := total64
+	if withLength {
+		if length <= 0 {
+			return 0, 0
+		}
+		if length < total64-offset {
+			end = offset + length
+		}
+	}
+	return int(offset), int(end)
 }
 
 func subStrIndex(str, delim string, count int64) (string, error) {
@@ -6759,7 +7032,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 	return r
 }
 
-func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -6767,26 +7040,30 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 	typ := counts.GetType()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := vs.GetStrValue(i)
 		d, null2 := delims.GetStrValue(i)
 		c, null3 := counts.GetValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			r, err := subStrIndex(string(v), string(d), getCount(typ, c))
-			if err != nil {
-				return err
-			}
-
-			if err = rs.AppendBytes([]byte(r), false); err != nil {
-				return err
-			}
+			continue
+		}
+		r, err := subStrIndex(string(v), string(d), getCount(typ, c))
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(r), false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6804,36 +7081,31 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		str, isnull1 := strs.GetStrValue(i)
-		shaType, isnull2 := shaTypes.GetValue(i)
-
-		if isnull1 || isnull2 || !isSha2Family(shaType) {
+		if sha2RowMasked(selectList, i) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var checksum []byte
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
 
-			switch shaType {
-			case 0, 256:
-				sum256 := sha256.Sum256(str)
-				checksum = sum256[:]
-			case 224:
-				sum224 := sha256.Sum224(str)
-				checksum = sum224[:]
-			case 384:
-				sum384 := sha512.Sum384(str)
-				checksum = sum384[:]
-			case 512:
-				sum512 := sha512.Sum512(str)
-				checksum = sum512[:]
-			default:
-				panic("unexpected err happened in sha2 function")
-			}
-			checksum = []byte(hex.EncodeToString(checksum))
-			if err = res.AppendBytes(checksum, false); err != nil {
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
 		}
 
 	}
@@ -6841,9 +7113,92 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-// any one of 224 256 384 512 0 is valid
-func isSha2Family(len int64) bool {
-	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+// SHA2StringLengthFunc is the character-operand variant of SHA2. MySQL
+// converts the hash length as an integer at execution time, so a value such
+// as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
+// string wrapper preserves binary bytes and avoids the lossy implicit cast to
+// VARCHAR that would otherwise happen before execution.
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaLengths := vector.GenerateFunctionStrParameter(args[1])
+	lengthIsConst := args[1].IsConst()
+	var constLength int64
+	var constLengthNull bool
+	if lengthIsConst {
+		lengthValue, isnull := shaLengths.GetStrValue(0)
+		constLengthNull = isnull
+		if !isnull {
+			constLength = parseMySQLIntegerPrefix(lengthValue)
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if sha2RowMasked(selectList, i) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str, isnull1 := strs.GetStrValue(i)
+		var isnull2 bool
+		var shaType int64
+		if lengthIsConst {
+			isnull2 = constLengthNull
+			shaType = constLength
+		} else {
+			lengthValue, isnull := shaLengths.GetStrValue(i)
+			isnull2 = isnull
+			if !isnull {
+				shaType = parseMySQLIntegerPrefix(lengthValue)
+			}
+		}
+		if isnull1 || isnull2 {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		checksum, ok := sha2Checksum(str, shaType)
+		if !ok {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = res.AppendBytes(checksum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sha2Checksum(value []byte, length int64) ([]byte, bool) {
+	var checksum []byte
+	switch length {
+	case 0, 256:
+		sum256 := sha256.Sum256(value)
+		checksum = sum256[:]
+	case 224:
+		sum224 := sha256.Sum224(value)
+		checksum = sum224[:]
+	case 384:
+		sum384 := sha512.Sum384(value)
+		checksum = sum384[:]
+	case 512:
+		sum512 := sha512.Sum512(value)
+		checksum = sum512[:]
+	default:
+		return nil, false
+	}
+	encoded := make([]byte, hex.EncodedLen(len(checksum)))
+	hex.Encode(encoded, checksum)
+	return encoded, true
+}
+
+func sha2RowMasked(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row))
 }
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -7426,6 +7781,44 @@ func extractUnitPrefersTime(unit string) bool {
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if len(ivecs) == 3 {
+		var (
+			cachedDefinition string
+			memberPositions  map[string]uint64
+		)
+		findSetMember := func(target string, bitmap uint64, definition string) uint64 {
+			// The definition is a hidden constant for planner-generated SET
+			// calls. Keep the fallback for direct executor tests and defensive
+			// callers that provide a row-wise metadata vector.
+			if memberPositions == nil || cachedDefinition != definition {
+				cachedDefinition = definition
+				memberPositions = make(map[string]uint64)
+				for i, member := range strings.Split(definition, ",") {
+					// Match types.ParseSet: SET definitions are normalized by
+					// trimming trailing ASCII spaces and folding case.
+					key := strings.ToLower(strings.TrimRight(member, " "))
+					memberPositions[key] = uint64(i + 1)
+				}
+			}
+			// Most SET labels are already normalized at the SQL boundary. Try
+			// the allocation-free exact key first and fold only on a miss for
+			// mixed-case or padded needles.
+			targetKey := strings.TrimRight(target, " ")
+			position, ok := memberPositions[targetKey]
+			if !ok {
+				position, ok = memberPositions[strings.ToLower(targetKey)]
+			}
+			if !ok || position == 0 || position > types.MaxSetMembers {
+				return 0
+			}
+			if bitmap&(uint64(1)<<uint(position-1)) == 0 {
+				return 0
+			}
+			return position
+		}
+		return opTernaryStrFixedStrToFixed[uint64, uint64](ivecs, result, proc, length, findSetMember, selectList)
+	}
+
 	findInStrList := func(str, strlist string) uint64 {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
@@ -7438,31 +7831,75 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList, nil)
 }
 
-func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single, nil)
+func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	haystacks := vector.GenerateFunctionStrParameter(ivecs[0])
+	needles := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	caseInsensitive := ivecs[0].GetType().Charset == types.CharsetUTF8
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		haystack, null1 := haystacks.GetStrValue(row)
+		needle, null2 := needles.GetStrValue(row)
+		if null1 || null2 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
+	}
+	return nil
 }
 
-func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var value []byte
+		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+			value = v1[:prefixLength(len(v1), v2)]
 		} else {
-			//TODO: Ignoring 4 switch cases: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/left.go#L38
-			res := evalLeft(functionUtil.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
-				return err
-			}
+			value = functionUtil.QuickStrToBytes(evalLeft(functionUtil.QuickBytesToStr(v1), v2))
+		}
+		if err = rs.AppendBytes(value, false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func prefixLength(total int, requested int64) int {
+	if requested <= 0 {
+		return 0
+	}
+	if requested >= int64(total) {
+		return total
+	}
+	return int(requested)
 }
 
 func evalLeft(str string, length int64) string {
@@ -7476,26 +7913,39 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
-func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var value []byte
+		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+			count := prefixLength(len(v1), v2)
+			value = v1[len(v1)-count:]
 		} else {
-			res := evalRight(functionUtil.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
-				return err
-			}
+			value = functionUtil.QuickStrToBytes(evalRight(functionUtil.QuickBytesToStr(v1), v2))
+		}
+		if err = rs.AppendBytes(value, false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func evalRight(str string, length int64) string {
@@ -9119,12 +9569,18 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
-func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, n1 := p1.GetStrValue(i)
 		v2, n2 := p2.GetStrValue(i)
 		v3, n3 := p3.GetStrValue(i)
@@ -9145,7 +9601,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 func writeReplaceBytes(dst, src, needle, replacement []byte) {
 	if len(needle) == 0 {
@@ -9213,13 +9669,20 @@ func writeEncodedRuneRange(dst, v []byte, start, end int) int {
 	}
 	return n
 }
-func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, n1 := p1.GetStrValue(i)
 		pos, n2 := p2.GetValue(i)
 		remove, n3 := p3.GetValue(i)
@@ -9230,7 +9693,11 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			}
 			continue
 		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
+		if binary {
+			size, start, end, raw = insertBinaryResultLayout(v1, pos, remove, v4)
+		}
 		if int64(size) > maxStringFunctionResultLength(result) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -9242,6 +9709,12 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				copy(dst, v1)
 				return nil
 			}
+			if binary {
+				at := copy(dst, v1[:start])
+				at += copy(dst[at:], v4)
+				copy(dst[at:], v1[end:])
+				return nil
+			}
 			at := writeEncodedRuneRange(dst, v1, 0, start)
 			at += copy(dst[at:], v4)
 			writeEncodedRuneRange(dst[at:], v1, end, math.MaxInt)
@@ -9250,7 +9723,24 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func insertBinaryResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
+	count := int64(len(source))
+	if pos <= 0 || pos > count {
+		return len(source), 0, 0, true
+	}
+	start64 := pos - 1
+	end64 := count
+	remain := count - start64
+	if remove == 0 {
+		end64 = start64
+	} else if remove > 0 && remove < remain {
+		end64 = start64 + remove
+	}
+	start, end = int(start64), int(end64)
+	return start + len(replacement) + len(source) - end, start, end, false
 }
 
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -9260,37 +9750,39 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		src, null2 := p2.GetStrValue(i)
 		cut, null3 := p3.GetStrValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-
-			v1Str := strings.ToLower(string(v1))
-			var res string
-			switch v1Str {
-			case "both":
-				res = trimBoth(string(cut), string(src))
-			case "leading":
-				res = trimLeading(string(cut), string(src))
-			case "trailing":
-				res = trimTrailing(string(cut), string(src))
-			default:
-				return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
-			}
-
-			if err = rs.AppendBytes([]byte(res), false); err != nil {
-				return err
-			}
+			continue
 		}
 
+		v1Str := strings.ToLower(string(v1))
+		var res string
+		switch v1Str {
+		case "both":
+			res = trimBoth(string(cut), string(src))
+		case "leading":
+			res = trimLeading(string(cut), string(src))
+		case "trailing":
+			res = trimTrailing(string(cut), string(src))
+		default:
+			return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
+		}
+		if err = rs.AppendBytes([]byte(res), false); err != nil {
+			return err
+		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[2], result, proc)
 }
 
 func trimBoth(src, cuts string) string {
@@ -9329,6 +9821,12 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		v3, null3 := p3.GetValue(i)
@@ -9336,26 +9834,17 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-
-			if v3 == 0 {
-				err = moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
-				return
-			}
-
-			res, isNull := SplitSingle(string(v1), string(v2), v3)
-			if isNull {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				if err = rs.AppendBytes([]byte(res), false); err != nil {
-					return err
-				}
-			}
+			continue
+		}
+		if v3 == 0 {
+			return moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
+		}
+		res, isNull := SplitSingle(string(v1), string(v2), v3)
+		if err = rs.AppendBytes([]byte(res), isNull); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func SplitSingle(str, sep string, cnt uint32) (string, bool) {
@@ -13251,6 +13740,19 @@ type aesModeInfo struct {
 	useCBC  bool
 }
 
+func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
+	if !modeInfo.needsIV {
+		return nil
+	}
+	if !hasIV {
+		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
+	}
+	if nullIV || len(iv) < aes.BlockSize {
+		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
+	}
+	return nil
+}
+
 func getAESMode(proc *process.Process) (aesModeInfo, error) {
 	mode := "aes-128-ecb"
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -13306,11 +13808,8 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
@@ -13379,11 +13878,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 			continue
 		}
-		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
+			return err
 		}
 
 		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)

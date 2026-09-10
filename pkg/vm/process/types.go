@@ -461,8 +461,9 @@ type BaseProcess struct {
 	LoadLocalReader                     *io.PipeReader
 	Aicm                                *defines.AutoIncrCacheManager
 	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableTypeFunc             func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
 	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	resolveVariableBinaryStringFunc     func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
 	prepareParams                       *vector.Vector
 	prepareParamsIsBin                  []bool
@@ -585,14 +586,18 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	MsgId           uint64
-	Uid             uuid.UUID
-	Cs              morpc.ClientSession
-	Err             chan error
-	ReserveBatch    func(context.Context, uint64) (uint64, error)
-	RollbackBatch   func(uint64)
-	BatchCredits    uint32
-	ByteCredits     uint64
+	// TerminalBacked marks registrations whose immutable terminal owns the
+	// generation result. Such registrations must not use Err for a second,
+	// competing terminal notification; Err is nil for that path.
+	TerminalBacked bool
+	MsgId          uint64
+	Uid            uuid.UUID
+	Cs             morpc.ClientSession
+	Err            chan error
+	ReserveBatch   func(context.Context, uint64) (uint64, error)
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -735,6 +740,16 @@ func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, 
 	return proc.Base.resolveVariableFunc
 }
 
+func (proc *Process) SetResolveVariableTypeFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error),
+) {
+	proc.Base.resolveVariableTypeFunc = f
+}
+
+func (proc *Process) GetResolveVariableTypeFunc() func(string, bool, bool) (plan.Type, error) {
+	return proc.Base.resolveVariableTypeFunc
+}
+
 func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
 	proc.Base.resolveVariableIsBinFunc = f
 }
@@ -743,12 +758,41 @@ func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystem
 	return proc.Base.resolveVariableIsBinFunc
 }
 
-func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
-	proc.Base.resolveVariableBinaryStringFunc = f
+func (proc *Process) SetResolveVariableStringDomainFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error),
+) {
+	proc.Base.resolveVariableStringDomainFunc = f
 }
 
-func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
-	return proc.Base.resolveVariableBinaryStringFunc
+func (proc *Process) GetResolveVariableStringDomainFunc() func(
+	varName string, isSystemVar, isGlobalVar bool,
+) (types.RuntimeStringDomain, error) {
+	return proc.Base.resolveVariableStringDomainFunc
+}
+
+// SetResolveVariableBinaryStringFunc is a compatibility adapter for callers
+// that still consume a binary boolean instead of the three-state domain.
+func (proc *Process) SetResolveVariableBinaryStringFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (bool, error),
+) {
+	proc.SetResolveVariableStringDomainFunc(func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error) {
+		binary, err := f(varName, isSystemVar, isGlobalVar)
+		if err != nil || !binary {
+			return types.RuntimeStringInherit, err
+		}
+		return types.RuntimeStringBinary, nil
+	})
+}
+
+func (proc *Process) GetResolveVariableBinaryStringFunc() func(string, bool, bool) (bool, error) {
+	f := proc.GetResolveVariableStringDomainFunc()
+	if f == nil {
+		return nil
+	}
+	return func(name string, system, global bool) (bool, error) {
+		domain, err := f(name, system, global)
+		return domain == types.RuntimeStringBinary, err
+	}
 }
 
 func (proc *Process) SetResolveVariablePrepareParamKindFunc(

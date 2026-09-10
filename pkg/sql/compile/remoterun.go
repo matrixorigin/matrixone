@@ -80,6 +80,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -93,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -118,6 +122,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -125,6 +132,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -218,10 +228,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -897,6 +913,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
+			ArrowExecutionScope:         t.Es.ArrowExecutionScope,
+			ArrowForceMaterialize:       t.Es.ArrowForceMaterialize,
+			ArrowDistributedExecution:   t.Es.ArrowDistributedExecution,
+			ArrowObjectIdentities:       t.Es.ArrowObjectIdentities,
+			ArrowRecordBatchShards:      t.Es.ArrowRecordBatchShards,
+			ArrowSchemaFingerprint:      t.Es.ArrowSchemaFingerprint,
+			ArrowConversionPlanVersion:  t.Es.ArrowConversionPlanVersion,
 			Attrs:                       t.Es.Attrs,
 			ColumnListLen:               t.Es.ColumnListLen,
 			Cols:                        t.Es.Cols,
@@ -1546,6 +1569,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
+					ArrowExecutionScope:         t.ArrowExecutionScope,
+					ArrowForceMaterialize:       t.ArrowForceMaterialize,
+					ArrowDistributedExecution:   t.ArrowDistributedExecution,
+					ArrowObjectIdentities:       t.ArrowObjectIdentities,
+					ArrowRecordBatchShards:      t.ArrowRecordBatchShards,
+					ArrowSchemaFingerprint:      t.ArrowSchemaFingerprint,
+					ArrowConversionPlanVersion:  t.ArrowConversionPlanVersion,
 					Attrs:                       t.Attrs,
 					ColumnListLen:               t.ColumnListLen,
 					FileSize:                    t.FileSize,
@@ -2286,6 +2316,44 @@ func validateRemoteUpdateChangedRowsPipelineProtocol(
 	return nil
 }
 
+func binaryStringSemanticFunction(functionID int32) bool {
+	switch functionID {
+	case function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
+		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE, function.LPAD,
+		function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
+		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRemoteBinaryStringPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if proc != nil {
+		value, ok := moruntime.ServiceRuntime(proc.GetService()).
+			GetGlobalVariables(moruntime.MOProtocolVersion)
+		version, versionOK := value.(int64)
+		if ok && versionOK && version >= defines.MORPCVersion58 {
+			return nil
+		}
+	}
+	if p == nil || !pipelineContainsFunction(p, func(functionID, _ int32) bool {
+		return binaryStringSemanticFunction(functionID)
+	}) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"binary string function semantics require MORPC protocol version %d",
+		defines.MORPCVersion58)
+}
+
 func validateRemotePadSpacePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2372,6 +2440,31 @@ func validateRemoteGroupingSetPipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoteArrowLoadPipelineProtocol prevents receivers from silently
+// ignoring Arrow-specific ExternalScan fields during a mixed-version rollout.
+func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetExternalScan()
+		if scan == nil || scan.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData {
+			continue
+		}
+		if proc == nil || !supportsRemoteArrowLoadPipeline(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"Arrow LOAD remote execution requires MORPC protocol version 57",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

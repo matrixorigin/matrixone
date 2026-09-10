@@ -184,6 +184,32 @@ func TestPreparedJSONComparisonParamPositionsIncludesMemberOfLeftParam(t *testin
 	require.Equal(t, []int32{3, 7}, PreparedJSONMemberOfParamPositions(preparePlan))
 }
 
+func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want []int32
+	}{
+		{"json_array", []int32{0, 1, 2, 3, 4}},
+		{"json_object", []int32{1, 3}},
+		{"json_set", []int32{2, 4}},
+		{"json_insert", []int32{2, 4}},
+		{"json_replace", []int32{2, 4}},
+		{"json_array_append", []int32{2, 4}},
+		{"concat", []int32{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := make([]*plan.Expr, 5)
+			for i := range args {
+				args[i] = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}}}
+			}
+			expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: tc.name}, Args: args}}}
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}}}
+			require.Equal(t, tc.want, PreparedJSONComparisonParamPositions(p))
+			require.Empty(t, PreparedJSONMemberOfParamPositions(p))
+		})
+	}
+}
+
 func TestHasTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1963,6 +1989,19 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
 	assert.Equal(t, "REM", GetCSVComment(param))
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "ArRoW", "arrow_container", "FiLe",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW, param.Format)
+	assert.Equal(t, tree.ARROW_CONTAINER_FILE, param.ArrowContainer)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "arrow",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_AUTO, param.ArrowContainer)
 }
 
 // TestGetCSVComment covers the COMMENT option accessor.
@@ -2082,6 +2121,12 @@ func TestInitS3Param_Plain(t *testing.T) {
 	param.Option = []string{"bucket", "b", "jsondata", "array"}
 	require.NoError(t, InitS3Param(param))
 	assert.Equal(t, "jsonline", param.Format)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"bucket", "b", "filepath", "data.arrow", "format", "arrow", "arrow_container", "stream",
+	}}}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_STREAM, param.ArrowContainer)
 }
 
 func TestInitS3Param_HiveLegacyOption(t *testing.T) {

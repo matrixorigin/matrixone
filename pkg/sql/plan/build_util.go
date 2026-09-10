@@ -972,6 +972,62 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
+// remapGeneratedColExprsToTableOrder normalizes generated-column references
+// after CTAS merges explicit target definitions with source columns. The
+// generated-column binder resolves references against declaration order, while
+// CTAS intentionally stores target-only columns before source-only columns.
+// DML generated-column expansion uses the final TableDef order, so leave the
+// catalog with one stable coordinate system.
+func remapGeneratedColExprsToTableOrder(tableCols, declarationCols []*ColDef) {
+	if len(tableCols) == 0 || len(declarationCols) == 0 {
+		return
+	}
+	tablePosByName := make(map[string]int, len(tableCols))
+	for pos, col := range tableCols {
+		if col != nil {
+			tablePosByName[col.Name] = pos
+		}
+	}
+	declarationToTablePos := make(map[int32]int32, len(declarationCols))
+	for declarationPos, col := range declarationCols {
+		if col == nil {
+			continue
+		}
+		if tablePos, ok := tablePosByName[col.Name]; ok {
+			declarationToTablePos[int32(declarationPos)] = int32(tablePos)
+		}
+	}
+
+	for _, col := range tableCols {
+		if col == nil || col.GeneratedCol == nil {
+			continue
+		}
+		remapGeneratedColExprPositions(col.GeneratedCol.Expr, declarationToTablePos)
+	}
+}
+
+func remapGeneratedColExprPositions(expr *plan.Expr, positions map[int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if pos, ok := positions[e.Col.ColPos]; ok {
+				e.Col.ColPos = pos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			remapGeneratedColExprPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			remapGeneratedColExprPositions(item, positions)
+		}
+	}
+}
+
 // applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
 // wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
 // keeps generated-column assignment semantics compatible across catalog

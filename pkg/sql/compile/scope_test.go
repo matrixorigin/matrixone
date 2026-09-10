@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -1779,6 +1780,7 @@ func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
 		[]int64{128},
 		makeWholeFileOffsets(1),
 		true,
+		pipeline.ArrowExecutionScope_UnknownArrowExecutionScope,
 	)
 
 	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)
@@ -2905,18 +2907,24 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	board := message.NewMessageBoard()
 	defer board.Reset()
 	proc.SetMessageBoard(board)
-	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true,
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
 	scope := &Scope{
 		Proc: proc,
 		DataSource: &Source{
 			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
 		},
 	}
-	payload := []byte{1, 3, 5, 7}
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Data: payload,
+		Card: 1,
 	}, board)
 
 	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
@@ -2928,9 +2936,103 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.Equal(t, payload, filters[0].data)
 }
 
+func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 110, UseMembershipFilter: true, MustApply: true}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required runtime filter 110 is unavailable")
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
+func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		null    bool
+		card    int32
+		corrupt bool
+	}{
+		{"valid", types.T_int64, false, 1, false},
+		{"wrong_type", types.T_int32, false, 1, false},
+		{"null", types.T_int64, true, 1, false},
+		{"overclaimed", types.T_int64, false, 2, false},
+		{"zero_card", types.T_int64, false, 0, false},
+		{"corrupt", types.T_int64, false, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.oid.ToType())
+			defer v.Free(proc.Mp())
+			if tc.oid == types.T_int64 {
+				require.NoError(t, vector.AppendFixed(v, int64(9), tc.null, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixed(v, int32(9), tc.null, proc.Mp()))
+			}
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			if tc.corrupt {
+				data = data[:3]
+			}
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
+				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
+			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			require.False(t, empty)
+			if tc.name == "valid" {
+				require.NoError(t, err)
+				require.Len(t, filters, 1)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, filters)
+			}
+		})
+	}
+}
+
+func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	const tag int32 = 111
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{
+			Tag: tag, UseMembershipFilter: true, MustApply: true,
+		}}},
+	}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
 func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	payload := []byte{2, 4, 6, 8}
-	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true}
+	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
 	filter := receivedRuntimeFilter{
 		spec: spec,
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
@@ -2939,9 +3041,10 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 		}}}},
 	}
 
-	membership, hasMembership := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
 
 	require.True(t, hasMembership)
+	require.True(t, required)
 	require.Equal(t, payload, membership)
 }
 
@@ -3016,27 +3119,31 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "is not registered")
 
-	membership, hasMembership := vectorScanMembershipFilter(nil)
+	membership, hasMembership, required := vectorScanMembershipFilter(nil)
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
-		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true},
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true},
 		expr: &plan.Expr{},
 	}})
 	require.Nil(t, membership)
 	require.True(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.True(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
 	}})
 	require.Nil(t, membership)
 	require.False(t, hasMembership)
-	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
 		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
 			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
 		}}}},
 	}})
 	require.Equal(t, []byte{9, 8, 7}, membership)
 	require.False(t, hasMembership)
+	require.False(t, required)
 }
 
 func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {

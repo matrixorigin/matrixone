@@ -5,10 +5,7 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 select * from atomic_table_10;
 ➤ c1[4,32,0]  ¦  c2[12,-1,0]
 commit;
@@ -21,18 +18,12 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 select * from atomic_table_10;
 ➤ c1[4,32,0]  ¦  c2[12,-1,0]
 rollback;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");

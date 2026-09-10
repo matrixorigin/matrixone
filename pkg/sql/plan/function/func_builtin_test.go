@@ -148,6 +148,9 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 128, 0),
 		types.New(types.T_blob, 0, 0),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetLegacy),
 		types.T_int32.ToType(),
 	}
 	encoded := make([]string, len(typesToEncode))
@@ -165,17 +168,17 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		{
 			name:   "maximum character length",
 			fn:     builtInInternalCharLength,
-			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 16, 16, 16, 0},
 		},
 		{
 			name:   "maximum octet length",
 			fn:     builtInInternalCharSize,
-			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 64, 16, 48, 0},
 		},
 		{
 			name:   "character set domain",
 			fn:     builtInInternalCharacterSet,
-			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
+			values: []int64{3, 3, 3, 3, 2, 2, 2, 1, 2, 0, 0},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,7 +191,7 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 					types.T_int64.ToType(),
 					false,
 					test.values,
-					[]bool{false, false, false, false, false, false, false, true},
+					[]bool{false, false, false, false, false, false, false, false, false, false, true},
 				),
 				test.fn,
 			)
@@ -645,15 +648,34 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
-func TestToIntervalCharRegistered(t *testing.T) {
+func TestToIntervalStringTypesRegistered(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
-		types.T_char.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, int32(TO_INTERVAL), fn.fid)
-	require.Equal(t, types.T_int64, fn.retType.Oid)
+	for _, stringType := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(stringType.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+				stringType.ToType(),
+				types.T_int64.ToType(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(TO_INTERVAL), fn.fid)
+			require.Equal(t, types.T_int64, fn.retType.Oid)
+		})
+	}
+
+	// GetFunctionByName validates the resolver result. Instantiate the TEXT
+	// overload too, so the registration's runtime factory cannot silently
+	// diverge from the CHAR/VARCHAR factories.
+	var textOverload *overload
+	for i := range allSupportedFunctions[TO_INTERVAL].Overloads {
+		candidate := &allSupportedFunctions[TO_INTERVAL].Overloads[i]
+		if len(candidate.args) == 2 && candidate.args[0] == types.T_text &&
+			candidate.args[1] == types.T_int64 {
+			textOverload = candidate
+			break
+		}
+	}
+	require.NotNil(t, textOverload)
+	require.NotNil(t, textOverload.newOp())
 }
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
@@ -1251,10 +1273,10 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", mp)
 			tc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
-				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
-			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{300000}, nil),
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), true, nil, nil), fEvalFn(fn))
 			ok, info := tc.Run()
 			require.True(t, ok, info)
 		})

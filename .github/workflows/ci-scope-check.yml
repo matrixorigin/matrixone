@@ -1,0 +1,20 @@
+name: CI scope contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/ci/**'
+      - '.github/workflows/entrypoint.yaml'
+      - '.github/workflows/ci-scope-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - run: node --test .github/ci/change-scope.test.cjs

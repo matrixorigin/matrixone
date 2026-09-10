@@ -120,6 +120,461 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	assertAttempts(t, counter, arguments, 3)
 }
 
+func TestUTProcessGroupsEscalateAfterTerm(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exercise the same shared cleanup primitive used by engine, plan, and
+	// embedded prebuild helpers. Both groups deliberately ignore TERM; the
+	// bounded KILL escalation must clear their descendants without waiting for
+	// the process leader to cooperate.
+	script := `
+set -o nounset
+test_dir=$(mktemp -d)
+ready_one="$test_dir/ready-one"
+ready_two="$test_dir/ready-two"
+pid_one="$test_dir/pid-one"
+pid_two="$test_dir/pid-two"
+first=0
+second=0
+cleanup() {
+    for pid in "$first" "$second"; do
+        if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+            kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+    for pid_file in "$pid_one" "$pid_two"; do
+        [[ -f "$pid_file" ]] || continue
+        read -r leader child < "$pid_file" || true
+        for pid in "$leader" "$child"; do
+            if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then kill -KILL "$pid" 2>/dev/null || true; fi
+        done
+    done
+    wait "$first" 2>/dev/null || true
+    wait "$second" 2>/dev/null || true
+    rm -rf "$test_dir"
+}
+trap cleanup EXIT
+force_count=0
+function logger() {
+    if [[ "$2" == *"force stopping process group"* ]]; then force_count=$((force_count + 1)); fi
+}
+source "$1"
+(
+    kill_calls=0
+    function kill() { kill_calls=$((kill_calls + 1)); return 0; }
+    terminate_ut_process_group 0 TERM
+    ut_process_group_alive 0
+    if (( kill_calls != 0 )); then
+        echo "zero pid attempted process-group signaling" >&2
+        exit 1
+    fi
+) || exit 1
+set -m
+bash -c 'trap "" TERM; sleep 30 & child=$!; printf "%s %s\\n" "$BASHPID" "$child" > "$2"; printf ready > "$1"; wait "$child"' bash "$ready_one" "$pid_one" &
+first=$!
+bash -c 'trap "" TERM; sleep 30 & child=$!; printf "%s %s\\n" "$BASHPID" "$child" > "$2"; printf ready > "$1"; wait "$child"' bash "$ready_two" "$pid_two" &
+second=$!
+set +m
+wait_ready() {
+    for attempt in {1..200}; do
+        [[ -s "$1" ]] && return 0
+        sleep 0.05
+    done
+    return 1
+}
+wait_ready "$ready_one" || { echo "first process did not become ready" >&2; exit 1; }
+wait_ready "$ready_two" || { echo "second process did not become ready" >&2; exit 1; }
+terminate_ut_process_groups 2 "$first" "$second"
+wait "$first" 2>/dev/null || true
+wait "$second" 2>/dev/null || true
+read -r first_leader first_child < "$pid_one"
+read -r second_leader second_child < "$pid_two"
+if (( force_count != 2 )); then
+    echo "expected KILL escalation for two groups, got $force_count" >&2
+    exit 1
+fi
+for pid in "$first_leader" "$first_child" "$second_leader" "$second_child"; do
+    gone=0
+    for attempt in {1..20}; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [[ -z "$state" || "$state" == Z* ]]; then
+            gone=1
+            break
+        fi
+        sleep 0.05
+    done
+    if (( gone == 0 )); then
+        echo "TERM-ignoring process descendant survived cancellation: $pid" >&2
+        exit 1
+    fi
+done
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("process-group cancellation harness failed: %v\n%s", err, output)
+	}
+}
+
+func TestAppendUTReportUsesOneAuthoritativeRepresentation(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+report="$test_dir/engine.out"
+destination="$test_dir/all.out"
+printf 'complete-1\ncomplete-2\n' > "$report"
+printf 'stale-shard\n' > "$report.1"
+: > "$report.ready"
+append_ut_report "$report" "$destination"
+if [[ "$(cat "$destination")" != $'complete-1\ncomplete-2' ]]; then
+    echo "ready report was not selected" >&2
+    exit 1
+fi
+: > "$destination"
+rm -f "$report.ready"
+printf 'partial-one\n' > "$report.1"
+printf 'partial-two\n' > "$report.2"
+append_ut_report "$report" "$destination"
+if [[ "$(cat "$destination")" != $'partial-one\npartial-two' ]]; then
+    echo "partial reports were not selected" >&2
+    exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("report ownership harness failed: %v\n%s", err, output)
+	}
+}
+
+func TestAppendUTReportPreservesSourcesWhenCopyIsInterrupted(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The injected cat emits one line and delivers TERM to the shell that owns
+	// append_ut_report.  The helper must leave the old destination and complete
+	// source untouched, then a retry must append exactly once.  Run both source
+	// representations used by the consumers: the engine's ready-marked base
+	// report and the plan helper's unmarked base report.
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+
+interrupt_once() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    interrupt_source="$report"
+    function cat() {
+        if [[ "$1" == "$interrupt_source" ]]; then
+            command head -n 1 "$1"
+            kill -TERM "$$"
+            return 143
+        fi
+        command cat "$@"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status == 0 || term_pending == 0 )); then
+        echo "interrupted transfer was not detected" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing' ]]; then
+        echo "destination changed after interrupted transfer" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$report")" != $'first\nsecond' ]]; then
+        echo "source changed after interrupted transfer" >&2
+        exit 1
+    fi
+    if [[ "$ready" == 1 && ! -f "$report.ready" ]]; then
+        echo "ready marker was lost after interrupted transfer" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "temporary destination survived interrupted transfer" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f cat
+    append_ut_report "$report" "$destination"
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "retry did not append the source exactly once" >&2
+        exit 1
+    fi
+    rm -f "$report" "$report.ready"
+}
+
+interrupt_once "$test_dir/engine.out" "$test_dir/engine-all.out" 1
+interrupt_once "$test_dir/plan.out" "$test_dir/plan-all.out" 0
+
+publish_after_rename() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    function mv() {
+        command mv "$@"
+        local status=$?
+        if (( status == 0 )); then
+            # Model GNU timeout delivering group TERM after rename(2) has
+            # committed but before the external mv reports its status.
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status != 0 || term_pending == 0 )); then
+        echo "post-rename interruption was not treated as committed" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "post-rename destination was not published exactly once" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "post-rename temporary state survived" >&2
+        exit 1
+    fi
+
+    # append_ut_report does not own source cleanup; the consumer removes the
+    # source only after this committed return.
+    trap - TERM
+    unset -f mv
+    rm -f "$report" "$report.ready"
+}
+
+publish_after_rename "$test_dir/engine-after-rename.out" "$test_dir/engine-after-rename-all.out" 1
+publish_after_rename "$test_dir/plan-after-rename.out" "$test_dir/plan-after-rename-all.out" 0
+
+publish_with_cleanup_interruption() {
+    local report=$1
+    local destination=$2
+    local ready=$3
+    local before_delete=${4:-0}
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+    if [[ "$ready" == 1 ]]; then : > "$report.ready"; fi
+
+    term_pending=0
+    rm_interrupted=0
+    trap 'term_pending=1' TERM
+    function rm() {
+        if [[ "$*" == *".expected"* ]] &&
+            (( before_delete == 1 && rm_interrupted == 0 )); then
+            rm_interrupted=1
+            # Model TERM before unlink.  The retry must perform the cleanup
+            # after the pending trap has been recorded.
+            kill -TERM "$$"
+            return 143
+        fi
+        command rm "$@"
+        local status=$?
+        if (( status == 0 && before_delete == 0 && rm_interrupted == 0 )) &&
+            [[ "$*" == *".expected"* ]]; then
+            # The publication has already committed.  Model TERM after the
+            # expected hard link is removed but before rm reports status.
+            rm_interrupted=1
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status != 0 || term_pending == 0 )); then
+        echo "cleanup interruption changed the committed status" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing\nfirst\nsecond' ]]; then
+        echo "cleanup interruption duplicated or lost the report" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "cleanup interruption left transaction state" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f rm
+    rm -f "$report" "$report.ready"
+}
+
+publish_with_cleanup_interruption "$test_dir/engine-after-cleanup.out" "$test_dir/engine-after-cleanup-all.out" 1
+publish_with_cleanup_interruption "$test_dir/plan-after-cleanup.out" "$test_dir/plan-after-cleanup-all.out" 0
+publish_with_cleanup_interruption "$test_dir/engine-before-cleanup.out" "$test_dir/engine-before-cleanup-all.out" 1 1
+publish_with_cleanup_interruption "$test_dir/plan-before-cleanup.out" "$test_dir/plan-before-cleanup-all.out" 0 1
+
+link_after_creation_interruption() {
+    local report=$1
+    local destination=$2
+    printf 'existing\n' > "$destination"
+    printf 'first\nsecond\n' > "$report"
+
+    term_pending=0
+    trap 'term_pending=1' TERM
+    function ln() {
+        command ln "$@"
+        local status=$?
+        if (( status == 0 )); then
+            # The hard link exists, but publication has not started.  The
+            # failed transfer must remove both temporary names.
+            kill -TERM "$$"
+            return 143
+        fi
+        return "$status"
+    }
+    append_ut_report "$report" "$destination"
+    status=$?
+    if (( status == 0 || term_pending == 0 )); then
+        echo "link interruption was not reported as a failed transfer" >&2
+        exit 1
+    fi
+    if [[ "$(command cat "$destination")" != $'existing' ]]; then
+        echo "link interruption changed the destination" >&2
+        exit 1
+    fi
+    if compgen -G "$destination.tmp.*" > /dev/null; then
+        echo "link interruption left transaction state" >&2
+        exit 1
+    fi
+
+    trap - TERM
+    unset -f ln
+    rm -f "$report"
+}
+
+link_after_creation_interruption "$test_dir/engine-after-link.out" "$test_dir/engine-after-link-all.out"
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("interrupted report transfer harness failed: %v\n%s", err, output)
+	}
+}
+
+func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
+	scriptPath, err := filepath.Abs("summarize_ut_setup.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(t.TempDir(), "ut.json")
+	report := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=2s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster2","Output":"    MO_UT_SETUP fixture=shared-cluster phase=cluster-start duration=500ms status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster3","Output":"    MO_UT_SETUP fixture=shared-cluster phase=slow-start duration=1m2.5s status=ready\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster4","Output":"    MO_UT_SETUP fixture=shared-cluster phase=hour-start duration=1h2m3s status=ready\n"}`,
+		`null`,
+		`[]`,
+		`{"Action":"output","Package":"example/issues","Test":"TestIssue","Output":"    MO_UT_SETUP fixture=issue26875 phase=database-create duration=100ms status=error\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster5","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=service-start duration=3s status=ready wait=2s hold=5s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=10 phase=admission-release duration=1ms status=ready wait=2s hold=5s admission_released=true\n"}`,
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster6","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=cluster-construct duration=1ms status=ready\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=admission-acquire duration=100ms status=ready wait=100ms hold=100ms\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=1 pid=11 phase=service-start duration=4s status=ready wait=100ms hold=4.1s\n"}`,
+		"not json",
+	}, "\n")
+	runSummary := func(reportPath, report string) string {
+		t.Helper()
+		if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command("python3", scriptPath, reportPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("summarize setup timing: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+
+	text := runSummary(reportPath, report)
+	if !strings.Contains(text, "ignored malformed JSON lines=1 (report may be truncated by cancellation)") {
+		t.Fatalf("truncated report warning missing: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=cluster-start count=2 total=2.50s max=2.00s") {
+		t.Fatalf("missing cumulative setup summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=slow-start count=1 total=1.04m max=1.04m") {
+		t.Fatalf("missing compound duration summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=shared-cluster phase=hour-start count=1 total=62.05m max=62.05m") {
+		t.Fatalf("missing hour duration summary: %s", text)
+	}
+	if !strings.Contains(text, "fixture=issue26875 phase=database-create count=1 total=100.00ms max=100.00ms errors=1") {
+		t.Fatalf("missing setup error summary: %s", text)
+	}
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=2 admission_wait(total=2.10s max=2.00s) service_start(total=7.00s max=4.00s) admission_hold_observed_max=5.00s admission_unreleased_observed=1 admission_release_evidence=partial slowest_completed_admission_waits=2.00s:example/cluster:TestCluster5 pid=10 cluster=1,100.00ms:example/cluster:TestCluster6 pid=11 cluster=1") {
+		t.Fatalf("missing embedded cluster diagnosis: %s", text)
+	}
+
+	// Reusing a cluster object after a successful Close creates a new
+	// admission lease with the same (pid, cluster_id).  The old release must
+	// not make the second, still-active lease look released.
+	reacquired := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "reacquired.json"), reacquired)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
+		t.Fatalf("reacquired lease was not reported as active: %s", text)
+	}
+
+	// Once that second lease is released, the current state must converge back
+	// to zero rather than retaining a stale unreleased generation.
+	released := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestCluster","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=2s status=ready wait=2s hold=2s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-acquire duration=3s status=ready wait=3s hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=7 pid=20 phase=admission-release duration=1ms status=ready wait=3s hold=3s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "released.json"), released)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_wait(total=5.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=0 admission_release_evidence=complete") {
+		t.Fatalf("reacquired lease was not accounted for: %s", text)
+	}
+
+	// A release record can survive while its acquire record is truncated.  The
+	// real release event carries hold metadata, so this must remain unknown/
+	// partial rather than being promoted to a completed lease.
+	releaseOnly := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestReleaseOnly","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=8 pid=21 phase=admission-release duration=1ms status=ready wait=2s hold=2s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "release-only.json"), releaseOnly)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 admission_hold_observed_max=2.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
+		t.Fatalf("release-only record was promoted to complete: %s", text)
+	}
+
+	// A hold followed by a release is equally insufficient when the matching
+	// acquire event is absent from the captured prefix/suffix.
+	holdThenRelease := strings.Join([]string{
+		`{"Action":"output","Package":"example/cluster","Test":"TestHoldThenRelease","Output":"    MO_UT_SETUP fixture=embedded-cluster cluster_id=9 pid=22 phase=service-start duration=3s status=ready hold=3s admission_released=false\n    MO_UT_SETUP fixture=embedded-cluster cluster_id=9 pid=22 phase=admission-release duration=1ms status=ready hold=3s admission_released=true\n"}`,
+	}, "\n")
+	text = runSummary(filepath.Join(t.TempDir(), "hold-then-release.json"), holdThenRelease)
+	if !strings.Contains(text, "embedded-cluster diagnosis: clusters=1 service_start(total=3.00s max=3.00s) admission_hold_observed_max=3.00s admission_unreleased_observed=1 admission_release_evidence=partial") {
+		t.Fatalf("hold-then-release record was promoted to complete: %s", text)
+	}
+}
+
 func writeScopeFixture(t *testing.T, root, name, contents string) {
 	t.Helper()
 

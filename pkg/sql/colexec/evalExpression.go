@@ -603,6 +603,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.folded = true
 		expr.foldedNull = true
 		if params := proc.GetPrepareParams(); params != nil {
+			if err = expr.null.SetRuntimeStringDomainWithMP(
+				params.GetRuntimeStringDomainAt(expr.pos), proc.Mp()); err != nil {
+				return nil, err
+			}
 			if err = expr.null.SetStringSource(params.GetStringSourceAt(expr.pos)); err != nil {
 				return nil, err
 			}
@@ -620,7 +624,17 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
-		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
+		runtimeDomain := types.RuntimeStringInherit
+		if params := proc.GetPrepareParams(); params != nil {
+			runtimeDomain = params.GetRuntimeStringDomainAt(expr.pos)
+		}
+		if runtimeDomain == types.RuntimeStringInherit && proc.GetPrepareParamIsBinaryString(expr.pos) {
+			runtimeDomain = types.RuntimeStringBinary
+		}
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		if params := proc.GetPrepareParams(); params != nil {
 			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
@@ -720,9 +734,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
-	isBinaryString := false
-	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
-		isBinaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+	runtimeDomain := types.RuntimeStringInherit
+	if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
+		runtimeDomain, err = resolveStringDomain(expr.name, expr.system, expr.global)
 		if err != nil {
 			return nil, err
 		}
@@ -743,7 +757,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
-			expr.null.SetIsBinaryString(isBinaryString)
+			err = expr.null.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+			if err != nil {
+				return nil, err
+			}
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -778,7 +795,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
-		expr.vec.SetIsBinaryString(isBinaryString)
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
@@ -1833,9 +1853,10 @@ func generateConstExpressionExecutor(
 			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
-			// Distinguish binary with non-binary string.
+			// A folded CAST keeps its resolved SQL binary subtype so downstream
+			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_geometry {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
@@ -2410,6 +2431,14 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "round", "truncate":
+				// Precision endpoints do not bound ROUND's interior extrema or
+				// TRUNCATE's sign-dependent precision direction. Only derive a
+				// range when precision is independent of the row value.
+				if len(args) > 1 && !isConst(args[1]) {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "isnull", "is_null":
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:

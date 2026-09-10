@@ -48,6 +48,21 @@ type testReporter interface {
 	Fatalf(format string, args ...any)
 }
 
+// testLogger is optional so the shared fixture helpers remain usable with the
+// small reporters used by unit tests. *testing.T implements it, which lets
+// integration-test output explain where fixture setup time was spent without
+// coupling the lifecycle code to testing.T.
+type testLogger interface {
+	Logf(format string, args ...any)
+}
+
+func logTestSetup(t testReporter, format string, args ...any) {
+	t.Helper()
+	if logger, ok := t.(testLogger); ok {
+		logger.Logf(format, args...)
+	}
+}
+
 func (c *SharedTestCluster) Run(
 	t testReporter,
 	init func() (Cluster, error),
@@ -61,14 +76,34 @@ func (c *SharedTestCluster) Run(
 		return
 	}
 
+	initialized := false
+	initStarted := time.Now()
 	c.once.Do(func() {
+		initialized = true
 		c.cluster, c.err = init()
 		if c.err == nil && c.cluster == nil {
 			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
 		}
 	})
+	if initialized {
+		status := "ready"
+		if c.err != nil {
+			status = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
+			time.Since(initStarted), status)
+	}
 	if c.err != nil && c.cluster != nil {
+		cleanupStarted := time.Now()
 		cleanupErr := c.cluster.Close()
+		cleanupStatus := "ready"
+		if cleanupErr != nil {
+			cleanupStatus = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
+			time.Since(cleanupStarted), cleanupStatus)
 		if cleanupErr == nil {
 			c.cluster = nil
 		} else {
@@ -132,18 +167,32 @@ const (
 	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
 )
 
-func startBasicCluster(cnCount int) (Cluster, error) {
+func startBasicCluster(
+	cnCount int,
+	trace func(phase string, duration time.Duration, err error),
+) (Cluster, error) {
+	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
 		WithPreStart(adjustBasicClusterService),
 	)
+	if trace != nil {
+		trace("cluster-start", time.Since(started), err)
+	}
 	if err != nil {
 		return c, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), basicClusterTaskServiceReadyTimeout)
 	defer cancel()
+	readyStarted := time.Now()
 	if err := waitBasicClusterTaskServices(ctx, c, cnCount); err != nil {
+		if trace != nil {
+			trace("task-services-ready", time.Since(readyStarted), err)
+		}
 		return cleanupClusterOnError(c, err)
+	}
+	if trace != nil {
+		trace("task-services-ready", time.Since(readyStarted), nil)
 	}
 	return c, nil
 }
@@ -238,6 +287,18 @@ func waitTaskServiceReady(
 	}
 }
 
+func basicClusterSetupTracer(t testReporter, cnCount int) func(string, time.Duration, error) {
+	return func(phase string, duration time.Duration, err error) {
+		status := "ready"
+		if err != nil {
+			status = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=%s cn_count=%d duration=%s status=%s",
+			phase, cnCount, duration, status)
+	}
+}
+
 // RunBaseClusterTests starting an integration test for a 1 log, 1tn, 2cn base cluster is very slow
 // due to the amount of time it takes to start a cluster (10-20s) when there are a very large number
 // of test cases. So for some special cases that don't need to be restarted, a basicCluster can be
@@ -248,7 +309,7 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(basicClusterCNCount)
+		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
 	}, func(c Cluster) {
 		fn(c)
 	})
@@ -264,7 +325,7 @@ func RunSingleCNBaseClusterTests(
 ) {
 	t.Helper()
 	singleCNClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(1)
+		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
 	}, func(c Cluster) {
 		fn(c)
 	})

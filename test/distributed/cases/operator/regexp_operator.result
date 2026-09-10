@@ -220,7 +220,7 @@ insert into t1 values(20 , "The Sixteen Men of Tain");
 SELECT a, b
 FROM t1
 WHERE b REGEXP '^Power';
-➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+➤ a[4,32,0]  ¦  b[12,100,0]  𝄀
 1  ¦  PowerSlave  𝄀
 2  ¦  Powerage
 drop table t1;
