@@ -890,6 +890,9 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return nil, err
 	}
+	if err = c.unresolvedIndexHintError(); err != nil {
+		return nil, err
+	}
 	if err = c.lockTable(); err != nil {
 		return nil, err
 	}
@@ -924,6 +927,32 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 		startedSources = append(startedSources, source)
 	}
 	return startedSources, nil
+}
+
+// unresolvedIndexHintError restores the ordinary MySQL error after the
+// metadata lock has established that no concurrent definition change made the
+// hinted index visible. It runs before sources start, so an invalid hint cannot
+// execute the base-table plan produced while the hint was unresolved.
+func (c *Compile) unresolvedIndexHintError() error {
+	query := c.pn.GetQuery()
+	for _, hint := range query.GetUnresolvedIndexHints() {
+		if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
+			return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
+		}
+		return moerr.NewErrKeyDoesNotExist(c.proc.Ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
+	}
+	return nil
+}
+
+func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {
+	if query == nil {
+		return
+	}
+	for _, hint := range query.GetUnresolvedIndexHints() {
+		if hint != nil && hint.GetTable() != nil {
+			c.appendMetaTables(hint.GetTable())
+		}
+	}
 }
 
 func closeMaterializedSourceGenerations(sources []*materialized.Source) {
