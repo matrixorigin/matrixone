@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 
@@ -82,23 +83,58 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 		builder.aggSpillMem = 1 << 30
 		return builder, builder.qry.Nodes[2], stats
 	}
+	setAlgorithm := func(builder *QueryBuilder, algorithm string) {
+		ctx := builder.compCtx.(*statsCacheCompilerContext)
+		base := *ctx.MockCompilerContext
+		base.ResolveVariableFunc = nil
+		ctx.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+			if name == windowPartitionAlgorithmVariable {
+				return algorithm, nil
+			}
+			return base.ResolveVariable(name, isSystemVar, isGlobalVar)
+		}
+	}
 
-	builder, window, stats := newBuilder(t)
+	builder, _, stats := newBuilder(t)
 
 	builder.determineWindowPartitionAlgorithms(2)
-	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm,
-		"the blocking HASH implementation must not be selected before its end-to-end acceptance gate passes")
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, builder.qry.Nodes[1].PartitionAlgorithm)
+	require.Equal(t, int64(1<<30), builder.qry.Nodes[1].SpillMem)
 
 	stats.NdvMap["k"] = 1 << 16
 	builder.qry.Nodes[1].PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
 	builder.determineWindowPartitionAlgorithms(2)
 	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
 
-	t.Run("candidate admission is independently testable while auto is disabled", func(t *testing.T) {
-		builder, window, _ = newBuilder(t)
-		require.True(t, selectWindowHashPartition(builder, window))
+	t.Run("session override", func(t *testing.T) {
+		builder, _, stats := newBuilder(t)
+		setAlgorithm(builder, "SORT")
+		builder.determineWindowPartitionAlgorithms(2)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+
+		stats.NdvMap["k"] = 1 << 16
+		setAlgorithm(builder, "HASH")
+		builder.qry.Nodes[1].PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
+		builder.determineWindowPartitionAlgorithms(2)
 		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, builder.qry.Nodes[1].PartitionAlgorithm)
-		require.Equal(t, int64(1<<30), builder.qry.Nodes[1].SpillMem)
+
+		setAlgorithm(builder, "SORT")
+		builder.determineWindowPartitionAlgorithms(2)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+	})
+
+	t.Run("forced hash keeps eligibility and memory gates", func(t *testing.T) {
+		builder, _, _ := newBuilder(t)
+		setAlgorithm(builder, "HASH")
+		builder.qry.Nodes[1].OrderBy[0].Expr.Typ.Id = int32(types.T_char)
+		builder.determineWindowPartitionAlgorithms(2)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+
+		builder, _, _ = newBuilder(t)
+		setAlgorithm(builder, "HASH")
+		builder.aggSpillMem = 1
+		builder.determineWindowPartitionAlgorithms(2)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
 	})
 
 	for _, test := range []struct {
@@ -132,6 +168,34 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 			test.mutate(builder, window, stats)
 			require.False(t, selectWindowHashPartition(builder, window))
 			require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+		})
+	}
+}
+
+func TestResolveWindowPartitionAlgorithm(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value interface{}
+		err   error
+		want  windowPartitionAlgorithm
+	}{
+		{name: "nil context", want: windowPartitionAlgorithmCost},
+		{name: "cost", value: "COST", want: windowPartitionAlgorithmCost},
+		{name: "sort", value: "sort", want: windowPartitionAlgorithmSort},
+		{name: "hash", value: "HASH", want: windowPartitionAlgorithmHash},
+		{name: "unknown value", value: "MERGE", want: windowPartitionAlgorithmCost},
+		{name: "wrong type", value: int64(1), want: windowPartitionAlgorithmCost},
+		{name: "resolver error", err: errors.New("missing variable"), want: windowPartitionAlgorithmCost},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "nil context" {
+				require.Equal(t, test.want, resolveWindowPartitionAlgorithm(nil))
+				return
+			}
+			ctx := &MockCompilerContext{ResolveVariableFunc: func(string, bool, bool) (interface{}, error) {
+				return test.value, test.err
+			}}
+			require.Equal(t, test.want, resolveWindowPartitionAlgorithm(ctx))
 		})
 	}
 }

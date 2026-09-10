@@ -3748,6 +3748,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("version_compile_zlib"),
 		Default:           "",
 	},
+	"window_partition_algorithm": {
+		Name:              "window_partition_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
+		Default:           "COST",
+	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",
 		Scope:             ScopeBoth,
