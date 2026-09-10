@@ -1914,6 +1914,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
+		if err = preflightOrderedPercentileConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
 		if isLocalPreAggregationGroup(node, childNode) {

@@ -1920,6 +1920,41 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	return arg
 }
 
+// preflightOrderedPercentileConfigs evaluates runtime percentile arguments
+// before the aggregate's child scopes are compiled. constructGroup follows the
+// operator-construction convention of panicking on errors; using that path for
+// a user-supplied prepared-statement value both decorates the client error with
+// a panic stack and strands the scopes that were already constructed.
+func preflightOrderedPercentileConfigs(node *plan.Node, proc *process.Process) error {
+	for _, expr := range node.AggList {
+		f := expr.GetF()
+		if f == nil {
+			continue
+		}
+		switch f.Func.ObjName {
+		case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+			if len(f.Args) != 2 || !expressionContainsParam(f.Args[1]) {
+				continue
+			}
+			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func expressionContainsParam(expr *plan.Expr) bool {
+	found := false
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if current.GetP() != nil {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
 	args := f.Args
 	switch f.Func.ObjName {
@@ -1978,27 +2013,38 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
-		if len(args) != 2 {
-			panic(moerr.NewInvalidInputNoCtxf(
-				"%s requires a value and percentile argument", f.Func.ObjName))
-		}
-		configExpr := args[1]
-		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
-			panic(err)
-		}
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
 			panic(err)
 		}
-		defer free()
-		percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
-		if err != nil {
-			panic(err)
-		}
-		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
-		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
+		return args, config
 	}
 	return args, nil
+}
+
+func constructOrderedPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value and percentile argument", f.Func.ObjName)
+	}
+	configExpr := args[1]
+	if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {

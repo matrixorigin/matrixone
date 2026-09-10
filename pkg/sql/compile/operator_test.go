@@ -415,6 +415,31 @@ func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 	}
 }
 
+func TestPreflightOrderedPercentileConfigsReturnsPreparedValueError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("1.5"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), plan2.NamePercentileDisc,
+		[]*plan.Expr{value, percentile})
+	require.NoError(t, err)
+
+	err = preflightOrderedPercentileConfigs(&plan.Node{
+		AggList: []*plan.Expr{bound},
+	}, proc)
+	require.EqualError(t, err,
+		"invalid input: percentile argument of percentile_disc must be finite and in [0,1], got 1.5")
+}
+
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -113,7 +113,10 @@ the aggregate.
 
 At physical construction, the compiler evaluates `p` to one singleton vector,
 checks NULL, finiteness, and range, and removes it from the row argument list.
-For exact ordered percentiles, immutable extra configuration is encoded as:
+A direct marker is preflighted before compiling the aggregate's child scopes,
+so an invalid execution value follows the ordinary user-error path without a
+panic stack or partially constructed scopes. For exact ordered percentiles,
+immutable extra configuration is encoded as:
 
 ```text
 byte 0       ordered-percentile config version (1)
@@ -137,8 +140,9 @@ transitions are:
    direct marker, including the binder-inserted cast, and marks the plan
    ineligible for the ordinary prepare-time physical compile cache.
 2. Before each `EXECUTE`, parameter decoding creates the current process-owned
-   parameter vector. The compiler evaluates the current `p` while constructing
-   that execution's aggregate configuration.
+   parameter vector. The compiler preflights the current `p` before child-scope
+   construction, then uses it while constructing that execution's aggregate
+   configuration.
 3. A percentile-marker plan is also ineligible for runtime-specialization cache
    lookup and installation. If an earlier plan generation left a runtime
    specialization entry, it is cleared before execution. This rule also applies
@@ -148,9 +152,9 @@ transitions are:
    statement path. A repeated execution, whether `p` is equal or different,
    constructs a fresh physical aggregate from the current vector.
 5. NULL, conversion failure, NaN/infinity, or an out-of-range `p` fails before
-   query execution and installs no physical or runtime-specialization cache
-   entry. The parameter vector and partial compile follow normal error cleanup.
-   A subsequent valid execution returns to step 2; it cannot observe the failed
+   child scopes are compiled and installs no physical or runtime-specialization
+   cache entry. The original user error is returned without panic detail. A
+   subsequent valid execution returns to step 2; it cannot observe the failed
    value or a prior successful value.
 6. Schema/metadata rebuild replaces the logical prepared-plan generation and
    clears the same runtime cache before the new generation is considered.
@@ -305,7 +309,7 @@ does not substitute for traceable approval of this design revision.
 | Contract | Evidence |
 |---|---|
 | constant/direct-marker binding and row-dependent rejection | `pkg/sql/plan/prepared_aggregate_params_test.go`, `pkg/sql/plan/base_binder_approx_percentile_test.go` |
-| per-execution evaluation and exact physical config | `pkg/sql/compile/operator_test.go` (`TestConstructAggregateConfigPreparedPercentile`) |
+| per-execution evaluation, preflighted user errors, and exact physical config | `pkg/sql/compile/operator_test.go` (`TestConstructAggregateConfigPreparedPercentile`, `TestPreflightOrderedPercentileConfigsReturnsPreparedValueError`) |
 | no ordinary or runtime-specialization compile reuse | `pkg/frontend/prepared_percentile_cache_test.go` |
 | repeated values and invalid-then-valid prepared execution | `test/distributed/cases/function/func_aggr_ordered_set.test` |
 | rank, direction, NULL, groups, native numeric order, exact decimal and NaN behavior | `pkg/sql/colexec/aggexec/ordered_percentile_test.go` |
