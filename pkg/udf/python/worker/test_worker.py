@@ -63,6 +63,20 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "offset_width must be an integer"):
             worker._field("result", {"type_id": worker.INT64, "offset_width": "32"})
 
+    def test_malformed_control_is_reported_as_protocol_error(self):
+        with self.assertRaisesRegex(ValueError, "PROTOCOL: invalid control UTF-8"):
+            worker._decode_control(b"\xff")
+        with self.assertRaisesRegex(ValueError, "PROTOCOL: invalid control JSON"):
+            worker._decode_control(b"{")
+        self.assertEqual(
+            "PROTOCOL: invalid control JSON",
+            worker._safe_error(ValueError("PROTOCOL: invalid control JSON")),
+        )
+
+    def test_malformed_arrow_payload_is_reported_as_protocol_error(self):
+        with self.assertRaisesRegex(ValueError, "PROTOCOL: execution payload is not a valid Arrow stream"):
+            worker._deserialize_record_batch(b"not-an-arrow-stream")
+
     def test_closing_control_preserves_zero_last_sequence(self):
         fence = {
             "account_id": 1,
