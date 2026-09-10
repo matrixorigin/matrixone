@@ -32,15 +32,15 @@ import (
 
 // TestArrowLoadBVT is the embedded public-path BVT suite for `LOAD DATA ...
 // format='arrow'` (issue #23684, design doc sections 14 and 18). It runs every
-// subtest against one dedicated 1-CN cluster with S3 explicitly enabled and uses
-// the real MySQL protocol rather than the internal executor. Local File and Stream
-// and explicitly opts in to every Arrow surface it exercises.
+// subtest against one dedicated 1-CN cluster without Arrow-specific settings and
+// uses the real MySQL protocol rather than the internal executor. Local File and
+// Stream, local stage, and S3-backed stage therefore prove default availability.
 // It proves type-matrix correctness, option/DDL rejection, multi-object
-// atomicity, explicit transactions, cross-session visibility, and local gate
-// behavior. Standard distributed CI, mixed binaries, and real cloud providers
+// atomicity, explicit transactions, and cross-session visibility. Focused gate
+// tests, standard distributed CI, mixed binaries, and real cloud providers
 // remain separate release evidence.
 func TestArrowLoadBVT(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, true, false)
+	c := startArrowLoadClusterWithDefaults(t, 1)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_bvt")
 	mustExec(t, db, "use arrow_bvt")
@@ -61,7 +61,6 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
 	t.Run("CommitPhaseFailureRollback", func(t *testing.T) { testArrowCommitPhaseFailureRollback(t, db) })
 	t.Run("LocalMinIO", func(t *testing.T) { testArrowLoadLocalMinIO(t, db) })
-
 	// Restart is deliberately last: it destroys every existing SQL connection
 	// while preserving the cluster data directory. No later subtest may depend on
 	// the original CN generation.
@@ -123,7 +122,7 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 // before touching the file at all. This checks the client-visible opt-out
 // contract, but it does not replace a true mixed-binary-version rehearsal.
 func TestArrowLoadGateDisabled(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 1)
+	c := startArrowLoadCluster(t, 1, false, true, true)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_gate_off")
 	mustExec(t, db, "use arrow_gate_off")
@@ -136,12 +135,12 @@ func TestArrowLoadGateDisabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
-// any network I/O. Dummy, unreachable credentials are sufficient proof of the
-// ordering: the statement must be rejected by configuration rather than
+// testArrowLoadGateS3Disabled proves the explicit S3 kill switch fails closed
+// before any network I/O. Dummy, unreachable credentials are sufficient proof
+// of the ordering: the statement must be rejected by configuration rather than
 // attempting HeadObject.
-func TestArrowLoadGateS3Disabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, false, false)
+func testArrowLoadGateS3Disabled(t *testing.T, c embed.Cluster) {
+	t.Helper()
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_s3_gate_off")
 	mustExec(t, db, "use arrow_s3_gate_off")
@@ -157,23 +156,35 @@ func TestArrowLoadGateS3Disabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateDistributedDisabledSoftFallback proves DistributedEnabled=false
-// is a soft fallback (silently serialize), not a hard rejection.
-func TestArrowLoadGateDistributedDisabledSoftFallback(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true /*enabled*/, true /*s3Enabled*/, false /*distributedEnabled*/)
+// TestArrowLoadDistributedDisabledSoftFallback proves the explicit distributed
+// rollback switch is a soft fallback (silently serialize), not a hard rejection.
+func TestArrowLoadDistributedDisabledSoftFallback(t *testing.T) {
+	c := startArrowLoadCluster(t, 1, true, true, false)
 	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_distributed_off")
-	mustExec(t, db, "use arrow_distributed_off")
-	mustExec(t, db, "create table t(id bigint not null, name varchar(50))")
+	testArrowLoadDistributedDisabledSoftFallback(t, db)
+}
+
+// testArrowLoadDistributedDisabledSoftFallback proves DistributedEnabled=false
+// is a soft fallback (silently serialize), not a hard rejection. Its caller
+// provisions a dedicated cluster with the distributed kill switch disabled, so
+// the scenario does not mutate any shared cluster configuration.
+func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
+	const databaseName = "arrow_distributed_off"
+	const tableName = "`arrow_distributed_off`.`t`"
+	mustExec(t, db, "create database if not exists "+databaseName)
+	t.Cleanup(func() {
+		mustExec(t, db, "drop database if exists "+databaseName)
+	})
+	mustExec(t, db, "create table "+tableName+"(id bigint not null, name varchar(50))")
 
 	dir := t.TempDir()
 	fixtureIDName(t, dir, "part1.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 	fixtureIDName(t, dir, "part2.arrow", containerFile, [][]idNameRow{{{id: 2, name: "b"}}})
 
 	mustExec(t, db, fmt.Sprintf(
-		"load data infile {'filepath'='%s','format'='arrow'} into table t parallel 'true'",
-		filepath.Join(dir, "part*.arrow")))
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from t"))
+		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
+		filepath.Join(dir, "part*.arrow"), tableName))
+	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
 }
 
 func testArrowTypeMatrixNumeric(t *testing.T, db *sql.DB) {

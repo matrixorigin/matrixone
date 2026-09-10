@@ -17,6 +17,7 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -25,6 +26,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	issue26111SourceDB       = "issue_26111_source"
+	issue26111BranchDB       = "issue_26111_branch"
+	issue26111SnapshotBranch = "issue_26111_snapshot_branch"
+	issue26111AccountBranch  = "issue_26111_account_branch"
+	issue26111SnapshotName   = "issue_26111_snapshot"
+	issue26111ExistingTarget = "issue_26111_existing"
+	issue26111TargetAccount  = "i26111t"
 )
 
 func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
@@ -38,13 +49,45 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 	_, _ = db.ExecContext(ctx, statement)
 }
 
-func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
-	c, err := embed.StartTestCluster(embed.WithCNCount(1))
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
+func cleanupIssue26111Catalog(ctx context.Context, db *sql.DB) error {
+	statements := []string{
+		"drop snapshot if exists " + issue26111SnapshotName,
+		"drop database if exists `" + issue26111BranchDB + "`",
+		"drop database if exists `" + issue26111SnapshotBranch + "`",
+		"drop database if exists `" + issue26111ExistingTarget + "`",
+		"drop database if exists `" + issue26111SourceDB + "`",
+		"drop account if exists `" + issue26111TargetAccount + "`",
 	}
-	require.NoError(t, err)
-	require.NotNil(t, c)
+	var cleanupErr error
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	return cleanupErr
+}
+
+func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+		runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t, c)
+	})
+}
+
+func runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T, c embed.Cluster) {
+	t.Helper()
+
+	// RunSingleCNBaseClusterTests holds the shared fixture mutex while this
+	// callback executes. Register the discard at the test boundary so a dirty
+	// fixture is closed only after Run has released that mutex.
+	fixtureDirty := true
+	t.Cleanup(func() {
+		if !fixtureDirty {
+			return
+		}
+		if closeErr := embed.CloseSingleCNBaseClusterTests(); closeErr != nil {
+			t.Errorf("close dirty shared single-CN fixture: %v", closeErr)
+		}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -60,19 +103,37 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 	require.NoError(t, waitSystemBootstrap(ctx, db))
 
 	const (
-		sourceDB       = "issue_26111_source"
-		branchDB       = "issue_26111_branch"
-		snapshotBranch = "issue_26111_snapshot_branch"
-		accountBranch  = "issue_26111_account_branch"
-		snapshotName   = "issue_26111_snapshot"
-		existingTarget = "issue_26111_existing"
-		targetAccount  = "i26111t"
+		sourceDB       = issue26111SourceDB
+		branchDB       = issue26111BranchDB
+		snapshotBranch = issue26111SnapshotBranch
+		accountBranch  = issue26111AccountBranch
+		snapshotName   = issue26111SnapshotName
+		existingTarget = issue26111ExistingTarget
+		targetAccount  = issue26111TargetAccount
 	)
-	// This regression owns a fresh embedded cluster and its private data path.
-	// Closing that cluster makes all SQL state unreachable, so SQL-level pre-clean
-	// and bulk teardown would only duplicate lifecycle ownership. In particular,
-	// DROP ACCOUNT expands with the tenant catalog and can exhaust a shared cleanup
-	// deadline before the remaining objects are visited.
+	// The single-CN base fixture is shared with issue 26114. Every object created
+	// here therefore has an explicit reset path; the regression keeps its
+	// cross-database and cross-account oracles while leaving no catalog state for
+	// the next scenario.
+	preCleanFailed := false
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
+	if cleanupErr := cleanupIssue26111Catalog(cleanupCtx, db); cleanupErr != nil {
+		preCleanFailed = true
+		require.NoError(t, cleanupErr)
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if cleanupErr := cleanupIssue26111Catalog(cleanupCtx, db); cleanupErr != nil {
+			fixtureDirty = true
+			t.Errorf("issue 26111 catalog cleanup failed: %v", cleanupErr)
+			return
+		}
+		if !preCleanFailed {
+			fixtureDirty = false
+		}
+	}()
 
 	execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
 	execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`a` (id int primary key, b_id int)")

@@ -51,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -71,7 +70,8 @@ func doFaultPoint(
 		podResp []fj.PodResponse
 	)
 
-	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(proc.Ctx, sql); err != nil {
+	ctx := process.ContextWithWarningSink(proc.Ctx, proc.WarningSink)
+	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql); err != nil {
 		return false, err
 	}
 
@@ -171,6 +171,12 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			if funcName != "round" && funcName != "truncate" {
+				return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+			}
+			return opBinaryFixedFixedToFixed[T, int64, T](ivecs, result, proc, length, cb, selectList)
+		}
+		if ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
@@ -1170,13 +1176,19 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionStrParameter(ivecs[i])
 	}
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sp, null := vecs[0].GetStrValue(i)
 		if null {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -1209,7 +1221,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			return err
 		}
 	}
-	return nil
+	return setConcatWsStringResultDomain(ivecs, result, proc)
 }
 
 func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6283,17 +6295,47 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func formatCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		// if the first param's type is time type. return failed.
-		if inputs[0].Oid.IsDateRelate() {
+	if len(inputs) < 2 || len(inputs) > 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	// FORMAT's first argument has two observable numeric domains. Keep exact
+	// integer/DECIMAL vectors typed so execution can apply MySQL's decimal
+	// half-up rounding; strings and floating-point values continue through the
+	// existing approximate (ties-to-even) path. Do not infer this from the
+	// rendered text: scientific notation is syntax, not a type contract.
+	if inputs[0].IsNumeric() {
+		overloadID := len(inputs) - 2
+		if overloadID < 0 || overloadID >= len(overloads) {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		return fixedTypeMatch(overloads, inputs)
+		targets := append([]types.Type(nil), inputs...)
+		needsCast := false
+		for i := 1; i < len(targets); i++ {
+			if targets[i].Oid.IsMySQLString() {
+				continue
+			}
+			targets[i] = formattedScalarStringType(targets[i])
+			SetTargetScaleFromSource(&inputs[i], &targets[i])
+			needsCast = true
+		}
+		if needsCast {
+			return newCheckResultWithCast(overloadID, targets)
+		}
+		return newCheckResultWithSuccess(overloadID)
 	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
+	// If the first parameter is a date-like value, preserve the established
+	// invalid-argument contract instead of silently stringifying it.
+	if inputs[0].Oid.IsDateRelate() {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
 }
 
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, false)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6417,6 +6459,10 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 }
 
 func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, true)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6448,6 +6494,98 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 	}
 	return nil
+}
+
+func formatWithNumericFirst(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	withLocale bool,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	scale := vector.GenerateFunctionStrParameter(ivecs[1])
+	var locale vector.FunctionParameterWrapper[types.Varlena]
+	if withLocale {
+		locale = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		number, exact, nullNumber, err := formatNumericValueAt(ivecs[0], i)
+		if err != nil {
+			return err
+		}
+		scaleValue, nullScale := scale.GetStrValue(i)
+		if nullNumber || nullScale {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		localeValue := "en_US"
+		if withLocale {
+			localeBytes, nullLocale := locale.GetStrValue(i)
+			if nullLocale {
+				localeValue = "en_US"
+			} else {
+				localeValue = string(localeBytes)
+			}
+		}
+
+		var formatted string
+		if exact {
+			formatted, err = format.GetNumberFormatExact(number, string(scaleValue), localeValue)
+		} else {
+			formatted, err = format.GetNumberFormat(number, string(scaleValue), localeValue)
+		}
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(formatted), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, isNull bool, err error) {
+	if v.IsConstNull() || v.GetNulls().Contains(row) {
+		return "", false, true, nil
+	}
+	typ := v.GetType()
+	idx := int(row)
+	switch typ.Oid {
+	case types.T_bit:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](v, idx)), 10), true, false, nil
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int16](v, idx)), 10), true, false, nil
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int32](v, idx)), 10), true, false, nil
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](v, idx), 10), true, false, nil
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint8](v, idx)), 10), true, false, nil
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint16](v, idx)), 10), true, false, nil
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](v, idx)), 10), true, false, nil
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](v, idx).Format(typ.Scale), true, false, nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx).Format(typ.Scale), true, false, nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx).Format(typ.Scale), true, false, nil
+	default:
+		return "", false, false, moerr.NewInvalidInputNoCtxf("FORMAT numeric input has unsupported type %s", typ.Oid)
+	}
 }
 
 const (
@@ -6757,28 +6895,6 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	return nil
 }
 
-// Slice from left to right, starting from 0
-func getSliceFromLeft(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[offset:]
-	return string(substrRune)
-}
-
-// Cut slices from right to left, starting from 1
-func getSliceFromRight(s string, offset int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset > elemsize {
-		return ""
-	}
-	substrRune := sourceRune[elemsize-offset:]
-	return string(substrRune)
-}
-
 func StrCmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
 }
@@ -6793,72 +6909,33 @@ func strcmp(s1, s2 string) (int8, error) {
 	return 1, nil
 }
 
-func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := vs.GetStrValue(i)
 		s, null2 := starts.GetValue(i)
-
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var r string
-			if s > 0 {
-				r = getSliceFromLeft(functionUtil.QuickBytesToStr(v), s-1)
-			} else if s < 0 {
-				r = getSliceFromRight(functionUtil.QuickBytesToStr(v), -s)
-			} else {
-				r = ""
-			}
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
-				return err
-			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		if err = rs.AppendBytes(substringByDomain(v, s, 0, false, binary), false); err != nil {
+			return err
 		}
 	}
-	return nil
-}
-
-// Cut the slice with length from left to right, starting from 0
-func getSliceFromLeftWithLength(s string, offset int64, length int64) string {
-	if offset < 0 {
-		return ""
-	}
-	return getSliceOffsetLen(s, offset, length)
-}
-
-func getSliceOffsetLen(s string, offset int64, length int64) string {
-	sourceRune := []rune(s)
-	elemsize := int64(len(sourceRune))
-	if offset < 0 {
-		offset += elemsize
-		if offset < 0 {
-			return ""
-		}
-	}
-	if offset >= elemsize {
-		return ""
-	}
-
-	if length <= 0 {
-		return ""
-	} else {
-		end := offset + length
-		if end > elemsize {
-			end = elemsize
-		}
-		substrRune := sourceRune[offset:end]
-		return string(substrRune)
-	}
-}
-
-// From right to left, cut the slice with length from 1
-func getSliceFromRightWithLength(s string, offset int64, length int64) string {
-	return getSliceOffsetLen(s, -offset, length)
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 // Binary SUBSTRING uses byte offsets. Routing binary values through the text
@@ -6957,31 +7034,69 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := vs.GetStrValue(i)
 		s, null2 := starts.GetValue(i)
 		l, null3 := lens.GetValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			var r string
-			if s > 0 {
-				r = getSliceFromLeftWithLength(functionUtil.QuickBytesToStr(v), s-1, l)
-			} else if s < 0 {
-				r = getSliceFromRightWithLength(functionUtil.QuickBytesToStr(v), -s, l)
-			} else {
-				r = ""
-			}
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
-				return err
-			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		if err = rs.AppendBytes(substringByDomain(v, s, l, true, binary), false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func substringByDomain(value []byte, start, length int64, withLength, binary bool) []byte {
+	if binary {
+		left, right := substringBounds(len(value), start, length, withLength)
+		return value[left:right]
+	}
+	runes := []rune(functionUtil.QuickBytesToStr(value))
+	left, right := substringBounds(len(runes), start, length, withLength)
+	return functionUtil.QuickStrToBytes(string(runes[left:right]))
+}
+
+func substringBounds(total int, start, length int64, withLength bool) (left, right int) {
+	if start == 0 {
+		return 0, 0
+	}
+	total64 := int64(total)
+	var offset int64
+	if start > 0 {
+		offset = start - 1
+		if offset >= total64 {
+			return 0, 0
+		}
+	} else {
+		if start < -total64 {
+			return 0, 0
+		}
+		offset = total64 + start
+	}
+	end := total64
+	if withLength {
+		if length <= 0 {
+			return 0, 0
+		}
+		if length < total64-offset {
+			end = offset + length
+		}
+	}
+	return int(offset), int(end)
 }
 
 func subStrIndex(str, delim string, count int64) (string, error) {
@@ -7044,7 +7159,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 	return r
 }
 
-func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -7052,26 +7167,30 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 	typ := counts.GetType()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := vs.GetStrValue(i)
 		d, null2 := delims.GetStrValue(i)
 		c, null3 := counts.GetValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			r, err := subStrIndex(string(v), string(d), getCount(typ, c))
-			if err != nil {
-				return err
-			}
-
-			if err = rs.AppendBytes([]byte(r), false); err != nil {
-				return err
-			}
+			continue
+		}
+		r, err := subStrIndex(string(v), string(d), getCount(typ, c))
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(r), false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -7839,31 +7958,75 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList, nil)
 }
 
-func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single, nil)
+func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	haystacks := vector.GenerateFunctionStrParameter(ivecs[0])
+	needles := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	caseInsensitive := ivecs[0].GetType().Charset == types.CharsetUTF8
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		haystack, null1 := haystacks.GetStrValue(row)
+		needle, null2 := needles.GetStrValue(row)
+		if null1 || null2 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
+	}
+	return nil
 }
 
-func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var value []byte
+		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+			value = v1[:prefixLength(len(v1), v2)]
 		} else {
-			//TODO: Ignoring 4 switch cases: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/left.go#L38
-			res := evalLeft(functionUtil.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
-				return err
-			}
+			value = functionUtil.QuickStrToBytes(evalLeft(functionUtil.QuickBytesToStr(v1), v2))
+		}
+		if err = rs.AppendBytes(value, false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func prefixLength(total int, requested int64) int {
+	if requested <= 0 {
+		return 0
+	}
+	if requested >= int64(total) {
+		return total
+	}
+	return int(requested)
 }
 
 func evalLeft(str string, length int64) string {
@@ -7877,26 +8040,39 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
-func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var value []byte
+		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+			count := prefixLength(len(v1), v2)
+			value = v1[len(v1)-count:]
 		} else {
-			res := evalRight(functionUtil.QuickBytesToStr(v1), v2)
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
-				return err
-			}
+			value = functionUtil.QuickStrToBytes(evalRight(functionUtil.QuickBytesToStr(v1), v2))
+		}
+		if err = rs.AppendBytes(value, false); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func evalRight(str string, length int64) string {
@@ -9504,7 +9680,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 		if (truncated || conversionTruncated) && proc != nil {
-			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 				renderedValue := renderWarningValue(i)
 				if conversionTruncated {
 					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
@@ -9520,12 +9696,18 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
-func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, n1 := p1.GetStrValue(i)
 		v2, n2 := p2.GetStrValue(i)
 		v3, n3 := p3.GetStrValue(i)
@@ -9546,7 +9728,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 func writeReplaceBytes(dst, src, needle, replacement []byte) {
 	if len(needle) == 0 {
@@ -9614,13 +9796,20 @@ func writeEncodedRuneRange(dst, v []byte, start, end int) int {
 	}
 	return n
 }
-func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, n1 := p1.GetStrValue(i)
 		pos, n2 := p2.GetValue(i)
 		remove, n3 := p3.GetValue(i)
@@ -9631,7 +9820,11 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			}
 			continue
 		}
+		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
+		if binary {
+			size, start, end, raw = insertBinaryResultLayout(v1, pos, remove, v4)
+		}
 		if int64(size) > maxStringFunctionResultLength(result) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -9643,6 +9836,12 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				copy(dst, v1)
 				return nil
 			}
+			if binary {
+				at := copy(dst, v1[:start])
+				at += copy(dst[at:], v4)
+				copy(dst[at:], v1[end:])
+				return nil
+			}
 			at := writeEncodedRuneRange(dst, v1, 0, start)
 			at += copy(dst[at:], v4)
 			writeEncodedRuneRange(dst[at:], v1, end, math.MaxInt)
@@ -9651,7 +9850,24 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
+}
+
+func insertBinaryResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
+	count := int64(len(source))
+	if pos <= 0 || pos > count {
+		return len(source), 0, 0, true
+	}
+	start64 := pos - 1
+	end64 := count
+	remain := count - start64
+	if remove == 0 {
+		end64 = start64
+	} else if remove > 0 && remove < remain {
+		end64 = start64 + remove
+	}
+	start, end = int(start64), int(end64)
+	return start + len(replacement) + len(source) - end, start, end, false
 }
 
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -9661,37 +9877,39 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		src, null2 := p2.GetStrValue(i)
 		cut, null3 := p3.GetStrValue(i)
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-
-			v1Str := strings.ToLower(string(v1))
-			var res string
-			switch v1Str {
-			case "both":
-				res = trimBoth(string(cut), string(src))
-			case "leading":
-				res = trimLeading(string(cut), string(src))
-			case "trailing":
-				res = trimTrailing(string(cut), string(src))
-			default:
-				return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
-			}
-
-			if err = rs.AppendBytes([]byte(res), false); err != nil {
-				return err
-			}
+			continue
 		}
 
+		v1Str := strings.ToLower(string(v1))
+		var res string
+		switch v1Str {
+		case "both":
+			res = trimBoth(string(cut), string(src))
+		case "leading":
+			res = trimLeading(string(cut), string(src))
+		case "trailing":
+			res = trimTrailing(string(cut), string(src))
+		default:
+			return moerr.NewNotSupportedf(proc.Ctx, "trim type %s", v1Str)
+		}
+		if err = rs.AppendBytes([]byte(res), false); err != nil {
+			return err
+		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[2], result, proc)
 }
 
 func trimBoth(src, cuts string) string {
@@ -9730,6 +9948,12 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		v3, null3 := p3.GetValue(i)
@@ -9737,26 +9961,17 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-
-			if v3 == 0 {
-				err = moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
-				return
-			}
-
-			res, isNull := SplitSingle(string(v1), string(v2), v3)
-			if isNull {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				if err = rs.AppendBytes([]byte(res), false); err != nil {
-					return err
-				}
-			}
+			continue
+		}
+		if v3 == 0 {
+			return moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
+		}
+		res, isNull := SplitSingle(string(v1), string(v2), v3)
+		if err = rs.AppendBytes([]byte(res), isNull); err != nil {
+			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func SplitSingle(str, sep string, cnt uint32) (string, bool) {

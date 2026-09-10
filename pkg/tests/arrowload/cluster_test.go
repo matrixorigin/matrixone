@@ -30,7 +30,8 @@ import (
 
 // Arrow LOAD tests use dedicated, non-shared embedded clusters and close them at
 // cleanup. This keeps process-local metrics and lifecycle state out of pkg/embed's
-// package-level shared clusters. All Arrow execution tests opt in explicitly.
+// package-level shared clusters. Default-path tests leave Arrow configuration
+// untouched; focused rollback tests explicitly override the kill switches.
 type arrowLoadClusterOptions struct {
 	cnCount            int
 	enabled            bool
@@ -49,7 +50,7 @@ func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distri
 }
 
 // startArrowLoadClusterWithDefaults deliberately installs no Arrow-specific
-// configuration. Tests using it prove the product default rejects Arrow LOAD.
+// configuration. Tests using it prove the product default is available.
 func startArrowLoadClusterWithDefaults(t testing.TB, cnCount int) embed.Cluster {
 	t.Helper()
 	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
@@ -78,6 +79,35 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 	t.Cleanup(func() {
 		require.NoError(t, c.Close())
 	})
+	return c
+}
+
+// startArrowLoadClusterWithForceModes provisions one CN for each ownership
+// policy in the fallback test. Both CNs use the same storage and fixture, so
+// the policy comparison pays for one cluster lifecycle while still compiling
+// and executing each mode through an independent public frontend.
+func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
+	t.Helper()
+	nextCN := 0
+	c, err := embed.StartTestCluster(
+		embed.WithCNCount(2),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			forceMaterialize := nextCN == 1
+			nextCN++
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ArrowLoad.Enabled = true
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = true
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = forceMaterialize
+			})
+		}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
 	return c
 }
 

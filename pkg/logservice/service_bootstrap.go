@@ -153,6 +153,18 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 			return nil
 		default:
 		}
+		ready, err := s.store.waitHAKeeperLeaderReady(ctx, hakeeperDefaultTimeout)
+		if err != nil {
+			// Preserve the ordinary bootstrap's cancellation/removed-shard policy,
+			// but do not report success for a failed NodeHost (for example ErrClosed).
+			if !restoreConfigured && (ctx.Err() != nil || errors.Is(err, dragonboat.ErrShardNotFound)) {
+				return nil
+			}
+			return err
+		}
+		if !ready {
+			continue
+		}
 		s.runtime.SubLogger(runtime.SystemInit).Info("before initial cluster info")
 		applied, err := s.store.setInitialClusterInfoWithRecoveryResult(
 			numOfLogShards,
@@ -184,6 +196,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		initialClusterProposed = true
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set",
 			zap.Bool("applied", applied))
+		s.requestHeartbeat()
 		break
 	}
 	if backup != nil {

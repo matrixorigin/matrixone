@@ -410,14 +410,15 @@ func doComQueryInBack(
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
 	}
+	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(backSes.txnCompileCtx.ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
@@ -612,7 +613,8 @@ func affectedRowsForStatement(execCtx *ExecCtx) int64 {
 // a frontend background executor. The back session forwards temporary-table
 // aliases to its upstream session, while the upstream ID keeps physical table
 // names visible to the temporary-table GC as belonging to the active client.
-func bindBackExecSession(proc *process.Process, backSes *backSession) {
+func bindBackExecSession(proc *process.Process, backSes *backSession, ctx context.Context) {
+	proc.WarningSink = process.WarningSinkFromContext(ctx)
 	if backSes.upstream == nil {
 		return
 	}
