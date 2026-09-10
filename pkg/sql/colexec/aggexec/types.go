@@ -40,11 +40,6 @@ type AggFuncExecExpression struct {
 	argExpressions []*plan.Expr
 	extraConfig    []byte
 	configType     plan.AggregateConfigType
-	// groupConcatMaxLenFloor is the value captured when a prepared GROUP_CONCAT
-	// plan was built. The execution-time session value may be higher or lower,
-	// but refreshing a reused plan must not lose this prepare-time floor.
-	groupConcatMaxLenFloor    uint64
-	groupConcatMaxLenFloorSet bool
 }
 
 func MakeAggFunctionExpression(
@@ -122,37 +117,6 @@ func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 
 func (ag *AggFuncExecExpression) SetExtraConfig(config []byte) {
 	ag.extraConfig = config
-	ag.groupConcatMaxLenFloor = 0
-	ag.groupConcatMaxLenFloorSet = false
-}
-
-// RefreshGroupConcatMaxLen applies the execution-time group_concat_max_len to
-// a compiled aggregate. Prepared plans retain the value captured at prepare
-// time as a floor, so executing once with a larger session value does not
-// permanently change later executions after the session value is lowered.
-func (ag *AggFuncExecExpression) RefreshGroupConcatMaxLen(
-	maxLen uint64,
-	preservePreparedFloor bool,
-) {
-	if preservePreparedFloor {
-		if !ag.groupConcatMaxLenFloorSet {
-			if floor, ok := groupConcatConfigMaxLen(ag.extraConfig); ok {
-				ag.groupConcatMaxLenFloor = floor
-			} else {
-				// Legacy configs did not carry a max length. The first refresh is
-				// their only available prepare-time value.
-				ag.groupConcatMaxLenFloor = maxLen
-			}
-			ag.groupConcatMaxLenFloorSet = true
-		}
-		if ag.groupConcatMaxLenFloor > maxLen {
-			maxLen = ag.groupConcatMaxLenFloor
-		}
-	} else {
-		ag.groupConcatMaxLenFloor = 0
-		ag.groupConcatMaxLenFloorSet = false
-	}
-	ag.extraConfig = RefreshGroupConcatConfigMaxLen(ag.extraConfig, maxLen)
 }
 
 type AggregateConfig struct {

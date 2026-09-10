@@ -228,22 +228,6 @@ func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
 	return EncodeGroupConcatConfig(string(separator), maxLen)
 }
 
-func groupConcatConfigMaxLen(config []byte) (uint64, bool) {
-	if len(config) >= groupConcatOrderedConfigHeaderSize &&
-		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
-		return binary.LittleEndian.Uint64(
-			config[len(groupConcatOrderedConfigMagic):groupConcatOrderedConfigHeaderSize],
-		), true
-	}
-	if len(config) >= groupConcatConfigHeaderSize &&
-		bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
-		return binary.LittleEndian.Uint64(
-			config[len(groupConcatConfigMagic):groupConcatConfigHeaderSize],
-		), true
-	}
-	return 0, false
-}
-
 func GroupConcatReturnType(args []types.Type) types.Type {
 	for _, p := range args {
 		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob ||

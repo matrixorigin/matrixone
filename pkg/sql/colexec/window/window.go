@@ -585,7 +585,7 @@ func (ctr *container) processAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetSession())
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	// Aggregate state initializes its physical capacity as NULL. Keep only
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
@@ -809,7 +809,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetSession())
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()
@@ -927,7 +927,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetSession())
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()

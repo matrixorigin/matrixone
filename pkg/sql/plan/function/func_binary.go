@@ -9679,7 +9679,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 		if (truncated || conversionTruncated) && proc != nil {
-			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 				renderedValue := renderWarningValue(i)
 				if conversionTruncated {
 					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,

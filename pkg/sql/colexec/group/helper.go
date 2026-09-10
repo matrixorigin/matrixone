@@ -1662,7 +1662,7 @@ func (ctr *container) getNextFinalResult(
 		// a later vector/allocation error must not expose warnings for a failed
 		// statement.
 		for _, ag := range ctr.aggList {
-			aggexec.ReportGroupConcatWarnings(ag, proc.GetSession())
+			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
 		}
 
 		ctr.freeAggList()

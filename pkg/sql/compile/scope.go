@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
@@ -205,7 +206,7 @@ func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
 func refreshGroupConcatMaxLen(
 	scopes []*Scope,
 	proc *process.Process,
-	preservePreparedFloor bool,
+	preparedFloor uint64,
 ) error {
 	var maxLen uint64
 	resolved := false
@@ -222,36 +223,23 @@ func refreshGroupConcatMaxLen(
 		visited[scope] = struct{}{}
 
 		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			var aggregates []aggexec.AggFuncExecExpression
 			switch arg := op.(type) {
 			case *group.Group:
-				for i := range arg.Aggs {
-					if arg.Aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
-						continue
-					}
-					if err := refreshGroupConcatExprMaxLen(
-						&arg.Aggs[i], proc, &maxLen, &resolved, preservePreparedFloor); err != nil {
-						return err
-					}
-				}
+				aggregates = arg.Aggs
 			case *group.MergeGroup:
-				for i := range arg.Aggs {
-					if arg.Aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
-						continue
-					}
-					if err := refreshGroupConcatExprMaxLen(
-						&arg.Aggs[i], proc, &maxLen, &resolved, preservePreparedFloor); err != nil {
-						return err
-					}
-				}
+				aggregates = arg.Aggs
 			case *window.Window:
-				for i := range arg.Aggs {
-					if arg.Aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
-						continue
-					}
-					if err := refreshGroupConcatExprMaxLen(
-						&arg.Aggs[i], proc, &maxLen, &resolved, preservePreparedFloor); err != nil {
-						return err
-					}
+				aggregates = arg.Aggs
+			case *timewin.TimeWin:
+				aggregates = arg.Aggs
+			}
+			for i := range aggregates {
+				if aggregates[i].GetAggID() != aggexec.AggIdOfGroupConcat {
+					continue
+				}
+				if err := refreshGroupConcatExprMaxLen(&aggregates[i], proc, &maxLen, &resolved, preparedFloor); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -280,7 +268,7 @@ func refreshGroupConcatExprMaxLen(
 	proc *process.Process,
 	maxLen *uint64,
 	resolved *bool,
-	preservePreparedFloor bool,
+	preparedFloor uint64,
 ) error {
 	if !*resolved {
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
@@ -295,7 +283,7 @@ func refreshGroupConcatExprMaxLen(
 		*maxLen = uint64(sessionMaxLen)
 		*resolved = true
 	}
-	agg.RefreshGroupConcatMaxLen(*maxLen, preservePreparedFloor)
+	agg.SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(agg.GetExtraConfig(), max(*maxLen, preparedFloor)))
 	return nil
 }
 

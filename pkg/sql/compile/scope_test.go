@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -108,26 +109,31 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
 	windowArg := window.NewArgument()
 	windowArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(",")}
+	timeArg := timewin.NewArgument()
+	timeArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(";")}
 	scopes := []*Scope{
 		{RootOp: groupArg},
+		{RootOp: timeArg},
 		{RootOp: mergeGroupArg},
 		{RootOp: windowArg},
 	}
 
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, true))
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
 	// The prepare-time 1024-byte value is a floor. Lowering the session value
 	// for EXECUTE must not make the prepared plan truncate at 5 bytes.
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
 
 	sessionMaxLen = 1024
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, true))
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
 
 	// A prepared plan with a smaller floor expands for a larger execution-time
 	// value, then returns to its original floor when the session value drops.
@@ -141,16 +147,17 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 	}
 	lowFloorScopes := []*Scope{{RootOp: lowFloor}}
 	sessionMaxLen = 1024
-	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, true))
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), lowFloor.Aggs[0].GetExtraConfig())
 	sessionMaxLen = 5
-	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, true))
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), lowFloor.Aggs[0].GetExtraConfig())
 
 	groupArg.Release()
 	mergeGroupArg.Release()
 	windowArg.Release()
 	lowFloor.Release()
+	timeArg.Release()
 }
 
 func GetFilePath() string {
