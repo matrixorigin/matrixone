@@ -499,6 +499,22 @@ func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 	}
 }
 
+func BenchmarkWindowPartitionCommentCase(b *testing.B) {
+	// This mirrors the issue benchmark: 65,536 rows, one INT32 partition key,
+	// and 64 distinct values. It compares the blocking partition prerequisite;
+	// the SQL BVT remains the independent Window-consumer correctness oracle.
+	const rows, ndv = 1 << 16, 64
+	for _, algorithm := range []string{"sort", "hash"} {
+		b.Run(algorithm, func(b *testing.B) {
+			var peak int64
+			for i := 0; i < b.N; i++ {
+				peak = max(peak, runWindowPartitionBenchmark(b, rows, ndv, 1, false, algorithm == "hash"))
+			}
+			b.ReportMetric(float64(peak), "peak-mpool-B")
+		})
+	}
+}
+
 func runWindowPartitionBenchmark(b *testing.B, rows, ndv, keyCount int, varlen, useHash bool) int64 {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(b, "", mp)

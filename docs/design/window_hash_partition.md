@@ -1,22 +1,21 @@
 # Cost-based hash partitioning for ordinary window functions
 
-- Status: draft; automatic selection disabled pending independent review and acceptance evidence
+- Status: enabled by default; conservative eligibility, cost, memory, and SORT fallback remain mandatory
 - Tracking issue: [matrixorigin/matrixone#27943](https://github.com/matrixorigin/matrixone/issues/27943)
 - Owner: iamlinjunhong
 - Base commit: `c46d897e9645b80178568ef0783dd8e99e527222`
 - Implementation PR: [matrixorigin/matrixone#27972](https://github.com/matrixorigin/matrixone/pull/27972)
 - Design revision: `window-hash-partition-2026-09-02-r4`
-- Last updated: 2026-09-02
+- Last updated: 2026-09-10
 
 ## 1. Decision
 
-This draft defines a cost-selected `HASH` implementation for the existing `Node_PARTITION`
-operator used by ordinary SQL window functions. `SORT` remains the zero-value,
-wire-compatible default and the mandatory fallback. `HASH` is not automatically
-selected in this revision: the optimizer fail-closes to `SORT` until an
-independent design decision and the complete real-Window performance/resource
-acceptance matrix are recorded. Once enabled, the planner makes one explicit
-choice; compile and execution follow that choice without independently
+This design defines a cost-selected `HASH` implementation for the existing
+`Node_PARTITION` operator used by ordinary SQL window functions. `SORT` remains
+the zero-value, wire-compatible default and the mandatory fallback. The
+optimizer automatically selects `HASH` only after the eligibility, cost, and
+memory gates pass; otherwise it keeps `SORT`. The planner makes one explicit
+choice, and compile and execution follow that choice without independently
 replanning it.
 
 The first revision implements coordinator hash partitioning. All upstream CN
@@ -26,6 +25,13 @@ the `PARTITION BY` expressions, stably groups row indexes by hash group, and emi
 one complete equality partition per batch to `Window`. A subsequent revision may
 add distributed hash shuffle, but it is not required for correctness or for the
 first performance win.
+
+The session-only `window_partition_algorithm` enum provides `COST` (the default),
+`SORT`, and `HASH` modes. `COST` applies the planner's normal eligibility, cost,
+and memory gates; `SORT` keeps the legacy path for comparison; `HASH` bypasses
+only the cost comparison while retaining the structural, statistics, equality,
+and memory gates. An explicit HASH request therefore still falls back to SORT
+when the input cannot be admitted safely.
 
 This design concerns ordinary analytic windows such as
 `sum(v) over (partition by k)`. MatrixOne's timestamp-based TIME WINDOW operators
@@ -143,12 +149,14 @@ HASH look artificially worse. Overflow, missing statistics, invalid NDV, or an
 unbounded width estimate rejects HASH.
 
 `B` uses the configured aggregate spill threshold when one is present; otherwise
-it uses MatrixOne's existing per-worker default memory threshold. HASH is selected
-only when `N` is at least one vector batch, `hash_work < sort_work`, and
-`hash_aux <= B`. This deliberately favors SORT for small inputs and for high-NDV,
-wide keys whose auxiliary hash state approaches the memory limit. Constants and
-the crossover are covered by table-driven planner tests and calibrated by the
-operator benchmark matrix before merge.
+it uses MatrixOne's existing per-worker default memory threshold. In `COST` mode,
+HASH is selected only when `N` is at least one vector batch, `hash_work <
+sort_work`, and `hash_aux <= B`. `HASH` mode retains the vector-batch,
+eligibility, statistics, and `hash_aux <= B` gates but skips the relative-work
+comparison. This deliberately favors SORT for small inputs and for high-NDV,
+wide keys in the default mode while allowing a controlled comparison on a
+known-safe input. Constants and the crossover are covered by table-driven
+planner tests and calibrated by the operator benchmark matrix before merge.
 
 Already ordered physical-property propagation is not currently available at
 this boundary. This revision therefore does not claim to recognize it. Once such
@@ -307,6 +315,14 @@ INT32-key rows) produced:
 The near-unique result motivated the explicit per-group work term rather than an
 `N log N` versus `N` comparison alone.
 
+On `m1-27943`, the exact issue case (65,536 rows, one INT32 key, NDV 64) was
+repeated with `-benchtime=3x -benchmem -count=3`: SORT measured 10.76--12.32
+ms/op and HASH 1.50--1.60 ms/op, or roughly 7x faster. HASH used about 2.47 MB
+of peak operator working memory versus 12 KB for SORT and allocated about 6.30
+MB/op versus 4.74 MB/op. These numbers measure the blocking Partition
+prerequisite in isolation; the public SQL BVT remains the Window-consumer
+correctness oracle.
+
 The historical r2 operator matrix used `-benchtime=1x -benchmem` across 1K,
 64K, and 1M rows; NDV 1, 1%, and 100%; one/three fixed or varlen keys. It
 informed the cost-model shape but is not r3 end-to-end acceptance evidence. On
@@ -316,23 +332,24 @@ versus 1.216--1.222 s/op and 139.1 MB `peak-mpool-B` at 100%-NDV. The latter
 counterexample remains on SORT through the key-count-scaled per-group cost.
 
 This is deliberately an operator microbenchmark, not a claim about end-to-end
-SQL latency. Automatic HASH selection remains disabled until the performance
-gate records repeated selected-HASH-versus-SORT measurements through a real
-Window consumer for the ordered/unordered, activating/rejected, fallback, and
-multi-scope cases, including peak memory. The public SQL BVT now asserts the
-fail-closed SORT default while preserving aggregate, ranking, value, ROWS,
-RANGE, ordered, and unordered Window result oracles. Re-enablement must add an
-exact selected-HASH public-path oracle in addition to those semantic controls.
+SQL latency. Automatic HASH selection is enabled with the conservative
+eligibility and memory gates above. The public SQL BVT asserts the selected-HASH
+path for analyzed low-NDV input and retains SORT controls for unsupported or
+uneconomic inputs while preserving aggregate, ranking, value, ROWS, RANGE,
+ordered, and unordered Window result oracles. Further performance work should
+continue to compare selected HASH and SORT through a real Window consumer,
+including peak memory and multi-scope cases.
 
 ## 11. Rollout and observability
 
-The plan enum makes rollout reversible: forcing the optimizer eligibility
-predicate false restores the complete old path without changing SQL or wire
-contracts. EXPLAIN records the selected algorithm. Operator analyzer statistics
-account retained batches, hash-table growth, group-id capacity, output-boundary
-indexes, and fallback selection scratch; benchmark evidence records peak bytes
-and fallback activation. No user-visible session switch is introduced in the
-first revision.
+The plan enum makes rollout reversible: `SET SESSION window_partition_algorithm =
+'SORT'` restores the complete old path for a session without changing SQL or
+wire contracts. `COST` remains the default and `HASH` is intended for controlled
+comparison or diagnosis, not a global rollout override. EXPLAIN records the
+selected algorithm. Operator analyzer statistics account retained batches,
+hash-table growth, group-id capacity, output-boundary indexes, and fallback
+selection scratch; benchmark evidence records peak bytes and fallback
+activation.
 
 ## 12. Design verification and review status
 
@@ -344,11 +361,11 @@ first revision.
   merge before one partition owner.
 - Proposed compatibility: complete; zero-value SORT plus the protocol-version compile gate is
   safe across persisted and mixed-version protobuf readers.
-- Proposed cost/resource implementation: draft; benchmark calibration, mpool-owned
-  index buffers, and a bounded post-trigger fallback contract are implemented,
-  while real-Window acceptance measurements remain required before automatic
-  selection can be enabled.
-- Independent review decision: pending. This document is versioned with the
-  implementation PR above; an independent reviewer must record approval of its
-  exact revision, and the acceptance evidence above must be recorded, before
-  automatic HASH selection can be enabled.
+- Proposed cost/resource implementation: complete for conservative automatic
+  selection; benchmark calibration, mpool-owned index buffers, and a bounded
+  post-trigger fallback contract are implemented. Real-Window acceptance
+  measurements remain follow-up validation for tuning and rollout confidence.
+- Default-enable decision: automatic HASH selection is enabled behind the
+  existing eligibility, cost, memory, and SORT-fallback gates. Unsupported or
+  uneconomic inputs remain on SORT while the selected-HASH versus SORT matrix
+  continues to be expanded.
