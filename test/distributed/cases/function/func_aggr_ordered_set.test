@@ -45,6 +45,10 @@ set @ordered_p = 0.25;
 execute ordered_percentile_p using @ordered_p;
 set @ordered_p = 0.75;
 execute ordered_percentile_p using @ordered_p;
+set @ordered_p = 1.5;
+execute ordered_percentile_p using @ordered_p;
+set @ordered_p = 0.5;
+execute ordered_percentile_p using @ordered_p;
 deallocate prepare ordered_percentile_p;
 
 select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38

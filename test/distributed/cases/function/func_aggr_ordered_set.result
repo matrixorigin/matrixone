@@ -60,6 +60,13 @@ set @ordered_p = 0.75;
 execute ordered_percentile_p using @ordered_p;
 ➤ prepared_p[4,32,0]  𝄀
 20
+set @ordered_p = 1.5;
+execute ordered_percentile_p using @ordered_p;
+invalid input: percentile argument of percentile_disc must be finite and in [0,1], got 1.5
+set @ordered_p = 0.5;
+execute ordered_percentile_p using @ordered_p;
+➤ prepared_p[4,32,0]  𝄀
+10
 deallocate prepare ordered_percentile_p;
 select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
 from t_ordered_set_bvt;

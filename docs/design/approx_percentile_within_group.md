@@ -1,7 +1,12 @@
 # `APPROX_PERCENTILE` ordered-set syntax
 
-**Status:** Implemented; approval requested
+**Status:** Implemented by [#27864](https://github.com/matrixorigin/matrixone/pull/27864)
 **Related:** [#25110](https://github.com/matrixorigin/matrixone/issues/25110)
+
+This document records the original `APPROX_PERCENTILE ... WITHIN GROUP`
+lowering. The prepared-percentile and extended-`PERCENTILE_DISC` contract is a
+separate protocol-bearing extension described in
+[Prepared percentiles and sortable discrete percentiles](20260910-prepared-and-discrete-percentiles.md).
 
 ## Contract
 
