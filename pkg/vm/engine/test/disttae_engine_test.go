@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1612,7 +1613,11 @@ func Test_SubUnsubTable(t *testing.T) {
 		inValidTableID   = rel.GetTableID(ctx) + 1
 		inValidTableName = "invalid_table"
 	)
-	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
+	// The missing table is permanent: exercise one real subscription request,
+	// rather than retrying it through the successful-subscription helper. A
+	// context timeout must not count as evidence that the server rejected it.
+	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "expected missing-table response, got %v", err)
 }
 
 func TestDeleteTupleInTupleList(t *testing.T) {
