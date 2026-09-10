@@ -27,6 +27,7 @@ import (
 	"io"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -67,6 +68,9 @@ func (t FencingTuple) Validate() error {
 	if t.StatementID == "" || t.GroupID == "" ||
 		t.GroupEpoch == 0 || t.InvocationID == "" || t.LeaseEpoch == 0 {
 		return fmt.Errorf("%w: incomplete fencing tuple", ErrProtocol)
+	}
+	if !utf8.ValidString(t.StatementID) || !utf8.ValidString(t.GroupID) || !utf8.ValidString(t.InvocationID) {
+		return fmt.Errorf("%w: fencing tuple contains invalid UTF-8", ErrProtocol)
 	}
 	return nil
 }
