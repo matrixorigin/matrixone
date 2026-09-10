@@ -216,9 +216,12 @@ func TestODKUProvenanceCarriesInputOrdinalsAcrossBufferReuse(t *testing.T) {
 	proc.Base.ODKUInputOrdinal = new(uint64)
 
 	pre := &PreInsert{
-		ctr:                          container{canFreeVecIdx: make(map[int]bool)},
-		HasAutoCol:                   true,
-		TableDef:                     &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: i64typ}, {Name: "payload", Typ: i64typ}}},
+		ctr:        container{canFreeVecIdx: make(map[int]bool)},
+		HasAutoCol: true,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}},
+			{Name: "payload", Typ: i64typ},
+		}},
 		Attrs:                        []string{"id", "payload"},
 		TrackAutoIncrementGenerated:  true,
 		AutoIncrementGeneratedColumn: 2,
