@@ -683,6 +683,17 @@ def _validate_schema(schema: pa.Schema, descriptors: Iterable[Dict[str, Any]]) -
         _validate_field(schema.field(index), f"arg_{index}", descriptor)
 
 
+def _validate_input_batch_schema(
+    batch: pa.RecordBatch, expected_schema: pa.Schema, descriptors: Iterable[Dict[str, Any]]
+) -> None:
+    # Flight carries one stream schema, but each received RecordBatch still
+    # owns a schema object.  Validate every batch so a later frame cannot
+    # replace a fixed-width Arrow type after the first frame was admitted.
+    _validate_schema(batch.schema, descriptors)
+    if batch.schema != expected_schema:
+        raise ValueError("TYPE_CONTRACT: input batch schema changed")
+
+
 def _load_handler(source: str, handler: str):
     namespace: Dict[str, Any] = {"__name__": "__matrixone_routine__"}
     exec(compile(source, "<routine>", "exec"), namespace, namespace)
@@ -1424,12 +1435,13 @@ class RoutineFlightServer(flight.FlightServerBase):
                     if schema is None:
                         schema = reader.schema
                         _validate_schema(schema, args)
+                    batch = chunk.data
+                    _validate_input_batch_schema(batch, schema, args)
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] != "InputBatch": raise ValueError("PROTOCOL: data batch is missing InputBatch")
                     sequence = _required_uint64(control, "sequence")
                     if sequence != state.last_input + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
-                    batch = chunk.data
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
                     if batch.nbytes > max_batch_bytes: raise ValueError("RESOURCE_EXHAUSTED: input batch exceeds byte limit")

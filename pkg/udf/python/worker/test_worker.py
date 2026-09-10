@@ -88,6 +88,18 @@ class WorkerContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "TYPE_CONTRACT"):
                 worker._field("value", descriptor)
 
+    def test_every_input_batch_keeps_the_frozen_schema(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        valid_schema = pa.schema([worker._field("arg_0", descriptor)])
+        invalid_batch = pa.RecordBatch.from_arrays(
+            [pa.array([1], type=pa.int32())],
+            schema=pa.schema(
+                [pa.field("arg_0", pa.int32(), nullable=True, metadata=valid_schema.field(0).metadata)]
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "Arrow type"):
+            worker._validate_input_batch_schema(invalid_batch, valid_schema, [descriptor])
+
     def test_closing_control_preserves_zero_last_sequence(self):
         fence = {
             "account_id": 1,
