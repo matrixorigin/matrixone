@@ -1272,6 +1272,8 @@ class RoutineFlightServer(flight.FlightServerBase):
                     chunk = reader.read_chunk()
                 except StopIteration:
                     break
+                if chunk is None or (chunk.data is None and not chunk.app_metadata):
+                    raise ValueError("PROTOCOL: empty input frame")
                 if chunk.data is not None:
                     if ended:
                         raise ValueError("PROTOCOL: input arrived after EndInput")
