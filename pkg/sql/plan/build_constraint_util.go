@@ -68,13 +68,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType plan.Type
-
-func init() {
-	typ := types.T_text.ToType()
-	constTextType = makePlan2Type(&typ)
-}
-
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
