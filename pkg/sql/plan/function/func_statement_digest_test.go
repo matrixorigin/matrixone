@@ -1,0 +1,543 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+func TestStatementDigestTextVectorAndNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(
+			types.T_varchar.ToType(),
+			[]string{"SELECT 1", "SELECT 2 /* comment */ WHERE 10=20", ""},
+			[]bool{false, false, true},
+		)},
+		NewFunctionTestResult(
+			types.T_text.ToType(), false,
+			[]string{"SELECT ?", "SELECT ? WHERE ? = ?", ""},
+			[]bool{false, false, true},
+		),
+		StatementDigestText,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestStatementDigestTextErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	constInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer constInput.Free(proc.Mp())
+	require.NoError(t, constInput.SetStringSource(types.StringSourceLiteral))
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{constInput}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+
+	proc.SetPrepareParams(constInput)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{constInput}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+	proc.SetPrepareParams(nil)
+
+	dynamicInput := vector.NewVec(types.T_varchar.ToType())
+	defer dynamicInput.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(dynamicInput, []byte("SELECT ?"), false, proc.Mp()))
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{dynamicInput}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextIsRuntimeDependent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	ov, err := GetFunctionById(proc.Ctx, fn.GetEncodedOverloadID())
+	require.NoError(t, err)
+	require.True(t, ov.CannotFold())
+	require.True(t, ov.IsRealTimeRelated())
+}
+
+func TestStatementDigestTextBinaryCompatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	nullInput := vector.NewConstNull(types.T_blob.ToType(), 1, proc.Mp())
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_blob.ToType()})
+	require.NoError(t, err)
+	nullResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{nullInput}, 1)
+	nullInput.Free(proc.Mp())
+	require.NoError(t, err)
+	require.True(t, nullResult.IsNull(0))
+	nullResult.Free(proc.Mp())
+
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
+			require.NoError(t, err)
+			valid, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{valid}, 1)
+			valid.Free(proc.Mp())
+			require.NoError(t, err)
+			require.Equal(t, "SELECT ?", result.GetStringAt(0))
+			result.Free(proc.Mp())
+
+			invalid, err := vector.NewConstBytes(oid.ToType(), []byte{0xff, 0x00, 0xc3, 0x28}, 1, proc.Mp())
+			require.NoError(t, err)
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{invalid}, 1)
+			invalid.Free(proc.Mp())
+			require.Error(t, err)
+			require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+		})
+	}
+
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		t.Run(oid.String(), func(t *testing.T) {
+			nullInput := vector.NewConstNull(oid.ToType(), 1, proc.Mp())
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{oid.ToType()})
+			require.NoError(t, err)
+			nullResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{nullInput}, 1)
+			nullInput.Free(proc.Mp())
+			require.NoError(t, err)
+			require.True(t, nullResult.IsNull(0))
+			nullResult.Free(proc.Mp())
+
+			input, err := vector.NewConstBytes(oid.ToType(), []byte("SELECT 1"), 1, proc.Mp())
+			require.NoError(t, err)
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			input.Free(proc.Mp())
+			require.Error(t, err)
+			require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+		})
+	}
+
+	textInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT 1"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer textInput.Free(proc.Mp())
+	textInput.SetIsBinaryString(true)
+	binaryFn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	textResult, err := RunFunctionDirectly(proc, binaryFn.GetEncodedOverloadID(), []*vector.Vector{textInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ?", textResult.GetStringAt(0))
+	textResult.Free(proc.Mp())
+}
+
+func TestStatementDigestTextMalformedUTF8AlwaysUndisclosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+
+	for _, source := range []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+		types.StringSourceSQLPrepare,
+	} {
+		t.Run(fmt.Sprintf("source-%d", source), func(t *testing.T) {
+			input, err := vector.NewConstBytes(
+				types.T_varchar.ToType(), []byte{'S', 'E', 'L', 'E', 'C', 'T', ' ', 0xff, 0xc3, 0x28}, 1, proc.Mp(),
+			)
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(source))
+
+			_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.Error(t, err)
+			require.Equal(
+				t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode(),
+			)
+		})
+	}
+
+	// Valid UTF-8 malformed SQL remains disclosed for a direct literal; the
+	// encoding guard must not broaden suppression to ordinary parser errors.
+	control, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer control.Free(proc.Mp())
+	require.NoError(t, control.SetStringSource(types.StringSourceLiteral))
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{control}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextPreparedParamProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+
+	literal, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer literal.Free(proc.Mp())
+	require.NoError(t, literal.SetStringSource(types.StringSourceLiteral))
+	// A separate marker in the prepared statement must not hide diagnostics
+	// for this literal digest argument.
+	proc.SetPrepareParams(literal)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{literal}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+	proc.SetPrepareParams(nil)
+
+	marker, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer marker.Free(proc.Mp())
+	require.NoError(t, marker.SetStringSource(types.StringSourceSQLPrepare))
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{marker}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextReadsSettingsAtExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	limit := int64(1024)
+	mode := ""
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		switch name {
+		case "sql_mode":
+			require.True(t, system)
+			require.False(t, global)
+			return mode, nil
+		case "max_digest_length":
+			require.True(t, system)
+			require.True(t, global)
+			return limit, nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %s", name)
+		}
+	})
+	input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT a,b,c,d,e,f"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer input.Free(proc.Mp())
+	require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	first, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+	require.NoError(t, err)
+	limit = 8
+	proc.ResetMaxDigestLengthSnapshot()
+	second, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+	require.NoError(t, err)
+	firstBytes := first.GetBytesAt(0)
+	secondBytes := second.GetBytesAt(0)
+	require.NotEqual(t, string(firstBytes), string(secondBytes))
+	first.Free(proc.Mp())
+	second.Free(proc.Mp())
+
+	limit = 1024
+	proc.ResetMaxDigestLengthSnapshot()
+	modeInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`SELECT "column" FROM t`), 1, proc.Mp())
+	require.NoError(t, err)
+	defer modeInput.Free(proc.Mp())
+	require.NoError(t, modeInput.SetStringSource(types.StringSourceLiteral))
+
+	mode = ""
+	stringModeResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{modeInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT ? FROM `t`", stringModeResult.GetStringAt(0))
+	stringModeResult.Free(proc.Mp())
+
+	mode = "ANSI_QUOTES"
+	identifierModeResult, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{modeInput}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `column` FROM `t`", identifierModeResult.GetStringAt(0))
+	identifierModeResult.Free(proc.Mp())
+}
+
+func TestStatementDigestTextUsesRemoteLengthSnapshot(t *testing.T) {
+	inputSQL := []byte("SELECT a,b,c,d,e,f")
+	for _, test := range []struct {
+		name   string
+		length int64
+		want   string
+	}{
+		{name: "explicit zero", length: 0, want: ""},
+		{name: "custom", length: 8, want: "SELECT `a`"},
+		{name: "default", length: process.DefaultMaxDigestLength, want: "SELECT `a` , `b` , `c` , `d` , `e` , `f`"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(nil) // remote CNs have no session resolver
+			proc.GetSessionInfo().MaxDigestLength = test.length
+			proc.GetSessionInfo().MaxDigestLengthSet = true
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), inputSQL, 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestStatementDigestTextDoesNotDiscloseFoldedExpression(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT ?"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer input.Free(proc.Mp())
+	require.NoError(t, input.SetStringSource(types.StringSourceExpression))
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextNestedCallIsUndisclosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	innerInput, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SELECT 1, 2, 3"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer innerInput.Free(proc.Mp())
+	require.NoError(t, innerInput.SetStringSource(types.StringSourceLiteral))
+	inner, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{innerInput}, 1)
+	require.NoError(t, err)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{inner}, 1)
+	inner.Free(proc.Mp())
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextMixedSourcesStayUndisclosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("SELECT ?"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte("SELECT"), false, proc.Mp()))
+	require.NoError(t, input.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, proc.Mp()))
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	_, err = RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+	require.Error(t, err)
+	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
+}
+
+func TestStatementDigestTextSelectListSkipsMaskedBinaryRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("SELECT 1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte{0xff, 0x00}, false, proc.Mp()))
+	require.NoError(t, input.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, proc.Mp()))
+	require.NoError(t, input.SetIsBinaryStringAt(1, true, proc.Mp()))
+
+	result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, StatementDigestText(
+		[]*vector.Vector{input}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
+	))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.Equal(t, "SELECT ?", got.GetStringAt(0))
+	require.True(t, got.IsNull(1))
+}
+
+func TestStatementDigestTextOverloadsAndCharset(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{
+		types.T_varchar, types.T_char, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_geometry, types.T_geometry32,
+	} {
+		t.Run(oid.String(), func(t *testing.T) {
+			argType := oid.ToType()
+			argType.Charset = uint8(7)
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{argType})
+			require.NoError(t, err)
+			_, shouldCast := fn.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+			require.Equal(t, types.T_text, fn.GetReturnType().Oid)
+			require.Equal(t, argType.Charset, fn.GetReturnType().Charset)
+		})
+	}
+
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	targets, shouldCast := fn.ShouldDoImplicitTypeCast()
+	require.True(t, shouldCast)
+	require.Len(t, targets, 1)
+	require.Equal(t, types.T_varchar, targets[0].Oid)
+	require.Equal(t, types.T_text, fn.GetReturnType().Oid)
+}
+
+func TestStatementDigestSettings(t *testing.T) {
+	require.Equal(t, "", statementDigestSQLMode(nil))
+	require.Equal(t, 1024, statementDigestMaxLength(nil))
+
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		switch name {
+		case "sql_mode":
+			require.True(t, system)
+			require.False(t, global)
+			return "ANSI_QUOTES", nil
+		case "max_digest_length":
+			require.True(t, system)
+			require.True(t, global)
+			return int64(2048), nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %s", name)
+		}
+	})
+	require.Equal(t, "ANSI_QUOTES", statementDigestSQLMode(proc))
+	require.Equal(t, 2048, statementDigestMaxLength(proc))
+
+	for _, test := range []struct {
+		name  string
+		value interface{}
+		want  int
+	}{
+		{name: "zero", value: uint64(0), want: 0},
+		{name: "maximum", value: 1 << 20, want: 1 << 20},
+		{name: "negative", value: int64(-1), want: 1024},
+		{name: "too large", value: uint64(1 << 21), want: 1024},
+		{name: "wrong type", value: "1024", want: 1024},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := testutil.NewProcess(t)
+			p.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return test.value, nil
+			})
+			require.Equal(t, test.want, statementDigestMaxLength(p))
+		})
+	}
+
+	fallback := testutil.NewProcess(t)
+	fallback.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
+	fallback.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, fmt.Errorf("resolver unavailable")
+	})
+	require.Equal(t, "NO_BACKSLASH_ESCAPES", statementDigestSQLMode(fallback))
+	require.Equal(t, 1024, statementDigestMaxLength(fallback))
+	fallback.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
+	require.Equal(t, "", statementDigestSQLMode(fallback))
+}
+
+func TestStatementDigestTextPreservesBackgroundSQLModeSnapshot(t *testing.T) {
+	inputSQL := []byte(`SELECT "column" FROM t`)
+	for _, test := range []struct {
+		name       string
+		isFrontend bool
+		want       string
+	}{
+		{
+			name:       "background empty resolver keeps captured ANSI quotes",
+			isFrontend: false,
+			want:       "SELECT `column` FROM `t`",
+		},
+		{
+			name:       "frontend empty resolver explicitly clears mode",
+			isFrontend: true,
+			want:       "SELECT ? FROM `t`",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.IsFrontend = test.isFrontend
+			proc.GetSessionInfo().SqlMode = "ANSI_QUOTES"
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				switch name {
+				case "sql_mode":
+					require.True(t, system)
+					require.False(t, global)
+					return "", nil
+				case "max_digest_length":
+					require.True(t, system)
+					require.True(t, global)
+					return int64(process.DefaultMaxDigestLength), nil
+				default:
+					return nil, fmt.Errorf("unexpected variable %s", name)
+				}
+			})
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), inputSQL, 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+			fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestStatementDigestSQLModeResolutionBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		frontend   bool
+		snapshot   string
+		value      interface{}
+		err        error
+		noResolver bool
+		want       string
+	}{
+		{name: "remote snapshot", snapshot: "ANSI_QUOTES", noResolver: true, want: "ANSI_QUOTES"},
+		{name: "background backslash mode", snapshot: "NO_BACKSLASH_ESCAPES", value: "", want: "NO_BACKSLASH_ESCAPES"},
+		{name: "combined modes", snapshot: "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", value: "", want: "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"},
+		{name: "captured explicit empty", snapshot: process.EmptySqlModeSentinel, value: "", want: ""},
+		{name: "resolver explicit empty", snapshot: "ANSI_QUOTES", value: process.EmptySqlModeSentinel, want: ""},
+		{name: "nonempty resolver wins", snapshot: "ANSI_QUOTES", value: "NO_BACKSLASH_ESCAPES", want: "NO_BACKSLASH_ESCAPES"},
+		{name: "resolver error", snapshot: "ANSI_QUOTES", err: fmt.Errorf("unavailable"), want: "ANSI_QUOTES"},
+		{name: "wrong resolver type", snapshot: "ANSI_QUOTES", value: 42, want: "ANSI_QUOTES"},
+		{name: "nil resolver value", snapshot: "ANSI_QUOTES", want: "ANSI_QUOTES"},
+		{name: "empty snapshot", value: "", want: ""},
+		{name: "frontend clear", frontend: true, snapshot: "ANSI_QUOTES", value: "", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.IsFrontend = test.frontend
+			proc.GetSessionInfo().SqlMode = test.snapshot
+			proc.SetResolveVariableFunc(nil)
+			if !test.noResolver {
+				proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", name)
+					require.True(t, system)
+					require.False(t, global)
+					return test.value, test.err
+				})
+			}
+			require.Equal(t, test.want, statementDigestSQLMode(proc))
+		})
+	}
+}

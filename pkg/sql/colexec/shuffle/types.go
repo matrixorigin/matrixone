@@ -125,14 +125,16 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if !shuffle.DrainAllBuckets {
-		if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
-			abortErr := err
-			if abortErr == nil {
-				abortErr = context.Canceled
-			}
-			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+	// Publish the cause before releasing a holder in either execution mode.
+	// Late peers and active readers must observe the same terminal error.
+	if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
+		abortErr := err
+		if abortErr == nil {
+			abortErr = context.Canceled
 		}
+		shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+	}
+	if !shuffle.DrainAllBuckets {
 		if shuffle.ctr.held {
 			shuffle.ackDirectBatch()
 			if shuffle.ctr.buf != nil && shuffle.ctr.bufFromPool && shuffle.ctr.shufflePool != nil {

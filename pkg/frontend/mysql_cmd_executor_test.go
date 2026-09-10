@@ -3987,10 +3987,14 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 	proc := &process.Process{Base: &process.BaseProcess{}}
+	proc.Base.SessionInfo.MaxDigestLength = 17
+	proc.Base.SessionInfo.MaxDigestLengthSet = true
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MaxDigestLengthSet)
+	require.Zero(t, proc.Base.SessionInfo.MaxDigestLength)
 	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementOffset)
 
@@ -4000,9 +4004,13 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.Equal(t, uint64(7), proc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(4), proc.Base.SessionInfo.AutoIncrementOffset)
 
+	proc.Base.SessionInfo.MaxDigestLength = 29
+	proc.Base.SessionInfo.MaxDigestLengthSet = true
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MaxDigestLengthSet)
+	require.Zero(t, proc.Base.SessionInfo.MaxDigestLength)
 }
 
 func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {

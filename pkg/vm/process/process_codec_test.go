@@ -210,14 +210,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 	})
 
 	t.Run("sql mode resolution", func(t *testing.T) {
-		require.Equal(t, "", resolveSqlMode(nil))
+		require.Equal(t, "", ResolveSqlMode(nil))
 
 		// Resolver present: its value wins.
 		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "STRICT_TRANS_TABLES", nil
 		})
-		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_TRANS_TABLES", ResolveSqlMode(proc))
 
 		// A frontend resolver returning an explicit empty string means the
 		// session is intentionally non-strict.
@@ -225,14 +225,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "", nil
 		})
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(proc))
 
 		// A background resolver may return its empty compiled default, but the
 		// captured strict snapshot must survive the first serialization.
 		proc.Base.IsFrontend = false
-		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_ALL_TABLES", ResolveSqlMode(proc))
 		proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc),
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(proc),
 			"an already-captured explicit empty mode must remain non-strict")
 		proc.Base.SessionInfo.SqlMode = "STRICT_ALL_TABLES"
 
@@ -240,18 +240,18 @@ func TestProcessCodecHelpers(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		})
-		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		require.Equal(t, "STRICT_ALL_TABLES", ResolveSqlMode(proc))
 
 		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
 		// forward preserves the upstream mode instead of defaulting to strict.
 		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}
-		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(strictProc))
+		require.Equal(t, "STRICT_TRANS_TABLES", ResolveSqlMode(strictProc))
 
 		sentinelProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: EmptySqlModeSentinel}}}
-		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(sentinelProc))
+		require.Equal(t, EmptySqlModeSentinel, ResolveSqlMode(sentinelProc))
 
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
-		require.Equal(t, "", resolveSqlMode(emptyProc))
+		require.Equal(t, "", ResolveSqlMode(emptyProc))
 	})
 }
 
@@ -277,6 +277,74 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	second, err := decoded.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+}
+
+func TestBuildProcessInfoPreservesMaxDigestLengthAcrossForwards(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value int64
+	}{
+		{name: "explicit zero", value: 0},
+		{name: "custom", value: 37},
+		{name: "default", value: DefaultMaxDigestLength},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			defer proc.Free()
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				if name == "max_digest_length" {
+					require.True(t, system)
+					require.True(t, global)
+					return test.value, nil
+				}
+				return nil, moerr.NewInternalErrorNoCtx("unavailable")
+			})
+
+			svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+			payload, err := svc.Encode(proc, "select 1")
+			require.NoError(t, err)
+			first := pipeline.ProcessInfo{}
+			require.NoError(t, first.Unmarshal(payload))
+			require.True(t, first.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, test.value, first.SessionInfo.MaxDigestLength)
+
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Nil(t, decoded.GetResolveVariableFunc())
+			require.Equal(t, int(test.value), ResolveMaxDigestLength(decoded))
+
+			second, err := decoded.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.True(t, second.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, test.value, second.SessionInfo.MaxDigestLength)
+		})
+	}
+}
+
+func TestBuildProcessInfoNormalizesLegacyAndMalformedMaxDigestLength(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value int64
+		set   bool
+	}{
+		{name: "legacy absent", value: 0, set: false},
+		{name: "malformed negative", value: -1, set: true},
+		{name: "malformed too large", value: MaximumMaxDigestLength + 1, set: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			defer proc.Free()
+			proc.SetResolveVariableFunc(nil)
+			proc.Base.SessionInfo.MaxDigestLength = test.value
+			proc.Base.SessionInfo.MaxDigestLengthSet = test.set
+
+			info, err := proc.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.True(t, info.SessionInfo.MaxDigestLengthSet)
+			require.Equal(t, int64(DefaultMaxDigestLength), info.SessionInfo.MaxDigestLength)
+		})
+	}
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {

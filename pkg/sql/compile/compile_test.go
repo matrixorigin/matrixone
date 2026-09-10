@@ -1725,6 +1725,51 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 	}
 }
 
+func TestScopeRunClassifiesLateShufflePrepare(t *testing.T) {
+	primaryErr := moerr.NewInternalErrorNoCtx("shuffle upstream failed")
+	for _, tc := range []struct {
+		name     string
+		cause    error
+		want     error
+		drainAll bool
+	}{
+		{"consumer_finished", context.Canceled, nil, false},
+		{"execution_failed", primaryErr, primaryErr, false},
+		{"independent_deadline", context.DeadlineExceeded, context.DeadlineExceeded, false},
+		{"drain_all_consumer_finished", context.Canceled, nil, true},
+		{"drain_all_execution_failed", primaryErr, primaryErr, true},
+		{"drain_all_independent_deadline", context.DeadlineExceeded, context.DeadlineExceeded, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.BuildPipelineContext(context.Background())
+			pool := shuffle.NewShufflePool(2, 2, tc.drainAll)
+			peer := shuffle.NewArgument()
+			defer peer.Release()
+			peer.BucketNum = 2
+			peer.DrainAllBuckets = tc.drainAll
+			peer.SetShufflePool(pool)
+			require.NoError(t, vm.Prepare(peer, proc))
+			// Deterministically retire a peer before this scope can prepare.
+			peer.Reset(proc, true, tc.cause)
+			peer.Free(proc, true, tc.cause)
+			proc.Cancel(nil)
+			late := shuffle.NewArgument()
+			defer late.Release()
+			late.BucketNum = 2
+			late.DrainAllBuckets = tc.drainAll
+			late.SetShufflePool(pool)
+			got := (&Scope{RootOp: late, Proc: proc}).Run(&Compile{proc: proc})
+			if tc.want == nil {
+				require.NoError(t, got)
+			} else {
+				require.ErrorIs(t, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
 	tests := []struct {
 		name   string

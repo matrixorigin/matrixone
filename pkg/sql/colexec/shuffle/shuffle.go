@@ -85,6 +85,12 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	if !shuffle.ctr.shufflePool.hold() {
+		// A peer can terminate while this pipeline is still preparing. Keep
+		// its cause so scope cleanup can distinguish consumer cancellation
+		// from a query failure, and never replace the original execution error.
+		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+			return err
+		}
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
 	}
 	shuffle.ctr.held = true

@@ -15,6 +15,9 @@
 package shuffle
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -898,4 +901,71 @@ func TestVMPrepareRejectsAbortedSharedPool(t *testing.T) {
 		t.Fatal("failed VM preparation leaked the producer context")
 	}
 	arg.Free(proc, true, err)
+}
+
+func TestShuffleResetPreservesAbortCause(t *testing.T) {
+	for _, drainAll := range []bool{false, true} {
+		for _, prepared := range []bool{false, true} {
+			for _, tc := range []struct {
+				name  string
+				cause error
+			}{
+				{"canceled", context.Canceled},
+				{"deadline", context.DeadlineExceeded},
+				{"execution_error", errors.New("upstream execution failed")},
+			} {
+				t.Run(fmt.Sprintf("drainAll=%t/prepared=%t/%s", drainAll, prepared, tc.name), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					pool := NewShufflePool(2, 2, drainAll)
+					arg := NewArgument()
+					defer arg.Release()
+					arg.BucketNum = 2
+					arg.DrainAllBuckets = drainAll
+					arg.SetShufflePool(pool)
+					if prepared {
+						require.NoError(t, vm.Prepare(arg, proc))
+					}
+					arg.Reset(proc, true, tc.cause)
+					arg.Free(proc, true, tc.cause)
+					require.ErrorIs(t, pool.terminalError(), tc.cause)
+					require.True(t, pool.cleaned)
+					require.False(t, pool.hold())
+				})
+			}
+		}
+	}
+}
+
+func TestVMPreparePreservesSharedPoolAbortCause(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"canceled", context.Canceled},
+		{"deadline", context.DeadlineExceeded},
+		{"execution_error", errors.New("upstream execution failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			sp := NewShufflePool(2, 2, false)
+			// One peer fails before the second peer reaches Prepare. Keep an
+			// active holder so this also covers deferred pool reclamation.
+			require.True(t, sp.hold())
+			sp.abortWithError(proc.Mp(), tc.cause)
+			arg := NewArgument()
+			defer arg.Release()
+			arg.BucketNum = 2
+			arg.SetShufflePool(sp)
+			err := vm.Prepare(arg, proc)
+			producerCtx := arg.ctr.producerProc.Ctx
+			arg.Reset(proc, true, err)
+			arg.Free(proc, true, err)
+			sp.release(proc.Mp(), true)
+			require.ErrorIs(t, err, tc.cause)
+			require.ErrorIs(t, context.Cause(producerCtx), tc.cause)
+			require.True(t, sp.cleaned)
+		})
+	}
 }
