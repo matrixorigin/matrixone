@@ -265,6 +265,9 @@ func validatePythonInputVectors(inputs []*vector.Vector, args []types.Type, leng
 		if input == nil {
 			return fmt.Errorf("python udf: input vector %d is nil", index)
 		}
+		if input.Length() == 0 {
+			return fmt.Errorf("python udf: input vector %d is empty", index)
+		}
 		if !input.IsConst() && input.Length() < length {
 			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
 		}
