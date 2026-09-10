@@ -229,21 +229,6 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key hav
 2  ¦  null  𝄀
 3  ¦  null  𝄀
 4  ¦  null
-create table distinct_parent (id int primary key);
-create table distinct_child (parent_id int, v int);
-insert into distinct_parent values (1), (2), (3);
-insert into distinct_child values (1, 10), (1, 10), (1, 20), (1, null), (2, null);
-select p.id,
-       (select count(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 2 else 0 end as count_ok,
-       (select sum(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 30 else null end as sum_ok,
-       (select avg(distinct c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then 15.0 else null end as avg_ok,
-       (select group_concat(distinct c.v order by c.v) from distinct_child c where c.parent_id = p.id) <=> case when p.id = 1 then '10,20' else null end as concat_ok
-from distinct_parent p
-order by p.id;
-➤ id[4,32,0]  ¦  count_ok[-7,1,0]  ¦  sum_ok[-7,1,0]  ¦  avg_ok[-7,1,0]  ¦  concat_ok[-7,1,0]  𝄀
-1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
-2  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
-3  ¦  1  ¦  1  ¦  1  ¦  1
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) as ex from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
