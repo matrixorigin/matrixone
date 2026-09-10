@@ -73,6 +73,46 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_json USING @bool_math, @bool_math").Scan(&direct, &jsonKind))
 			require.Equal(t, "true", direct)
 			require.Equal(t, "BOOLEAN", jsonKind)
+			const mixedQuery = "SELECT ?, ROUND(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_mixed FROM '"+mixedQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed")
+			for _, test := range []struct {
+				value       string
+				wantDirect  string
+				wantDirectN bool
+				wantRound   float64
+				wantRoundN  bool
+			}{
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+				{value: "FALSE", wantDirect: "false"},
+				{value: "NULL", wantDirectN: true, wantRoundN: true},
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+			} {
+				mustExec(t, ctx, conn, "SET @bool_mixed = "+test.value)
+				rows, err := conn.QueryContext(ctx,
+					"EXECUTE bool_mixed USING @bool_mixed, @bool_mixed")
+				require.NoError(t, err)
+				columns, err := rows.ColumnTypes()
+				require.NoError(t, err)
+				require.Len(t, columns, 2)
+				require.Equal(t, "TEXT", columns[0].DatabaseTypeName(),
+					"a direct SQL EXECUTE parameter keeps its text result contract")
+				require.True(t, rows.Next())
+				var gotDirect sql.NullString
+				var gotRound sql.NullFloat64
+				require.NoError(t, rows.Scan(&gotDirect, &gotRound))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+				require.Equal(t, test.wantDirectN, !gotDirect.Valid, test.value)
+				if !test.wantDirectN {
+					require.Equal(t, test.wantDirect, gotDirect.String, test.value)
+				}
+				require.Equal(t, test.wantRoundN, !gotRound.Valid, test.value)
+				if !test.wantRoundN {
+					require.Equal(t, test.wantRound, gotRound.Float64, test.value)
+				}
+				rows.Close()
+			}
 			stmt, err := conn.PrepareContext(ctx, query)
 			require.NoError(t, err)
 			defer stmt.Close()
