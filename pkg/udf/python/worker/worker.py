@@ -52,6 +52,7 @@ MAX_EXECUTION_FRAME_BYTES = 1 << 30
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
+_HANDLER_ENV_ALLOWLIST = frozenset({"PATH"})
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
 _MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
@@ -873,7 +874,15 @@ def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: floa
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
         popen_kwargs["pass_fds"] = (response_write_fd,)
-    child_env = os.environ.copy()
+    # User code runs under a separate execution identity.  In particular, do
+    # not inherit CN, object-store, database, or tenant credentials from the
+    # worker process.  Routine dependencies are supplied by the selected Python
+    # environment and do not need ambient environment variables.
+    child_env = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _HANDLER_ENV_ALLOWLIST
+    }
     child_env[_HANDLER_RESPONSE_FD_ENV] = str(response_write_fd)
     # The extra descriptor is a protocol-channel separation mechanism, not a
     # sandbox boundary.  An unisolated handler with arbitrary OS access can
