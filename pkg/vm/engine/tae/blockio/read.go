@@ -558,6 +558,9 @@ func blockDataReadWithExactMembershipTopK(
 		columns[topColumnPos],
 		colTypes[topColumnPos],
 		func(filterVectors []vector.Vector) ([]int64, error) {
+			if top.Stats != nil && len(filterVectors) > 0 {
+				top.Stats.StorageFilterInputRows += uint64(filterVectors[0].Length())
+			}
 			selected := searchFunc(containers.Vectors(filterVectors))
 			if len(selected) == 0 {
 				if filterRows != nil {
@@ -568,6 +571,9 @@ func blockDataReadWithExactMembershipTopK(
 			selected, err := ds.ApplyTombstones(ctx, &info.BlockID, selected, engine.Policy_CheckAll)
 			if err != nil {
 				return nil, err
+			}
+			if top.Stats != nil {
+				top.Stats.StorageFilterOutputRows += uint64(len(selected))
 			}
 			if len(selected) == 0 {
 				if filterRows != nil {

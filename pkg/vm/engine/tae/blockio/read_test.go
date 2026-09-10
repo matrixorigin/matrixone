@@ -416,6 +416,8 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 		[]int64{}, []float64{})
 	t.Run("exact membership fused before topk", func(t *testing.T) {
 		output := newOutput()
+		top := newTop()
+		top.Stats = new(objectio.IndexReaderTopStats)
 		filter := objectio.BlockReadFilter{
 			Valid:           true,
 			ExactMembership: true,
@@ -436,7 +438,7 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 			[]uint16{0},
 			[]types.Type{typesByColumn[0]},
 			filter,
-			newTop(),
+			top,
 			fileservice.Policy(0),
 			"entries",
 			output,
@@ -445,6 +447,8 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 			fs,
 		))
 		assertOutput(t, output, []int64{0, 4}, []float64{100, 9})
+		require.Equal(t, uint64(5), top.Stats.StorageFilterInputRows)
+		require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
 		output.Clean(queryMP)
 	})
 	t.Run("exact membership all tombstoned", func(t *testing.T) {
