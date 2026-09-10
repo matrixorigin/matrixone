@@ -78,10 +78,14 @@ func TestMaxCommitTSInAppendableObjectReadsMax(t *testing.T) {
 	require.Equal(t, types.BuildTS(25, 0), got)
 }
 
-// P1-1 regression: after a flush soft-deletes the appendable object, the source
-// rows survive only in a TN non-appendable replacement. SourceCommitTSAt must
-// read that object's true max commit_ts (not fall back to the retention
-// boundary), so a not-yet-indexed row cannot pass the coverage gate.
+// SourceCommitTSAt reads a TN object's per-row commit_ts zonemap (20 here), not
+// its CreateTime (30 here). commit_ts is the original user commit that flush and
+// merge copy verbatim; CreateTime is the flush/merge time and advances on every
+// merge. Reading commit_ts avoids two hazards: under-reporting rows that survive
+// only in a TN object after an appendable flush (would fall back to the retention
+// boundary and let a not-yet-indexed row pass), and over-reporting on merge (the
+// bound stays at the last user DML, so an idle-but-merged table stays coverable
+// instead of failing the watermark check forever).
 func TestSourceCommitTSAtTNObjectPreservesCommitTS(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
