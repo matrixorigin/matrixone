@@ -74,7 +74,7 @@ func metadataColNames(t *testing.T, defs []*planpb.TableDef) []string {
 // column DEFAULT cannot repair a value count, because the arity is rejected before any default
 // is consulted.
 func TestCreateIndexWaitsForTheDeploymentBeforeWideningMetadata(t *testing.T) {
-	before := metadataColNames(t, planAt(t, defines.MORPCVersion59-1))
+	before := metadataColNames(t, planAt(t, defines.MORPCVersion60-1))
 	require.Equal(t, []string{
 		catalog.Hnsw_TblCol_Metadata_Index_Id,
 		catalog.Hnsw_TblCol_Metadata_Checksum,
@@ -82,7 +82,7 @@ func TestCreateIndexWaitsForTheDeploymentBeforeWideningMetadata(t *testing.T) {
 		catalog.Hnsw_TblCol_Metadata_Filesize,
 	}, before, "an old CN is still out there; write the shape its positional INSERT fits")
 
-	after := metadataColNames(t, planAt(t, defines.MORPCVersion59))
+	after := metadataColNames(t, planAt(t, defines.MORPCVersion60))
 	require.Equal(t, []string{
 		catalog.Hnsw_TblCol_Metadata_Index_Id,
 		catalog.Hnsw_TblCol_Metadata_Checksum,

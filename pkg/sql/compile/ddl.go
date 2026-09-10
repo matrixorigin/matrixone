@@ -4465,7 +4465,8 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
 		// sequence table exists
 		// get pre sequence table row values
-		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		ctx := process.ContextWithWarningSink(c.proc.Ctx, c.proc.WarningSink)
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}

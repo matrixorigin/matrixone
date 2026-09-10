@@ -113,7 +113,7 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c3 := c
 	c3.RaftAddress = ""
 	c3.RaftPort = 0
-	err = c2.Validate()
+	err = c3.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c4 := c
@@ -135,6 +135,26 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c7 := c
 	c7.HAKeeperBootstrapRetryInterval.Duration = -time.Second
 	err = c7.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c8 := c
+	c8.HAKeeperCheckInterval.Duration = 0
+	err = c8.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c9 := c
+	c9.HAKeeperCheckInterval.Duration = -time.Second
+	err = c9.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c10 := c
+	c10.HAKeeperTickInterval.Duration = -time.Second
+	err = c10.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c11 := c
+	c11.HAKeeperCheckInterval.Duration = time.Duration(1<<63 - 1)
+	err = c11.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 

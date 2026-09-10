@@ -41,6 +41,15 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		previous := b.bindingProjectedAlias
+		b.bindingProjectedAlias = true
+		defer func() { b.bindingProjectedAlias = previous }()
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
@@ -68,7 +77,22 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+			return &plan.Expr{
+				Typ: b.ctx.aggregates[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.aggregateTag,
+						ColPos: colPos,
+					},
+				},
+			}, nil
+		}
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		!isGroupConcatAggregateExpr(astExpr) {
 		if !b.insideAgg {
 			return &plan.Expr{
 				Typ: b.ctx.aggregates[colPos].Typ,
@@ -135,9 +159,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
 			// flag is scoped to this recursive bind so an anonymous expression
 			// written directly in HAVING still follows normal visibility rules.
+			if projectPos := b.ctx.projectedExprPosition(projected); projectPos >= 0 {
+				projected = b.ctx.wrapAliasExpansion(projected, projectPos)
+			}
 			previous := b.bindingProjectedAlias
 			b.bindingProjectedAlias = true
-			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			expr, err := b.BindExpr(projected, depth, isRoot)
 			b.bindingProjectedAlias = previous
 			return expr, err
 		}
@@ -395,6 +422,12 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	astStr := semanticAstKey(astExpr)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
+	if funcName == NameGroupConcat {
+		if b.ctx.groupConcatByExpr == nil {
+			b.ctx.groupConcatByExpr = make(map[*tree.FuncExpr]int32)
+		}
+		b.ctx.groupConcatByExpr[astExpr] = colPos
+	}
 
 	return &plan.Expr{
 		Typ: expr.Typ,

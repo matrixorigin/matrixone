@@ -370,7 +370,7 @@ func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
 
 	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59-1)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60-1)
 	sqls, next := TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
 	var meta string
 	for _, s := range sqls {
@@ -382,7 +382,7 @@ func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
 	require.NotEmpty(t, sqls, "the frame's bytes are still written")
 	require.Equal(t, int64(2), next)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
 	sqls, _ = TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
 	meta = ""
 	for _, s := range sqls {
