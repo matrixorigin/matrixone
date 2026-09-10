@@ -3922,6 +3922,14 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
+	if session, ok := ses.(*Session); ok {
+		authStats, err := authenticateLoadBeforePlan(reqCtx, session, stmt)
+		if err != nil {
+			return nil, err
+		}
+		stats.PermissionAuth.Add(&authStats)
+	}
+
 	// Step 1: Call buildPlan to construct the execution plan
 	plan, err := buildPlan(reqCtx, ses, ctx, stmt)
 	if err != nil {

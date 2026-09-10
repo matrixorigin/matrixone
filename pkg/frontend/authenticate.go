@@ -9219,18 +9219,23 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
 		}
 		if len(arr) == 0 {
-			if ins, ok := stmt.(*tree.Insert); ok {
-				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
-				if ok {
-					arr = append(arr, privilegeTips{
-						typ:                   PrivilegeTypeInsert,
-						objType:               objectTypeTable,
-						databaseName:          dbName,
-						tableName:             tableName,
-						isClusterTable:        isClusterTable(dbName, tableName),
-						clusterTableOperation: clusterTableModify,
-					})
-				}
+			var dbName, tableName string
+			var ok bool
+			switch st := stmt.(type) {
+			case *tree.Insert:
+				dbName, tableName, ok = getInsertTargetTableName(st, ses)
+			case *tree.Load:
+				dbName, tableName, ok = getLoadTargetTableName(st, ses)
+			}
+			if ok {
+				arr = append(arr, privilegeTips{
+					typ:                   PrivilegeTypeInsert,
+					objType:               objectTypeTable,
+					databaseName:          dbName,
+					tableName:             tableName,
+					isClusterTable:        isClusterTable(dbName, tableName),
+					clusterTableOperation: clusterTableModify,
+				})
 			}
 		}
 		if len(arr) == 0 {
@@ -9272,6 +9277,53 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 		return "", "", false
 	}
 	return dbName, tableName, true
+}
+
+func getLoadTargetTableName(stmt *tree.Load, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.Table == nil {
+		return "", "", false
+	}
+	dbName := string(stmt.Table.SchemaName)
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(stmt.Table.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+// authenticateLoadBeforePlan checks the target-table privilege using the LOAD
+// AST before planning can probe an external source. The plan-level check still
+// runs after planning because it is the authoritative check for rewritten DML
+// and any additional target information discovered by the planner.
+func authenticateLoadBeforePlan(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if ses == nil || ses.GetTenantInfo() == nil || ses.IsBackgroundSession() {
+		return stats, nil
+	}
+	if _, ok := stmt.(*tree.Load); !ok {
+		return stats, nil
+	}
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() {
+		return stats, nil
+	}
+
+	ok, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx, ses, stmt, nil)
+	stats.Add(&delta)
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		return stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
+	return stats, nil
 }
 
 func appendMergeActionPrivilegeTips(
