@@ -834,6 +834,18 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported fencing tuple field"):
             worker._decode_control(json.dumps(value).encode())
 
+    def test_fencing_tuple_rejects_invalid_utf8(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "\ud800",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        with self.assertRaisesRegex(ValueError, "invalid UTF-8"):
+            worker._tuple_key(tuple_value)
+
     def test_control_rejects_duplicate_json_fields(self):
         wire = (
             b'{"version":1,"kind":"InputBatch","tuple":{"account_id":1,'

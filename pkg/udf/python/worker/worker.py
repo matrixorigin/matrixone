@@ -321,6 +321,11 @@ def _tuple_key(value: Dict[str, Any]) -> tuple:
     string_fields = ("statement_id", "group_id", "invocation_id")
     if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in string_fields):
         raise ValueError("PROTOCOL: incomplete fencing tuple")
+    try:
+        for key in string_fields:
+            value[key].encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("PROTOCOL: fencing tuple contains invalid UTF-8") from exc
     account_id = value.get("account_id")
     if (
         isinstance(account_id, bool)
