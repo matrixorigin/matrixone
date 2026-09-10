@@ -297,10 +297,27 @@ def _tuple_key(value: Dict[str, Any]) -> tuple:
     )
 
 
+def _reject_duplicate_json_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"PROTOCOL: duplicate control JSON field {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonstandard_json_constant(value):
+    raise ValueError(f"PROTOCOL: invalid JSON constant {value}")
+
+
 def _decode_control(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid control size")
-    value = json.loads(bytes(data).decode("utf-8"))
+    value = json.loads(
+        bytes(data).decode("utf-8"),
+        object_pairs_hook=_reject_duplicate_json_pairs,
+        parse_constant=_reject_nonstandard_json_constant,
+    )
     if (
         not isinstance(value, dict)
         or type(value.get("version")) is not int
