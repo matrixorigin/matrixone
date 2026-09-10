@@ -161,7 +161,19 @@ func (builder *QueryBuilder) rewriteAffineSumFamilies(
 				}
 				derived, err := builder.buildAffineSumResult(
 					anchor0, anchor1, delta)
-				if err != nil || !sameAffineResultType(derived, ctx.aggregates[candidate.oldPos]) {
+				if err != nil {
+					return
+				}
+				expected := ctx.aggregates[candidate.oldPos]
+				if !sameAffineResultType(derived, expected) {
+					// Decimal arithmetic may widen the intermediate anchor
+					// expression to Decimal256. The affine safety proof above
+					// establishes that the rewritten value has the same domain as
+					// the original SUM, so restore its published result contract.
+					derived, err = appendCastBeforeExpr(
+						builder.GetContext(), derived, expected.Typ)
+				}
+				if err != nil || !sameAffineResultType(derived, expected) {
 					return
 				}
 				replacements[candidate.oldPos] = derived

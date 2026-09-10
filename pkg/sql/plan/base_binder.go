@@ -5520,6 +5520,7 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
+	lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
@@ -5618,8 +5619,15 @@ func bindFuncExprImplByPlanExpr(
 
 					// For decimal types, check scale compatibility
 					if colOid.IsDecimal() && otherOid.IsDecimal() {
-						// Only use column type if it has enough precision (scale)
-						// to represent the other value without truncation
+						// Reusing the column type is safe only when it can hold both
+						// the integral and fractional parts of the other operand. A
+						// scale-only check can narrow a Decimal256 expression back to
+						// Decimal128 and overflow before the comparison is evaluated.
+						colIntegralWidth := colType.Width - colType.Scale
+						otherIntegralWidth := otherType.Width - otherType.Scale
+						if colIntegralWidth < otherIntegralWidth {
+							return false
+						}
 						if colType.Scale >= otherType.Scale {
 							return true
 						}
@@ -7173,6 +7181,64 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 		return "", false
 	}
 	return decimalStringLiteralValue(fn.Args[0])
+}
+
+// refineDecimalArithmeticLiteralLookupTypes removes the conservative full
+// Decimal128 width from direct numeric literals before arithmetic overload
+// selection. The stored literal value supplies a tighter bound; retaining a
+// synthetic DECIMAL(38,s) bound would make a weak literal such as 0.5 force an
+// otherwise narrow prepared expression into Decimal256.
+func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs []types.Type) []types.Type {
+	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
+		return inputs
+	}
+	result := inputs
+	changed := false
+	for i, expr := range args {
+		var lit *plan.Literal
+		for current := expr; current != nil; {
+			if lit = current.GetLit(); lit != nil {
+				break
+			}
+			cast := current.GetF()
+			if cast == nil || cast.Func.ObjName != "cast" || len(cast.Args) == 0 {
+				break
+			}
+			current = cast.Args[0]
+		}
+		if !inputs[i].Oid.IsDecimal() || lit == nil || lit.Isnull {
+			continue
+		}
+		var formatted string
+		switch value := lit.Value.(type) {
+		case *plan.Literal_Decimal64Val:
+			formatted = types.Decimal64(value.Decimal64Val.A).Format(inputs[i].Scale)
+		case *plan.Literal_Decimal128Val:
+			formatted = types.Decimal128{
+				B0_63:   uint64(value.Decimal128Val.A),
+				B64_127: uint64(value.Decimal128Val.B),
+			}.Format(inputs[i].Scale)
+		case *plan.Literal_Sval:
+			formatted = value.Sval
+		default:
+			continue
+		}
+		width := int32(0)
+		for _, ch := range formatted {
+			if ch >= '0' && ch <= '9' {
+				width++
+			}
+		}
+		if width <= 0 || width >= inputs[i].Width {
+			continue
+		}
+		if !changed {
+			result = append([]types.Type(nil), inputs...)
+			changed = true
+		}
+		result[i].Width = width
+	}
+	return result
 }
 
 // A direct prepared parameter in a binary comparison derives its type from

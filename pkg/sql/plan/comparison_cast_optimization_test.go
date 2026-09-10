@@ -174,6 +174,24 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 	}
 }
 
+func TestComparisonDoesNotNarrowWideDecimalExpressionToColumn(t *testing.T) {
+	ctx := context.Background()
+	wideExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_decimal256), Width: 39, Scale: 0},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}
+	columnExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 0},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{wideExpr, columnExpr})
+	require.NoError(t, err)
+	args := result.GetF().Args
+	require.Equal(t, int32(types.T_decimal256), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), args[1].Typ.Id)
+}
+
 // TestDecimalScaleCompatibilityInComparison tests that decimal comparison
 // does not use column type when constant has higher scale (would cause truncation)
 func TestDecimalScaleCompatibilityInComparison(t *testing.T) {

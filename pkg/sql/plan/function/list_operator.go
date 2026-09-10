@@ -84,6 +84,63 @@ func isDatetimeTimestampComparison(left, right types.Type) bool {
 		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
+func decimal128ArithmeticNeedsWidening(operator string, inputs []types.Type) bool {
+	if len(inputs) != 2 || inputs[0].Oid != types.T_decimal128 || inputs[1].Oid != types.T_decimal128 {
+		return false
+	}
+	left, right := inputs[0], inputs[1]
+	switch operator {
+	case "+", "-":
+		scale := max(left.Scale, right.Scale)
+		integerDigits := max(left.Width-left.Scale, right.Width-right.Scale)
+		return integerDigits+scale+1 > 38
+	case "*":
+		return left.Width+right.Width > 38
+	default:
+		return false
+	}
+}
+
+func widenDecimal128ArithmeticInputs(inputs []types.Type) []types.Type {
+	return []types.Type{
+		types.New(types.T_decimal256, inputs[0].Width, inputs[0].Scale),
+		types.New(types.T_decimal256, inputs[1].Width, inputs[1].Scale),
+	}
+}
+
+func decimalAddSubReturnType(parameters []types.Type) types.Type {
+	scale := max(parameters[0].Scale, parameters[1].Scale)
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		integerDigits := max(
+			parameters[0].Width-parameters[0].Scale,
+			parameters[1].Width-parameters[1].Scale,
+		)
+		return types.New(types.T_decimal256, min(integerDigits+scale+1, int32(65)), scale)
+	}
+	if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
+		return types.New(types.T_decimal128, 38, scale)
+	}
+	return types.New(types.T_decimal64, 18, scale)
+}
+
+func decimalMultiplyReturnType(parameters []types.Type) types.Type {
+	scale := int32(12)
+	scale1, scale2 := parameters[0].Scale, parameters[1].Scale
+	if scale1 > scale {
+		scale = scale1
+	}
+	if scale2 > scale {
+		scale = scale2
+	}
+	if scale1+scale2 < scale {
+		scale = scale1 + scale2
+	}
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		return types.New(types.T_decimal256, min(parameters[0].Width+parameters[1].Width, int32(65)), scale)
+	}
+	return types.New(types.T_decimal128, 38, scale)
+}
+
 // isJSONBooleanComparison identifies equality predicates whose result depends
 // on the JSON scalar category. Letting the generic cast rule turn both operands
 // into BOOL would make a JSON string such as "true" indistinguishable from the
@@ -1787,6 +1844,9 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if decimal128ArithmeticNeedsWidening("+", inputs) {
+					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if plusOperatorSupportsVectorScalar(t1, t2) {
@@ -1809,29 +1869,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					// After type conversion, both parameters may be decimal128
 					// Check both parameters to determine result type
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal128, 38, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal64 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal64, 18, scale1)
+					if parameters[0].Oid.IsDecimal() {
+						return decimalAddSubReturnType(parameters)
 					}
 					return parameters[0]
 				},
@@ -1864,6 +1903,9 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if decimal128ArithmeticNeedsWidening("-", inputs) {
+					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if minusOperatorSupportsVectorScalar(t1, t2) {
@@ -1884,13 +1926,8 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
+					if parameters[0].Oid == types.T_decimal256 {
+						return decimalAddSubReturnType(parameters)
 					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
@@ -1939,6 +1976,9 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if decimal128ArithmeticNeedsWidening("*", inputs) {
+					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					// Multiply-specific: when coercion promotes intN×D64 to
@@ -1977,19 +2017,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
 					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale2 > scale {
-							scale = scale2
-						}
-						if scale1+scale2 < scale {
-							scale = scale1 + scale2
-						}
-						return types.New(types.T_decimal256, 65, scale)
+						return decimalMultiplyReturnType(parameters)
 					}
 					if parameters[0].Oid == types.T_decimal64 || parameters[0].Oid == types.T_decimal128 {
 						scale := int32(12)
