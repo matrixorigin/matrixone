@@ -252,6 +252,11 @@ type DatTypKey struct{}
 type TableIDKey struct{}
 type LogicalIdKey struct{}
 
+// RelKindKey carries a mo_tables.relkind that a CREATE TABLE must adopt verbatim
+// instead of deriving one from the table name. Set by ALTER TABLE ... COPY so the
+// replica keeps the original table's kind.
+type RelKindKey struct{}
+
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 

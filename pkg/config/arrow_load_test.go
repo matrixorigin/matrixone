@@ -23,25 +23,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestArrowLoadDefaultsAndProgrammaticOptIn(t *testing.T) {
+func TestArrowLoadDefaultsAndProgrammaticOptOut(t *testing.T) {
 	var frontend FrontendParameters
 	frontend.SetDefaultValues()
-	require.False(t, frontend.ArrowLoad.Enabled)
-	require.False(t, frontend.ArrowLoad.S3Enabled)
-	require.False(t, frontend.ArrowLoad.DistributedEnabled)
+	require.True(t, frontend.ArrowLoad.Enabled)
+	require.True(t, frontend.ArrowLoad.S3Enabled)
+	require.True(t, frontend.ArrowLoad.DistributedEnabled)
 	require.False(t, frontend.ArrowLoad.ForceMaterialize)
 
 	parameters := NewArrowLoadParameters()
-	parameters.Enabled = true
-	parameters.S3Enabled = true
-	parameters.DistributedEnabled = true
+	parameters.Enabled = false
+	parameters.S3Enabled = false
+	parameters.DistributedEnabled = false
 	parameters.SetDefaultValues()
-	require.True(t, parameters.Enabled)
-	require.True(t, parameters.S3Enabled)
-	require.True(t, parameters.DistributedEnabled)
+	require.False(t, parameters.Enabled)
+	require.False(t, parameters.S3Enabled)
+	require.False(t, parameters.DistributedEnabled)
 }
 
-func TestLaunchTAEComposeProfileKeepsArrowLoadFailClosed(t *testing.T) {
+func TestLaunchTAEComposeProfileKeepsArrowLoadDefaultOn(t *testing.T) {
 	for _, name := range []string{"cn-0.toml", "cn-1.toml"} {
 		t.Run(name, func(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join("..", "..", "etc", "launch-tae-compose", "config", name))
@@ -56,9 +56,9 @@ func TestLaunchTAEComposeProfileKeepsArrowLoadFailClosed(t *testing.T) {
 			require.NoError(t, err)
 			decoded.CN.Frontend.SetDefaultValues()
 
-			require.False(t, decoded.CN.Frontend.ArrowLoad.Enabled)
-			require.False(t, decoded.CN.Frontend.ArrowLoad.S3Enabled)
-			require.False(t, decoded.CN.Frontend.ArrowLoad.DistributedEnabled)
+			require.True(t, decoded.CN.Frontend.ArrowLoad.Enabled)
+			require.True(t, decoded.CN.Frontend.ArrowLoad.S3Enabled)
+			require.True(t, decoded.CN.Frontend.ArrowLoad.DistributedEnabled)
 		})
 	}
 }
@@ -72,22 +72,21 @@ func TestArrowLoadTOMLDefaultsAndExplicitOptOut(t *testing.T) {
 		distributedEnabled bool
 		forceMaterialize   bool
 	}{
-		{name: "section omitted"},
+		{name: "section omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
 		{
 			name: "enable fields omitted", input: "[arrow-load]\nforce-materialize = true\n",
-			forceMaterialize: true,
+			enabled: true, s3Enabled: true, distributedEnabled: true, forceMaterialize: true,
 		},
 		{
-			name: "explicit opt in", input: `[arrow-load]
-	enabled = true
-s3-enabled = true
-distributed-enabled = true
+			name: "explicit opt out", input: `[arrow-load]
+enabled = false
+s3-enabled = false
+distributed-enabled = false
 `,
-			enabled: true, s3Enabled: true, distributedEnabled: true,
 		},
 		{
-			name: "one case-insensitive opt in", input: "[arrow-load]\nENABLED = true\nS3-ENABLED = true\n",
-			enabled: true, s3Enabled: true,
+			name: "one case-insensitive opt out", input: "[arrow-load]\nENABLED = false\nS3-ENABLED = false\n",
+			distributedEnabled: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
