@@ -116,6 +116,10 @@ func NewCDCStatementBuilder(
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q mapping does not match column metadata", pkName))
 		}
 		if _, internal := catalog.InternalColumns[col.Name]; internal {
+			// __mo_fake_pk_col is an engine-only placeholder for tables without a
+			// user-visible row identity. It is omitted from sink INSERT values and
+			// cannot safely support DELETE predicates or idempotent snapshot replay,
+			// so fail closed instead of emitting SQL that can lose or duplicate rows.
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q is internal", pkName))
 		}
 		pkColNames = append(pkColNames, pkName)
