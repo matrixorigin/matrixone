@@ -364,13 +364,13 @@ function report_slow_ut_cases(){
 function snapshot_ut_diagnostics(){
     local destination="${UT_DIAGNOSTIC_DIR}"
     mkdir -p "${destination}"
-    if [[ -f "${UT_REPORT}" ]]; then
+    if [[ -f "${UT_REPORT}" && "${UT_REPORT}" != "${destination}/ut-report.json" ]]; then
         cp "${UT_REPORT}" "${destination}/ut-report.json"
     fi
-    if [[ -f "${UT_CHECKPOINT}" ]]; then
+    if [[ -f "${UT_CHECKPOINT}" && "${UT_CHECKPOINT}" != "${destination}/ut-checkpoint.log" ]]; then
         cp "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log"
     fi
-    if [[ -f "${UT_STDERR}" ]]; then
+    if [[ -f "${UT_STDERR}" && "${UT_STDERR}" != "${destination}/ut-stderr.log" ]]; then
         cp "${UT_STDERR}" "${destination}/ut-stderr.log"
     fi
     logger "ERR" "UT diagnostic snapshot: ${destination}"
@@ -386,20 +386,48 @@ function start_ut_heartbeat(){
     fi
 
     (
-        trap 'exit 0' TERM INT
+        local heartbeat_sleep_pid=""
+        function stop_heartbeat_sleep(){
+            trap - TERM INT
+            if [[ -n "${heartbeat_sleep_pid}" ]]; then
+                kill -TERM "${heartbeat_sleep_pid}" 2>/dev/null || true
+            fi
+            exit 0
+        }
+        trap stop_heartbeat_sleep TERM INT
         while :; do
-            sleep "${interval}" || exit 0
+            sleep "${interval}" &
+            heartbeat_sleep_pid=$!
+            wait "${heartbeat_sleep_pid}" || exit 0
+            heartbeat_sleep_pid=""
             [[ "${UT_TERMINATING}" == 0 ]] || exit 0
 
-            local latest stage label active_cases active_detail process_count memory
+            local latest stage label active_cases active_detail active_records process_count memory report
+            local -a heartbeat_reports
             latest=$(tail -n 1 "${UT_CHECKPOINT}" 2>/dev/null || true)
             stage=$(sed -n 's/.* stage=\([^ ]*\).*/\1/p' <<< "${latest}")
             label=$(sed -n 's/.* label=\(.*\) status=.*/\1/p' <<< "${latest}")
             [[ -n "${stage}" ]] || stage="unknown"
             [[ -n "${label}" ]] || label="unknown"
-            active_detail=$(awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" 2>/dev/null |
-                grep '^active UT case:' | head -n 3 | paste -sd ';' - || true)
-            active_cases=$(grep -o 'active UT case:' <<< "${active_detail}" | wc -l | tr -d ' ' || true)
+            # The heartbeat is forked before run_tests assigns the helper
+            # report variables. Discover reports from the immutable run
+            # workspace instead of relying on those later parent-shell values.
+            heartbeat_reports=(
+                "${UT_REPORT}"
+                "${G_WKSP}/${G_TS}-light-race-report.out"
+                "${G_WKSP}/${G_TS}-engine-race-report.out"
+                "${G_WKSP}/${G_TS}-engine-race-report.out".*
+                "${G_WKSP}/${G_TS}-plan-race-report.out"
+                "${G_WKSP}/${G_TS}-plan-race-report.out".*
+            )
+            active_records=""
+            for report in "${heartbeat_reports[@]}"; do
+                if [[ -s "${report}" ]]; then
+                    active_records+=$'\n'"$(awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true)"
+                fi
+            done
+            active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
+            active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
             process_count=$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
             memory=$(cgroup_memory_metrics)
             logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
@@ -417,6 +445,14 @@ function stop_ut_heartbeat(){
         return 0
     fi
     kill -TERM "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    local ticks=0
+    while kill -0 "${UT_HEARTBEAT_PID}" 2>/dev/null && (( ticks < 20 )); do
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    if kill -0 "${UT_HEARTBEAT_PID}" 2>/dev/null; then
+        kill -KILL "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    fi
     wait "${UT_HEARTBEAT_PID}" 2>/dev/null || true
     UT_HEARTBEAT_PID=""
 }
@@ -550,7 +586,6 @@ function handle_ut_termination(){
         exit 143
     fi
     UT_TERMINATING=1
-    stop_ut_heartbeat
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
         "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
@@ -560,6 +595,7 @@ function handle_ut_termination(){
     for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
         [[ -n "${pid}" ]] && terminate_ut_process_group "${pid}" TERM
     done
+    stop_ut_heartbeat
 
     if [[ -n "${CURRENT_UT_PID}" ]]; then
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"

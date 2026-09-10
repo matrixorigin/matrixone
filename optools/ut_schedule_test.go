@@ -217,18 +217,36 @@ exit 0
 
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2"; }
+function logger() { printf "%s\n" "$2" >> "$CASE_DIR/ut.log"; }
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+before=$(date +%s)
+stop_ut_heartbeat
+after=$(date +%s)
+[[ $((after - before)) -lt 3 ]] || exit 90
+
 UT_HEARTBEAT_INTERVAL=1
 start_ut_heartbeat
+LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
+cat > "$LIGHT_RACE_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
+EOF
+cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
+EOF
 sleep 2
 stop_ut_heartbeat
-[[ -z "$UT_HEARTBEAT_PID" ]] || exit 90
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
+grep -q 'active_cases=2' "$CASE_DIR/ut.log"
+grep -q 'TestPrivate' "$CASE_DIR/ut.log"
+grep -q 'TestShard' "$CASE_DIR/ut.log"
 `
-	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 exit 0
-`)
+	`
+	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
 	}
