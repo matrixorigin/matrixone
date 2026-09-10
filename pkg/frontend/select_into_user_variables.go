@@ -32,12 +32,13 @@ import (
 // until the complete result is known.  This also keeps existing variables
 // unchanged for a zero-row query, as MySQL does.
 type selectIntoUserVariables struct {
-	mu       sync.Mutex
-	vars     []*tree.VarExpr
-	row      []any
-	rowIsBin []bool
-	rowType  []plan2.Type
-	rowCount uint64
+	mu        sync.Mutex
+	vars      []*tree.VarExpr
+	row       []any
+	rowIsBin  []bool
+	rowType   []plan2.Type
+	rowDomain []types.RuntimeStringDomain
+	rowCount  uint64
 }
 
 func newSelectIntoUserVariables(vars []*tree.VarExpr) *selectIntoUserVariables {
@@ -98,11 +99,13 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 		collector.row = make([]any, len(collector.vars))
 		collector.rowIsBin = make([]bool, len(collector.vars))
 		collector.rowType = make([]plan2.Type, len(collector.vars))
+		collector.rowDomain = make([]types.RuntimeStringDomain, len(collector.vars))
 		if err := extractRowFromEveryVector(ctx, ses, bat, 0, collector.row, false); err != nil {
 			return err
 		}
 		for i, vec := range bat.Vecs {
 			collector.rowIsBin[i] = vec.GetIsBin()
+			collector.rowDomain[i] = vec.GetRuntimeStringDomainAt(0)
 			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}
 	}
@@ -142,7 +145,12 @@ func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSessi
 		if i < len(collector.rowType) {
 			typ = collector.rowType[i]
 		}
-		if err := setUserDefinedVarWithType(ses, variable.Name, collector.row[i], sql, isBin, typ); err != nil {
+		runtimeDomain := types.RuntimeStringInherit
+		if i < len(collector.rowDomain) {
+			runtimeDomain = collector.rowDomain[i]
+		}
+		if err := setUserDefinedVarWithTypeAndDomain(
+			ses, variable.Name, collector.row[i], sql, isBin, typ, runtimeDomain); err != nil {
 			return err
 		}
 	}
@@ -154,16 +162,31 @@ func setUserDefinedVarWithIsBin(ses FeSession, name string, value interface{}, s
 }
 
 func setUserDefinedVarWithType(ses FeSession, name string, value interface{}, sql string, isBin bool, typ plan2.Type) error {
+	return setUserDefinedVarWithTypeAndDomain(
+		ses, name, value, sql, isBin, typ, types.RuntimeStringInherit)
+}
+
+func setUserDefinedVarWithTypeAndDomain(
+	ses FeSession,
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan2.Type,
+	runtimeDomain types.RuntimeStringDomain,
+) error {
 	switch session := ses.(type) {
 	case *Session:
-		return session.setUserDefinedVarWithType(name, value, sql, isBin, typ)
+		return session.setUserDefinedVarWithTypeAndKindAndReplayability(
+			name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)), false, runtimeDomain)
 	case *backSession:
 		if session.upstream == nil {
 			return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
 		}
-		return setUserDefinedVarWithType(session.upstream, name, value, sql, isBin, typ)
+		return setUserDefinedVarWithTypeAndDomain(
+			session.upstream, name, value, sql, isBin, typ, runtimeDomain)
 	default:
-		if isBin {
+		if isBin || runtimeDomain != types.RuntimeStringInherit {
 			return moerr.NewInternalError(context.Background(), "do not support binary user defined var assignment")
 		}
 		return ses.SetUserDefinedVar(name, value, sql)
