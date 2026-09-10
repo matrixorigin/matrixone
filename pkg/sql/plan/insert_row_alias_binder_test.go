@@ -268,3 +268,222 @@ func TestInsertRowAliasFallbackCollectsNestedParameters(t *testing.T) {
 	insert := stmt.(*tree.Insert)
 	require.Equal(t, []int{1, 2, 3}, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
 }
+
+func TestInsertRowAliasValidationEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tests := []struct {
+		name        string
+		rowAlias    *tree.AliasClause
+		insertCols  []string
+		table       *planpb.TableDef
+		wantFailure bool
+	}{
+		{name: "nil alias", insertCols: []string{"a"}, table: tableDef},
+		{name: "empty alias", rowAlias: &tree.AliasClause{}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "target conflict", rowAlias: &tree.AliasClause{Alias: "t"}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "missing table", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{"a"}, wantFailure: true},
+		{name: "column count mismatch", rowAlias: &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x"}}, insertCols: []string{"a", "b"}, table: tableDef, wantFailure: true},
+		{name: "empty target column", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{""}, table: tableDef, wantFailure: true},
+		{name: "empty alias column", rowAlias: &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{""}}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "missing target column", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{"missing"}, table: tableDef, wantFailure: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binding, err := validateInsertRowAlias(
+				context.Background(), test.rowAlias, test.insertCols, test.table, "db", "t", 1,
+			)
+			if test.wantFailure {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Nil(t, binding)
+		})
+	}
+}
+
+func TestInsertRowAliasSourceColumnResolutionEdges(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, false)
+	tableDef := testInsertAliasTable()
+
+	columns, err := builder.getInsertColsForRowAlias(nil, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "a", "b"}, columns)
+
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{"a", "A"}, tableDef)
+	require.Error(t, err)
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{"missing"}, tableDef)
+	require.Error(t, err)
+	require.Nil(t, cloneInsertRowsForGeneratedRewrite(nil))
+}
+
+func TestInsertRowAliasUpdateTargetValidationEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	valid := func(name *tree.UnresolvedName) *tree.UpdateExpr {
+		return &tree.UpdateExpr{Names: []*tree.UnresolvedName{name}}
+	}
+	tests := []struct {
+		name        string
+		table       *planpb.TableDef
+		updates     tree.UpdateExprs
+		wantFailure bool
+	}{
+		{name: "missing table", updates: tree.UpdateExprs{}, wantFailure: true},
+		{name: "nil updates", table: tableDef},
+		{name: "nil update item", table: tableDef, updates: tree.UpdateExprs{nil}},
+		{name: "empty update", table: tableDef, updates: tree.UpdateExprs{&tree.UpdateExpr{}}, wantFailure: true},
+		{name: "nil update name", table: tableDef, updates: tree.UpdateExprs{&tree.UpdateExpr{Names: []*tree.UnresolvedName{nil}}}, wantFailure: true},
+		{name: "wrong table", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("other", "a"))}, wantFailure: true},
+		{name: "missing column", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("missing"))}, wantFailure: true},
+		{name: "valid column", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("a"))}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateOndupUpdateTargets(
+				context.Background(), test.updates, test.table, "db", "t", 1,
+			)
+			if test.wantFailure {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestInsertRowAliasBinderResolvesBareAndRejectsQualifiedEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x", "y"}},
+		[]string{"a", "b"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+
+	for _, name := range []*tree.UnresolvedName{
+		testInsertAliasName("db", "n", "x"),
+		testInsertAliasName("n", "missing"),
+		testInsertAliasName("other", "a"),
+		testInsertAliasName("t", "missing"),
+	} {
+		_, err = binder.BindColRef(name, 0, true)
+		require.Error(t, err)
+	}
+
+	_, err = binder.BindColRef(testInsertAliasName("other", "a"), 1, true)
+	require.Error(t, err)
+
+	expr, err := binder.BindColRef(testInsertAliasName("x"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), expr.GetCol().RelPos)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+
+	binder.SetTargetCorrelationTag(13)
+	expr, err = binder.BindColRef(testInsertAliasName("a"), 1, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), expr.GetCorr().Depth)
+	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(1), expr.GetCorr().ColPos)
+
+	_, err = binder.BindColRef(testInsertAliasName("missing"), 0, true)
+	require.Error(t, err)
+}
+
+func TestInsertRowAliasScopeRefsTraverseAndRewrite(t *testing.T) {
+	col := func(tag, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+	corr := func(tag, pos, depth int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: tag, ColPos: pos, Depth: depth}}}
+	}
+	emptyExprs := []*planpb.Expr{
+		&planpb.Expr{Expr: &planpb.Expr_Col{}},
+		&planpb.Expr{Expr: &planpb.Expr_Corr{}},
+		&planpb.Expr{Expr: &planpb.Expr_F{}},
+		&planpb.Expr{Expr: &planpb.Expr_List{}},
+		&planpb.Expr{Expr: &planpb.Expr_W{}},
+		&planpb.Expr{Expr: &planpb.Expr_Sub{}},
+	}
+
+	refs := make([]insertScopeRef, 0)
+	seen := make(map[[2]int32]struct{})
+	collectInsertScopeRefs(nil, &refs, seen)
+	for _, expr := range emptyExprs {
+		collectInsertScopeRefs(expr, &refs, seen)
+	}
+
+	listExpr := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		col(22, 6), corr(22, 6, 2), col(88, 12),
+	}}}}
+	windowExpr := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc:  col(7, 7),
+		PartitionBy: []*planpb.Expr{col(11, 8)},
+		OrderBy:     []*planpb.OrderBySpec{nil, &planpb.OrderBySpec{Expr: col(99, 9)}},
+		Frame:       &planpb.FrameClause{Start: &planpb.FrameBound{Val: col(7, 10)}, End: &planpb.FrameBound{Val: col(11, 11)}},
+	}}}
+	subqueryExpr := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{}}}
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{
+		col(7, 1),
+		corr(7, 2, 1),
+		corr(7, 3, 2),
+		col(11, 3),
+		col(99, 4),
+		col(0, 5),
+		col(7, 1),
+		listExpr,
+		corr(11, 13, 2),
+		corr(88, 13, 2),
+		windowExpr,
+		subqueryExpr,
+	}}}}
+	collectInsertScopeRefs(expr, &refs, seen)
+
+	got := make([][2]int32, 0, len(refs))
+	for _, ref := range refs {
+		got = append(got, [2]int32{ref.tag, ref.pos})
+	}
+	require.Equal(t, [][2]int32{
+		{7, 1}, {7, 2}, {7, 3}, {11, 3}, {99, 4}, {22, 6}, {88, 12},
+		{11, 13}, {88, 13}, {7, 7}, {11, 8}, {99, 9}, {7, 10}, {11, 11},
+	}, got)
+
+	rewriteInsertScopeRefs(nil, 7, 20, 11, 4, map[[2]int32]int32{})
+	for _, empty := range emptyExprs {
+		rewriteInsertScopeRefs(empty, 7, 20, 11, 4, map[[2]int32]int32{})
+	}
+	rewriteInsertScopeRefs(expr, 7, 20, 11, 4, map[[2]int32]int32{
+		{99, 4}: 8,
+		{22, 6}: 10,
+		{99, 9}: 11,
+	})
+
+	args := expr.GetF().Args
+	require.Equal(t, int32(20), args[0].GetCol().RelPos)
+	require.Equal(t, int32(2), args[1].GetCol().ColPos)
+	require.Equal(t, int32(20), args[2].GetCorr().RelPos)
+	require.Equal(t, int32(7), args[3].GetCol().ColPos)
+	require.Equal(t, int32(8), args[4].GetCol().ColPos)
+	require.Equal(t, int32(0), args[5].GetCol().RelPos)
+	require.Equal(t, int32(10), args[7].GetList().List[0].GetCol().ColPos)
+	require.Equal(t, int32(10), args[7].GetList().List[1].GetCorr().ColPos)
+	require.Equal(t, int32(88), args[7].GetList().List[2].GetCol().RelPos)
+	require.Equal(t, int32(17), args[8].GetCorr().ColPos)
+	require.Equal(t, int32(88), args[9].GetCorr().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().WindowFunc.GetCol().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().OrderBy[1].Expr.GetCol().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().Frame.Start.Val.GetCol().RelPos)
+}
+
+func TestInsertRowAliasParamOffsetsHandleEmptyExpressions(t *testing.T) {
+	require.Nil(t, collectParamExprOffsets(nil))
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (1) as n on duplicate key update a = 1", 1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	require.Nil(t, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
+}
