@@ -98,6 +98,46 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+// decimal256BatchArith enforces the declared DECIMAL precision after the
+// physical Decimal256 kernel has completed. Decimal256's signed coefficient
+// can hold up to 76 digits, while SQL DECIMAL results are capped at 65; merely
+// clamping result metadata would otherwise let wider values escape into CTAS,
+// comparisons, and storage under a narrower type tag.
+func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int,
+	arithFn func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error,
+	selectList *FunctionSelectList) error {
+	if err := decimalBatchArith[types.Decimal256, types.Decimal256](
+		parameters, result, proc, length, arithFn, selectList); err != nil {
+		return err
+	}
+
+	resultVector := result.GetResultVector()
+	resultType := resultVector.GetType()
+	if resultType.Width <= 0 || resultType.Width >= types.T_decimal256.ToType().Width {
+		return nil
+	}
+	limit := types.Decimal256{B0_63: 1}
+	if !d256MulPow10(&limit, resultType.Width) {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"cannot construct Decimal256 precision limit for width %d", resultType.Width)
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](resultVector)
+	for row, value := range values {
+		if resultVector.GetNulls().Contains(uint64(row)) {
+			continue
+		}
+		magnitude := value
+		d256Abs(&magnitude)
+		if !magnitude.Less(limit) {
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal256",
+				"value '%s' exceeds DECIMAL(%d,%d)",
+				value.Format(resultType.Scale), resultType.Width, resultType.Scale)
+		}
+	}
+	return nil
+}
+
 func divOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
 	if typ1.Oid.IsArrayRelate() && typ2.IsNumeric() { // Vec / Scalar
 		return true
@@ -282,7 +322,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	case types.T_decimal128:
 		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList)
 	case types.T_decimal256:
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Add, selectList)
+		return decimal256BatchArith(parameters, result, proc, length, d256Add, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32], selectList)
@@ -354,7 +394,7 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Sub, selectList)
 	case types.T_decimal256:
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Sub, selectList)
+		return decimal256BatchArith(parameters, result, proc, length, d256Sub, selectList)
 
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
@@ -442,7 +482,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul, selectList)
 	case types.T_decimal256:
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Mul, selectList)
+		return decimal256BatchArith(parameters, result, proc, length, d256Mul, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)

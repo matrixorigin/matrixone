@@ -106,6 +106,17 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
 			},
 		},
+		{
+			shouldCast: true,
+			in: [2]types.Type{
+				types.T_int32.ToType(),
+				types.New(types.T_decimal256, 40, 2),
+			},
+			want: [2]types.Type{
+				types.New(types.T_decimal256, 76, 0),
+				types.New(types.T_decimal256, 40, 2),
+			},
+		},
 
 		// special rule, null + null
 		// we just cast it as int64 + int64

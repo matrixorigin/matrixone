@@ -7192,12 +7192,21 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
 		return inputs
 	}
+	hasDecimalInput := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal()
 	result := inputs
 	changed := false
 	for i, expr := range args {
 		var lit *plan.Literal
+		var literalExpr *Expr
 		for current := expr; current != nil; {
+			// A syntax-explicit cast declares the value's arithmetic domain. Do
+			// not replace DECIMAL(38,18) with metadata inferred from its source
+			// spelling, which can otherwise create an invalid width < scale cast.
+			if isExplicitPreparedCast(current) {
+				break
+			}
 			if lit = current.GetLit(); lit != nil {
+				literalExpr = current
 				break
 			}
 			cast := current.GetF()
@@ -7206,7 +7215,26 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 			}
 			current = cast.Args[0]
 		}
-		if !inputs[i].Oid.IsDecimal() || lit == nil || lit.Isnull {
+		if lit == nil || lit.Isnull {
+			continue
+		}
+		if hasDecimalInput && inputs[i].IsIntOrUint() {
+			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
+			if !exact || width <= 0 {
+				continue
+			}
+			if !changed {
+				result = append([]types.Type(nil), inputs...)
+				changed = true
+			}
+			oid := types.T_decimal64
+			if width > types.T_decimal64.ToType().Width {
+				oid = types.T_decimal128
+			}
+			result[i] = types.New(oid, width, 0)
+			continue
+		}
+		if !inputs[i].Oid.IsDecimal() {
 			continue
 		}
 		var formatted string
@@ -7219,7 +7247,16 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 				B64_127: uint64(value.Decimal128Val.B),
 			}.Format(inputs[i].Scale)
 		case *plan.Literal_Sval:
-			formatted = value.Sval
+			_, _, canonical, exact := PreparedDecimalRuntimeDomains(value.Sval)
+			if !exact {
+				continue
+			}
+			parseWidth := max(inputs[i].Width, inputs[i].Scale, int32(1))
+			parsed, err := types.ParseDecimal256(canonical, parseWidth, inputs[i].Scale)
+			if err != nil {
+				continue
+			}
+			formatted = parsed.Format(inputs[i].Scale)
 		default:
 			continue
 		}
@@ -7229,6 +7266,13 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 				width++
 			}
 		}
+		unsigned := strings.TrimPrefix(formatted, "-")
+		if strings.HasPrefix(unsigned, "0.") && width > 1 {
+			// DECIMAL precision excludes the display-only zero to the left of
+			// the decimal point. The scale itself remains a lower bound.
+			width--
+		}
+		width = max(width, inputs[i].Scale, int32(1))
 		if width <= 0 || width >= inputs[i].Width {
 			continue
 		}

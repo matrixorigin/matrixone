@@ -84,28 +84,56 @@ func isDatetimeTimestampComparison(left, right types.Type) bool {
 		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
-func decimal128ArithmeticNeedsWidening(operator string, inputs []types.Type) bool {
-	if len(inputs) != 2 || inputs[0].Oid != types.T_decimal128 || inputs[1].Oid != types.T_decimal128 {
-		return false
+func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
+	if input.Oid.IsDecimal() {
+		width = input.Width
+		if width <= 0 {
+			width = input.Oid.ToType().Width
+		}
+		scale = max(input.Scale, int32(0))
+		return width, scale, true
 	}
-	left, right := inputs[0], inputs[1]
-	switch operator {
-	case "+", "-":
-		scale := max(left.Scale, right.Scale)
-		integerDigits := max(left.Width-left.Scale, right.Width-right.Scale)
-		return integerDigits+scale+1 > 38
-	case "*":
-		return left.Width+right.Width > 38
-	default:
-		return false
+	if input.IsIntOrUint() {
+		return integerIntegralWidth(input.Oid), 0, true
 	}
+	return 0, 0, false
 }
 
-func widenDecimal128ArithmeticInputs(inputs []types.Type) []types.Type {
-	return []types.Type{
-		types.New(types.T_decimal256, inputs[0].Width, inputs[0].Scale),
-		types.New(types.T_decimal256, inputs[1].Width, inputs[1].Scale),
+// widenedDecimalArithmeticInputs derives the Decimal256 cast domains from the
+// original numeric operands. fixedTypeCastRule1 intentionally uses a full
+// Decimal128 envelope for mixed decimal/integer operands, so deciding from its
+// output alone loses the integer's actual 3..20 digit domain and can either
+// miss a required widening or make small literal arithmetic unnecessarily wide.
+func widenedDecimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]types.Type, bool) {
+	if len(inputs) != 2 || len(coerced) != 2 ||
+		coerced[0].Oid != types.T_decimal128 || coerced[1].Oid != types.T_decimal128 {
+		return nil, false
 	}
+
+	leftWidth, leftScale, leftOK := decimalArithmeticDomain(inputs[0])
+	rightWidth, rightScale, rightOK := decimalArithmeticDomain(inputs[1])
+	if !leftOK || !rightOK || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
+		return nil, false
+	}
+
+	var precision int32
+	switch operator {
+	case "+", "-":
+		scale := max(leftScale, rightScale)
+		integerDigits := max(leftWidth-leftScale, rightWidth-rightScale)
+		precision = integerDigits + scale + 1
+	case "*":
+		precision = leftWidth + rightWidth
+	default:
+		return nil, false
+	}
+	if precision <= types.T_decimal128.ToType().Width {
+		return nil, false
+	}
+	return []types.Type{
+		types.New(types.T_decimal256, leftWidth, leftScale),
+		types.New(types.T_decimal256, rightWidth, rightScale),
+	}, true
 }
 
 func decimalAddSubReturnType(parameters []types.Type) types.Type {
@@ -1844,10 +1872,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if decimal128ArithmeticNeedsWidening("+", inputs) {
-					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				if widened, ok := widenedDecimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					if plusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1903,10 +1931,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if decimal128ArithmeticNeedsWidening("-", inputs) {
-					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				if widened, ok := widenedDecimalArithmeticInputs("-", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					if minusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1976,10 +2004,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if decimal128ArithmeticNeedsWidening("*", inputs) {
-					return newCheckResultWithCast(0, widenDecimal128ArithmeticInputs(inputs))
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					// Multiply-specific: when coercion promotes intN×D64 to
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
