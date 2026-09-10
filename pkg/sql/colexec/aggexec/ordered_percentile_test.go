@@ -666,6 +666,7 @@ func TestOrderedPercentileDiscreteSortableTypes(t *testing.T) {
 		require.NoError(t, exec.SetExtraInformation(
 			EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		require.Positive(t, exec.Size())
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
