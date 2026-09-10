@@ -547,7 +547,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.DbName != "" {
 		dbName = ap.DbName
 	}
-	dbId := pub.DbId
+	var dbId uint64
 	if dbName != pubsub.TableAll {
 		if _, ok := sysDatabases[dbName]; ok {
 			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
