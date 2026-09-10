@@ -91,8 +91,9 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 				require.Eventually(t, func() bool {
 					var current int
 					err := dbConn.QueryRowContext(ctx,
-						"select count(*) from mo_catalog.mo_view_refresh "+
-							"where target_database_name = ? and status = 'CURRENT'",
+						"select count(*) from mo_catalog.mo_tables t "+
+							"join mo_catalog.mo_view_refresh r on r.account_id=t.account_id and r.target_relation_id=t.rel_id "+
+							"where t.reldatabase = ? and t.relkind = 'v' and r.status = 'CURRENT'",
 						db).Scan(&current)
 					return err == nil && current == 11
 				}, time.Minute, 100*time.Millisecond)
