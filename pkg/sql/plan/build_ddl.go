@@ -1520,8 +1520,82 @@ func remapCTASSourceDefaultsToOutput(
 					col.Name, refPos)
 			}
 		}
+		if err := remapCTASDefaultSQL(ctx, col.Default, positions, cols); err != nil {
+			return err
+		}
 		remapGeneratedColExprPositions(col.Default.Expr, positions)
 	}
+	return nil
+}
+
+type ctasDefaultNameVisitor struct {
+	names map[string]string
+}
+
+func (v *ctasDefaultNameVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if name, ok := expr.(*tree.UnresolvedName); ok && name.NumParts == 1 {
+		if target, found := v.names[strings.ToLower(name.ColName())]; found {
+			return tree.NewUnresolvedColName(target), true
+		}
+	}
+	return expr, false
+}
+
+func (v *ctasDefaultNameVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+// Rewrite names simultaneously, using the bound reference's source position.
+// Sequential string substitutions would corrupt swapped aliases and literals.
+func remapCTASDefaultSQL(ctx context.Context, def *plan.Default, positions map[int32]int32, cols []*ColDef) error {
+	names := make(map[string]string)
+	var collect func(*plan.Expr)
+	collect = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col != nil && e.Col.RelPos == 0 {
+				if pos, ok := positions[e.Col.ColPos]; ok {
+					names[strings.ToLower(e.Col.Name)] = cols[pos].Name
+					e.Col.Name = cols[pos].Name
+				}
+			}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				collect(arg)
+			}
+		case *plan.Expr_List:
+			for _, arg := range e.List.List {
+				collect(arg)
+			}
+		}
+	}
+	collect(def.Expr)
+	if len(names) == 0 || def.OriginString == "" {
+		return nil
+	}
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+def.OriginString, 1)
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "invalid inherited default SQL")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 {
+		return moerr.NewInvalidInput(ctx, "invalid inherited default SQL")
+	}
+	expr, ok := clause.Exprs[0].Expr.Accept(&ctasDefaultNameVisitor{names: names})
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "cannot rewrite inherited default SQL")
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
+	expr.Format(fmtCtx)
+	def.OriginString = fmtCtx.String()
 	return nil
 }
 
@@ -1561,6 +1635,7 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 
 func buildCTASDefaultFromOrigin(
 	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+	columns ...*ColDef,
 ) (*plan.Default, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
 	if err != nil {
@@ -1577,12 +1652,20 @@ func buildCTASDefaultFromOrigin(
 	}
 
 	binder := NewDefaultBinder(ctx.GetContext(), nil, nil, typ, nil)
+	if len(columns) > 0 {
+		binder = NewDefaultBinderWithColumns(ctx.GetContext(), typ, columns)
+	}
 	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
+	}
+	if exprHasLocalColumnRef(defaultExpr) {
+		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
+			return nil, err
+		}
 	}
 	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
 	if err != nil {
@@ -1598,6 +1681,24 @@ func buildCTASDefaultFromOrigin(
 		Expr:         defaultExpr,
 		OriginString: originString,
 	}, nil
+}
+
+// Rebinding closes type overrides as well as SQL replay: merely updating a
+// ColRef's position/type cannot update its enclosing function overload. Check
+// the final physical order too, since LIKE and dump reconstruct that order.
+func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
+	for _, col := range cols {
+		if col.Default == nil || !exprHasLocalColumnRef(col.Default.Expr) {
+			continue
+		}
+		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
+			col.Default.NullAbility, col.Default.OriginString, cols...)
+		if err != nil {
+			return err
+		}
+		col.Default = bound
+	}
+	return validateDefaultColumnDependencies(ctx.GetContext(), cols)
 }
 
 func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
@@ -3358,6 +3459,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			allColDefs,
 			sourceColumnDefs,
 		)
+		if err := finalizeCTASDefaults(ctx, createTable.TableDef.Cols); err != nil {
+			return err
+		}
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder

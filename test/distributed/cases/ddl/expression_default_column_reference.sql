@@ -128,15 +128,13 @@ create table t_ctas (
 insert into t_ctas (a) values (20);
 select a, b from t_ctas order by a;
 
--- The declaration order remains [a, b] even though CTAS stores the
--- target-only column b before the SELECT column a. Do not re-apply the
--- forward-expression-default rule to the physical merge order.
+-- CTAS must not publish an order that SHOW CREATE/LIKE cannot replay.
+-- @regex("defined after it", true)
 create table t_ctas_expression (
     a int default (1 + 1),
     b int default (a + 1)
 ) as select 10 as a;
-insert into t_ctas_expression (a) values (20);
-select a, b from t_ctas_expression order by a;
+select count(*) as unpublished from information_schema.tables where table_schema = database() and table_name = 't_ctas_expression';
 
 -- Inherited source defaults are bound against the source table order, not the
 -- SELECT output order. Reordering the source columns must preserve b= a+1.
@@ -165,7 +163,7 @@ insert into t_ctas_explicit_reference_source (a, c) values (10, 30);
 create table t_ctas_explicit_reference (
     b int default (c + 10),
     c int,
-    x int default (b + 100)
+    x int default (100)
 ) as select b, c from t_ctas_explicit_reference_source;
 select x, b, c from t_ctas_explicit_reference;
 insert into t_ctas_explicit_reference (c) values (50);
@@ -189,5 +187,28 @@ select a, b, c from t_move order by a;
 create table t_like like t_chain;
 insert into t_like (id, a) values (10, 50);
 select id, a, b, c from t_like;
+
+-- LOAD must normalize file order before evaluating dependency levels.
+create table t_load(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1));
+load data inline format='csv', data='20,10\n40,30\n' into table t_load fields terminated by ',' (b,a);
+select a,b,c,d from t_load order by a;
+load data inline format='csv', data='50\n' into table t_load fields terminated by ',' (b);
+select b, c is null as null_c, d is null as null_d from t_load where b=50;
+create table t_load_volatile(id int, a double default (rand()), b double default (a));
+load data inline format='csv', data='1\n2\n' into table t_load_volatile fields terminated by ',' (id);
+select id, a=b as same_source from t_load_volatile order by id;
+load data inline format='csv', data='3,7\n' into table t_load_volatile fields terminated by ',' (id,b);
+select id,b from t_load_volatile where id=3;
+
+-- CTAS rebinds inherited defaults against overridden target types and names.
+create table t_ctas_src(a bigint, b bigint default (a+a));
+insert into t_ctas_src(a) values(3);
+create table t_ctas_type(a varchar(20)) as select a,b from t_ctas_src;
+insert into t_ctas_type(a) values('10');
+select a,b from t_ctas_type order by b;
+create table t_ctas_alias as select a as x,b from t_ctas_src;
+create table t_ctas_alias_copy like t_ctas_alias;
+insert into t_ctas_alias_copy(x) values(7);
+select x,b from t_ctas_alias_copy;
 
 drop database expression_default_colref_28450;

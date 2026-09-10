@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -693,6 +694,11 @@ func buildDefaultExprWithColumns(
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
+	if exprHasLocalColumnRef(planExpr) {
+		if err := requireExpressionDefaultProtocol(proc); err != nil {
+			return nil, err
+		}
+	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
@@ -718,6 +724,23 @@ func buildDefaultExprWithColumns(
 		Expr:         newExpr,
 		OriginString: fmtCtx.String(),
 	}, nil
+}
+
+// Admission must precede catalog publication: older VALUE_SCAN consumers cannot
+// evaluate a persisted default containing row references. The deployment must
+// keep its protocol at the old value until all CNs have been upgraded.
+func requireExpressionDefaultProtocol(proc *process.Process) error {
+	if proc != nil {
+		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
+			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			version, valid := value.(int64)
+			if ok && valid && version >= defines.MORPCVersion60 {
+				return nil
+			}
+		}
+	}
+	return moerr.NewNotSupported(context.Background(),
+		"column-reference defaults require all CNs to support protocol version 60")
 }
 
 func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {

@@ -19,13 +19,120 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExpressionDefaultProtocolAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
+	for _, version := range []any{defines.MORPCVersion58, "59", defines.MORPCVersion59, defines.MORPCVersion60} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		stmt, err := mysql.ParseOne(context.Background(), "create table t(a int, b int default (a+1))", 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		if version == defines.MORPCVersion60 {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "protocol version 60")
+		}
+		stmt, err = mysql.ParseOne(context.Background(), "create table t(a int default (1+1))", 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err, "constant defaults remain compatible")
+	}
+	require.Error(t, requireExpressionDefaultProtocol(nil))
+}
+
+func TestCTASDefaultRebindAndReplay(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	stmt, err := mysql.ParseOne(context.Background(), "create table src(a bigint, b bigint default (a+a))", 1)
+	require.NoError(t, err)
+	p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	table := p.GetDdl().GetCreateTable().TableDef
+	table.TblId = 29002
+	mock.ctxt.tables["src"] = table
+	mock.ctxt.objects["src"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "src", Obj: 29002}
+	for _, sql := range []string{
+		"create table dst(a varchar(20)) as select a,b from src",
+		"create table dst as select a as x,b from src",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().TableDef.Cols
+			ref := expressionDefaultFindLocalCol(cols[1].Default.Expr)
+			require.NotNil(t, ref)
+			require.Equal(t, cols[0].Typ.Id, ref.Typ.Id)
+			require.Equal(t, cols[0].Name, ref.GetCol().Name)
+			if cols[0].Name == "x" {
+				require.Contains(t, cols[1].Default.OriginString, "x")
+				require.NotContains(t, cols[1].Default.OriginString, "a")
+			}
+			// The stored SQL must bind independently against the target schema.
+			require.NoError(t, finalizeCTASDefaults(mock.CurrentContext(), cols))
+		})
+	}
+	stmt, err = mysql.ParseOne(context.Background(),
+		"create table dst(a int default (1+1), b int default (a+1)) as select 10 as a", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	require.ErrorContains(t, err, "defined after it", "reject non-replayable physical order before publication")
+}
+
+func TestLoadDefaultMaterialization(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		ctx := NewMockCompilerContext(true)
+		stmt, err := mysql.ParseOne(context.Background(),
+			"create table t(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1))", 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+		table := p.GetDdl().GetCreateTable().TableDef
+		builder := NewQueryBuilder(planpb.Query_INSERT, ctx, false, false)
+		bindCtx := NewBindContext(builder, nil)
+		child := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, bindCtx)
+		node := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{child}}
+		load := &tree.Load{Table: &tree.TableName{}, Param: &tree.ExternParam{}}
+		supplied := map[string]int32{"b": 0, "a": 1}
+		_, err = getProjectNode(load, ctx, node, table, supplied)
+		require.NoError(t, err)
+		if parallel {
+			before := node.ProjectList[2]
+			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
+			require.Same(t, before, node.ProjectList[2], "default is already typed")
+		}
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied)
+		require.NoError(t, err)
+		last := builder.qry.Nodes[id]
+		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
+		previous := builder.qry.Nodes[last.Children[0]]
+		require.Equal(t, []int32{0}, collectRefColPos(previous.ProjectList[2]))
+		initial := builder.qry.Nodes[previous.Children[0]]
+		require.Equal(t, []int32{1}, collectRefColPos(initial.ProjectList[0]))
+		require.Equal(t, []int32{0}, collectRefColPos(initial.ProjectList[1]))
+		require.True(t, initial.ProjectList[2].GetLit().Isnull)
+		require.Nil(t, last.BindingTags, "LOAD consumes physical child-batch coordinates")
+	}
+}
 
 func expressionDefaultIntType() planpb.Type {
 	return planpb.Type{Id: int32(types.T_int64), Width: 64}
