@@ -363,3 +363,18 @@ SET @format_text_28508 = '9007199254740993';
 SET @format_scale_28508 = 2;
 EXECUTE format_domain_stmt_28508 USING @format_decimal_28508, @format_scale_28508, @format_float_28508, @format_scale_28508, @format_text_28508, @format_scale_28508;
 DEALLOCATE PREPARE format_domain_stmt_28508;
+
+-- Catalog expressions retain legacy rounding and string-vector compatibility.
+DROP TABLE IF EXISTS format_catalog_28508;
+CREATE TABLE format_catalog_28508(
+    a BIGINT,
+    d DECIMAL(6,1),
+    g VARCHAR(30) GENERATED ALWAYS AS (FORMAT(d, 0, 'en_US')) STORED,
+    v VARCHAR(30) DEFAULT (FORMAT(2.5, 0)),
+    CHECK (FORMAT(a, 0) = '1')
+);
+INSERT INTO format_catalog_28508(a, d) VALUES (1, 2.5);
+SELECT a, g, v, FORMAT(d, 0) AS direct_format FROM format_catalog_28508;
+UPDATE format_catalog_28508 SET d = 3.5 WHERE a = 1;
+SELECT a, g, v, FORMAT(d, 0) AS direct_format FROM format_catalog_28508;
+DROP TABLE format_catalog_28508;
