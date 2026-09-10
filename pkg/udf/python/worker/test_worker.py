@@ -72,9 +72,13 @@ class WorkerContractTest(unittest.TestCase):
             "invocation_id": "zero-sequence",
             "lease_epoch": 1,
         }
-        for kind in ("EndInput", "Finish"):
+        controls = {
+            "EndInput": {"last_sequence": 0},
+            "Finish": {"last_sequence": 0, "finish_id": "finish", "status": "OK"},
+        }
+        for kind, fields in controls.items():
             wire = worker._encode_control(
-                {"kind": kind, "tuple": fence, "last_sequence": 0}
+                {"kind": kind, "tuple": fence, **fields}
             )
             self.assertEqual(0, worker._decode_control(wire)["last_sequence"])
             self.assertIn(b'"last_sequence":0', wire)
@@ -762,6 +766,38 @@ class WorkerContractTest(unittest.TestCase):
             worker._decode_control(json.dumps(value).encode())
         with self.assertRaisesRegex(ValueError, "unsupported control field"):
             worker._encode_control(value)
+
+    def test_control_fields_belong_to_their_kind(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        input_batch = {
+            "version": worker.PROTOCOL_VERSION,
+            "kind": "InputBatch",
+            "tuple": tuple_value,
+            "sequence": 1,
+        }
+        with self.assertRaisesRegex(ValueError, "not valid for control kind"):
+            worker._encode_control({**input_batch, "last_sequence": 1})
+        with self.assertRaisesRegex(ValueError, "not valid for control kind"):
+            worker._decode_control(
+                json.dumps({**input_batch, "last_sequence": 1}).encode()
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported control kind"):
+            worker._decode_control(
+                json.dumps(
+                    {
+                        "version": worker.PROTOCOL_VERSION,
+                        "kind": "Unknown",
+                        "tuple": tuple_value,
+                    }
+                ).encode()
+            )
 
     def test_control_rejects_unknown_fencing_tuple_fields(self):
         tuple_value = {
