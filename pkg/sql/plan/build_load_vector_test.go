@@ -32,7 +32,7 @@ func TestMakeCastExprKeepsDirectParallelLoadVector(t *testing.T) {
 	node := &plan.Node{ProjectList: []*plan.Expr{original}}
 	tableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: vectorType}}}
 
-	result := makeCastExpr(&tree.Load{}, "vectors.csv", tableDef, node)
+	result := makeCastExpr(&tree.Load{}, "vectors.csv", tableDef, node, map[string]int32{"v": 0})
 	require.Len(t, result, 1)
 	require.Same(t, original, result[0])
 }
