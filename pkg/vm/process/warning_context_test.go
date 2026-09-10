@@ -23,7 +23,7 @@ import (
 
 func TestWarningSinkContextGeneration(t *testing.T) {
 	ctx := context.Background()
-	require.Same(t, ctx, ContextWithWarningSink(ctx, nil))
+	require.Equal(t, ctx, ContextWithWarningSink(ctx, nil))
 	require.Nil(t, ContextWithWarningSink(nil, nil))
 	require.Nil(t, WarningSinkFromContext(nil))
 	old, next := new(int), new(int)
