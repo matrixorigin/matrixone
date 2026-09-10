@@ -2920,15 +2920,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	// Resolve ambiguous scalar numeric overloads while the statement is being
 	// prepared. The parameter itself remains a ParamRef under the selected
-	// numeric cast. ABS records this fallback so execution can rebind integer
-	// protocol values exactly, SLEEP keeps the stable DOUBLE domain for the
-	// cached plan, and CHAR keeps a numeric context for prepared parameters
+	// numeric cast. ABS and SIGN record this fallback so execution can rebind
+	// integer protocol values exactly, SLEEP keeps the stable DOUBLE domain for
+	// the cached plan, and CHAR keeps a numeric context for prepared parameters
 	// without changing the ordinary string-prefix semantics of direct CHAR
 	// calls.
 	if b.builder != nil && b.builder.isPrepareStatement {
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
-			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep") ||
-				strings.EqualFold(funcName, "char")) {
+			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
+				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -3013,15 +3013,16 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
-	// ABS and SLEEP both have integer and floating-point overloads. A bare
+	// ABS, SIGN, and SLEEP all have integer and floating-point overloads. A bare
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
-	// the generic overload resolver choose an integer cast makes valid binary
-	// executions such as ABS(-1.5) and SLEEP(0.01) fail before the function can
-	// see the value. Use DOUBLE as the deferred prepare-time domain. ABS marks
-	// that fallback so execution can restore an exact integer overload when the
-	// protocol reports an integer parameter; explicit user DOUBLE casts remain
-	// ordinary DOUBLE expressions.
-	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sleep")) {
+	// generic overload resolver choose an integer cast makes valid executions
+	// such as ABS(-1.5), SIGN(-0.1), and SLEEP(0.01) fail before the function
+	// can see the value. Use DOUBLE as the deferred prepare-time domain. ABS and
+	// SIGN mark that fallback so execution can restore an exact integer/decimal
+	// overload when the protocol reports the runtime category; explicit user
+	// DOUBLE casts remain ordinary DOUBLE expressions.
+	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sign") ||
+		strings.EqualFold(name, "sleep")) {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
@@ -3254,6 +3255,34 @@ func containsExplicitFloatCast(expr tree.Expr) bool {
 	}
 }
 
+func isDirectExplicitNumericCast(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	cast, ok := expr.(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	typ, ok := cast.Type.(*tree.T)
+	return ok && isNumericCastType(defines.MysqlType(typ.InternalType.Oid))
+}
+
+func isNumericCastType(typ defines.MysqlType) bool {
+	switch typ {
+	case defines.MYSQL_TYPE_BOOL, defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_DECIMAL,
+		defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_BIT:
+		return true
+	default:
+		return false
+	}
+}
+
 func containsExplicitFloatCasts(exprs []tree.Expr) bool {
 	for _, expr := range exprs {
 		if containsExplicitFloatCast(expr) {
@@ -3319,14 +3348,16 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
-	// explicit floating-point boundary before that mutation so
-	// ABS(CAST(? AS DOUBLE)) remains on its fixed DOUBLE overload.
+	// explicit numeric boundary before that mutation so ABS/SIGN keep an
+	// explicitly selected overload.
 	hasExplicitFloatCast := containsExplicitFloatCast(astArgs[0])
+	hasExplicitNumericCast := isDirectExplicitNumericCast(astArgs[0])
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
 	}
-	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
+	if (strings.EqualFold(name, "abs") && !hasExplicitFloatCast) ||
+		(strings.EqualFold(name, "sign") && !hasExplicitNumericCast) {
 		b.markPreparedNumericFallback(arg)
 	}
 	args, err := b.coerceBoolNumericAggregateArg(name, []*plan.Expr{arg})
