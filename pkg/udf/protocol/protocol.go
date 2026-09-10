@@ -373,53 +373,70 @@ func (g *ExecutionGroup) BeginOpen(memberID string) (*OpenToken, error) {
 type OpenToken struct {
 	group    *ExecutionGroup
 	memberID string
-	once     sync.Once
-	result   error
+	mu       sync.Mutex
+	state    openTokenState
 }
+
+type openTokenState uint8
+
+const (
+	openTokenPending openTokenState = iota
+	openTokenCommitted
+	openTokenAborted
+)
 
 func (t *OpenToken) Commit() error {
 	if t == nil || t.group == nil {
 		return ErrUnknownIdentity
 	}
-	t.once.Do(func() {
-		g := t.group
-		g.mu.Lock()
-		delete(g.pending, t.memberID)
-		g.inFlight--
-		if g.closing || g.released {
-			t.result = ErrGroupClosed
-			release := g.canReleaseLocked()
-			g.mu.Unlock()
-			if release {
-				if err := t.group.releaseIfReady(); err != nil {
-					t.result = errors.Join(t.result, err)
-				}
-			}
-			return
-		}
-		g.members[t.memberID] = true
-		g.registered++
+	if err := t.begin(openTokenCommitted); err != nil {
+		return err
+	}
+	g := t.group
+	g.mu.Lock()
+	delete(g.pending, t.memberID)
+	g.inFlight--
+	if g.closing || g.released {
+		release := g.canReleaseLocked()
 		g.mu.Unlock()
-	})
-	return t.result
+		if release {
+			return errors.Join(ErrGroupClosed, g.releaseIfReady())
+		}
+		return ErrGroupClosed
+	}
+	g.members[t.memberID] = true
+	g.registered++
+	g.mu.Unlock()
+	return nil
 }
 
 func (t *OpenToken) Abort() error {
 	if t == nil || t.group == nil {
 		return ErrUnknownIdentity
 	}
-	t.once.Do(func() {
-		g := t.group
-		g.mu.Lock()
-		delete(g.pending, t.memberID)
-		g.inFlight--
-		release := g.canReleaseLocked()
-		g.mu.Unlock()
-		if release {
-			t.result = t.group.releaseIfReady()
-		}
-	})
-	return t.result
+	if err := t.begin(openTokenAborted); err != nil {
+		return err
+	}
+	g := t.group
+	g.mu.Lock()
+	delete(g.pending, t.memberID)
+	g.inFlight--
+	release := g.canReleaseLocked()
+	g.mu.Unlock()
+	if release {
+		return g.releaseIfReady()
+	}
+	return nil
+}
+
+func (t *OpenToken) begin(state openTokenState) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state != openTokenPending {
+		return fmt.Errorf("%w: open token was already finalized", ErrProtocol)
+	}
+	t.state = state
+	return nil
 }
 
 func (g *ExecutionGroup) Close(reason CloseReason) error {
@@ -427,6 +444,10 @@ func (g *ExecutionGroup) Close(reason CloseReason) error {
 		return fmt.Errorf("%w: close reason is empty", ErrProtocol)
 	}
 	g.mu.Lock()
+	if g.closing && g.reason != reason {
+		g.mu.Unlock()
+		return fmt.Errorf("%w: close reason changed from %q to %q", ErrProtocol, g.reason, reason)
+	}
 	if g.released {
 		g.mu.Unlock()
 		return nil
