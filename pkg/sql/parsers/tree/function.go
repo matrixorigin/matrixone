@@ -179,6 +179,16 @@ type CreateFunction struct {
 	Import     bool
 	Body       string
 	Handler    string
+	// Mode and NullPolicy are Python routine options. Empty values mean that
+	// the language default applies; the frontend persists the resolved values
+	// in the routine body so execution never has to infer them later.
+	Mode       string
+	NullPolicy string
+}
+
+type PythonFunctionOptions struct {
+	Mode       string
+	NullPolicy string
 }
 
 func NewCreateFunction(replace bool, name *FunctionName, args FunctionArgs, returnType *ReturnType, lang string, import_ bool, body string, handler string) *CreateFunction {
@@ -201,8 +211,23 @@ func (node *CreateFunction) Valid() error {
 		if node.Import {
 			return moerr.NewInvalidInputNoCtx("import")
 		}
+		if node.Mode != "" || node.NullPolicy != "" {
+			return moerr.NewInvalidInputNoCtx("Python function options require LANGUAGE PYTHON")
+		}
 		return nil
 	case string(PYTHON):
+		if node.Mode != "" {
+			node.Mode = strings.ToUpper(node.Mode)
+			if node.Mode != "SCALAR" && node.Mode != "VECTOR" {
+				return moerr.NewInvalidArgNoCtx("Python function mode", node.Mode)
+			}
+		}
+		if node.NullPolicy != "" {
+			node.NullPolicy = strings.ToUpper(node.NullPolicy)
+			if node.NullPolicy != "CALLED_ON_NULL_INPUT" && node.NullPolicy != "RETURNS_NULL_ON_NULL_INPUT" {
+				return moerr.NewInvalidArgNoCtx("Python function NULL policy", node.NullPolicy)
+			}
+		}
 		return nil
 	default:
 		return moerr.NewInvalidArgNoCtx("function language", node.Language)
@@ -250,6 +275,14 @@ func (node *CreateFunction) Format(ctx *FmtCtx) {
 		ctx.WriteString(" handler '")
 		ctx.WriteString(node.Handler)
 		ctx.WriteString("'")
+	}
+	if node.Mode != "" {
+		ctx.WriteString(" mode ")
+		ctx.WriteString(strings.ToLower(node.Mode))
+	}
+	if node.NullPolicy != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(strings.ReplaceAll(node.NullPolicy, "_", " ")))
 	}
 }
 
