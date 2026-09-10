@@ -15,41 +15,15 @@
 package optools
 
 import (
-	"bytes"
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 const goUTAnalysisModule = "github.com/matrixorigin/go-ut-analysis@v0.0.0-20250711025253-f31acb12d3b1"
-
-func writeRunUTPrelude(t *testing.T) string {
-	t.Helper()
-
-	path, err := filepath.Abs("run_ut.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	marker := []byte("if [[ 'SCA' == $TEST_TYPE ]]; then")
-	index := bytes.Index(contents, marker)
-	if index < 0 {
-		t.Fatal("run_ut.sh main dispatch marker not found")
-	}
-	prelude := filepath.Join(t.TempDir(), "run_ut-prelude.sh")
-	if err := os.WriteFile(prelude, contents[:index], 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return prelude
-}
 
 func writeMockGo(t *testing.T) string {
 	t.Helper()
@@ -505,113 +479,6 @@ link_after_creation_interruption "$test_dir/engine-after-link.out" "$test_dir/en
 	cmd := exec.Command("bash", "-c", script, "bash", processPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("interrupted report transfer harness failed: %v\n%s", err, output)
-	}
-}
-
-func TestLogserviceCompanionTracksPIDBeforeCancellation(t *testing.T) {
-	prelude := writeRunUTPrelude(t)
-	runUTDir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mockGoDir := t.TempDir()
-	mockGo := filepath.Join(mockGoDir, "go")
-	if err := os.WriteFile(mockGo, []byte(`#!/bin/bash
-if [[ "${1:-}" == version ]]; then exit 0; fi
-if [[ "${1:-}" == test ]]; then
-    trap 'printf terminated > "${MOCK_GO_TERM}"; exit 143' TERM
-    printf started > "${MOCK_GO_STARTED}"
-    kill -TERM "${PPID}"
-	( sleep 4; kill -TERM "$$" 2>/dev/null || true ) &
-    while :; do sleep 1; done
-fi
-exit 0
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	startedPath := filepath.Join(t.TempDir(), "companion.started")
-	termPath := filepath.Join(t.TempDir(), "companion.term")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", `source "$1" UT race; trap handle_ut_termination TERM; trap 'if [[ "${LOGSERVICE_RACE_JOB_PID:-}" =~ ^[1-9][0-9]*$ ]]; then terminate_ut_process_group "$LOGSERVICE_RACE_JOB_PID" TERM; fi' EXIT; start_logservice_race example.com/logservice; while [[ ! -s "$MOCK_GO_TERM" ]]; do sleep 0.01; done`, "bash", prelude)
-	cmd.Dir = runUTDir
-	env := os.Environ()
-	for index, value := range env {
-		if strings.HasPrefix(value, "PATH=") {
-			env[index] = "PATH=" + mockGoDir + string(os.PathListSeparator) + os.Getenv("PATH")
-		}
-	}
-	cmd.Env = append(env,
-		"MOCK_GO_STARTED="+startedPath,
-		"MOCK_GO_TERM="+termPath,
-		"UT_WORKDIR="+t.TempDir(),
-	)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatalf("companion cancellation harness timed out: %v\n%s", ctx.Err(), output)
-	}
-	if err == nil {
-		t.Fatalf("expected cancellation exit, got success: %s", output)
-	}
-	exitError, ok := err.(*exec.ExitError)
-	if !ok || exitError.ExitCode() != 143 {
-		t.Fatalf("expected cancellation status 143, got %v\n%s", err, output)
-	}
-	if _, err := os.Stat(startedPath); err != nil {
-		t.Fatalf("companion did not start before cancellation: %v\n%s", err, output)
-	}
-	if _, err := os.Stat(termPath); err != nil {
-		t.Fatalf("companion did not receive cancellation after pid registration: %v\n%s", err, output)
-	}
-}
-
-func TestLogserviceCompanionStderrConsumeIsIdempotent(t *testing.T) {
-	prelude := writeRunUTPrelude(t)
-	runUTDir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	testDir := t.TempDir()
-	script := `
-set -o nounset
-source "$1" UT race
-function logger() { :; }
-function handle_ut_termination() { :; }
-test_dir="$2"
-UT_REPORT="$test_dir/all.out"
-UT_STDERR="$test_dir/stderr.out"
-LOGSERVICE_RACE_REPORT="$test_dir/companion.json"
-LOGSERVICE_RACE_STDERR="$test_dir/companion.err"
-printf 'existing\n' > "$UT_REPORT"
-printf 'companion-error\n' > "$LOGSERVICE_RACE_STDERR"
-printf '{"Action":"pass"}\n' > "$LOGSERVICE_RACE_REPORT"
-function remove_ut_report_file() { return 1; }
-consume_logservice_race_report
-if [[ "$(cat "$UT_STDERR")" != 'companion-error' ]]; then
-    echo "stderr was not atomically consumed" >&2
-    exit 1
-fi
-if [[ "$(cat "$UT_REPORT")" != $'existing\n{"Action":"pass"}' ]]; then
-    echo "JSON report was not consumed" >&2
-    exit 1
-fi
-if [[ -n "$LOGSERVICE_RACE_STDERR" || -n "$LOGSERVICE_RACE_REPORT" ]]; then
-    echo "consumed report ownership was not cleared" >&2
-    exit 1
-fi
-# A second consume must be a no-op even though the injected cleanup failure
-# left the private stderr source on disk.
-consume_logservice_race_report
-if [[ "$(cat "$UT_STDERR")" != 'companion-error' ]]; then
-    echo "stderr was duplicated after cleanup retry" >&2
-    exit 1
-fi
-`
-	cmd := exec.Command("bash", "-c", script, "bash", prelude, testDir)
-	cmd.Dir = runUTDir
-	cmd.Env = append(os.Environ(), "UT_WORKDIR="+t.TempDir())
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("companion stderr ownership harness failed: %v\n%s", err, output)
 	}
 }
 

@@ -529,18 +529,13 @@ UT_HARD_TIMEOUT ?= 70m
 # consumes CPU, memory, and linker capacity, so it remains opt-in until a
 # same-resource measurement proves a critical-path gain.
 UT_PREBUILD_EMBEDDED ?= 0
-# Plan overlap is an explicit A/B knob; it consumes one heavy process slot and
-# remains off until the runner's resource budget proves a gain.
-UT_OVERLAP_PLAN ?= 0
-# Run pkg/logservice in a private process while the serial issues package is
-# active. This is an explicit A/B knob: it is enabled only for UT_SHARD=all,
-# after dependency ownership validation, and remains off until same-runner
-# measurements prove a wall-time gain without resource contention.
-UT_OVERLAP_LOGSERVICE ?= 0
+# Reuse released engine slots for plan while resource-heavy work finishes.
+# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+UT_OVERLAP_PLAN ?= 1
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LOGSERVICE UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
