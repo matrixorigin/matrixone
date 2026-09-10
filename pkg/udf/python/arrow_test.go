@@ -178,6 +178,19 @@ func TestArrowTypeValidationIncludesFixedBinaryWidth(t *testing.T) {
 	require.ErrorContains(t, descriptor.ValidateField(field), "does not match")
 }
 
+func TestTypeDescriptorRejectsNonCanonicalDomain(t *testing.T) {
+	invalid := []TypeDescriptor{
+		{TypeID: int32(types.T_varchar), Width: -1, OffsetWidth: 32},
+		{TypeID: int32(types.T_int64), OffsetWidth: 64},
+		{TypeID: int32(types.T_decimal64), Width: 3, Scale: 4, OffsetWidth: 32},
+		{TypeID: int32(types.T_array_float32), Width: types.MaxArrayDimension + 1},
+	}
+	for _, descriptor := range invalid {
+		_, err := descriptor.Field("value")
+		require.Error(t, err, "%+v", descriptor)
+	}
+}
+
 func TestArrowValueDomainRejectsDecimalOverflowAndNullableVectorChild(t *testing.T) {
 	decimalType := &arrow.Decimal128Type{Precision: 3, Scale: 0}
 	decimalBuilder := array.NewDecimal128Builder(memory.NewGoAllocator(), decimalType)
