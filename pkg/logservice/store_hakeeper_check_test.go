@@ -31,11 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 func TestIDAllocatorDefaultState(t *testing.T) {
@@ -44,6 +46,185 @@ func TestIDAllocatorDefaultState(t *testing.T) {
 	v, ok := alloc.Next()
 	assert.False(t, ok)
 	assert.Equal(t, uint64(0), v)
+}
+
+func TestNextHAKeeperCheckIntervalUsesFastBootstrapInterval(t *testing.T) {
+	s := &store{
+		cfg: Config{
+			HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+		},
+	}
+
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(nil))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapping,
+	}))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapCommandsReceived,
+	}))
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperRunning,
+	}))
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperCreated,
+	}))
+}
+
+func TestHAKeeperCheckTickerPreservesPeriodicSchedule(t *testing.T) {
+	s := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+	}}
+	interval := bootstrapHAKeeperCheckInterval
+	var resets []time.Duration
+	reset := func(next time.Duration) { resets = append(resets, next) }
+	// A ticker retains its next scheduled tick while the synchronous checker
+	// runs. A reset at check completion would discard that tick and charge the
+	// check's execution time again, even when the configured cadence is unchanged.
+	for _, tc := range []struct {
+		state *pb.CheckerState
+		want  []time.Duration
+	}{
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapping}, nil},
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapCommandsReceived}, nil},
+		{&pb.CheckerState{State: pb.HAKeeperRunning}, []time.Duration{3 * time.Second}},
+		{&pb.CheckerState{State: pb.HAKeeperRunning}, []time.Duration{3 * time.Second}},
+		{nil, []time.Duration{3 * time.Second}},
+		{&pb.CheckerState{State: pb.HAKeeperBootstrapping}, []time.Duration{3 * time.Second, bootstrapHAKeeperCheckInterval}},
+	} {
+		interval = s.updateHAKeeperCheckTicker(reset, interval, tc.state)
+		require.Equal(t, tc.want, resets)
+	}
+}
+
+func TestBootstrapCheckWindowUsesConfiguredInterval(t *testing.T) {
+	fast := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: bootstrapHAKeeperCheckInterval},
+	}}
+	require.Equal(t, checkBootstrapCycles*bootstrapHAKeeperCheckInterval, fast.bootstrapCheckWindow())
+
+	defaultInterval := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+	}}
+	require.Equal(t, checkBootstrapCycles*3*time.Second, defaultInterval.bootstrapCheckWindow())
+}
+
+func TestBootstrapCheckWindowRejectsInvalidInterval(t *testing.T) {
+	for _, interval := range []time.Duration{0, -time.Second, time.Duration(1<<63 - 1)} {
+		t.Run(interval.String(), func(t *testing.T) {
+			s := &store{cfg: Config{
+				HAKeeperCheckInterval: toml.Duration{Duration: interval},
+			}}
+			require.Panics(t, func() { s.bootstrapCheckWindow() })
+		})
+	}
+}
+
+func bootstrapCheckTestState(complete, recoveryPending bool) *pb.CheckerState {
+	state := &pb.CheckerState{
+		State:                     pb.HAKeeperBootstrapCommandsReceived,
+		LogServiceRecoveryPending: recoveryPending,
+		ClusterInfo: pb.ClusterInfo{
+			LogShards: []metadata.LogShardRecord{{
+				ShardID:          1,
+				NumberOfReplicas: 1,
+			}},
+		},
+	}
+	if complete {
+		state.LogState.Shards = map[uint64]pb.LogShardInfo{
+			1: {ShardID: 1, Replicas: map[uint64]string{1: "log-1", 2: "log-2"}},
+		}
+	}
+	return state
+}
+
+func TestCheckBootstrapDeadlineBoundaries(t *testing.T) {
+	start := time.Unix(100, 0)
+	deadline := start.Add(checkBootstrapCycles * 3 * time.Second)
+	for _, tc := range []struct {
+		name        string
+		now         time.Time
+		state       *pb.CheckerState
+		wantCalls   int
+		wantSuccess bool
+	}{
+		{name: "incomplete before deadline", now: deadline.Add(-time.Nanosecond), state: bootstrapCheckTestState(false, false)},
+		{name: "incomplete at deadline", now: deadline, state: bootstrapCheckTestState(false, false), wantCalls: 1},
+		{name: "incomplete after deadline", now: deadline.Add(time.Nanosecond), state: bootstrapCheckTestState(false, false), wantCalls: 1},
+		{name: "complete at deadline", now: deadline, state: bootstrapCheckTestState(true, false), wantCalls: 1, wantSuccess: true},
+		{name: "recovery pending after deadline", now: deadline.Add(time.Second), state: bootstrapCheckTestState(true, true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &store{
+				cfg:                    Config{HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second}},
+				bootstrapMgr:           bootstrap.NewBootstrapManager(tc.state.ClusterInfo),
+				bootstrapCheckDeadline: deadline,
+			}
+			var calls []bool
+			injected := moerr.NewInternalErrorNoCtx("stop after deadline assertion")
+			err := s.checkBootstrapWithSetterAt(tc.now, tc.state, func(success bool) error {
+				calls = append(calls, success)
+				return injected
+			})
+			require.Len(t, calls, tc.wantCalls)
+			if tc.wantCalls > 0 {
+				require.ErrorIs(t, err, injected)
+				require.Equal(t, tc.wantSuccess, calls[0])
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestCheckBootstrapDeadlineIncludesSlowCheckCost(t *testing.T) {
+	start := time.Unix(100, 0)
+	deadline := start.Add(checkBootstrapCycles * 3 * time.Second)
+	for _, checkCost := range []time.Duration{0, 200 * time.Millisecond} {
+		t.Run(checkCost.String(), func(t *testing.T) {
+			state := bootstrapCheckTestState(false, false)
+			s := &store{
+				cfg:                    Config{HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second}},
+				bootstrapMgr:           bootstrap.NewBootstrapManager(state.ClusterInfo),
+				bootstrapCheckDeadline: deadline,
+			}
+			var calls []bool
+			setter := func(success bool) error {
+				calls = append(calls, success)
+				return moerr.NewInternalErrorNoCtx("stop after deadline assertion")
+			}
+			// The first check starts before the deadline. Its synchronous cost is
+			// then charged to the same absolute deadline instead of extending it.
+			if checkCost > 0 {
+				s.checkBootstrapWithSetterAt(deadline.Add(-checkCost), state, setter)
+				require.Empty(t, calls)
+			}
+			s.checkBootstrapWithSetterAt(deadline, state, setter)
+			require.Equal(t, []bool{false}, calls)
+		})
+	}
+}
+
+func TestCheckBootstrapLeaderTakeoverInitializesDeadlineOnce(t *testing.T) {
+	start := time.Unix(100, 0)
+	state := bootstrapCheckTestState(false, false)
+	s := &store{
+		cfg:          Config{HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second}},
+		bootstrapMgr: bootstrap.NewBootstrapManager(state.ClusterInfo),
+	}
+	var calls []bool
+	setter := func(success bool) error {
+		calls = append(calls, success)
+		return moerr.NewInternalErrorNoCtx("stop after deadline assertion")
+	}
+	s.checkBootstrapWithSetterAt(start, state, setter)
+	wantDeadline := start.Add(checkBootstrapCycles * 3 * time.Second)
+	require.Equal(t, wantDeadline, s.bootstrapCheckDeadline)
+	s.checkBootstrapWithSetterAt(start.Add(time.Second), state, setter)
+	require.Empty(t, calls)
+	require.Equal(t, wantDeadline, s.bootstrapCheckDeadline)
+	s.checkBootstrapWithSetterAt(wantDeadline, state, setter)
+	require.Equal(t, []bool{false}, calls)
 }
 
 func TestIDAllocatorCapacity(t *testing.T) {
@@ -145,7 +326,10 @@ func TestHandleBootstrapFailure(t *testing.T) {
 }
 
 func TestCheckBootstrapRetriesSetBootstrapStateFailure(t *testing.T) {
-	s := &store{bootstrapCheckCycles: checkBootstrapCycles}
+	s := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: time.Second},
+	}}
+	s.startBootstrapCheckBudget()
 	state := &pb.CheckerState{
 		State: pb.HAKeeperBootstrapCommandsReceived,
 		ClusterInfo: pb.ClusterInfo{
@@ -165,18 +349,31 @@ func TestCheckBootstrapRetriesSetBootstrapStateFailure(t *testing.T) {
 	}
 
 	calls := 0
-	s.checkBootstrapWithSetter(state, func(success bool) error {
+	deadline := s.bootstrapCheckDeadline
+	err := s.checkBootstrapWithSetter(state, func(success bool) error {
 		calls++
 		require.True(t, success)
 		return moerr.NewInternalErrorNoCtx("injected bootstrap state timeout")
 	})
+	require.Error(t, err)
 
 	require.Equal(t, 1, calls)
-	require.Equal(t, uint64(checkBootstrapCycles), s.bootstrapCheckCycles)
+	require.Equal(t, deadline, s.bootstrapCheckDeadline)
+	err = s.checkBootstrapWithSetter(state, func(success bool) error {
+		calls++
+		require.True(t, success)
+		return moerr.NewInternalErrorNoCtx("injected bootstrap state timeout")
+	})
+	require.Error(t, err)
+	require.Equal(t, 2, calls)
+	require.Equal(t, deadline, s.bootstrapCheckDeadline)
 }
 
 func TestCheckBootstrapWaitsForReplicatedLogServiceRecovery(t *testing.T) {
-	s := &store{bootstrapCheckCycles: checkBootstrapCycles}
+	s := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: time.Second},
+	}}
+	s.startBootstrapCheckBudget()
 	state := &pb.CheckerState{
 		State:                     pb.HAKeeperBootstrapCommandsReceived,
 		LogServiceRecoveryPending: true,
@@ -202,14 +399,28 @@ func TestCheckBootstrapWaitsForReplicatedLogServiceRecovery(t *testing.T) {
 		return nil
 	})
 	require.Equal(t, 0, calls)
-	require.Equal(t, uint64(checkBootstrapCycles), s.bootstrapCheckCycles)
+	require.False(t, s.bootstrapCheckDeadline.IsZero())
 }
 
 func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, true, fn)
+}
+
+func runManualHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, false, fn)
+}
+
+func runHAKeeperStoreTestWithWorkers(
+	t *testing.T,
+	startLogReplica bool,
+	workers bool,
+	fn func(*testing.T, *store),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = !workers
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -470,7 +681,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		state, err = leaderStore.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), leaderStore.bootstrapCheckCycles)
+		assert.False(t, leaderStore.bootstrapCheckDeadline.IsZero())
 		require.NotNil(t, leaderStore.bootstrapMgr)
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -722,6 +933,8 @@ func TestGetCheckerState(t *testing.T) {
 
 func TestSetInitialClusterInfo(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// Keep background ID preallocation out of the exact watermark assertions.
+		store.tickerStopper.Stop()
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
@@ -772,11 +985,15 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		assert.Equal(t, uint64(2), state.NextIDByKey["b"])
 		assert.Zero(t, state.NextIDByKey["c"])
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// This test drives the state transitions itself. Join the background
+		// checker before initialization so its ID preallocation cannot change
+		// the watermark used to verify that rejected recovery has no effect.
+		store.tickerStopper.Stop()
 		require.NoError(t, store.setInitialClusterInfo(
 			1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 
@@ -798,7 +1015,7 @@ func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 		require.Empty(t, state.NextIDByKey)
 		require.False(t, state.LogServiceRecoveryPending)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
@@ -809,6 +1026,29 @@ func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
 		require.ErrorContains(t, err, "not ready for ID allocation")
 	}
 	runHAKeeperStoreTest(t, false, fn)
+}
+
+func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
+	runManualHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
+		require.NoError(t, s.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
+		// No LogStore heartbeat: bootstrap cannot place its replica yet. Exercise
+		// the real checker result consumed by the ticker, not a synthetic nil.
+		state := s.hakeeperCheck()
+		require.Nil(t, state)
+		require.Equal(t, s.cfg.HAKeeperCheckInterval.Duration, s.nextHAKeeperCheckInterval(state))
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		_, err := s.addLogStoreHeartbeat(ctx, s.getHeartbeatMessage())
+		require.NoError(t, err)
+		state = s.hakeeperCheck()
+		require.NotNil(t, state)
+		require.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(state))
+		actual, err := s.getCheckerState()
+		require.NoError(t, err)
+		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, actual.State)
+	})
 }
 
 func TestFailedBootstrap(t *testing.T) {
@@ -908,7 +1148,7 @@ func TestRecoveryBootstrapDefersTNUntilCompletion(t *testing.T) {
 		require.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
 		require.False(t, cb.Commands[0].Bootstrapping)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
@@ -948,20 +1188,25 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
+		bootstrapCommandsAdded := false
+		store.bootstrapCommandsAdded = func() {
+			bootstrapCommandsAdded = true
+		}
 		store.bootstrap(term, state)
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.True(t, bootstrapCommandsAdded)
+		assert.False(t, store.bootstrapCheckDeadline.IsZero())
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
-			// keep checking, bootstrap will eventually be set as failed
-			for i := 0; i <= checkBootstrapCycles; i++ {
-				store.checkBootstrap(state)
-			}
+			// Drive the elapsed-time check through its explicit-time seam rather
+			// than mutating the production-owned deadline.
+			expired := time.Now().Add(store.bootstrapCheckWindow())
+			require.NoError(t, store.checkBootstrapWithSetterAt(expired, state, store.setBootstrapState))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)
@@ -1034,7 +1279,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 			}
 		}
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
@@ -1072,7 +1317,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.False(t, store.bootstrapCheckDeadline.IsZero())
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -1180,7 +1425,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.False(t, store.bootstrapCheckDeadline.IsZero())
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 

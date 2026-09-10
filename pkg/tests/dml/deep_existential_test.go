@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -61,9 +62,10 @@ func TestDeepExistentialMultiCN(t *testing.T) {
 		defer cleanupTestDatabases(t, db, name)
 		execSQLDB(t, ctx, db, "create database `"+name+"`")
 		execSQLDB(t, ctx, db, "use `"+name+"`")
-		// Enough independent blocks to dispatch work to both CNs, with eight
-		// nonunique keys. Enumerating I/J witness pairs would be quadratic.
-		const n = 65536
+		// Three independent blocks are enough to dispatch work to both CNs. Keep
+		// eight nonunique keys so the existential match-group shortcut is still
+		// exercised without enumerating I/J witness pairs quadratically.
+		const n = objectio.BlockMaxRows * 3
 		for _, tab := range []string{"ot", "it", "jt"} {
 			execSQLDB(t, ctx, db, "create table "+tab+" (id int, grp int)")
 			execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select result, result%%8 from generate_series(0,%d) g", tab, n-1))
