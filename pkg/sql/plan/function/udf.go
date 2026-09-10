@@ -11,11 +11,14 @@ package function
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 )
 
@@ -56,6 +59,63 @@ type PythonRoutineBody struct {
 	SDKVersion        string                 `json:"sdk_version,omitempty"`
 	ArgTypes          []PythonTypeDescriptor `json:"arg_types,omitempty"`
 	ReturnType        *PythonTypeDescriptor  `json:"return_type,omitempty"`
+}
+
+// DecodePythonRoutineBody decodes the one catalog representation accepted by
+// the Python execution path.  Catalog data is an execution authority, so an
+// unknown field or a second JSON value must be rejected instead of being
+// silently ignored by encoding/json.
+func DecodePythonRoutineBody(raw string) (PythonRoutineBody, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var body PythonRoutineBody
+	if err := decoder.Decode(&body); err != nil {
+		return PythonRoutineBody{}, err
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return PythonRoutineBody{}, fmt.Errorf("python routine body contains multiple JSON values")
+		}
+		return PythonRoutineBody{}, err
+	}
+	if err := body.Validate(); err != nil {
+		return PythonRoutineBody{}, err
+	}
+	return body, nil
+}
+
+// Validate checks fields that are independent of the catalog argument list.
+// The argument count is checked by Udf.ValidatePythonTypeContract after the
+// legacy catalog args column has been decoded.
+func (body PythonRoutineBody) Validate() error {
+	if body.Handler == "" || body.Source == "" {
+		return fmt.Errorf("python routine handler and source are required")
+	}
+	if body.Mode != "SCALAR" && body.Mode != "VECTOR" {
+		return fmt.Errorf("python routine has unsupported mode %q", body.Mode)
+	}
+	if body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull {
+		return fmt.Errorf("python routine has unsupported NULL policy %q", body.NullPolicy)
+	}
+	if body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
+		return fmt.Errorf("python routine has unsupported ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
+	}
+	if body.SDKVersion != udf.PythonSDKVersion {
+		return fmt.Errorf("python routine has unsupported SDK %q", body.SDKVersion)
+	}
+	if body.ReturnType == nil {
+		return fmt.Errorf("python routine is missing return descriptor")
+	}
+	for i, descriptor := range body.ArgTypes {
+		if err := validatePythonTypeDescriptor(descriptor); err != nil {
+			return fmt.Errorf("python routine argument descriptor %d: %w", i, err)
+		}
+	}
+	if err := validatePythonTypeDescriptor(*body.ReturnType); err != nil {
+		return fmt.Errorf("python routine return descriptor: %w", err)
+	}
+	return nil
 }
 
 // PythonTypeDescriptor is the single Arrow ABI descriptor used by both plan
@@ -117,20 +177,9 @@ func (u *Udf) LoadPythonTypeContract() error {
 	}
 	u.PythonArgTypes = nil
 	u.PythonReturnType = nil
-	body := PythonRoutineBody{}
-	if err := json.Unmarshal([]byte(u.Body), &body); err != nil {
+	body, err := DecodePythonRoutineBody(u.Body)
+	if err != nil {
 		return err
-	}
-	if body.ReturnType == nil {
-		return fmt.Errorf("python routine is missing return descriptor")
-	}
-	for i, descriptor := range body.ArgTypes {
-		if err := validatePythonTypeDescriptor(descriptor); err != nil {
-			return fmt.Errorf("python routine argument descriptor %d: %w", i, err)
-		}
-	}
-	if err := validatePythonTypeDescriptor(*body.ReturnType); err != nil {
-		return fmt.Errorf("python routine return descriptor: %w", err)
 	}
 	u.PythonArgTypes = append([]PythonTypeDescriptor(nil), body.ArgTypes...)
 	returnType := *body.ReturnType

@@ -216,6 +216,9 @@ func (node *CreateFunction) Valid() error {
 		}
 		return nil
 	case string(PYTHON):
+		if node.Import {
+			return moerr.NewNotSupportedNoCtx("Python artifact import requires the immutable artifact catalog")
+		}
 		if node.Mode != "" {
 			node.Mode = strings.ToUpper(node.Mode)
 			if node.Mode != "SCALAR" && node.Mode != "VECTOR" {
