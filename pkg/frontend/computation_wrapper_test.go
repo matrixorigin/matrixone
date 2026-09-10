@@ -1017,6 +1017,7 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 		query                string
 		peer                 uint64
 		peerSet              bool
+		peerSigned           bool
 		control              bool
 		floatPeer            bool
 		nullPeer             bool
@@ -1034,6 +1035,13 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			name:                 "bare_addition",
 			query:                "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
 			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:                 "bare_addition_signed_peer",
+			query:                "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
+			peer:                 1,
+			peerSigned:           true,
 			runtimeBoundOperator: "+",
 		},
 		{
@@ -1119,7 +1127,7 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			control:              true,
 			runtimeBoundOperator: "%",
 		},
-		{name: "negative_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: maxUint64 - 1, control: true},
+		{name: "negative_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: maxUint64 - 1, peerSigned: true, control: true},
 		{name: "bare_both", query: "select (? + ?) - cast(? as unsigned)", peer: 1},
 		{name: "abs_parent", query: "select abs(cast(? as unsigned) + ?) - cast(? as unsigned)", peer: 1},
 		{name: "multiplication_identity", query: "select (cast(? as unsigned) * ?) is not null", peer: 1, control: true},
@@ -1157,6 +1165,9 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 					packet[6] = 1
 					packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
 					packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+					if !tc.peerSigned {
+						packet[10] = 0x80
+					}
 					valueOffset := 7 + 2*paramCount
 					binary.LittleEndian.PutUint64(packet[valueOffset:], maxUint64)
 					binary.LittleEndian.PutUint64(packet[valueOffset+8:], tc.peer)
