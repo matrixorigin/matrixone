@@ -1364,6 +1364,8 @@ class RoutineFlightServer(flight.FlightServerBase):
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
                     if batch.nbytes > max_batch_bytes: raise ValueError("RESOURCE_EXHAUSTED: input batch exceeds byte limit")
+                    for index, descriptor in enumerate(args):
+                        _validate_array_values(batch.column(index), descriptor)
                     execution_request = {
                         "source": source,
                         "handler": handler_name,
