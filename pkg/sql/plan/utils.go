@@ -6130,29 +6130,41 @@ func replaceParamValsWithSelection(
 				stringDomainType = types.T_varbinary.ToType()
 				hasStringDomainType = true
 			}
-			if param.HasSourceType && param.Value != nil {
-				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
+			// COM_STMT and unit-test callers can provide a runtime string type
+			// without the SQL user-variable SourceType metadata.  The execution
+			// domain is still authoritative for this invocation, so use it as the
+			// source domain when no stronger SourceType is present.  Without this
+			// fallback, nested expressions such as ABS(? + 0) retain the
+			// prepare-time integer cast and lose MySQL's numeric-prefix semantics.
+			executeSourceType := param.SourceType
+			hasExecuteSourceType := param.HasSourceType
+			if !hasExecuteSourceType && hasRuntimeType && isStringBackedType(runtimeType) {
+				executeSourceType = runtimeType
+				hasExecuteSourceType = true
+			}
+			if hasExecuteSourceType && param.Value != nil {
+				sqlExecuteStringBackedParams[i] = isStringBackedType(executeSourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
-					ctx, param.Value, param.IsBin, param.SourceType, false)
+					ctx, param.Value, param.IsBin, executeSourceType, false)
 				if err != nil {
 					return false, err
 				}
 				if allowNonnumericStringPrefix[i] {
 					sqlExecuteStringMathParams[i], err = preparedSQLExecuteNumericParamExpr(
-						ctx, param.Value, param.IsBin, param.SourceType, true)
+						ctx, param.Value, param.IsBin, executeSourceType, true)
 					if err != nil {
 						return false, err
 					}
 				}
 				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
-						Typ:  makePlan2Type(&param.SourceType),
+						Typ:  makePlan2Type(&executeSourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
 				if sqlExecuteStringMathParams[i] != nil && (numericPrefixSource || retainParamRef) {
 					attachPreparedRuntimeParamSource(sqlExecuteStringMathParams[i], &plan.Expr{
-						Typ:  makePlan2Type(&param.SourceType),
+						Typ:  makePlan2Type(&executeSourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}

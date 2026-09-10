@@ -1206,6 +1206,16 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if _, ok := positions[param.Pos]; !ok {
 			return expr, false, nil
 		}
+		// A parameter nested below a string-math function has a dedicated
+		// permissive DOUBLE source prepared by replaceParamValsWithSelection.
+		// Prefer it over the generic runtime literal here; otherwise rebuilding
+		// an inner arithmetic node such as `? + 0` falls back to BIGINT and
+		// discards MySQL's numeric-prefix conversion.
+		if param.Pos >= 0 && int(param.Pos) < len(rule.sqlExecuteStringMathParams) {
+			if source := rule.sqlExecuteStringMathParams[param.Pos]; source != nil {
+				return DeepCopyExpr(source), true, nil
+			}
+		}
 		bound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
 		return bound, ok, err
 	}
