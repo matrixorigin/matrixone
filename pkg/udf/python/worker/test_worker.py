@@ -633,6 +633,16 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported control field"):
             worker._encode_control(value)
 
+    def test_control_rejects_duplicate_json_fields(self):
+        wire = (
+            b'{"version":1,"kind":"InputBatch","tuple":{"account_id":1,'
+            b'"statement_id":"statement","group_id":"group","group_epoch":1,'
+            b'"invocation_id":"invocation","lease_epoch":1},'
+            b'"sequence":1,"sequence":2}'
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate control JSON field"):
+            worker._decode_control(wire)
+
     def test_result_ack_rejects_zero_sequence(self):
         state = worker._InvocationState({}, 1)
         state.last_result = 1
