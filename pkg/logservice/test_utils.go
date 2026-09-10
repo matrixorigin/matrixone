@@ -16,9 +16,12 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,41 +41,83 @@ type allocatedPorts struct {
 	ports map[int]struct{}
 }
 
+// testPortAllocationError keeps the probe cause available to callers while
+// complying with the repository's error-construction policy.
+type testPortAllocationError struct {
+	message string
+	cause   error
+}
+
+func (e *testPortAllocationError) Error() string {
+	return e.message
+}
+
+func (e *testPortAllocationError) Unwrap() error {
+	return e.cause
+}
+
 var randomPorts = allocatedPorts{
 	ports: map[int]struct{}{},
 }
 
 func getAvailablePort() int {
-	genPort := func() int {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
-		return rand.Intn(65535-21024) + 21024
+	port, err := randomPorts.allocate(probeTestPort)
+	if err != nil {
+		panic(err) // Preserve the existing fixture API, but fail promptly with the cause.
 	}
-	checkPort := func(p int) bool {
-		randomPorts.Lock()
-		defer randomPorts.Unlock()
-		_, ok := randomPorts.ports[p]
-		if ok {
-			return false
+	return port
+}
+
+const maxPortAllocationAttempts = 128
+
+func (a *allocatedPorts) allocate(probe func(int) error) (int, error) {
+	a.Lock()
+	defer a.Unlock()
+	for range maxPortAllocationAttempts {
+		port := rand.Intn(65535-21024) + 21024
+		if _, exists := a.ports[port]; exists {
+			continue
 		}
-		ports := listAllPorts()
-		if len(ports) != 0 {
-			_, occupied := ports[uint16(p)]
-			if occupied {
-				return false
-			} else {
-				randomPorts.ports[p] = struct{}{}
-				return true
+		if err := probe(port); err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			return 0, &testPortAllocationError{
+				message: fmt.Sprintf("probe test port %d: %v", port, err),
+				cause:   err,
 			}
 		}
-		randomPorts.ports[p] = struct{}{}
-		return true
+		a.ports[port] = struct{}{}
+		return port, nil
 	}
-	for {
-		p := genPort()
-		if checkPort(p) {
-			return p
+	return 0, &testPortAllocationError{
+		message: fmt.Sprintf("no available test port after %d attempts", maxPortAllocationAttempts),
+	}
+}
+
+func probeTestPort(port int) error {
+	// Match wildcard listeners and reject existing loopback listeners too:
+	// macOS can allow a wildcard TCP bind beside an existing specific bind.
+	// Each probe closes before the next; no socket is reserved until use.
+	for _, host := range []string{DefaultListenHost, DefaultServiceHost} {
+		if err := probeTestPortAddress(fmt.Sprintf("%s:%d", host, port)); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func probeTestPortAddress(addr string) error {
+	tcp, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return err
+	}
+	defer tcp.Close()
+	udp, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		return err
+	}
+	return udp.Close()
 }
 
 var getClientConfig = func(readOnly bool, svcAddress ...string) ClientConfig {

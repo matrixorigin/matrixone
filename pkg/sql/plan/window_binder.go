@@ -110,6 +110,21 @@ func semanticAstKey(astExpr tree.Expr) string {
 	return semanticNodeKey(astExpr)
 }
 
+// isGroupConcatAggregateExpr identifies an explicit GROUP_CONCAT call before
+// the generic aggregate-expression cache is consulted. GROUP_CONCAT has an
+// observable warning side effect when it truncates its result. Reusing one
+// physical aggregate for two independent calls would therefore preserve the
+// value but lose one MySQL-compatible warning. Alias and ordinal references
+// are resolved to the materialized projection and continue to reuse it.
+func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
+	funcExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || funcExpr.FuncName == nil {
+		return false
+	}
+	name := funcExpr.FuncName.Compare()
+	return strings.EqualFold(name, NameGroupConcat)
+}
+
 func semanticNodeKey(node tree.NodeFormatter) string {
 	display := tree.String(node, dialect.MYSQL)
 	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset())
@@ -550,6 +565,8 @@ func cloneBindContextForWindowValidation(ctx *BindContext) *BindContext {
 	cloned.groupByCanonicalAst = cloneWindowValidationMap(ctx.groupByCanonicalAst)
 	cloned.groupByParamAst = cloneWindowValidationMap(ctx.groupByParamAst)
 	cloned.aggregateByAst = cloneWindowValidationMap(ctx.aggregateByAst)
+	cloned.aliasExpandedExprs = cloneWindowValidationMap(ctx.aliasExpandedExprs)
+	cloned.groupConcatByExpr = cloneWindowValidationMap(ctx.groupConcatByExpr)
 	cloned.sampleByAst = cloneWindowValidationMap(ctx.sampleByAst)
 	cloned.windowByAst = cloneWindowValidationMap(ctx.windowByAst)
 	cloned.projectByExpr = cloneWindowValidationMap(ctx.projectByExpr)

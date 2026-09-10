@@ -70,7 +70,8 @@ func doFaultPoint(
 		podResp []fj.PodResponse
 	)
 
-	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(proc.Ctx, sql); err != nil {
+	ctx := process.ContextWithWarningSink(proc.Ctx, proc.WarningSink)
+	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql); err != nil {
 		return false, err
 	}
 
@@ -170,6 +171,12 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			if funcName != "round" && funcName != "truncate" {
+				return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+			}
+			return opBinaryFixedFixedToFixed[T, int64, T](ivecs, result, proc, length, cb, selectList)
+		}
+		if ivecs[1].GetType().Oid != types.T_int64 {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
@@ -6344,17 +6351,47 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func formatCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		// if the first param's type is time type. return failed.
-		if inputs[0].Oid.IsDateRelate() {
+	if len(inputs) < 2 || len(inputs) > 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	// FORMAT's first argument has two observable numeric domains. Keep exact
+	// integer/DECIMAL vectors typed so execution can apply MySQL's decimal
+	// half-up rounding; strings and floating-point values continue through the
+	// existing approximate (ties-to-even) path. Do not infer this from the
+	// rendered text: scientific notation is syntax, not a type contract.
+	if inputs[0].IsNumeric() {
+		overloadID := len(inputs) - 2
+		if overloadID < 0 || overloadID >= len(overloads) {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		return fixedTypeMatch(overloads, inputs)
+		targets := append([]types.Type(nil), inputs...)
+		needsCast := false
+		for i := 1; i < len(targets); i++ {
+			if targets[i].Oid.IsMySQLString() {
+				continue
+			}
+			targets[i] = formattedScalarStringType(targets[i])
+			SetTargetScaleFromSource(&inputs[i], &targets[i])
+			needsCast = true
+		}
+		if needsCast {
+			return newCheckResultWithCast(overloadID, targets)
+		}
+		return newCheckResultWithSuccess(overloadID)
 	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
+	// If the first parameter is a date-like value, preserve the established
+	// invalid-argument contract instead of silently stringifying it.
+	if inputs[0].Oid.IsDateRelate() {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
 }
 
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, false)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6478,6 +6515,10 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 }
 
 func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].GetType().IsNumeric() {
+		return formatWithNumericFirst(ivecs, result, length, true)
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	vs1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6509,6 +6550,98 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		}
 	}
 	return nil
+}
+
+func formatWithNumericFirst(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	withLocale bool,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	scale := vector.GenerateFunctionStrParameter(ivecs[1])
+	var locale vector.FunctionParameterWrapper[types.Varlena]
+	if withLocale {
+		locale = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		number, exact, nullNumber, err := formatNumericValueAt(ivecs[0], i)
+		if err != nil {
+			return err
+		}
+		scaleValue, nullScale := scale.GetStrValue(i)
+		if nullNumber || nullScale {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		localeValue := "en_US"
+		if withLocale {
+			localeBytes, nullLocale := locale.GetStrValue(i)
+			if nullLocale {
+				localeValue = "en_US"
+			} else {
+				localeValue = string(localeBytes)
+			}
+		}
+
+		var formatted string
+		if exact {
+			formatted, err = format.GetNumberFormatExact(number, string(scaleValue), localeValue)
+		} else {
+			formatted, err = format.GetNumberFormat(number, string(scaleValue), localeValue)
+		}
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(formatted), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, isNull bool, err error) {
+	if v.IsConstNull() || v.GetNulls().Contains(row) {
+		return "", false, true, nil
+	}
+	typ := v.GetType()
+	idx := int(row)
+	switch typ.Oid {
+	case types.T_bit:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](v, idx)), 10), true, false, nil
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int16](v, idx)), 10), true, false, nil
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int32](v, idx)), 10), true, false, nil
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](v, idx), 10), true, false, nil
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint8](v, idx)), 10), true, false, nil
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint16](v, idx)), 10), true, false, nil
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](v, idx)), 10), true, false, nil
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](v, idx).Format(typ.Scale), true, false, nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx).Format(typ.Scale), true, false, nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx).Format(typ.Scale), true, false, nil
+	default:
+		return "", false, false, moerr.NewInvalidInputNoCtxf("FORMAT numeric input has unsupported type %s", typ.Oid)
+	}
 }
 
 const (
@@ -9603,7 +9736,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 		if (truncated || conversionTruncated) && proc != nil {
-			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 				renderedValue := renderWarningValue(i)
 				if conversionTruncated {
 					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,

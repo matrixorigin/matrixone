@@ -354,3 +354,77 @@ func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 		require.False(t, required)
 	}
 }
+
+func TestRequiresMORPCVersion59NumericFormatArguments(t *testing.T) {
+	numeric := func(typeID int32, position int32) *Expr {
+		return &Expr{Typ: Type{Id: typeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: position}}}
+	}
+	stringArg := numeric(61, 0)
+	scale := numeric(23, 1)
+	locale := numeric(61, 2)
+	format := func(obj int64, name string, first *Expr, args ...*Expr) *Expr {
+		all := make([]*Expr, 0, len(args)+1)
+		all = append(all, first)
+		all = append(all, args...)
+		return &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: obj, ObjName: name},
+			Args: all,
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{
+			name: "encoded two-argument numeric format",
+			expr: format(int64(262)<<32, "format", numeric(23, 0), scale),
+			want: true,
+		},
+		{
+			name: "encoded three-argument numeric format",
+			expr: format(int64(262)<<32|1, "format", numeric(31, 0), scale, locale),
+			want: true,
+		},
+		{
+			name: "name-only numeric format",
+			expr: format(0, "FORMAT", numeric(32, 0), scale),
+			want: true,
+		},
+		{
+			name: "string format remains compatible",
+			expr: format(int64(262)<<32, "format", stringArg, scale),
+		},
+		{
+			name: "other numeric function",
+			expr: format(int64(123)<<32, "other", numeric(23, 0), scale),
+		},
+		{
+			name: "missing scale argument",
+			expr: format(int64(262)<<32, "format", numeric(23, 0)),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := RequiresMORPCVersion59NumericFormatArguments(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+	t.Run("missing first argument", func(t *testing.T) {
+		_, err := RequiresMORPCVersion59NumericFormatArguments(
+			format(int64(262)<<32, "format", nil, scale))
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
+	})
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			format(int64(262)<<32, "format", numeric(23, 0), scale),
+			format(int64(262)<<32, "format", stringArg, scale),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.FormatNumericArguments)
+	require.True(t, features.Any())
+}
