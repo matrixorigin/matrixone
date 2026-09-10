@@ -1426,6 +1426,20 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}}},
 		}
 	}
+	makeUnaryMinusExpr := func(inputType, resultType types.T) *planpb.Expr {
+		resolved, err := planfunction.GetFunctionByName(context.Background(), "unary_minus", []types.Type{inputType.ToType()})
+		require.NoError(t, err)
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(resultType)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "unary_minus"},
+				Args: []*planpb.Expr{{
+					Typ:  planpb.Type{Id: int32(inputType)},
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+				}},
+			}},
+		}
+	}
 	makeFormatExpr := func(firstType types.Type, withLocale bool) *planpb.Expr {
 		args := []*planpb.Expr{{
 			Typ:  planpb.Type{Id: int32(firstType.Oid), Width: firstType.Width, Scale: firstType.Scale},
@@ -1523,6 +1537,51 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				require.ErrorContains(t, err,
 					"typed numeric FORMAT arguments require MORPC protocol version 59")
 			})
+		}
+	})
+
+	t.Run("widened unary minus sender and receiver boundary", func(t *testing.T) {
+		for _, inputType := range []types.T{types.T_int8, types.T_int16, types.T_int32} {
+			t.Run(inputType.String(), func(t *testing.T) {
+				expr := makeUnaryMinusExpr(inputType, types.T_int64)
+				remotePipeline := &pipeline.Pipeline{
+					InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+				}
+				scope := makeScope(expr)
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err,
+					"widened integer unary minus requires MORPC protocol version 60")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.ErrorContains(t, err,
+					"widened integer unary minus requires MORPC protocol version 60")
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
+				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.NoError(t, err)
+				decoded, err := decodeScope(encoded, proc, true, nil)
+				require.NoError(t, err)
+				decoded.release()
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+				decoded, err = decodeScope(encoded, proc, true, nil)
+				require.ErrorContains(t, err,
+					"widened integer unary minus requires MORPC protocol version 60")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, decoded)
+			})
+		}
+
+		for _, expr := range []*planpb.Expr{
+			makeUnaryMinusExpr(types.T_int64, types.T_int64),
+			makeUnaryMinusExpr(types.T_int8, types.T_int8),
+		} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+				InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+			}))
 		}
 	})
 

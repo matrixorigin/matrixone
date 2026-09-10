@@ -193,20 +193,22 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. A struct makes compatibility call sites name every capability
-// instead of relying on positional booleans.
+// MORPC v59. WidenedUnaryMinus requires MORPC v60. A struct makes compatibility
+// call sites name every capability instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
+	WidenedUnaryMinus        bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
-		features.FormatNumericArguments
+		features.FormatNumericArguments ||
+		features.WidenedUnaryMinus
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -235,10 +237,37 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if formatNumericArguments {
 				features.FormatNumericArguments = true
 			}
+			if !features.WidenedUnaryMinus && isWidenedUnaryMinus(fn, current.Typ.Id) {
+				features.WidenedUnaryMinus = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+// Unary minus historically reused the input's signed integer type. Starting
+// with v60, TINYINT/SMALLINT/INT operands produce BIGINT so their minimum value
+// can be negated exactly. A pre-v60 worker resolves the same overload ID to the
+// old narrow executor and panics when writing into the BIGINT result wrapper.
+func isWidenedUnaryMinus(function *Function, resultType int32) bool {
+	if function == nil || function.Func == nil || len(function.Args) != 1 || function.Args[0] == nil {
+		return false
+	}
+	const unaryMinusFunctionID int32 = 8
+	functionID := int32(function.Func.Obj >> 32)
+	if functionID != unaryMinusFunctionID && !strings.EqualFold(function.Func.GetObjName(), "unary_minus") {
+		return false
+	}
+	if resultType != 23 { // BIGINT
+		return false
+	}
+	switch function.Args[0].Typ.Id {
+	case 20, 21, 22: // TINYINT, SMALLINT, INT
+		return true
+	default:
+		return false
+	}
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric

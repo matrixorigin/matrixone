@@ -151,3 +151,21 @@ create table t1 (a tinyint);
 insert into t1 values (2);
 select a << 20 from t1;
 select !true;
+
+-- Signed integer unary minus widens narrow operands and rejects BIGINT overflow.
+drop table if exists unary_minus_signed_boundary;
+create table unary_minus_signed_boundary(i8 tinyint, i16 smallint, i32 int, i64 bigint);
+insert into unary_minus_signed_boundary values
+    (-128, -32768, -2147483648, -9223372036854775807),
+    (127, 32767, 2147483647, 9223372036854775807),
+    (0, 0, 0, -9223372036854775808),
+    (null, null, null, null);
+select -i8, -i16, -i32, -i64 from unary_minus_signed_boundary
+where i64 is null or i64 > -9223372036854775808 order by i8;
+create table unary_minus_signed_boundary_ctas as
+    select -i8 as n8, -i16 as n16, -i32 as n32 from unary_minus_signed_boundary where i8 = -128;
+show columns from unary_minus_signed_boundary_ctas;
+select * from unary_minus_signed_boundary_ctas;
+select -i64 from unary_minus_signed_boundary where i64 = -9223372036854775808;
+drop table unary_minus_signed_boundary_ctas;
+drop table unary_minus_signed_boundary;
