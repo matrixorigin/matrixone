@@ -28,9 +28,15 @@ contract](https://dev.mysql.com/doc/refman/8.0/en/data-type-defaults.html):
 expression defaults may use built-in deterministic or nondeterministic
 functions, may reference table columns, cannot reference auto-increment
 columns, and cannot forward-reference generated or expression-default columns.
-MatrixOne follows those dependency and row-evaluation rules, while its
-configured protocol-60 admission is an additional deployment safeguard for
-older MatrixOne readers.
+MatrixOne targets the ordinary-column dependency and row-evaluation subset of
+that contract, while its configured protocol-60 admission is an additional
+deployment safeguard for
+older MatrixOne readers. The implementation intentionally supports a strict
+subset for generated-column dependencies: MatrixOne rejects every
+default-to-generated reference, including references to a generated column that
+appears earlier, because generated values are owned by a separate computation
+path. This is a documented compatibility difference rather than a claim of
+full MySQL expression-default compatibility.
 
 Non-goals are generated-column semantics, automatic mixed-version discovery,
 reordering user declarations to make an invalid dependency legal, and a new
