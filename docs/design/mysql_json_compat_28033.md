@@ -44,6 +44,14 @@ VIEW warns at creation; stored-view expansion and any internal plan rebuild
 while consuming that view suppress the warning. Changing SHOW CREATE VIEW or
 persisted SQL spelling is outside this issue.
 
+For the aliased JSON merge result itself, use JSON_MERGE_PRESERVE semantics:
+matching object members recurse only when both member values are objects.
+Otherwise the conflicting values are combined as an array, with array values
+flattened by autowrapping. For example,
+`{"a":{"foo":"bar"}}` merged with `{"a":["foo","bar"]}` produces
+`{"a":[{"foo":"bar"},"foo","bar"]}`; this is not a recursive object/array
+merge.
+
 ## JSON_DEPTH
 
 Accept JSON, MySQL string transport types and T_any for NULL/prepared inputs.

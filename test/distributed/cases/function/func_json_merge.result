@@ -79,6 +79,9 @@ select json_merge_preserve('{"a":1,"b":2}', '{"a":3,"c":4}', '{"a":5,"d":6}');
 select json_merge_preserve('{"a":{"x":1}}', '{"a":{"y":2}}');
 ➤ json_merge_preserve({"a":{"x":1}}, {"a":{"y":2}})[-1,2147483647,0]  𝄀
 {"a": {"x": 1, "y": 2}}
+select json_merge_preserve('{"a":{"foo":"bar"}}', '{"a":["foo","bar"]}');
+➤ json_merge_preserve({"a":{"foo":"bar"}}, {"a":["foo","bar"]})[-1,2147483647,0]  𝄀
+{"a": [{"foo": "bar"}, "foo", "bar"]}
 select json_merge_preserve('{"a":[1]}', '{"a":[2]}');
 ➤ json_merge_preserve({"a":[1]}, {"a":[2]})[-1,2147483647,0]  𝄀
 {"a": [1, 2]}
