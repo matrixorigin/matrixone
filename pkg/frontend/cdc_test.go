@@ -1277,7 +1277,7 @@ func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(snapshot)
 	opts.setNoFullStartTS(txnOp)
-	require.Equal(t, "2026-09-09T01:02:03.456789Z", opts.StartTs)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
 
 	// An explicit StartTs remains the caller's activation boundary.
 	opts.StartTs = "2026-09-01T00:00:00Z"
@@ -5823,6 +5823,19 @@ func Test_parseTimestamp(t *testing.T) {
 
 	_, err = CDCStrToTime("2006-01-02T15:04:05-07:00", nil)
 	assert.NoError(t, err)
+}
+
+func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
+	want := types.BuildTS(1710000000000000000, 3)
+	got, err := CDCStrToTS(want.ToString())
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	// Existing wall-clock task rows and explicit user timestamps retain the
+	// historical logical-zero interpretation.
+	legacy, err := CDCStrToTS("2026-09-09T01:02:03.456789Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), int64(legacy.Logical()))
 }
 
 func TestCDCParseGranularityTuple(t *testing.T) {

@@ -6621,8 +6621,7 @@ func setNoFullStartTS(opts *CDCCreateTaskOptions, txnOp client.TxnOperator) {
 	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
 		snapshotTS := txnOp.SnapshotTS()
 		if !snapshotTS.IsEmpty() {
-			snapshot := snapshotTS.ToStdTime()
-			opts.StartTs = snapshot.UTC().Format(time.RFC3339Nano)
+			opts.StartTs = snapshotTS.DebugString()
 		}
 	}
 }
