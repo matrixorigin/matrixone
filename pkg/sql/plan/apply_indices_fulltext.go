@@ -586,6 +586,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				return -1, nil, nil, nil, err
 			}
 		}
+		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27941).
+		builder.qry.Nodes[curr_ftnode_id].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
 		if scanNode.ObjRef.PubInfo != nil {
 			fulltextFunc := builder.qry.Nodes[curr_ftnode_id].TableDef.TblFunc
 			fulltextFunc.FulltextSourceRef = DeepCopyObjectRef(scanNode.ObjRef)
@@ -1158,6 +1160,8 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	if err != nil {
 		return false, err
 	}
+	// Snapshot read TS for the covered fast path too (#27941).
+	builder.qry.Nodes[ftnodeID].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
 	ftnode := builder.qry.Nodes[ftnodeID]
 	ftTag := ftnode.BindingTags[0]
 

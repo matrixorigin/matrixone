@@ -65,7 +65,10 @@ func ConstructBlockPKFilter(
 		return objectio.BlockReadFilter{}, nil
 	}
 
-	readFilter := objectio.BlockReadFilter{HasFakePK: isFakePK}
+	readFilter := objectio.BlockReadFilter{
+		HasFakePK:       isFakePK,
+		ExactMembership: bf != nil && bf.Exact(),
+	}
 	// The scoped cache search must preserve the exact routing contract of the
 	// existing callbacks. Fake PK columns are not physically sorted even when
 	// the block carries the sorted flag, and membership filters may use a
