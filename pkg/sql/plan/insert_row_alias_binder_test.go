@@ -400,12 +400,12 @@ func TestInsertRowAliasScopeRefsTraverseAndRewrite(t *testing.T) {
 		return &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: tag, ColPos: pos, Depth: depth}}}
 	}
 	emptyExprs := []*planpb.Expr{
-		&planpb.Expr{Expr: &planpb.Expr_Col{}},
-		&planpb.Expr{Expr: &planpb.Expr_Corr{}},
-		&planpb.Expr{Expr: &planpb.Expr_F{}},
-		&planpb.Expr{Expr: &planpb.Expr_List{}},
-		&planpb.Expr{Expr: &planpb.Expr_W{}},
-		&planpb.Expr{Expr: &planpb.Expr_Sub{}},
+		{Expr: &planpb.Expr_Col{}},
+		{Expr: &planpb.Expr_Corr{}},
+		{Expr: &planpb.Expr_F{}},
+		{Expr: &planpb.Expr_List{}},
+		{Expr: &planpb.Expr_W{}},
+		{Expr: &planpb.Expr_Sub{}},
 	}
 
 	refs := make([]insertScopeRef, 0)
@@ -421,7 +421,7 @@ func TestInsertRowAliasScopeRefsTraverseAndRewrite(t *testing.T) {
 	windowExpr := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
 		WindowFunc:  col(7, 7),
 		PartitionBy: []*planpb.Expr{col(11, 8)},
-		OrderBy:     []*planpb.OrderBySpec{nil, &planpb.OrderBySpec{Expr: col(99, 9)}},
+		OrderBy:     []*planpb.OrderBySpec{nil, {Expr: col(99, 9)}},
 		Frame:       &planpb.FrameClause{Start: &planpb.FrameBound{Val: col(7, 10)}, End: &planpb.FrameBound{Val: col(11, 11)}},
 	}}}
 	subqueryExpr := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{}}}
