@@ -509,6 +509,26 @@ func TestSessionWindowPartitionAlgorithmChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionWindowPartitionAlgorithmChangeInvalidatesPreparedPlanGeneration(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	prepared := &PrepareStmt{Name: "window-prepared"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepared.Name, prepared))
+
+	// A mode change must preserve the prepared handle while forcing EXECUTE to
+	// rebuild the logical/physical plan under the new session value.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.False(t, prepared.needsRebuild)
+
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+}
+
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

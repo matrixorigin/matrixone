@@ -2117,6 +2117,19 @@ func (ses *Session) cleanCache() {
 	}
 }
 
+// markPreparedPlansForWindowPartitionAlgorithmChange marks prepared plan
+// generations stale without closing their handles. The session variable is
+// read while building the logical plan, so EXECUTE must rebuild the plan and
+// any cached compile after the value changes; removing the prepared statement
+// would incorrectly turn a valid EXECUTE into an unknown-statement error.
+func (ses *Session) markPreparedPlansForWindowPartitionAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
+	}
+}
+
 // releasePlanCache is an internal method. The caller MUST hold ses.mu
 // (currently only called from Session.Close which holds the lock).
 func (ses *Session) releasePlanCache() {
