@@ -70,6 +70,14 @@ class WorkerContractTest(unittest.TestCase):
             worker._scalar_input(array, 0, descriptor),
         )
 
+    def test_json_rejects_nonstandard_numbers(self):
+        descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
+        for value in ("NaN", "Infinity", "-Infinity", "1e9999"):
+            with self.assertRaisesRegex(ValueError, "invalid JSON"):
+                worker._canonical_json_text(value)
+            with self.assertRaisesRegex(ValueError, "JSON result"):
+                worker._check_scalar(value, descriptor)
+
     def test_uuid_scalar_round_trip_keeps_uuid_object_until_array_encoding(self):
         descriptor = {"type_id": worker.UUID, "offset_width": 0}
         value = uuid.UUID("123e4567-e89b-12d3-a456-426614174000")
