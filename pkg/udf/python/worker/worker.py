@@ -21,6 +21,7 @@ import importlib
 import inspect
 import json
 import logging
+import math
 import os
 import pickle
 import selectors
@@ -497,8 +498,22 @@ def _scalar_input(array: pa.Array, row: int, descriptor: Dict[str, Any]):
 def _canonical_json_text(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("TYPE_CONTRACT: JSON value must be text")
+
+    def reject_nonstandard_number(_constant: str):
+        raise ValueError("non-standard JSON number")
+
+    def reject_nonfinite_float(number: str):
+        parsed = float(number)
+        if not math.isfinite(parsed):
+            raise ValueError("non-finite JSON number")
+        return parsed
+
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(
+            value,
+            parse_constant=reject_nonstandard_number,
+            parse_float=reject_nonfinite_float,
+        )
     except Exception as exc:
         raise ValueError("TYPE_CONTRACT: invalid JSON input") from exc
     return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
