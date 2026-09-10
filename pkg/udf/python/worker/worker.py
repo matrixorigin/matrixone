@@ -320,7 +320,13 @@ def _required_positive_int(value: Dict[str, Any], key: str, maximum: int) -> int
 
 def _required_positive_float(value: Dict[str, Any], key: str, maximum: float) -> float:
     item = value.get(key)
-    if isinstance(item, bool) or not isinstance(item, (int, float)) or item <= 0 or item > maximum:
+    if (
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or not math.isfinite(item)
+        or item <= 0
+        or item > maximum
+    ):
         raise ValueError(f"PROTOCOL: invalid invocation field {key}")
     return float(item)
 
