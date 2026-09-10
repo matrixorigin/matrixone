@@ -43,6 +43,18 @@ j
 select json_value('{}', '$.a' returning json default '5' on empty default '7' on error) as j;
 j
 5
+select json_value('{"a":" 12 "}', '$.a' returning signed null on error) as n;
+n
+12
+select json_value('{"a":" 12 "}', '$.a' returning unsigned null on error) as n;
+n
+12
+select json_value('{"a":"2026-01-02 03:04:05.1234"}', '$.a' returning datetime(3) null on error) as dt;
+dt
+null
+select json_value('{"a":"0000-00-00"}', '$.a' returning date null on error) as d;
+d
+null
 create table json_value_responses (id int, doc varchar(100));
 insert into json_value_responses values (1, '{}'), (2, '{"a":"bad"}'), (3, '{"a":9}'), (4, '{"a":null}');
 select id, json_value(doc, '$.a' returning unsigned default 5 on empty default 7 on error) as n from json_value_responses order by id;

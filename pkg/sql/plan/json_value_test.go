@@ -109,9 +109,12 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.Len(t, legacy.GetF().Args, 2)
 
 	_, err = bind(defines.MORPCVersion57, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 58")
+	require.ErrorContains(t, err, "MORPC protocol version 60")
 
-	contract, err := bind(defines.MORPCVersion58, `select json_value('1', '$' returning unsigned)`)
+	_, err = bind(defines.MORPCVersion59, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 60")
+
+	contract, err := bind(defines.MORPCVersion60, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }
@@ -217,6 +220,25 @@ func TestJSONValueBindingTypeAndDefaultBoundaries(t *testing.T) {
 
 	_, err := bind(`select json_value('{"a":1}', '$.a' returning decimal(4,2) default 1.234 on error)`)
 	require.Error(t, err)
+
+	for _, sql := range []string{
+		`select json_value('{"a":1}', '$.a' returning float default 'NaN' on error)`,
+		`select json_value('{"a":1}', '$.a' returning double default 'NaN' on error)`,
+		`select json_value('{"a":1}', '$.a' returning float default 'Inf' on error)`,
+		`select json_value('{"a":1}', '$.a' returning double default '-Inf' on error)`,
+		`select json_value('{"a":1}', '$.a' returning date default '0000-00-00' on error)`,
+		`select json_value('{"a":1}', '$.a' returning time(3) default '12:34:56.1234' on error)`,
+		`select json_value('{"a":1}', '$.a' returning datetime(3) default '2026-01-02 03:04:05.1234' on error)`,
+		`select json_value('{"a":1}', '$.a' returning datetime default '0000-00-00 00:00:00' on error)`,
+	} {
+		t.Run("reject invalid default "+sql, func(t *testing.T) {
+			_, err := bind(sql)
+			require.Error(t, err)
+		})
+	}
+
+	_, err = bind(`select json_value('{"a":1}', '$.a' returning signed default ' 12 ' on error)`)
+	require.NoError(t, err)
 }
 
 func TestJSONValueSemanticNormalizationAndClone(t *testing.T) {

@@ -270,6 +270,76 @@ func jsonValueCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatch(overloads, inputs)
 }
 
+// fixedTypeMatchWithBoolNumericCast applies MySQL's numeric-context rule for
+// BOOL only to callers that explicitly opt in.  BOOL is intentionally not
+// added to fixedCanImplicitCastRule globally: that table is shared by
+// unrelated functions where changing overload resolution would be a silent
+// compatibility regression (for example string/bit and binary functions).
+//
+// The matcher first resolves BOOL as INT64 so overload ordering remains the
+// same as for an integer literal.  It then returns the selected overload's
+// actual target type, forcing a real BOOL cast at execution time.  This keeps
+// direct BOOL expressions and prepared parameters on the same path while
+// preserving the existing string fallback for functions that do not opt in.
+func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type) checkResult {
+	hasBool := false
+	for _, input := range inputs {
+		if input.Oid == types.T_bool {
+			hasBool = true
+			break
+		}
+	}
+	if !hasBool {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bool {
+			normalized[i] = types.T_int64.ToType()
+		}
+	}
+
+	matched := fixedTypeMatch(overloads, normalized)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		// Preserve the ordinary checker's behavior when this overload set has a
+		// non-numeric BOOL-compatible path.
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	selected := overloads[matched.idx]
+	for i, input := range inputs {
+		if input.Oid != types.T_bool {
+			continue
+		}
+		target := selected.args[i]
+		if !target.ToType().IsNumeric() || !IfTypeCastSupported(types.T_bool, target) {
+			return fixedTypeMatch(overloads, inputs)
+		}
+	}
+
+	if matched.status == succeedWithCast {
+		finalTypes := append([]types.Type(nil), matched.finalType...)
+		for i, input := range inputs {
+			if input.Oid == types.T_bool {
+				finalTypes[i] = selected.args[i].ToType()
+				SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+			}
+		}
+		return newCheckResultWithCast(matched.idx, finalTypes)
+	}
+
+	finalTypes := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		finalTypes[i] = input
+		if input.Oid == types.T_bool {
+			finalTypes[i] = selected.args[i].ToType()
+			SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
+}
+
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
 // OID/width/charset while applying the ordinary fixed matcher to control
 // arguments. Varlena string executors can consume every string family; casting

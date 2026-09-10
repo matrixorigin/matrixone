@@ -196,12 +196,17 @@ func jsonValueContext(proc *process.Process) context.Context {
 	return proc.Ctx
 }
 
+func parseJSONValuePath(pathBytes []byte) (string, bytejson.Path, error) {
+	pathString := string(pathBytes)
+	path, err := types.ParseStringToPath(pathString)
+	return pathString, path, err
+}
+
 func jsonValueExtract(
 	doc, pathBytes []byte,
 	docType types.T,
 ) jsonValueExtracted {
-	pathString := string(pathBytes)
-	path, err := types.ParseStringToPath(pathString)
+	pathString, path, err := parseJSONValuePath(pathBytes)
 	if err != nil {
 		return jsonValueExtracted{
 			state: jsonValueHardError,
@@ -301,13 +306,16 @@ func jsonValueExecuteCore(
 		}
 		doc, docNull := docParam.get(row)
 		path, pathNull := pathParam.get(row)
-		if docNull {
+		if pathNull {
 			if err := appendNull(); err != nil {
 				return err
 			}
 			continue
 		}
-		if pathNull {
+		if docNull {
+			if _, _, err := parseJSONValuePath(path); err != nil {
+				return moerr.NewInvalidArgNoCtx("json_value", "invalid path expression")
+			}
 			if err := appendNull(); err != nil {
 				return err
 			}
@@ -608,7 +616,7 @@ func parseJSONValueInt64(e jsonValueExtracted, _ types.Type) (int64, error) {
 			return value, nil
 		}
 	case bytejson.TpCodeString:
-		if value, ok := bytejson.NumericTextToInt64(string(e.value.GetString())); ok {
+		if value, ok := bytejson.NumericTextToInt64(numericText); ok {
 			return value, nil
 		}
 	case bytejson.TpCodeLiteral:
@@ -675,7 +683,7 @@ func parseJSONValueUint64(e jsonValueExtracted, _ types.Type) (uint64, error) {
 			return value, nil
 		}
 	case bytejson.TpCodeString:
-		if value, ok := bytejson.NumericTextToUint64(string(e.value.GetString())); ok {
+		if value, ok := bytejson.NumericTextToUint64(numericText); ok {
 			return value, nil
 		}
 	case bytejson.TpCodeLiteral:
@@ -763,12 +771,18 @@ func parseJSONValueDate(e jsonValueExtracted, _ types.Type) (types.Date, error) 
 	if err != nil {
 		return 0, err
 	}
+	if jsonValueTemporalHasZeroDate(s) {
+		return 0, moerr.NewInvalidInputNoCtxf("JSON_VALUE zero date value %q", s)
+	}
 	return types.ParseDateCast(s)
 }
 
 func parseJSONValueTime(e jsonValueExtracted, target types.Type) (types.Time, error) {
 	s, err := jsonValueScalarText(e)
 	if err != nil {
+		return 0, err
+	}
+	if err := validateJSONValueTemporalText(s, target.Scale); err != nil {
 		return 0, err
 	}
 	return types.ParseTime(s, target.Scale)
@@ -779,7 +793,41 @@ func parseJSONValueDatetime(e jsonValueExtracted, target types.Type) (types.Date
 	if err != nil {
 		return 0, err
 	}
+	if err := validateJSONValueTemporalText(s, target.Scale); err != nil {
+		return 0, err
+	}
 	return types.ParseDatetime(s, target.Scale)
+}
+
+func validateJSONValueTemporalText(s string, scale int32) error {
+	if jsonValueTemporalHasZeroDate(s) {
+		return moerr.NewInvalidInputNoCtxf("JSON_VALUE zero date/time value %q", s)
+	}
+	if scale >= 0 {
+		if digits, ok := jsonValueTemporalFractionalDigits(s); ok && int32(digits) > scale {
+			return moerr.NewDataTruncatedNoCtxf("JSON_VALUE", "value %q loses fractional precision at scale %d", s, scale)
+		}
+	}
+	return nil
+}
+
+func jsonValueTemporalHasZeroDate(s string) bool {
+	year, month, day, err := types.ParseDateCastComponents(strings.TrimSpace(s))
+	return err == nil && year == 0 && month == 0 && day == 0
+}
+
+func jsonValueTemporalFractionalDigits(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	dot := strings.IndexByte(s, '.')
+	if dot < 0 || dot == len(s)-1 {
+		return 0, dot < 0
+	}
+	for i := dot + 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	return len(s) - dot - 1, true
 }
 
 func parseJSONValueYear(e jsonValueExtracted, _ types.Type) (types.MoYear, error) {

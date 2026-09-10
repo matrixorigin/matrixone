@@ -15,20 +15,15 @@
 package bytejson
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
-	"sort"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const storedJSONValidationMinimumWork = 1024
-
-type storedJSONValidationRange struct {
-	start int
-	end   int
-}
 
 type storedJSONValidationChild struct {
 	value ByteJson
@@ -151,23 +146,31 @@ func validateStoredJSONContainer(value ByteJson, work *uint64, workLimit uint64)
 		return nil, err
 	}
 
-	ranges := make([]storedJSONValidationRange, 0, int(count))
 	children := make([]storedJSONValidationChild, 0, int(count))
 	payloadStart := int(tableSize)
+	// Canonical stored JSON writes key and value payloads in table order. Keep
+	// validation linear and reject non-canonical offsets before any lookup can
+	// rely on them; this avoids sorting every document during extraction.
+	previousPayloadEnd := tableSize
 	if value.Type == TpCodeObject {
+		var previousKey []byte
 		for i := uint64(0); i < count; i++ {
 			entryOffset := uint64(headerSize) + i*keyEntrySize
 			keyOffset := uint64(endian.Uint32(value.Data[entryOffset:]))
 			keyLength := uint64(endian.Uint16(value.Data[entryOffset+keyOriginOff:]))
 			keyEnd := keyOffset + keyLength
-			if keyEnd < keyOffset || keyOffset < uint64(payloadStart) || keyEnd > documentSize {
+			if keyEnd < keyOffset || keyOffset < previousPayloadEnd || keyOffset < uint64(payloadStart) || keyEnd > documentSize {
 				return nil, invalidStoredJSONDocument()
 			}
 			key := value.Data[int(keyOffset):int(keyEnd)]
 			if !utf8.Valid(key) {
 				return nil, invalidStoredJSONDocument()
 			}
-			ranges = append(ranges, storedJSONValidationRange{start: int(keyOffset), end: int(keyEnd)})
+			if i > 0 && bytes.Compare(previousKey, key) >= 0 {
+				return nil, invalidStoredJSONDocument()
+			}
+			previousKey = key
+			previousPayloadEnd = keyEnd
 		}
 	}
 
@@ -188,25 +191,14 @@ func validateStoredJSONContainer(value ByteJson, work *uint64, workLimit uint64)
 		}
 		valueOffset := uint64(endian.Uint32(entry[valTypeSize:]))
 		valueLength, ok := storedJSONValueLength(typeCode, value.Data, valueOffset, documentSize)
-		if !ok || valueOffset < uint64(payloadStart) || valueOffset+valueLength < valueOffset || valueOffset+valueLength > documentSize {
+		valueEnd := valueOffset + valueLength
+		if !ok || valueOffset < previousPayloadEnd || valueOffset < uint64(payloadStart) || valueEnd < valueOffset || valueEnd > documentSize {
 			return nil, invalidStoredJSONDocument()
 		}
-		ranges = append(ranges, storedJSONValidationRange{start: int(valueOffset), end: int(valueOffset + valueLength)})
+		previousPayloadEnd = valueEnd
 		children = append(children, storedJSONValidationChild{
-			value: ByteJson{Type: typeCode, Data: value.Data[int(valueOffset):int(valueOffset+valueLength)]},
+			value: ByteJson{Type: typeCode, Data: value.Data[int(valueOffset):int(valueEnd)]},
 		})
-	}
-
-	sort.Slice(ranges, func(i, j int) bool {
-		if ranges[i].start == ranges[j].start {
-			return ranges[i].end < ranges[j].end
-		}
-		return ranges[i].start < ranges[j].start
-	})
-	for i := 1; i < len(ranges); i++ {
-		if ranges[i].start < ranges[i-1].end {
-			return nil, invalidStoredJSONDocument()
-		}
 	}
 	return children, nil
 }

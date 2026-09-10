@@ -2176,6 +2176,97 @@ func TestJsonValueConversionDiagnosticsAreTyped(t *testing.T) {
 	}
 }
 
+func TestJsonValueNormalizesNumericStringWhitespace(t *testing.T) {
+	extracted := jsonValueExtract([]byte(`{"a":" 12 "}`), []byte(`$.a`), types.T_varchar)
+	signed, err := parseJSONValueInt64(extracted, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.Equal(t, int64(12), signed)
+
+	unsigned, err := parseJSONValueUint64(extracted, types.T_uint64.ToType())
+	require.NoError(t, err)
+	require.Equal(t, uint64(12), unsigned)
+}
+
+func TestJsonValueTemporalConversionsAreStrict(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "time rejects excess fractional precision",
+			run: func() error {
+				_, err := parseJSONValueTime(
+					jsonValueExtract([]byte(`{"a":"12:34:56.1234"}`), []byte(`$.a`), types.T_varchar),
+					types.T_time.ToTypeWithScale(3))
+				return err
+			},
+		},
+		{
+			name: "datetime rejects excess fractional precision",
+			run: func() error {
+				_, err := parseJSONValueDatetime(
+					jsonValueExtract([]byte(`{"a":"2026-01-02 03:04:05.1234"}`), []byte(`$.a`), types.T_varchar),
+					types.T_datetime.ToTypeWithScale(3))
+				return err
+			},
+		},
+		{
+			name: "date rejects zero sentinel",
+			run: func() error {
+				_, err := parseJSONValueDate(
+					jsonValueExtract([]byte(`{"a":"0000-00-00"}`), []byte(`$.a`), types.T_varchar),
+					types.T_date.ToType())
+				return err
+			},
+		},
+		{
+			name: "time rejects zero date sentinel",
+			run: func() error {
+				_, err := parseJSONValueTime(
+					jsonValueExtract([]byte(`{"a":"0000-00-00 00:00:00"}`), []byte(`$.a`), types.T_varchar),
+					types.T_time.ToType())
+				return err
+			},
+		},
+		{
+			name: "datetime rejects zero sentinel",
+			run: func() error {
+				_, err := parseJSONValueDatetime(
+					jsonValueExtract([]byte(`{"a":"0000-00-00 00:00:00"}`), []byte(`$.a`), types.T_varchar),
+					types.T_datetime.ToType())
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, tc.run())
+		})
+	}
+}
+
+func TestJsonValueValidatesPathForNullDocuments(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.T_varchar.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"$["}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+		NewFunctionTestConstInput(target, []string{""}, []bool{true}),
+	}
+	fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target, true, nil, nil), JsonValue)
+	defer func() {
+		fc.result.Free()
+		for _, parameter := range fc.parameters {
+			parameter.Free(proc.Mp())
+		}
+	}()
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	require.Error(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil))
+}
+
 func TestJsonValueWarningDiagnostics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &numericWarningSession{}

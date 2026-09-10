@@ -54,30 +54,32 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (revision 2, 2026-09-09)
+### Versioned compatibility decision (revision 3, 2026-09-10)
 
 The seven-argument representation is a new wire and persisted-plan contract.
-MORPC version 58 is the first version that may carry JSON_VALUE function ID 462
+MORPC version 59 is already allocated to typed numeric `FORMAT` arguments, so
+JSON_VALUE uses the next unclaimed capability version, 60.
+MORPC version 60 is the first version that may carry JSON_VALUE function ID 462
 with overload index 2. The planner admits `RETURNING`, `ON EMPTY`, and `ON
-ERROR` only when the deployment-wide `MOProtocolVersion` is at least 58; below
+ERROR` only when the deployment-wide `MOProtocolVersion` is at least 60; below
 that threshold it returns a not-supported error before publishing the plan.
 An ordinary two-argument call remains the legacy overload and is still allowed
 at version 57.
 
 Both remote pipeline boundaries enforce the same contract. The sender and
 receiver expression validators identify overload 2 and reject it when the
-local deployment gate is below version 58 or unavailable. This prevents a new
+local deployment gate is below version 60 or unavailable. This prevents a new
 sender from sending the plan to an old CN and prevents a current receiver from
 executing a plan after a rollback lowered the gate. The function-ID lookup also
 rejects an out-of-range overload instead of indexing the overload slice.
 
 Creating a view, generated column, index expression, or persisted prepared plan
-that contains overload 2 is therefore a version-58-only operation. Upgrade all
-CNs and raise the oldest-live protocol gate to 58 before enabling the syntax.
-Do not lower the gate or roll back to a pre-58 binary while such a plan remains
+that contains overload 2 is therefore a version-60-only operation. Upgrade all
+CNs and raise the oldest-live protocol gate to 60 before enabling the syntax.
+Do not lower the gate or roll back to a pre-60 binary while such a plan remains
 persisted; rebuild or remove that metadata first. A legacy two-argument plan
 does not carry this prerequisite and remains readable by older CNs. The
-regression matrix covers sender/receiver rejection below 58, acceptance at 58,
+regression matrix covers sender/receiver rejection below 60, acceptance at 60,
 planner admission at both thresholds, and the legacy two-argument control.
 
 ## Required evidence

@@ -14389,9 +14389,10 @@ name_confict:
 |   DATE
 |   DATABASE
 |   DAY
-|   DEDUP
-|   EMPTY_SYM
-|   HOUR
+	|   DEDUP
+	|   EMPTY_SYM
+	|   ERROR_SYM
+	|   HOUR
 |   IF
 |   FORMAT
 |   LEFT

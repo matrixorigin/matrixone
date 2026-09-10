@@ -2057,10 +2057,16 @@ func validateRemoteExpressionPipelineProtocol(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
-	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion58) {
+	if features.FormatNumericArguments &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 58",
+			"typed numeric FORMAT arguments require MORPC protocol version 59",
+		)
+	}
+	if features.JSONValueContract &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion60) {
+		return moerr.NewNotSupportedNoCtx(
+			"seven-argument JSON_VALUE plans require MORPC protocol version 60",
 		)
 	}
 	return nil

@@ -125,6 +125,30 @@ func TestValidateStoredJSONDocumentRejectsMalformedRanges(t *testing.T) {
 	})
 }
 
+func TestValidateStoredJSONDocumentRejectsUnorderedObjectKeys(t *testing.T) {
+	document, err := ParseFromByteSlice([]byte(`{"a":1,"z":2}`))
+	require.NoError(t, err)
+
+	firstKeyOffset := int(endian.Uint32(document.Data[headerSize:]))
+	secondKeyOffset := int(endian.Uint32(document.Data[headerSize+keyEntrySize:]))
+	for _, mutate := range []struct {
+		name      string
+		firstKey  byte
+		secondKey byte
+	}{
+		{name: "descending", firstKey: 'z', secondKey: 'a'},
+		{name: "duplicate", firstKey: 'a', secondKey: 'a'},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			data := append([]byte(nil), document.Data...)
+			data[firstKeyOffset] = mutate.firstKey
+			data[secondKeyOffset] = mutate.secondKey
+			err := ValidateStoredJSONDocument(ByteJson{Type: TpCodeObject, Data: data})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestValidateStoredJSONDocumentRejectsExcessiveDepth(t *testing.T) {
 	atLimitInput := strings.Repeat("[", JSONDocumentMaxNestingDepth) + "1" +
 		strings.Repeat("]", JSONDocumentMaxNestingDepth)
@@ -161,4 +185,28 @@ func TestStoredJSONValidationWorkBound(t *testing.T) {
 	var work uint64
 	require.NoError(t, chargeStoredJSONValidationWork(&work, 4, 4))
 	require.Error(t, chargeStoredJSONValidationWork(&work, 4, 1))
+}
+
+func BenchmarkValidateStoredJSONDocument(b *testing.B) {
+	var builder strings.Builder
+	builder.WriteByte('[')
+	for i := 0; i < 1024; i++ {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteByte('1')
+	}
+	builder.WriteByte(']')
+	document, err := ParseFromByteSlice([]byte(builder.String()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(document.Data)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := ValidateStoredJSONDocument(document); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
