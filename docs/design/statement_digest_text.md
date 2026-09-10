@@ -288,17 +288,17 @@ codes mapped to existing MySQL codes 3676 and 3677, and two additive protobuf
 fields in pipeline `SessionInfo`. It changes no catalog, disk, backup, or
 replication format.
 
-MORPC version 59 is the capability boundary for remotely executing function ID
+MORPC version 60 is the capability boundary for remotely executing function ID
 579 with its setting snapshot. Both the sender and decoded-owner boundary walk
 every expression owner. A pipeline containing this function is rejected with
 `ErrNotSupported` before remote execution when the oldest-live service protocol
-is absent or below v59. Ordinary pipelines remain wire-compatible because the
+is absent or below v60. Ordinary pipelines remain wire-compatible because the
 new fields are additive. This explicit rejection is the routing contract; the
 implementation does not silently execute with an older worker or promise an
 automatic coordinator retry.
 
 No persisted generated expression can contain the function because it is
-registered as non-deterministic. Rolling back below v59 makes new senders stop
+registered as non-deterministic. Rolling back below v60 makes new senders stop
 remote execution through the same protocol fence. Rolling back all nodes
 restores the prior `function not supported` behavior and requires no data
 migration or cleanup. Values already present in an in-flight protobuf are
@@ -377,7 +377,7 @@ forwarding.
 | runtime registration | `CannotFold` and `IsRealTimeRelated` | generated-column rejection |
 | runtime settings | statement generation cache; child sharing; resolver fallback/range/type table | SQL mode changed and restored; prepared plan reused |
 | distributed setting snapshot | encode/decode/re-encode at 0/default/custom; absent/malformed controls; resolver-free evaluation | one-CN public result plus multi-CN CI topology |
-| mixed-version fence | function ID 579 in plan and instruction owners; v58 rejects on encode and decode, v59 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
+| mixed-version fence | function ID 579 in plan and instruction owners; v59 rejects on encode and decode, v60 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
 | SQL modes | ANSI quotes, pipes, hint quoting; retained empty resolver vs frontend clear; error/type/nil/sentinel fallback; repeated forwarding | quoted user-variable identifier under `ANSI_QUOTES` |
 | alias compatibility | keyword/function aliases plus identifier controls | canonical function-alias BVT row |
 | delimiter boundary | simple/compound, one/multiple internal statements, with/without terminal delimiter | simple and compound BVT results |
@@ -402,7 +402,7 @@ head:
 - zero unresolved correctness findings against every invariant above;
 - passing `moerr`, MySQL parser, planner generated-expression, and function
   owning-package tests, using the repository CGo wrapper where required;
-- passing process snapshot/codec and sender/receiver MORPC v58/v59 capability
+- passing process snapshot/codec and sender/receiver MORPC v59/v60 capability
   tests, including zero and repeated-forward controls;
 - passing exact distributed SQL case in normal comparison mode, including
   result-file review and same-instance cleanup/repeat evidence;
