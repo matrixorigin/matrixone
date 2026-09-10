@@ -93,8 +93,10 @@ func TestArrowLoadPermissionDeniedDoesNotReadOrWrite(t *testing.T) {
 	require.Equal(t, int64(1), queryCount(t, ownerDB,
 		"select count(*) from `"+databaseName+"`.`"+tableName+"`"))
 
+	mustExec(t, ownerDB, "grant insert on table `"+databaseName+"`.`"+tableName+"` to "+roleName)
 	objectRequest.Store(false)
-	mustExec(t, ownerDB, loadSQL)
+	_, err = userDB.ExecContext(ctx, loadSQL)
+	require.NoError(t, err)
 	require.True(t, objectRequest.Load(), "authorized Arrow LOAD must access the MinIO object")
 	require.Equal(t, int64(2), queryCount(t, ownerDB,
 		"select count(*) from `"+databaseName+"`.`"+tableName+"`"))
