@@ -33,6 +33,8 @@ case，结合 `ut-report/ut-checkpoint.log` 和 helper report 判断卡点。
 CI 上传副本设置 250 MiB 总预算和 5 分钟超时；超出预算的文件保留带截断标记的头尾，
 `manifest.txt` 记录原始与保存字节数。该预算只约束诊断 artifact，不改变测试输入、
 coverage 或失败结论。
+成功的 UT job 只上传 `top.txt` 和 checkpoint 作为 1 天的轻量 baseline；原始 JSON 和
+helper report 仅在失败或取消时上传，便于比较正常 run 的阶段耗时而不复制完整测试流。
 
 ## Revision 7: bounded light/issues overlap on one runner
 
