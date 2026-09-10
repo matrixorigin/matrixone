@@ -21,6 +21,29 @@ is emitted only when its source has an explicit semantic mapping. An omitted
 field means that mapping is unavailable; it is never replaced by a guessed
 value, a fake query block, or a placeholder estimate.
 
+## Motivation and sequencing
+
+This contract is for machine-readable plan consumers: SQL clients, IDEs, and
+diagnostic or regression tooling that need to inspect a plan without parsing
+text EXPLAIN. A stable one-cell result and explicit protocol metadata let those
+consumers use the same document through COM_QUERY and prepared execution. The
+`matrixone` graph also keeps CTE, window, DML, and multi-step plans inspectable
+when they do not fit a single MySQL query-block shape.
+
+The contract is defined before implementation and QA so parser, renderer,
+frontend, and protocol work share one externally observable boundary. This
+revision intentionally establishes static-plan JSON first; it does not claim
+that runtime instrumentation is complete.
+
+`EXPLAIN ANALYZE` is a separate execution-and-measurement feature. The [MySQL
+8.0 EXPLAIN documentation](https://dev.mysql.com/doc/refman/8.0/en/explain.html)
+specifies TREE as its only supported output format and rejects JSON with
+ANALYZE. Therefore rejecting `EXPLAIN ANALYZE FORMAT=JSON` before execution
+preserves the MySQL 8.0.45 compatibility boundary and prevents v1 from
+inventing runtime fields or side effects. A future ANALYZE contract, if
+needed, must define its own runtime metrics, side effects, cancellation, and
+protocol semantics rather than silently extending this static schema.
+
 ## Accepted and rejected combinations
 
 Regular EXPLAIN supports SELECT, INSERT, REPLACE, UPDATE, DELETE, and the
