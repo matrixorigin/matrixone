@@ -17,12 +17,13 @@ package arrowload
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
@@ -146,6 +147,44 @@ func openArrowLoadDB(t testing.TB, c embed.Cluster, cnIndex int) *sql.DB {
 	return db
 }
 
+// openArrowLoadRawConn opens one physical MySQL connection for client-close
+// tests. database/sql intentionally retains an in-flight connection on DB.Close;
+// using driver.Conn here lets the test close the client TCP session while LOAD is
+// blocked in a real S3 request.
+func openArrowLoadRawConn(t testing.TB, c embed.Cluster, cnIndex int) (driver.Conn, int64) {
+	t.Helper()
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+	config := mysql.NewConfig()
+	config.User = "dump"
+	config.Passwd = "111"
+	config.Net = "tcp"
+	config.Addr = fmt.Sprintf("127.0.0.1:%d", cn.GetServiceConfig().CN.Frontend.Port)
+	connector, err := mysql.NewConnector(config)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := connector.Connect(ctx)
+	require.NoError(t, err)
+	queryer, ok := conn.(driver.QueryerContext)
+	require.True(t, ok, "MySQL driver connection does not support QueryContext")
+	rows, err := queryer.QueryContext(ctx, "select connection_id()", nil)
+	require.NoError(t, err)
+	defer rows.Close()
+	values := make([]driver.Value, 1)
+	require.NoError(t, rows.Next(values))
+	var connID int64
+	switch value := values[0].(type) {
+	case int64:
+		connID = value
+	case uint64:
+		connID = int64(value)
+	default:
+		require.FailNow(t, "unexpected connection_id type", "%T", values[0])
+	}
+	return conn, connID
+}
+
 func mustExec(t testing.TB, db *sql.DB, stmt string, args ...any) {
 	t.Helper()
 	_, err := db.Exec(stmt, args...)
@@ -181,6 +220,28 @@ func waitUntilStatementRunning(t testing.TB, observer *sql.DB, connID int64, nee
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for connection %d to run a statement containing %q (last info=%q, err=%v)",
 				connID, needle, info.String, err)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitUntilConnectionGone(t testing.TB, observer *sql.DB, connID int64, deadline time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var n int
+		err := observer.QueryRowContext(ctx,
+			"select count(*) from information_schema.processlist where conn_id = ?", connID,
+		).Scan(&n)
+		if err == nil && n == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for connection %d to disappear (last count=%d, err=%v)", connID, n, err)
 		case <-ticker.C:
 		}
 	}
