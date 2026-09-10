@@ -150,7 +150,7 @@ select last_insert_id();
 insert into t_odku_return_id (code, payload) values ('A', 2)
 on duplicate key update payload = values(payload);
 select id, code, payload from t_odku_return_id order by id;
-➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]  𝄀
 1  ¦  A  ¦  2
 select last_insert_id();
 ➤ last_insert_id()
@@ -158,7 +158,7 @@ select last_insert_id();
 insert into t_odku_return_id (code, payload) values ('B', 3)
 on duplicate key update payload = values(payload);
 select id, code, payload from t_odku_return_id order by id;
-➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  payload[4,32,0]  𝄀
 1  ¦  A  ¦  2  𝄀
 3  ¦  B  ¦  3
 select last_insert_id();
@@ -177,7 +177,7 @@ on duplicate key update payload = values(payload);
 insert into t_odku_user_auto_uk (payload) values (20)
 on duplicate key update payload = values(payload);
 select id, payload from t_odku_user_auto_uk order by id;
-➤ id[4,32,0]  ¦  payload[4,32,0]
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  20
 drop table if exists t_odku_user_auto_uk;

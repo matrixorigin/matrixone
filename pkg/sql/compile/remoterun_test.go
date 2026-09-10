@@ -1109,7 +1109,10 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
 		"requires MORPC protocol version 58")
-	dedup := &dedupjoin.DedupJoin{ODKUResultTracking: true}
+	dedup := &dedupjoin.DedupJoin{
+		ODKUResultTracking: true,
+		Conditions:         [][]*planpb.Expr{{}, {}},
+	}
 	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
 			Op:        int32(vm.DedupJoin),
