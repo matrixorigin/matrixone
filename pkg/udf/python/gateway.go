@@ -39,12 +39,11 @@ const (
 var errGatewayClosed = errors.New("python udf gateway is closed")
 
 type Gateway struct {
-	cfg       ClientConfig
-	conn      *grpc.ClientConn
-	flight    flight.FlightServiceClient
-	mu        sync.Mutex
-	lifecycle sync.RWMutex
-	closed    bool
+	cfg    ClientConfig
+	conn   *grpc.ClientConn
+	flight flight.FlightServiceClient
+	mu     sync.Mutex
+	closed bool
 }
 
 func NewGateway(cfg ClientConfig) (*Gateway, error) {
@@ -66,13 +65,18 @@ func NewGateway(cfg ClientConfig) (*Gateway, error) {
 func (g *Gateway) Language() string { return udf.LanguagePython }
 
 func (g *Gateway) connect() error {
+	_, err := g.flightClient()
+	return err
+}
+
+func (g *Gateway) flightClient() (flight.FlightServiceClient, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
-		return errGatewayClosed
+		return nil, errGatewayClosed
 	}
 	if g.flight != nil {
-		return nil
+		return g.flight, nil
 	}
 	conn, err := grpc.NewClient(g.cfg.ServerAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -82,29 +86,31 @@ func (g *Gateway) connect() error {
 		),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	g.conn = conn
 	g.flight = flight.NewFlightServiceClient(conn)
-	return nil
+	return g.flight, nil
 }
 
 func (g *Gateway) Close() error {
-	g.lifecycle.Lock()
-	defer g.lifecycle.Unlock()
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.closed {
+		g.mu.Unlock()
 		return nil
 	}
 	g.closed = true
-	if g.conn == nil {
+	conn := g.conn
+	g.conn = nil
+	g.mu.Unlock()
+	if conn == nil {
 		return nil
 	}
-	err := g.conn.Close()
-	g.conn = nil
-	g.flight = nil
-	return err
+	// Closing the connection is deliberately outside the mutex. gRPC uses
+	// this operation to interrupt in-flight exchanges; holding a lifecycle
+	// read lock until Execute returns would make shutdown wait for the very RPC
+	// it needs to cancel.
+	return conn.Close()
 }
 
 type openPayload struct {
@@ -124,8 +130,6 @@ type openPayload struct {
 }
 
 func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
-	g.lifecycle.RLock()
-	defer g.lifecycle.RUnlock()
 	g.mu.Lock()
 	closed := g.closed
 	g.mu.Unlock()
@@ -158,7 +162,8 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if invocation.Length == 0 {
 		return result.PreExtendAndReset(0)
 	}
-	if err := g.connect(); err != nil {
+	client, err := g.flightClient()
+	if err != nil {
 		return err
 	}
 	openBody, err := json.Marshal(openPayload{Handler: invocation.Handler, Source: invocation.Source, Mode: invocation.Mode, NullPolicy: invocation.NullPolicy, ABIContract: invocation.ABIContract, AdapterVersion: invocation.AdapterVersion, SDKVersion: invocation.SDKVersion, Context: cloneMap(invocation.Context), Args: args, Return: returnDescriptor, MaxBatchBytes: g.cfg.MaxBatchBytes, MaxBatchRows: g.cfg.MaxBatchRows, HandlerTimeoutSeconds: g.cfg.RequestTimeout.Seconds()})
@@ -170,7 +175,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		return err
 	}
 
-	stream, err := g.flight.DoExchange(streamCtx)
+	stream, err := client.DoExchange(streamCtx)
 	if err != nil {
 		return fmt.Errorf("python udf: open Arrow Flight exchange: %w", err)
 	}
@@ -187,6 +192,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 
 	var sequence protocol.Sequence
 	var schemaFrame *ArrowFrame
+	schemaReady := false
 	var inputSchema []byte
 	rows := 0
 	var start int64
@@ -241,7 +247,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 			}
 			inputEnded = true
 		}
-		batchRows, err := g.receiveResultBatch(streamCtx, stream, invocation.Tuple, sequenceNumber, batch.Rows, &schemaFrame, returnDescriptor, result, mp, &sequence)
+		batchRows, err := g.receiveResultBatch(streamCtx, client, stream, invocation.Tuple, sequenceNumber, batch.Rows, &schemaFrame, &schemaReady, returnDescriptor, result, mp, &sequence)
 		if err != nil {
 			return err
 		}
@@ -255,7 +261,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if !inputEnded || lastSequence != batchIndex {
 		return fmt.Errorf("python udf: input stream did not reach EndInput")
 	}
-	return g.receiveFinish(streamCtx, stream, invocation.Tuple, invocation.Length, rows, &sequence)
+	return g.receiveFinish(streamCtx, client, stream, invocation.Tuple, invocation.Length, rows, &sequence)
 }
 
 func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaining, maxBytes, maxRows int64) (encodedRecordBatch, error) {
@@ -322,11 +328,13 @@ func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaini
 
 func (g *Gateway) receiveResultBatch(
 	ctx context.Context,
+	client flight.FlightServiceClient,
 	stream flight.FlightService_DoExchangeClient,
 	tuple protocol.FencingTuple,
 	sequenceNumber uint64,
 	expectedRows int64,
 	schemaFrame **ArrowFrame,
+	schemaReady *bool,
 	returnDescriptor TypeDescriptor,
 	result vector.FunctionResultWrapper,
 	mp *mpool.MPool,
@@ -348,15 +356,17 @@ func (g *Gateway) receiveResultBatch(
 				if len(data.DataBody) != 0 {
 					return 0, fmt.Errorf("python udf: result schema contains a body")
 				}
-				if len(data.AppMetadata) == 0 {
-					return 0, fmt.Errorf("python udf: result schema is missing metadata")
-				}
-				control, err := protocol.UnmarshalControl(data.AppMetadata)
-				if err != nil || control.Tuple != tuple || control.Kind != "ResultSchema" {
-					return 0, fmt.Errorf("python udf: invalid result schema metadata")
-				}
 				*schemaFrame = &ArrowFrame{Header: append([]byte(nil), data.DataHeader...)}
+				if len(data.AppMetadata) != 0 {
+					if err := validateResultSchemaMetadata(data.AppMetadata, tuple); err != nil {
+						return 0, err
+					}
+					*schemaReady = true
+				}
 				continue
+			}
+			if !*schemaReady {
+				return 0, fmt.Errorf("python udf: result schema metadata was not received")
 			}
 			control, err := protocol.UnmarshalControl(data.AppMetadata)
 			if err != nil {
@@ -397,7 +407,7 @@ func (g *Gateway) receiveResultBatch(
 				return 0, err
 			}
 			decoded.Release()
-			if err := g.action(ctx, "AcknowledgeResults", protocol.Control{Kind: "AcknowledgeResults", Tuple: tuple, AckSequence: control.Sequence}); err != nil {
+			if err := g.action(ctx, client, "AcknowledgeResults", protocol.Control{Kind: "AcknowledgeResults", Tuple: tuple, AckSequence: control.Sequence}); err != nil {
 				return 0, err
 			}
 			if err := sequence.AcknowledgeResults(control.Sequence); err != nil {
@@ -414,6 +424,10 @@ func (g *Gateway) receiveResultBatch(
 		}
 		switch control.Kind {
 		case "ResultSchema":
+			if *schemaFrame == nil || *schemaReady {
+				return 0, fmt.Errorf("python udf: invalid result schema metadata")
+			}
+			*schemaReady = true
 			continue
 		case "InputConsumed":
 			if control.Sequence != sequenceNumber {
@@ -430,8 +444,17 @@ func (g *Gateway) receiveResultBatch(
 	}
 }
 
+func validateResultSchemaMetadata(metadata []byte, tuple protocol.FencingTuple) error {
+	control, err := protocol.UnmarshalControl(metadata)
+	if err != nil || control.Tuple != tuple || control.Kind != "ResultSchema" {
+		return fmt.Errorf("python udf: invalid result schema metadata")
+	}
+	return nil
+}
+
 func (g *Gateway) receiveFinish(
 	ctx context.Context,
+	client flight.FlightServiceClient,
 	stream flight.FlightService_DoExchangeClient,
 	tuple protocol.FencingTuple,
 	expectedRows, rows int,
@@ -466,7 +489,7 @@ func (g *Gateway) receiveFinish(
 				!inputEnded || control.LastSequence != lastInput || lastResult != lastInput || acked != lastInput || !sequence.ReadyToFinish() {
 				return fmt.Errorf("python udf: invalid Finish status=%q rows=%d", control.Status, rows)
 			}
-			return g.action(ctx, "AcknowledgeFinish", protocol.Control{Kind: "AcknowledgeFinish", Tuple: tuple, FinishID: control.FinishID})
+			return g.action(ctx, client, "AcknowledgeFinish", protocol.Control{Kind: "AcknowledgeFinish", Tuple: tuple, FinishID: control.FinishID})
 		default:
 			return fmt.Errorf("python udf: unexpected control %q", control.Kind)
 		}
@@ -498,14 +521,14 @@ func validateInvocation(invocation *udf.Invocation) error {
 	return invocation.Tuple.Validate()
 }
 
-func (g *Gateway) action(ctx context.Context, kind string, control protocol.Control) error {
+func (g *Gateway) action(ctx context.Context, client flight.FlightServiceClient, kind string, control protocol.Control) error {
 	body, err := protocol.MarshalControl(control)
 	if err != nil {
 		return err
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
 	defer cancel()
-	stream, err := g.flight.DoAction(actionCtx, &flight.Action{Type: kind, Body: body})
+	stream, err := client.DoAction(actionCtx, &flight.Action{Type: kind, Body: body})
 	if err != nil {
 		return fmt.Errorf("python udf: %s: %w", kind, err)
 	}

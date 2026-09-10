@@ -12,7 +12,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,6 +94,24 @@ func TestAppendArrowResultRejectsMissingConsumer(t *testing.T) {
 	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
 	require.NoError(t, err)
 	require.ErrorContains(t, AppendArrowResult(descriptor, values, nil, nil), "missing result wrapper")
+}
+
+func TestAppendArrowResultValidatesEmptyArrayType(t *testing.T) {
+	allocator := memory.NewGoAllocator()
+	stringBuilder := array.NewStringBuilder(allocator)
+	values := stringBuilder.NewStringArray()
+	defer values.Release()
+
+	mp := mpool.MustNewZeroNoFixed()
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer func() {
+		result.Free()
+		mpool.DeleteMPool(mp)
+	}()
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+
+	require.ErrorContains(t, AppendArrowResult(descriptor, values, result, mp), "Arrow type")
 }
 
 func TestZeroArgumentRecordPreservesRows(t *testing.T) {

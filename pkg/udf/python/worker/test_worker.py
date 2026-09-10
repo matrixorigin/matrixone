@@ -516,6 +516,12 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid control field sequence"):
             worker._required_uint64({"sequence": "1"}, "sequence")
 
+    def test_result_ack_rejects_zero_sequence(self):
+        state = worker._InvocationState({}, 1)
+        state.last_result = 1
+        with self.assertRaisesRegex(ValueError, "result ACK"):
+            state.ack_result(0)
+
 
 if __name__ == "__main__":
     unittest.main()
