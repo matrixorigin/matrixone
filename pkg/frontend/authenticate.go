@@ -9294,6 +9294,28 @@ func getLoadTargetTableName(stmt *tree.Load, ses *Session) (string, string, bool
 	return dbName, tableName, true
 }
 
+// loadStatementForPrePlanAuth finds a LOAD nested in a prepared or executable
+// EXPLAIN wrapper whose planner recursively builds the inner statement.
+func loadStatementForPrePlanAuth(stmt tree.Statement) *tree.Load {
+	for stmt != nil {
+		switch st := stmt.(type) {
+		case *tree.Load:
+			return st
+		case *tree.PrepareStmt:
+			stmt = st.Stmt
+		case *tree.ExplainStmt:
+			stmt = st.Statement
+		case *tree.ExplainAnalyze:
+			stmt = st.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = st.Statement
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
 // authenticateLoadBeforePlan checks the target-table privilege using the LOAD
 // AST before planning can probe an external source. The plan-level check still
 // runs after planning because it is the authoritative check for rewritten DML
@@ -9301,7 +9323,7 @@ func getLoadTargetTableName(stmt *tree.Load, ses *Session) (string, string, bool
 func authenticateLoadBeforePlan(
 	ctx context.Context,
 	ses *Session,
-	stmt tree.Statement,
+	stmt *tree.Load,
 	defaultDatabase string,
 ) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
@@ -9309,7 +9331,7 @@ func authenticateLoadBeforePlan(
 	if ses == nil || ses.GetTenantInfo() == nil || ses.IsBackgroundSession() {
 		return stats, nil
 	}
-	if _, ok := stmt.(*tree.Load); !ok {
+	if stmt == nil {
 		return stats, nil
 	}
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() {

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,6 +93,14 @@ func TestArrowLoadPermissionDeniedDoesNotReadOrWrite(t *testing.T) {
 	require.False(t, objectRequest.Load(), "denied Arrow LOAD must not access the MinIO object")
 	require.Equal(t, int64(1), queryCount(t, ownerDB,
 		"select count(*) from `"+databaseName+"`.`"+tableName+"`"))
+
+	prepareSQL := "prepare arrow_load_permission_stmt from '" +
+		strings.ReplaceAll(loadSQL, "'", "''") + "'"
+	objectRequest.Store(false)
+	_, err = userDB.ExecContext(ctx, prepareSQL)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "do not have privilege to execute the statement")
+	require.False(t, objectRequest.Load(), "denied prepared Arrow LOAD must not access the MinIO object")
 
 	mustExec(t, ownerDB, "grant insert on table `"+databaseName+"`.`"+tableName+"` to "+roleName)
 	objectRequest.Store(false)

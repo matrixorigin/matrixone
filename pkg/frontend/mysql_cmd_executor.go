@@ -3840,12 +3840,12 @@ func buildPlanWithPrepareMode(
 
 	// LOAD planning may inspect an external source before producing a plan.
 	// Authorize its target table at this common planning boundary so direct
-	// compilation, prepared-plan rebuilds, and compile retries share the same
-	// admission check.
-	if _, isLoad := stmt.(*tree.Load); isLoad {
+	// compilation, prepared-plan rebuilds, compile retries, and executable
+	// wrappers share the same admission check.
+	if loadStmt := loadStatementForPrePlanAuth(stmt); loadStmt != nil {
 		if session, ok := ses.(*Session); ok {
 			authStats, authErr := authenticateLoadBeforePlan(
-				reqCtx, session, stmt, ctx.DefaultDatabase())
+				reqCtx, session, loadStmt, ctx.DefaultDatabase())
 			if authErr != nil {
 				return nil, authErr
 			}
