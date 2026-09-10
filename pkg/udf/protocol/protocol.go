@@ -87,6 +87,117 @@ type Control struct {
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
+type controlFieldRule struct {
+	allowed  map[string]struct{}
+	required map[string]struct{}
+}
+
+var controlFieldRules = map[string]controlFieldRule{
+	"OpenInvocation":     {allowed: map[string]struct{}{"payload": {}}, required: map[string]struct{}{"payload": {}}},
+	"InputBatch":         {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"EndInput":           {allowed: map[string]struct{}{"last_sequence": {}}, required: map[string]struct{}{"last_sequence": {}}},
+	"ResultSchema":       {allowed: map[string]struct{}{}},
+	"InputConsumed":      {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"ResultBatch":        {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"Finish":             {allowed: map[string]struct{}{"last_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"last_sequence": {}, "finish_id": {}, "status": {}}},
+	"AcknowledgeResults": {allowed: map[string]struct{}{"ack_sequence": {}}, required: map[string]struct{}{"ack_sequence": {}}},
+	"AcknowledgeFinish":  {allowed: map[string]struct{}{"finish_id": {}}, required: map[string]struct{}{"finish_id": {}}},
+	"Ack":                {allowed: map[string]struct{}{"ack_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"status": {}}},
+	"Error":              {allowed: map[string]struct{}{"status": {}, "reason": {}}, required: map[string]struct{}{"status": {}, "reason": {}}},
+}
+
+var controlBaseFields = map[string]struct{}{
+	"version": {}, "kind": {}, "tuple": {},
+}
+
+func validateControlFields(control Control, wire map[string]json.RawMessage) error {
+	rule, ok := controlFieldRules[control.Kind]
+	if !ok {
+		return fmt.Errorf("%w: unsupported control kind %q", ErrProtocol, control.Kind)
+	}
+	if wire != nil {
+		for field := range wire {
+			if _, base := controlBaseFields[field]; base {
+				continue
+			}
+			if _, allowed := rule.allowed[field]; !allowed {
+				return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, field, control.Kind)
+			}
+		}
+		for field := range rule.required {
+			if _, present := wire[field]; !present {
+				return fmt.Errorf("%w: control kind %q is missing field %q", ErrProtocol, control.Kind, field)
+			}
+		}
+	}
+	if control.Sequence != 0 {
+		if _, allowed := rule.allowed["sequence"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "sequence", control.Kind)
+		}
+	}
+	if control.LastSequence != 0 {
+		if _, allowed := rule.allowed["last_sequence"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "last_sequence", control.Kind)
+		}
+	}
+	if control.AckSequence != 0 {
+		if _, allowed := rule.allowed["ack_sequence"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "ack_sequence", control.Kind)
+		}
+	}
+	if control.FinishID != "" {
+		if _, allowed := rule.allowed["finish_id"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "finish_id", control.Kind)
+		}
+	}
+	if control.Status != "" {
+		if _, allowed := rule.allowed["status"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "status", control.Kind)
+		}
+	}
+	if control.Reason != "" {
+		if _, allowed := rule.allowed["reason"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "reason", control.Kind)
+		}
+	}
+	if len(control.Payload) != 0 {
+		if _, allowed := rule.allowed["payload"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "payload", control.Kind)
+		}
+	}
+	switch control.Kind {
+	case "OpenInvocation":
+		if len(control.Payload) == 0 && wire == nil {
+			return fmt.Errorf("%w: control kind %q is missing field %q", ErrProtocol, control.Kind, "payload")
+		}
+	case "InputBatch", "InputConsumed", "ResultBatch":
+		if control.Sequence == 0 {
+			return fmt.Errorf("%w: control kind %q requires a positive sequence", ErrProtocol, control.Kind)
+		}
+	case "AcknowledgeResults":
+		if control.AckSequence == 0 {
+			return fmt.Errorf("%w: control kind %q requires a positive ack_sequence", ErrProtocol, control.Kind)
+		}
+	case "Finish":
+		if control.FinishID == "" || control.Status == "" {
+			return fmt.Errorf("%w: control kind %q requires finish_id and status", ErrProtocol, control.Kind)
+		}
+	case "AcknowledgeFinish":
+		if control.FinishID == "" {
+			return fmt.Errorf("%w: control kind %q requires finish_id", ErrProtocol, control.Kind)
+		}
+	case "Ack":
+		if control.Status == "" || ((control.AckSequence == 0) == (control.FinishID == "")) {
+			return fmt.Errorf("%w: Ack requires status and exactly one acknowledgement identity", ErrProtocol)
+		}
+	case "Error":
+		if control.Status == "" || control.Reason == "" {
+			return fmt.Errorf("%w: control kind %q requires status and reason", ErrProtocol, control.Kind)
+		}
+	}
+	return nil
+}
+
 // MarshalJSON keeps closing controls self-describing when their final
 // sequence is zero.  The zero value is meaningful for an empty input stream;
 // omitting it would make EndInput(0) indistinguishable from a malformed
@@ -131,6 +242,9 @@ func MarshalControl(control Control) ([]byte, error) {
 	if err := control.Tuple.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateControlFields(control, nil); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(control)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode control: %v", ErrProtocol, err)
@@ -165,6 +279,13 @@ func UnmarshalControl(data []byte) (Control, error) {
 		return Control{}, fmt.Errorf("%w: unsupported control version %d", ErrProtocol, control.Version)
 	}
 	if err := control.Tuple.Validate(); err != nil {
+		return Control{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return Control{}, fmt.Errorf("%w: control must be an object: %v", ErrProtocol, err)
+	}
+	if err := validateControlFields(control, fields); err != nil {
 		return Control{}, err
 	}
 	return control, nil
