@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,6 +32,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+type groupConcatWarningSink struct {
+	total    uint64
+	codes    []uint16
+	messages []string
+}
+
+type cancelAfterGroupConcatWarningContext struct {
+	context.Context
+	exec *groupConcatExec
+}
+
+func (c *cancelAfterGroupConcatWarningContext) Err() error {
+	if c.exec != nil && c.exec.truncationCount > 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func (s *groupConcatWarningSink) AppendWarningDiagnostic(code uint16, msg string) {
+	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
+}
+
+func (s *groupConcatWarningSink) AppendWarningBatch(
+	total uint64,
+	codes []uint16,
+	messages []string,
+) {
+	s.total += total
+	s.codes = append(s.codes, codes...)
+	s.messages = append(s.messages, messages...)
+}
 
 func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -1170,16 +1203,31 @@ func TestGroupConcatOrderedMaxLen(t *testing.T) {
 		Type: planConfig.Type,
 		Data: runtimeConfig,
 	}, 0))
-	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.GroupGrow(2))
 
-	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"ccc", "a", "bb"})
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+		"ccc", "a", "bb", "ccc", "a", "bb",
+	})
 	orderKeys := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(orderKeys, []int64{3, 1, 2}, nil, mp))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orderKeys}))
+	require.NoError(t, vector.AppendFixedList(
+		orderKeys, []int64{3, 1, 2, 6, 4, 5}, nil, mp))
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1, 2, 2, 2},
+		[]*vector.Vector{values, orderKeys},
+	))
 
 	results, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "a|bb|", string(results[0].GetBytesAt(0)))
+	require.Equal(t, "a|bb|", string(results[0].GetBytesAt(1)))
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(2), sink.total)
+	require.ElementsMatch(t, []string{
+		"Row 3 was cut by GROUP_CONCAT()",
+		"Row 6 was cut by GROUP_CONCAT()",
+	}, sink.messages)
 
 	refreshed := RefreshGroupConcatConfigMaxLen(runtimeConfig, 3)
 	require.Equal(t, EncodeGroupConcatOrderedConfig(planConfig.Data, 3), refreshed)
@@ -1214,6 +1262,131 @@ func TestGroupConcatMaxLen(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     94,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 5), 0))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb", "cc"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "aabbc", string(results[0].GetBytesAt(0)))
+
+	// A boundary that cannot publish diagnostics must not consume them; a later
+	// session-aware boundary still needs to see the warning.
+	ReportGroupConcatWarnings(exec, &struct{}{})
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []uint16{moerr.ER_CUT_VALUE_GROUP_CONCAT}, sink.codes)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
+
+	// A result can be inspected by more than one execution-layer boundary, but
+	// the same truncation must not be reported twice.
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Len(t, sink.messages, 1)
+
+	results[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatWarningsAreDiscardedAfterFailedFinalization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     95,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	orderConfig := testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "")
+	exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(AggregateConfig{
+		Type: orderConfig.Type,
+		Data: EncodeGroupConcatOrderedConfig(orderConfig.Data, 5),
+	}, 0))
+	require.NoError(t, exec.GroupGrow(1))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb", "cc"})
+	orderKeys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(orderKeys, []int64{1, 2, 3}, nil, mp))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orderKeys}))
+
+	results, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	results[0].Free(mp)
+
+	// A cancelled generation must not expose warnings retained by the previous
+	// generation, even when callers inspect the executor after the failure.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = exec.FlushWithContext(ctx)
+	require.Error(t, err)
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Zero(t, sink.total)
+	require.Empty(t, sink.messages)
+
+	values.Free(mp)
+	orderKeys.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatWarningsAreDiscardedWhenLaterGroupFinalizationFails(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     96,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	orderConfig := testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "")
+	exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(AggregateConfig{
+		Type: orderConfig.Type,
+		Data: EncodeGroupConcatOrderedConfig(orderConfig.Data, 5),
+	}, 0))
+	require.NoError(t, exec.GroupGrow(2))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+		"aa", "bb", "cc", "aa", "bb", "cc",
+	})
+	orderKeys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		orderKeys, []int64{1, 2, 3, 4, 5, 6}, nil, mp))
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1, 2, 2, 2},
+		[]*vector.Vector{values, orderKeys},
+	))
+
+	ctx := &cancelAfterGroupConcatWarningContext{
+		Context: context.Background(),
+		exec:    exec,
+	}
+	_, err := exec.FlushWithContext(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, exec.truncationCount)
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Zero(t, sink.total)
+	require.Empty(t, sink.messages)
+
+	values.Free(mp)
+	orderKeys.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatMaxLenCanTruncateSeparator(t *testing.T) {
