@@ -43,13 +43,13 @@ type RowLocator struct {
 // envelope.
 func EncodeLocator(dst []byte, locator RowLocator) ([]byte, error) {
 	if locator.RelationID == 0 {
-		return nil, wrapCodecError(ErrInvalidValue, "locator relation id is zero")
+		return dst, wrapCodecError(ErrInvalidValue, "locator relation id is zero")
 	}
 	if uint64(len(locator.PrimaryKey)) > uint64(MaxKeyBytes-locatorHeader) {
-		return nil, wrapCodecError(ErrInvalidValue, "locator primary key is too large: %d", len(locator.PrimaryKey))
+		return dst, wrapCodecError(ErrInvalidValue, "locator primary key is too large: %d", len(locator.PrimaryKey))
 	}
 	if len(dst) > MaxKeyBytes-locatorHeader-len(locator.PrimaryKey) {
-		return nil, wrapCodecError(ErrInvalidValue, "locator destination exceeds maximum size")
+		return dst, wrapCodecError(ErrInvalidValue, "locator destination exceeds maximum size")
 	}
 
 	result := append(dst, locatorMagic...)

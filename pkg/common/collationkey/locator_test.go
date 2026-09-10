@@ -105,11 +105,21 @@ func TestLocatorRejectsMalformedInput(t *testing.T) {
 
 func TestLocatorRejectsOversizedKeyAndDestination(t *testing.T) {
 	tooLarge := make([]byte, MaxKeyBytes-locatorHeader+1)
-	if _, err := EncodeLocator(nil, RowLocator{RelationID: 1, PrimaryKey: tooLarge}); !errors.Is(err, ErrInvalidValue) {
+	dst := []byte("prefix")
+	encoded, err := EncodeLocator(dst, RowLocator{RelationID: 1, PrimaryKey: tooLarge})
+	if !errors.Is(err, ErrInvalidValue) {
 		t.Fatalf("oversized key error = %v, want ErrInvalidValue", err)
 	}
-	if _, err := EncodeLocator(make([]byte, MaxKeyBytes-locatorHeader+1), RowLocator{RelationID: 1}); !errors.Is(err, ErrInvalidValue) {
+	if !bytes.Equal(encoded, dst) {
+		t.Fatalf("oversized key changed destination: %X", encoded)
+	}
+	largeDst := append([]byte("prefix"), make([]byte, MaxKeyBytes-locatorHeader+1)...)
+	encoded, err = EncodeLocator(largeDst, RowLocator{RelationID: 1})
+	if !errors.Is(err, ErrInvalidValue) {
 		t.Fatalf("oversized destination error = %v, want ErrInvalidValue", err)
+	}
+	if !bytes.Equal(encoded, largeDst) {
+		t.Fatalf("oversized destination changed input")
 	}
 }
 
