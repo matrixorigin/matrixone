@@ -1247,7 +1247,9 @@ class RoutineFlightServer(flight.FlightServerBase):
                         if last_sequence != state.last_input:
                             raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True
-                    elif control["kind"] != "OpenInvocation":
+                    elif control["kind"] == "OpenInvocation":
+                        raise ValueError("PROTOCOL: duplicate OpenInvocation")
+                    else:
                         raise ValueError("PROTOCOL: unexpected control without Arrow data")
             if not ended: raise ValueError("PROTOCOL: input stream ended before EndInput")
             if state.acked_result != state.last_result: raise ValueError("PROTOCOL: result is not acknowledged")
