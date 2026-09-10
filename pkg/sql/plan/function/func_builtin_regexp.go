@@ -968,10 +968,6 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 			return opBinaryStrStrToFixedWithErrorCheck[bool](
 				parameters, result, nil, length,
 				func(subject, pattern string) (bool, error) {
-					if !binary {
-						subject = regexpValidTextPrefix(subject)
-						pattern = regexpValidTextPrefix(pattern)
-					}
 					var match bool
 					var err error
 					if like {
@@ -1037,12 +1033,12 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 		if !binary {
 			if parameters[0].GetIsBinaryStringAt(int(i)) {
 				subjectString = regexpBinaryBytesToText(subjectString)
-			} else {
+			} else if regexpTextNeedsPrefixValidation(parameters[0], int(i)) {
 				subjectString = regexpValidTextPrefix(subjectString)
 			}
 			if parameters[1].GetIsBinaryStringAt(int(i)) {
 				patternString = regexpBinaryBytesToText(patternString)
-			} else {
+			} else if regexpTextNeedsPrefixValidation(parameters[1], int(i)) {
 				patternString = regexpValidTextPrefix(patternString)
 			}
 		}

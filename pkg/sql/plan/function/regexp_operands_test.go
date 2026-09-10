@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -146,6 +147,27 @@ func TestRegexpIndependentOperandRoles(t *testing.T) {
 	}
 }
 
+func TestRegexpTextPrefixValidationBySource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	test := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"text"}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil), nil)
+	parameter := test.parameters[0]
+	for _, tc := range []struct {
+		source types.StringSource
+		want   bool
+	}{
+		{types.StringSourceExpression, false},
+		{types.StringSourceLiteral, false},
+		{types.StringSourceUserVariable, true},
+		{types.StringSourceSQLPrepare, true},
+		{types.StringSourceCOMStmt, true},
+	} {
+		require.NoError(t, parameter.SetStringSource(tc.source))
+		require.Equal(t, tc.want, regexpTextNeedsPrefixValidation(parameter, 0), tc.source)
+	}
+}
+
 func TestRegexpOutputEncoding(t *testing.T) {
 	for _, tc := range []struct{ input, prefix string }{
 		{"ASCII", "ASCII"}, {"éa", "éa"}, {"\xffa", ""}, {"a\xffb", "a"}, {"é\xc3", "é"},
@@ -162,4 +184,29 @@ func TestRegexpOutputEncoding(t *testing.T) {
 		allBytes[i] = byte(i)
 	}
 	require.Equal(t, string(allBytes), regexpTextToBinaryBytes(regexpBinaryBytesToText(string(allBytes))))
+}
+
+func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
+	subject := "a" + strings.Repeat("x", 1<<20)
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		name     string
+		validate bool
+	}{
+		{"ordinary_text", false},
+		{"runtime_text", true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				value := subject
+				if tc.validate {
+					value = regexpValidTextPrefix(value)
+				}
+				matched, err := op.regMap.regularMatchWithMode("^a", value, false)
+				if err != nil || !matched {
+					b.Fatalf("matched=%v err=%v", matched, err)
+				}
+			}
+		})
+	}
 }

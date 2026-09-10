@@ -118,7 +118,7 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 			wire.mu.Unlock()
 			rows, err := stmt.QueryContext(ctx, subject, pattern)
 			require.NoError(t, err)
-			defer rows.Close()
+			defer func() { require.NoError(t, rows.Close()) }()
 			columns, err := rows.ColumnTypes()
 			require.NoError(t, err)
 			require.Len(t, columns, 1)
