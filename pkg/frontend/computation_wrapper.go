@@ -377,14 +377,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	defer RecordStatementTxnID(execCtx.reqCtx, cwft.ses)
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 
-	if session, ok := cwft.ses.(*Session); ok {
-		authStats, authErr := authenticateLoadBeforePlan(execCtx.reqCtx, session, cwft.stmt)
-		if authErr != nil {
-			return nil, authErr
-		}
-		stats.PermissionAuth.Add(&authStats)
-	}
-
 	var preparedExprRetry *preparedExecutionRetry
 	if execCtx.input.isPreparedExpr() {
 		preparedExprRetry = newPreparedExecutionRetry(
