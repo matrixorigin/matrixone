@@ -123,21 +123,41 @@ include committed and local tracked/untracked Go files, inspect the resulting
 package list, and run the configured checks only on that list:
 
 ```bash
+set -euo pipefail
 base_ref=${REVIEW_BASE:-origin/main}
 merge_base=$(git merge-base HEAD "$base_ref")
-changed_go=$( {
-  git diff --name-only "$merge_base" -- '*.go'
-  git ls-files --others --exclude-standard -- '*.go'
-} | sort -u )
-changed_dirs=$(printf '%s\n' "$changed_go" |
-  sed '/^$/d' | xargs -r -n1 dirname | sort -u)
-changed_pkgs=$(printf '%s\n' "$changed_dirs" |
-  sed '/^$/d; s#^\./##; s#^#./#' | xargs -r go list)
+tracked_go=$(git diff --name-only "$merge_base" -- '*.go')
+untracked_go=$(git ls-files --others --exclude-standard -- '*.go')
+changed_go=$(printf '%s\n%s\n' "$tracked_go" "$untracked_go" |
+  sort -u | while IFS= read -r file; do
+    if [ -f "$file" ]; then printf '%s\n' "$file"; fi
+  done)
 
-test -z "$changed_go" || printf '%s\n' "$changed_go" | xargs -r gofmt -d
-test -z "$changed_pkgs" || GOWORK=off go vet -mod=readonly $changed_pkgs
-test -z "$changed_pkgs" || golangci-lint run -c .golangci.yml \
-  --new-from-rev "$merge_base" $changed_pkgs
+if [ -n "$changed_go" ]; then
+  format_files=$(printf '%s\n' "$changed_go" | xargs -r gofmt -l)
+  if [ -n "$format_files" ]; then
+    printf 'gofmt required for:\n%s\n' "$format_files" >&2
+    exit 1
+  fi
+fi
+
+changed_dirs=$(printf '%s\n' "$changed_go" | while IFS= read -r file; do
+  [ -n "$file" ] && dirname -- "$file"
+done | sort -u)
+changed_pkgs=$(printf '%s\n' "$changed_dirs" | while IFS= read -r dir; do
+  if [ -n "$dir" ] && [ -d "$dir" ]; then
+    go list -mod=readonly "./${dir#./}"
+  fi
+done | sort -u)
+if [ -n "$changed_go" ] && [ -z "$changed_pkgs" ]; then
+  printf 'changed Go files exist, but no package was discovered\n' >&2
+  exit 1
+fi
+
+if [ -n "$changed_pkgs" ]; then
+  GOWORK=off go vet -mod=readonly $changed_pkgs
+  golangci-lint run -c .golangci.yml --new-from-rev "$merge_base" $changed_pkgs
+fi
 ```
 
 Use the CGo setup and wrapper from
@@ -168,9 +188,10 @@ SHA, then classify it before editing:
   end-to-end test.
 - **Infrastructure:** network/API fetch failures, rate limits, unavailable
   caches, runner/toolchain setup, disk exhaustion, or a cancelled/evicted job
-  are not product failures. Preserve the log, rerun only a clearly transient
-  job when authorized, and do not add sleeps, retries, skips, or product
-  workarounds to hide it.
+  do not by themselves prove a product failure. Preserve the log and classify
+  the cancellation/eviction reason; rerun only a clearly transient job when
+  authorized, and do not add sleeps, retries, skips, or product workarounds to
+  hide it.
 - **Ambiguous/hung:** keep the existing run as the source of truth; poll for a
   terminal result, inspect the process/stack and resource state, and avoid
   launching a duplicate service or test that can contend for ports, native
