@@ -656,16 +656,22 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			// dedup below then collapses pks the two arms share. The base scan re-checks the json
 			// predicate on current values, so the stale index arm cannot leak an updated row.
 			if p, isPartial := builder.jsonPartialProbes[scanNode.NodeId]; isPartial {
-				if tailID, ok := builder.buildJSONProbeTail(ctx, scanNode, p, pkType); ok {
-					ftScanID := curr_ftnode_id
-					curr_ftnode_id, curr_ftnode_pkcol = builder.unionFtWithTail(ctx, ftScanID, curr_ftnode_tag, tailID, pkType)
-					// The score-sort/runtime-filter passes key their probe skip on the scan id held
-					// in ret_filter_node_ids/served (set above, pre-union), so keep it marked.
-					if builder.jsonProbeFtNodes == nil {
-						builder.jsonProbeFtNodes = make(map[int32]bool)
-					}
-					builder.jsonProbeFtNodes[ftScanID] = true
+				tailID, ok := builder.buildJSONProbeTail(ctx, scanNode, p, pkType)
+				if !ok {
+					// The index is behind, so the bulk arm alone would silently drop rows committed
+					// after build_ts. Eligibility was checked in decideJSONProbe, so a failure here is
+					// unexpected -- fail closed rather than return an incomplete bulk-only result.
+					return -1, nil, nil, nil, moerr.NewInternalError(builder.GetContext(),
+						"fulltext2 json partial probe: table_changes tail could not be built")
 				}
+				ftScanID := curr_ftnode_id
+				curr_ftnode_id, curr_ftnode_pkcol = builder.unionFtWithTail(ctx, ftScanID, curr_ftnode_tag, tailID, pkType)
+				// The score-sort/runtime-filter passes key their probe skip on the scan id held in
+				// ret_filter_node_ids/served (set above, pre-union), so keep it marked.
+				if builder.jsonProbeFtNodes == nil {
+					builder.jsonProbeFtNodes = make(map[int32]bool)
+				}
+				builder.jsonProbeFtNodes[ftScanID] = true
 			}
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
