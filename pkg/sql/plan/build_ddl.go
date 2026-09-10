@@ -4530,6 +4530,9 @@ func validateV2UniqueIndexParts(
 	if !useV2 {
 		return nil
 	}
+	if len(keyParts) == 0 {
+		return moerr.NewInternalError(ctx.GetContext(), "v2 unique key has no key parts")
+	}
 	for _, keyPart := range keyParts {
 		if keyPart == nil || keyPart.ColName == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")

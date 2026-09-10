@@ -203,6 +203,7 @@ func TestUniqueIndexDDLPropagatesV2Metadata(t *testing.T) {
 	source.Cols = append(source.Cols, &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(types.T_int64)}})
 	err := validateV2UniqueIndexParts(ctx, source, []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("n")}})
 	require.Error(t, err)
+	require.Error(t, validateV2UniqueIndexParts(ctx, source, nil))
 }
 
 func TestUniqueIndexDDLRejectsMalformedV2Metadata(t *testing.T) {
