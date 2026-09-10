@@ -658,6 +658,11 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
+	if err = requireDataBranchDatabaseIdentity(
+		execCtx.reqCtx, currentProtocolVersion(ses.proc),
+	); err != nil {
+		return
+	}
 	if bh, deferred, err = getDataBranchMutationExecutor(
 		execCtx.reqCtx, ses, true, &BackgroundExecOption{
 			forcePessimisticRC:             true,
@@ -915,7 +920,9 @@ func dataBranchDeleteDatabase(
 	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
 		return
 	}
-	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
+		execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
+	); err != nil {
 		return
 	}
 

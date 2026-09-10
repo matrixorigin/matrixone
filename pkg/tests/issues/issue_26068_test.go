@@ -45,15 +45,17 @@ func TestIssue26068DataBranchDatabaseIdentityLifecycle(t *testing.T) {
 		db.SetMaxOpenConns(4)
 
 		const (
-			sourceDB   = "issue_26068_identity_source"
-			branchDB   = "issue_26068_identity_branch"
-			ordinaryDB = "issue_26068_identity_ordinary"
-			lockedDB   = "issue_26068_identity_locked"
+			sourceDB       = "issue_26068_identity_source"
+			branchDB       = "issue_26068_identity_branch"
+			ordinaryDB     = "issue_26068_identity_ordinary"
+			lockedDB       = "issue_26068_identity_locked"
+			branchSnapshot = "issue_26068_identity_snapshot"
 		)
 		cleanup := func(cleanupCtx context.Context) {
 			for _, name := range []string{branchDB, ordinaryDB, lockedDB, sourceDB} {
 				execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+name+"`")
 			}
+			execSQLMaybe(t, cleanupCtx, db, "drop snapshot if exists "+branchSnapshot)
 		}
 		cleanup(ctx)
 		defer func() {
@@ -82,6 +84,21 @@ func TestIssue26068DataBranchDatabaseIdentityLifecycle(t *testing.T) {
 			).Scan(&ordinaryType))
 			require.Equal(t, "data-branch", branchType)
 			require.Empty(t, ordinaryType)
+		})
+
+		t.Run("snapshot restore preserves marker", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create snapshot "+branchSnapshot+" for database `"+branchDB+"`")
+			execSQLRequire(t, ctx, db, "drop database `"+branchDB+"`")
+			execSQLRequire(t, ctx, db, "restore database `"+branchDB+"` {snapshot=\""+branchSnapshot+"\"}")
+
+			var databaseType string
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select coalesce(dat_type, '') from mo_catalog.mo_database where account_id=0 and datname=?",
+				branchDB,
+			).Scan(&databaseType))
+			require.Equal(t, "data-branch", databaseType)
+
+			execSQLRequire(t, ctx, db, "data branch delete database `"+branchDB+"`")
 		})
 
 		t.Run("delete validates after exclusive database lock", func(t *testing.T) {

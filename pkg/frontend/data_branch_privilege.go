@@ -654,6 +654,7 @@ func validateDataBranchDeleteDatabaseTarget(
 	ses *Session,
 	bh BackgroundExec,
 	dbName string,
+	protocolVersion int64,
 ) ([]uint64, error) {
 	accId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -690,7 +691,7 @@ func validateDataBranchDeleteDatabaseTarget(
 		}
 		return true
 	})
-	if len(tableNames) == 0 && databaseType != catalog.SystemDBTypeDataBranch {
+	if len(tableNames) == 0 && !dataBranchDatabaseIdentityActive(databaseType, protocolVersion) {
 		return nil, inactiveBranchDatabaseError(ctx, dbName)
 	}
 	if err = validateActiveBranchChildTableIDs(ctx, ses, bh, tableNames); err != nil {

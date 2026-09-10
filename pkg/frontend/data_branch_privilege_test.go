@@ -118,6 +118,7 @@ func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T
 
 	tests := []struct {
 		name         string
+		protocol     int64
 		databaseType string
 		tables       [][]interface{}
 		activeIDs    [][]interface{}
@@ -126,37 +127,64 @@ func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T
 		wantSQLCount int
 	}{
 		{
-			name:         "marked empty database",
+			name:         "v62 marked empty database",
+			protocol:     defines.MORPCVersion62,
 			databaseType: catalog.SystemDBTypeDataBranch,
 			wantIDs:      []uint64{},
 			wantSQLCount: 2,
 		},
 		{
-			name:         "unmarked empty database",
+			name:         "v61 marked empty database fails closed",
+			protocol:     defines.MORPCVersion61,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 2,
+		},
+		{
+			name:         "v62 unmarked empty database",
+			protocol:     defines.MORPCVersion62,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 2,
+		},
+		{
+			name:         "v61 unmarked empty database",
+			protocol:     defines.MORPCVersion61,
 			wantErr:      "not an active branch database",
 			wantSQLCount: 2,
 		},
 		{
 			name:         "subscription database",
+			protocol:     defines.MORPCVersion62,
 			databaseType: catalog.SystemDBTypeSubscription,
 			wantErr:      "not an active branch database",
 			wantSQLCount: 1,
 		},
 		{
 			name:         "unknown database type",
+			protocol:     defines.MORPCVersion62,
 			databaseType: "unknown",
 			wantErr:      "not an active branch database",
 			wantSQLCount: 1,
 		},
 		{
-			name:         "marked database with ordinary table",
+			name:         "v62 marked database with ordinary table",
+			protocol:     defines.MORPCVersion62,
 			databaseType: catalog.SystemDBTypeDataBranch,
 			tables:       [][]interface{}{{int64(tableID), "local_t"}},
 			wantErr:      "not an active branch table",
 			wantSQLCount: 3,
 		},
 		{
-			name:         "marked database with branch table",
+			name:         "v61 marked database with ordinary table",
+			protocol:     defines.MORPCVersion61,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			tables:       [][]interface{}{{int64(tableID), "local_t"}},
+			wantErr:      "not an active branch table",
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v62 marked database with branch table",
+			protocol:     defines.MORPCVersion62,
 			databaseType: catalog.SystemDBTypeDataBranch,
 			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
 			activeIDs:    [][]interface{}{{int64(tableID)}},
@@ -164,7 +192,25 @@ func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T
 			wantSQLCount: 3,
 		},
 		{
-			name:         "legacy database with branch table",
+			name:         "v61 legacy database with branch table",
+			protocol:     defines.MORPCVersion61,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v62 legacy database with branch table",
+			protocol:     defines.MORPCVersion62,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v61 marked database retains legacy receipt validation",
+			protocol:     defines.MORPCVersion61,
+			databaseType: catalog.SystemDBTypeDataBranch,
 			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
 			activeIDs:    [][]interface{}{{int64(tableID)}},
 			wantIDs:      []uint64{tableID},
@@ -187,7 +233,7 @@ func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T
 			)
 			bh.sql2result[activeSQL] = branchUint64Result("table_id", test.activeIDs)
 
-			ids, err := validateDataBranchDeleteDatabaseTarget(ctx, ses, bh, dbName)
+			ids, err := validateDataBranchDeleteDatabaseTarget(ctx, ses, bh, dbName, test.protocol)
 			if test.wantErr != "" {
 				require.ErrorContains(t, err, test.wantErr)
 				require.Nil(t, ids)

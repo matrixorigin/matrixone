@@ -12733,6 +12733,7 @@ type backgroundExecTest struct {
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
 	executionAccountIDs            []uint32
+	executionDatabaseTypes         []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -12856,6 +12857,8 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
@@ -12873,6 +12876,8 @@ func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sql
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	return bt.sql2err[s]
 }
 

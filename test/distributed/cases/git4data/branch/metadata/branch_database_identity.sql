@@ -13,10 +13,16 @@ drop database if exists issue26068_dropall_dst;
 drop database if exists issue26068_local_table_src;
 drop database if exists issue26068_local_table_dst;
 drop database if exists issue26068_ordinary_empty;
+drop snapshot if exists issue26068_empty_snapshot;
+drop snapshot if exists issue26068_dropall_snapshot;
 
 -- Empty source database: the database marker is the only branch receipt.
 create database issue26068_empty_src;
 data branch create database issue26068_empty_dst from issue26068_empty_src;
+select dat_type from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
+create snapshot issue26068_empty_snapshot for database issue26068_empty_dst;
+drop database issue26068_empty_dst;
+restore database issue26068_empty_dst{snapshot="issue26068_empty_snapshot"};
 select dat_type from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
 data branch delete database issue26068_empty_dst;
 select count(*) as empty_branch_exists from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
@@ -52,6 +58,10 @@ select count(*) as cloned_tables from mo_catalog.mo_tables
   where reldatabase = 'issue26068_dropall_dst' and relname in ('t1', 't2');
 drop table issue26068_dropall_dst.t1;
 drop table issue26068_dropall_dst.t2;
+create snapshot issue26068_dropall_snapshot for database issue26068_dropall_dst;
+drop database issue26068_dropall_dst;
+restore database issue26068_dropall_dst{snapshot="issue26068_dropall_snapshot"};
+select dat_type from mo_catalog.mo_database where datname = 'issue26068_dropall_dst';
 data branch delete database issue26068_dropall_dst;
 select count(*) as dropped_table_branch_exists from mo_catalog.mo_database where datname = 'issue26068_dropall_dst';
 
@@ -82,3 +92,5 @@ drop database if exists issue26068_dropall_dst;
 drop database if exists issue26068_local_table_src;
 drop database if exists issue26068_local_table_dst;
 drop database if exists issue26068_ordinary_empty;
+drop snapshot if exists issue26068_empty_snapshot;
+drop snapshot if exists issue26068_dropall_snapshot;

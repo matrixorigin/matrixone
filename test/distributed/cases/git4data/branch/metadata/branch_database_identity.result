@@ -9,8 +9,16 @@ drop database if exists issue26068_dropall_dst;
 drop database if exists issue26068_local_table_src;
 drop database if exists issue26068_local_table_dst;
 drop database if exists issue26068_ordinary_empty;
+drop snapshot if exists issue26068_empty_snapshot;
+drop snapshot if exists issue26068_dropall_snapshot;
 create database issue26068_empty_src;
 data branch create database issue26068_empty_dst from issue26068_empty_src;
+select dat_type from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
+➤ dat_type[12,32,0]  𝄀
+data-branch
+create snapshot issue26068_empty_snapshot for database issue26068_empty_dst;
+drop database issue26068_empty_dst;
+restore database issue26068_empty_dst{snapshot="issue26068_empty_snapshot"};
 select dat_type from mo_catalog.mo_database where datname = 'issue26068_empty_dst';
 ➤ dat_type[12,32,0]  𝄀
 data-branch
@@ -60,6 +68,12 @@ where reldatabase = 'issue26068_dropall_dst' and relname in ('t1', 't2');
 2
 drop table issue26068_dropall_dst.t1;
 drop table issue26068_dropall_dst.t2;
+create snapshot issue26068_dropall_snapshot for database issue26068_dropall_dst;
+drop database issue26068_dropall_dst;
+restore database issue26068_dropall_dst{snapshot="issue26068_dropall_snapshot"};
+select dat_type from mo_catalog.mo_database where datname = 'issue26068_dropall_dst';
+➤ dat_type[12,32,0]  𝄀
+data-branch
 data branch delete database issue26068_dropall_dst;
 select count(*) as dropped_table_branch_exists from mo_catalog.mo_database where datname = 'issue26068_dropall_dst';
 ➤ dropped_table_branch_exists[-5,64,0]  𝄀
@@ -95,3 +109,5 @@ drop database if exists issue26068_dropall_dst;
 drop database if exists issue26068_local_table_src;
 drop database if exists issue26068_local_table_dst;
 drop database if exists issue26068_ordinary_empty;
+drop snapshot if exists issue26068_empty_snapshot;
+drop snapshot if exists issue26068_dropall_snapshot;
