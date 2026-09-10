@@ -76,3 +76,11 @@ func TestValidateActionAckCorrelatesTheRequestedFence(t *testing.T) {
 	finishAck.FinishID = "finish-2"
 	require.ErrorContains(t, validateActionAck(finish.Kind, finish, finishAck), "finish ID")
 }
+
+func TestGatewayCloseIsTerminal(t *testing.T) {
+	gateway, err := NewGateway(ClientConfig{})
+	require.NoError(t, err)
+	require.NoError(t, gateway.Close())
+	require.ErrorIs(t, gateway.connect(), errGatewayClosed)
+	require.NoError(t, gateway.Close())
+}
