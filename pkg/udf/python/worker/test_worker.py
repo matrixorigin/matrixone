@@ -645,6 +645,33 @@ class WorkerContractTest(unittest.TestCase):
                 }
             )
 
+    def test_statement_context_rejects_unknown_iana_timezone(self):
+        with self.assertRaisesRegex(ValueError, "not present in the local tzdb"):
+            worker._statement_context(
+                {
+                    "statement_timestamp_utc": "1704067200000000",
+                    "session_timezone_kind": "IANA",
+                    "session_timezone_name": "NoSuch/Zone",
+                    "session_timezone_tzdb_version": "2025a",
+                    "sql_mode": "[]",
+                    "current_user": "alice",
+                    "connection_collation": "utf8mb4_bin",
+                }
+            )
+
+        context = worker._statement_context(
+            {
+                "statement_timestamp_utc": "1704067200000000",
+                "session_timezone_kind": "IANA",
+                "session_timezone_name": "UTC",
+                "session_timezone_tzdb_version": "2025a",
+                "sql_mode": "[]",
+                "current_user": "alice",
+                "connection_collation": "utf8mb4_bin",
+            }
+        )
+        self.assertEqual("UTC", context.session_timezone.name)
+
     def test_terminal_admission_does_not_evict_live_tombstones(self):
         old_records = worker.MAX_LEDGER_ENTRIES
         old_bytes = worker.MAX_LEDGER_BYTES
