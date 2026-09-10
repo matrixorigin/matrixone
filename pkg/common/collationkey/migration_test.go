@@ -190,3 +190,42 @@ func TestMigrationGateRejectsMalformedPersistedState(t *testing.T) {
 		t.Fatalf("post-drain permit error = %v, want ErrMigrationGate", err)
 	}
 }
+
+func TestMigrationGateRejectsNilAndMalformedBranches(t *testing.T) {
+	if got := MigrationPhase(99).String(); got != "phase(99)" {
+		t.Fatalf("unknown phase string = %q", got)
+	}
+	if _, err := NewMigrationGate(0, 1); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("zero relation gate error = %v", err)
+	}
+
+	var nilGate *MigrationGate
+	owner := migrationTestOwner("owner-a", 1)
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{"begin draining", func() error { return nilGate.BeginDraining(owner, 1) }},
+		{"enter exclusive", func() error { return nilGate.EnterExclusive(owner, 1) }},
+		{"set build identity", func() error { return nilGate.SetBuildIdentity(owner, 1, 1, 1) }},
+		{"publish", func() error { return nilGate.Publish(owner, 1, 1, map[string]uint64{"cn": 1}, 1) }},
+		{"abort", func() error { return nilGate.AbortBeforePublication(owner, 1) }},
+		{"claim expired", func() error { return nilGate.ClaimExpired(1, owner) }},
+		{"release", func() error { return nilGate.ReleaseAfterReplay(owner) }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.call(); !errors.Is(err, ErrMigrationGate) {
+				t.Fatalf("error = %v, want ErrMigrationGate", err)
+			}
+		})
+	}
+
+	// A map entry with a valid key but no eight-byte value must fail closed
+	// before any partially decoded state is returned.
+	buf := []byte{0, 0, 0, 1, 0, 0, 0, 1, 'x'}
+	off := 0
+	if _, err := readMigrationMap(buf, &off); !errors.Is(err, ErrMigrationGate) {
+		t.Fatalf("truncated map value error = %v", err)
+	}
+}
