@@ -1,0 +1,47 @@
+DROP DATABASE IF EXISTS group_by_scalar_subquery_28302;
+CREATE DATABASE group_by_scalar_subquery_28302;
+USE group_by_scalar_subquery_28302;
+CREATE TABLE outer_t(id INT PRIMARY KEY);
+CREATE TABLE inner_t(id INT PRIMARY KEY, v INT);
+INSERT INTO outer_t VALUES (1), (2), (3);
+INSERT INTO inner_t VALUES (1, 101), (2, 202), (4, 404);
+SELECT (SELECT 1) AS k, COUNT(*) AS c
+FROM outer_t
+GROUP BY (SELECT 1);
+k	c
+1	3
+SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
+FROM outer_t
+GROUP BY (SELECT MAX(v) FROM inner_t);
+k	c
+404	3
+SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
+FROM outer_t
+GROUP BY k;
+k	c
+404	3
+SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
+FROM outer_t
+GROUP BY 1;
+k	c
+404	3
+PREPARE group_stmt FROM
+  'SELECT (SELECT MAX(v) FROM inner_t WHERE id <= ?) AS k, COUNT(*) AS c
+     FROM outer_t
+    GROUP BY (SELECT MAX(v) FROM inner_t WHERE id <= ?)';
+SET @project_bound = 2;
+SET @group_bound = 4;
+EXECUTE group_stmt USING @project_bound, @group_bound;
+k	c
+202	3
+DEALLOCATE PREPARE group_stmt;
+DELETE FROM outer_t;
+SELECT COUNT(*) AS grouped_rows
+FROM (
+  SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
+  FROM outer_t
+  GROUP BY (SELECT MAX(v) FROM inner_t)
+) AS grouped;
+grouped_rows
+0
+DROP DATABASE group_by_scalar_subquery_28302;
