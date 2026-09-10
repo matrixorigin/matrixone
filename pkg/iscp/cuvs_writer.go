@@ -318,6 +318,9 @@ var _ IndexSqlWriter = (*CuvsCdcWriter)(nil)
 type CuvsSync interface {
 	AppendRecords(sqlproc *sqlexec.SqlProcess, recordBytes []byte) error
 	Save(sqlproc *sqlexec.SqlProcess) error
+	// SetBuildTS records the data version the frames this sync writes will reflect, so each
+	// one can record its own coverage next to its bytes. Mirrors HnswSync.SetBuildTS.
+	SetBuildTS(ts int64)
 	Destroy()
 }
 
@@ -343,6 +346,12 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 	var sync CuvsSync
 	err := c.RunTxn(ctx, r, 30*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
 		s, e := factory(sqlproc)
+		if e == nil && s != nil {
+			// The frames this iteration writes reflect the data up to the iteration's upper
+			// bound, so that is their build_ts -- not this transaction's SnapshotTS, which is
+			// later and would overstate what was applied.
+			s.SetBuildTS(r.GetToTS().Physical())
+		}
 		if e != nil {
 			return e
 		}
