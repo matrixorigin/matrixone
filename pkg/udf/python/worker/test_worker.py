@@ -63,6 +63,22 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "offset_width must be an integer"):
             worker._field("result", {"type_id": worker.INT64, "offset_width": "32"})
 
+    def test_closing_control_preserves_zero_last_sequence(self):
+        fence = {
+            "account_id": 1,
+            "statement_id": "review",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "zero-sequence",
+            "lease_epoch": 1,
+        }
+        for kind in ("EndInput", "Finish"):
+            wire = worker._encode_control(
+                {"kind": kind, "tuple": fence, "last_sequence": 0}
+            )
+            self.assertEqual(0, worker._decode_control(wire)["last_sequence"])
+            self.assertIn(b'"last_sequence":0', wire)
+
     def test_zero_temporal_is_distinct_from_null(self):
         descriptor = {"type_id": worker.DATE, "offset_width": 32, "temporal_encoding": "sql_zero_struct"}
         zero = worker.SqlDate(True, None)
