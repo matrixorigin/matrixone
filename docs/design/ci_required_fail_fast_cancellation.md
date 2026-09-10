@@ -85,8 +85,9 @@ conflict handling make that harmless.
 ## Execution and trust boundary
 
 The scheduled workflow runs from the default branch every five minutes and may
-also be dispatched manually in dry-run mode. It checks out only `.github/ci`
-from the trusted default-branch revision with persisted credentials disabled.
+also be dispatched manually in dry-run mode. The job rejects any dispatch whose
+workflow ref is not the repository's default branch. It checks out only
+`.github/ci` from that trusted revision with persisted credentials disabled.
 No pull-request code is loaded or executed. The PR entrypoint uses a strict run
 name of the form:
 
