@@ -263,6 +263,7 @@ test('workflow has a five-minute trusted, bounded, least-privilege controller', 
 test('summary identifies the cancellation owner and remains bounded', () => {
   const result = {
     dryRun: false, scanned: 1, eligible: 1, healthy: 0,
+    skippedMetadata: 2, skippedBase: 1,
     cancelled: [{ runId: 100, runUrl: 'https://github.example/runs/100', pullNumber: 42,
       attempt: 2, failedJob: 'CI preflight', conclusion: 'failure' }],
     wouldCancel: [], raced: [], errors: [],
@@ -270,6 +271,9 @@ test('summary identifies the cancellation owner and remains bounded', () => {
   const summary = renderSummary(result);
   assert.match(summary, /\| #42 \|/);
   assert.match(summary, /CI preflight/);
+  assert.match(summary, /failure/);
+  assert.match(summary, /Skipped legacy or invalid metadata: 2/);
+  assert.match(summary, /Skipped 3\.0-dev runs: 1/);
   assert.match(summary, /100.*\/2/);
 });
 

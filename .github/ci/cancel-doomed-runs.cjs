@@ -282,6 +282,8 @@ function renderSummary(result) {
     `- Mode: ${result.dryRun ? 'dry run' : 'enforce'}`,
     `- Runs scanned: ${result.scanned}`,
     `- Eligible policy-v1 runs: ${result.eligible}`,
+    `- Skipped legacy or invalid metadata: ${result.skippedMetadata}`,
+    `- Skipped 3.0-dev runs: ${result.skippedBase}`,
     `- Cancelled: ${result.cancelled.length}`,
     `- Would cancel: ${result.wouldCancel.length}`,
     `- Races: ${result.raced.length}`,
@@ -294,12 +296,13 @@ function renderSummary(result) {
     ...result.errors.map(record => ['error', record]),
   ];
   if (records.length > 0) {
-    lines.push('', '| Result | PR | Run/attempt | Failed required job | Detail |',
-      '| --- | --- | --- | --- | --- |');
+    lines.push('', '| Result | PR | Run/attempt | Failed required job | Conclusion | Detail |',
+      '| --- | --- | --- | --- | --- | --- |');
     for (const [kind, record] of records.slice(0, 100)) {
       const run = record.runUrl ? `[${record.runId}](${record.runUrl})` : record.runId;
       lines.push(`| ${kind} | #${record.pullNumber || '?'} | ${run}/${record.attempt} | ` +
-        `${escapeTable(record.failedJob || '')} | ${escapeTable(record.detail || '')} |`);
+        `${escapeTable(record.failedJob || '')} | ${escapeTable(record.conclusion || '')} | ` +
+        `${escapeTable(record.detail || '')} |`);
     }
     if (records.length > 100) lines.push('', `${records.length - 100} additional records omitted.`);
   }
