@@ -63,6 +63,29 @@ _CONTROL_KEYS = frozenset(
         "payload",
     }
 )
+_CONTROL_BASE_KEYS = frozenset({"version", "kind", "tuple"})
+_CONTROL_FIELD_RULES = {
+    "OpenInvocation": (frozenset({"payload"}), frozenset({"payload"})),
+    "InputBatch": (frozenset({"sequence"}), frozenset({"sequence"})),
+    "EndInput": (frozenset({"last_sequence"}), frozenset({"last_sequence"})),
+    "ResultSchema": (frozenset(), frozenset()),
+    "InputConsumed": (frozenset({"sequence"}), frozenset({"sequence"})),
+    "ResultBatch": (frozenset({"sequence"}), frozenset({"sequence"})),
+    "Finish": (
+        frozenset({"last_sequence", "finish_id", "status"}),
+        frozenset({"last_sequence", "finish_id", "status"}),
+    ),
+    "AcknowledgeResults": (
+        frozenset({"ack_sequence"}),
+        frozenset({"ack_sequence"}),
+    ),
+    "AcknowledgeFinish": (frozenset({"finish_id"}), frozenset({"finish_id"})),
+    "Ack": (
+        frozenset({"ack_sequence", "finish_id", "status"}),
+        frozenset({"status"}),
+    ),
+    "Error": (frozenset({"status", "reason"}), frozenset({"status", "reason"})),
+}
 _TUPLE_KEYS = frozenset(
     {
         "account_id",
@@ -356,6 +379,7 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
     if set(value) - _CONTROL_KEYS:
         raise ValueError("PROTOCOL: unsupported control field")
     _tuple_key(value.get("tuple") or {})
+    _validate_control_fields(value, wire=True)
     return value
 
 
@@ -399,12 +423,52 @@ def _required_uint64(value: Dict[str, Any], key: str, allow_zero: bool = False) 
     return item
 
 
+def _validate_control_fields(value: Dict[str, Any], wire: bool) -> None:
+    kind = value["kind"]
+    rule = _CONTROL_FIELD_RULES.get(kind)
+    if rule is None:
+        raise ValueError(f"PROTOCOL: unsupported control kind {kind!r}")
+    allowed, required = rule
+    fields = set(value) - _CONTROL_BASE_KEYS
+    invalid = fields - allowed
+    if invalid:
+        raise ValueError(
+            f"PROTOCOL: field {next(iter(invalid))!r} is not valid for control kind {kind!r}"
+        )
+    if wire:
+        missing = required - set(value)
+        if missing:
+            raise ValueError(
+                f"PROTOCOL: control kind {kind!r} is missing field {next(iter(missing))!r}"
+            )
+    if "sequence" in value:
+        _required_uint64(value, "sequence")
+    if "last_sequence" in value:
+        _required_uint64(value, "last_sequence", allow_zero=True)
+    if "ack_sequence" in value:
+        _required_uint64(value, "ack_sequence")
+    if "finish_id" in value:
+        _required_string(value, "finish_id")
+    if "status" in value:
+        _required_string(value, "status")
+    if "reason" in value:
+        _required_string(value, "reason")
+    if kind == "Ack":
+        if ("ack_sequence" in value) == ("finish_id" in value):
+            raise ValueError("PROTOCOL: Ack requires exactly one acknowledgement identity")
+    elif kind == "OpenInvocation" and (
+        "payload" not in value or (wire and value["payload"] is None)
+    ):
+        raise ValueError("PROTOCOL: control kind 'OpenInvocation' is missing field 'payload'")
+
+
 def _encode_control(value: Dict[str, Any]) -> bytes:
     value = dict(value)
     if set(value) - _CONTROL_KEYS:
         raise ValueError("PROTOCOL: unsupported control field")
     value.setdefault("version", PROTOCOL_VERSION)
     _tuple_key(value["tuple"])
+    _validate_control_fields(value, wire=False)
     data = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     if len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: control is too large")
@@ -1193,29 +1257,22 @@ class RoutineFlightServer(flight.FlightServerBase):
                 finish_id = _required_string(control, "finish_id")
                 if finish_id != terminal.finish_id:
                     raise ValueError("PROTOCOL: terminal Finish ACK does not match the completed Finish")
-            yield _encode_control(
-                {
-                    "kind": "Ack",
-                    "tuple": control["tuple"],
-                    "status": "OK",
-                    "ack_sequence": control.get("ack_sequence", 0),
-                    "finish_id": control.get("finish_id", ""),
-                }
-            )
+            yield _encode_control(self._ack_control(control))
             return
         if action.type == "AcknowledgeResults":
             state.ack_result(_required_uint64(control, "ack_sequence"))
         elif action.type == "AcknowledgeFinish":
             state.ack_finish(_required_string(control, "finish_id"))
-        yield _encode_control(
-            {
-                "kind": "Ack",
-                "tuple": control["tuple"],
-                "status": "OK",
-                "ack_sequence": control.get("ack_sequence", 0),
-                "finish_id": control.get("finish_id", ""),
-            }
-        )
+        yield _encode_control(self._ack_control(control))
+
+    @staticmethod
+    def _ack_control(control: Dict[str, Any]) -> Dict[str, Any]:
+        value = {"kind": "Ack", "tuple": control["tuple"], "status": "OK"}
+        if control["kind"] == "AcknowledgeResults":
+            value["ack_sequence"] = control["ack_sequence"]
+        else:
+            value["finish_id"] = control["finish_id"]
+        return value
 
     def do_exchange(self, context, descriptor, reader, writer):
         state = None

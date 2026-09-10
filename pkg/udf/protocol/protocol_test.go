@@ -69,9 +69,35 @@ func TestControlRejectsDuplicateJSONFields(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate control JSON field")
 }
 
+func TestControlFieldsBelongToTheirKind(t *testing.T) {
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	object["last_sequence"] = 1
+	wire, err = json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "not valid for control kind")
+
+	_, err = MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1, Status: "ERROR"})
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "not valid for control kind")
+
+	_, err = UnmarshalControl([]byte(`{"version":1,"kind":"Unknown","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3}}`))
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "unsupported control kind")
+}
+
 func TestClosingControlCarriesZeroLastSequence(t *testing.T) {
 	for _, kind := range []string{"EndInput", "Finish"} {
-		wire, err := MarshalControl(Control{Kind: kind, Tuple: testTuple()})
+		control := Control{Kind: kind, Tuple: testTuple()}
+		if kind == "Finish" {
+			control.Status = "OK"
+			control.FinishID = "finish"
+		}
+		wire, err := MarshalControl(control)
 		require.NoError(t, err)
 		var object map[string]any
 		require.NoError(t, json.Unmarshal(wire, &object))
@@ -96,7 +122,7 @@ func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
 	tuple := testTuple()
 	tuple.AccountID = 0
 	require.NoError(t, tuple.Validate())
-	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple})
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
 	require.NoError(t, err)
 }
 
