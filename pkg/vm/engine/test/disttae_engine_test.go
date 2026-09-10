@@ -1605,10 +1605,85 @@ func Test_SubUnsubTable(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.Nil(t, err)
 
-	//subscribe a valid table
-	require.Nil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName, false))
+	dbID, tableID := rel.GetDBID(ctx), rel.GetTableID(ctx)
+	push := disttaeEngine.Engine.PushClient()
+	subscribe := func() error {
+		return disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), dbID, tableID, databaseName, tableName)
+	}
+	assertSubscribed := func() {
+		t.Helper()
+		state, ok := push.GetState().SubTables[tableID]
+		require.True(t, ok)
+		require.Equal(t, dbID, state.DBID)
+		require.Equal(t, disttae.Subscribed, state.SubState)
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		readTxn, _, reader, err := testutil.GetTableTxnReader(ctx, disttaeEngine, databaseName, tableName, nil, mp, t)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, readTxn.Rollback(ctx)) }()
+		defer func() { require.NoError(t, reader.Close()) }()
+		result := testutil.EmptyBatchFromSchema(schema, 0)
+		defer result.Clean(mp)
+		var got, want []int8
+		for i := 0; i < 10; i++ {
+			want = append(want, bat.Vecs[0].Get(i).(int8))
+		}
+		for {
+			done, err := reader.Read(ctx, result.Attrs, nil, mp, result)
+			require.NoError(t, err)
+			for i := 0; i < result.RowCount(); i++ {
+				got = append(got, vector.GetFixedAtNoTypeCheck[int8](result.Vecs[0], i))
+			}
+			if done {
+				break
+			}
+			result.CleanOnlyData()
+		}
+		require.ElementsMatch(t, want, got)
+	}
+	unsubscribe := func() {
+		t.Helper()
+		require.NoError(t, disttaeEngine.Engine.UnsubscribeTable(ctx, uint64(accountId), dbID, tableID))
+		// Sending the request is not completion: wait for the response to clear
+		// the subscription, without forcing internal state or sleeping blindly.
+		require.Eventually(t, func() bool {
+			_, ok := push.GetState().SubTables[tableID]
+			return !ok
+		}, 30*time.Second, 10*time.Millisecond)
+	}
 
-	//subscribe a invalid table
+	// A real subscription must materialize the committed rows. Repeating it
+	// must be idempotent, without duplicating replayed data.
+	require.NoError(t, subscribe())
+	assertSubscribed()
+	require.NoError(t, subscribe())
+	assertSubscribed()
+	unsubscribe()
+
+	// A controlled transient failure must be observed before recovery. Remove
+	// the fault before retrying, so success cannot mask an unexercised failure.
+	fault.Enable()
+	defer fault.Disable()
+	removeFault, err := objectio.InjectLogging(objectio.FJ_CNSubscribeTableFail, databaseName, tableName, 0, true)
+	require.NoError(t, err)
+	defer removeFault()
+	err = subscribe()
+	require.ErrorContains(t, err, "injected subscribe table err")
+	_, subscribed := push.GetState().SubTables[tableID]
+	require.False(t, subscribed)
+	removeFault()
+	require.NoError(t, subscribe())
+	assertSubscribed()
+
+	// Exercise repeated real unsubscribe/resubscribe transitions and verify
+	// the replayed rows on every cycle, reusing only this case's fixture.
+	for cycle := 0; cycle < 3; cycle++ {
+		unsubscribe()
+		require.NoError(t, subscribe(), "cycle %d", cycle)
+		assertSubscribed()
+	}
+
+	// A permanent error must not corrupt the existing valid subscription.
 	var (
 		inValidTableID   = rel.GetTableID(ctx) + 1
 		inValidTableName = "invalid_table"
@@ -1618,6 +1693,11 @@ func Test_SubUnsubTable(t *testing.T) {
 	// context timeout must not count as evidence that the server rejected it.
 	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "expected missing-table response, got %v", err)
+	_, subscribed = push.GetState().SubTables[inValidTableID]
+	require.False(t, subscribed)
+	require.NoError(t, subscribe())
+	assertSubscribed()
+	unsubscribe()
 }
 
 func TestDeleteTupleInTupleList(t *testing.T) {
