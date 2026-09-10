@@ -69,6 +69,29 @@ func TestControlRejectsDuplicateJSONFields(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate control JSON field")
 }
 
+func TestClosingControlCarriesZeroLastSequence(t *testing.T) {
+	for _, kind := range []string{"EndInput", "Finish"} {
+		wire, err := MarshalControl(Control{Kind: kind, Tuple: testTuple()})
+		require.NoError(t, err)
+		var object map[string]any
+		require.NoError(t, json.Unmarshal(wire, &object))
+		lastSequence, ok := object["last_sequence"]
+		require.True(t, ok, "%s must carry an explicit last_sequence", kind)
+		require.Equal(t, float64(0), lastSequence)
+
+		decoded, err := UnmarshalControl(wire)
+		require.NoError(t, err)
+		require.Zero(t, decoded.LastSequence)
+	}
+
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	_, ok := object["last_sequence"]
+	require.False(t, ok, "non-closing controls should not grow a closing-only field")
+}
+
 func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
 	tuple := testTuple()
 	tuple.AccountID = 0
