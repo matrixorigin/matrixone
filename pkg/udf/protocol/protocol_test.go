@@ -123,7 +123,8 @@ func TestExecutionGroupReleasesOnlyAfterCloseAndAllMembersTerminal(t *testing.T)
 
 	_, err = group.BeginOpen("late")
 	require.ErrorIs(t, err, ErrGroupClosed)
-	require.NoError(t, group.Close(ReasonCancel))
+	require.ErrorIs(t, group.Close(ReasonCancel), ErrProtocol)
+	require.NoError(t, group.Close(ReasonInputEOF))
 	require.Equal(t, int32(1), releases.Load())
 }
 
@@ -158,7 +159,7 @@ func TestExecutionGroupZeroMemberAndAbortedOpenRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, group.Close(ReasonCancel))
 	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
-	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
+	require.ErrorIs(t, open.Commit(), ErrProtocol)
 }
 
 func TestExecutionGroupReservesPendingMemberIdentity(t *testing.T) {
@@ -183,6 +184,15 @@ func TestExecutionGroupReservesPendingMemberIdentity(t *testing.T) {
 	require.Equal(t, 1, registered)
 	require.Equal(t, 1, active)
 	require.Zero(t, inFlight)
+}
+
+func TestExecutionGroupCloseReasonIsImmutable(t *testing.T) {
+	group, err := NewExecutionGroup("g", 1, 1, func() error { return nil })
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonIdle))
+	require.NoError(t, group.Close(ReasonIdle))
+	require.ErrorIs(t, group.Close(ReasonCancel), ErrProtocol)
+	require.Equal(t, ReasonIdle, group.Reason())
 }
 
 func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
@@ -269,8 +279,8 @@ func TestExecutionGroupCommitReportsReleaseFailure(t *testing.T) {
 	err = open.Commit()
 	require.ErrorIs(t, err, ErrGroupClosed)
 	require.ErrorContains(t, err, "temporary release failure")
-	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
-	require.ErrorContains(t, open.Commit(), "temporary release failure")
+	require.ErrorIs(t, open.Commit(), ErrProtocol)
+	require.ErrorIs(t, open.Abort(), ErrProtocol)
 	require.Equal(t, GroupDraining, group.State())
 	require.NoError(t, group.Close(ReasonCancel))
 	require.Equal(t, GroupReleased, group.State())
