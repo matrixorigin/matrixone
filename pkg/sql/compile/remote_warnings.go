@@ -46,6 +46,7 @@ type remoteWarningCollector struct {
 	warningCount uint64
 	warnings     []remoteWarningDiagnostic
 	maxRetained  int
+	closed       bool
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -66,6 +67,10 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 		return
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.warningCount += total
 	limit := s.maxRetained
 	if limit <= 0 {
@@ -87,4 +92,22 @@ func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiag
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.warningCount, append([]remoteWarningDiagnostic(nil), s.warnings...)
+}
+
+// closeWarnings atomically seals an attempt against late local/RPC writers.
+// Failed attempts discard without copying; successful attempts transfer the
+// bounded records exactly once. A collector is never reopened for a retry.
+func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, nil
+	}
+	s.closed = true
+	total, warnings := s.warningCount, s.warnings
+	s.warningCount, s.warnings = 0, nil
+	if !success {
+		return 0, nil
+	}
+	return total, warnings
 }

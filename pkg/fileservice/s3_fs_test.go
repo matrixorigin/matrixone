@@ -2413,10 +2413,20 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	require.True(t, fs.diskCache.isUpdating(diskPath))
 
 	unblock()
-	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	// Flush waits for the async finalizer to publish the cache file.  Keep a
+	// generous bounded deadline here: the finalizer is deliberately blocked
+	// above, and a loaded CI worker may need more than one scheduler quantum
+	// after it is released.  The test still fails fast on a genuinely stuck
+	// finalizer while avoiding a false timeout caused by CI contention.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	fs.FlushCache(flushCtx)
 	require.NoError(t, flushCtx.Err())
+	require.Eventually(t, func() bool {
+		return !fs.diskCache.isUpdating(diskPath)
+	}, diskCacheLifecycleTestTimeout, time.Millisecond,
+		"async range finalizer did not release its update reservation")
+	require.FileExists(t, diskPath)
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
