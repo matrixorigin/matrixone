@@ -404,6 +404,15 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	sp := sqlexec.NewSqlProcess(proc)
 	veccache.Cache.Once()
 
+	// Named-snapshot MATCH (#27941): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and cacheKey carries the same TS so the historical index is a
+	// separate cache entry from the current one. EffectiveSnapshotTS is nil for a
+	// non-historical TS, leaving the key and the read unchanged.
+	cacheKey := u.tblcfg.IndexTable
+	if ets := sp.ApplyScanSnapshot(tf.ScanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
+	}
+
 	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.
 	var mode int64
 	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
@@ -478,7 +487,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			rt.RequestedIncludeColumns = u.includeNames
 		}
 		go func() {
-			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+			_, _, serr := veccache.Cache.Search(sp, cacheKey, newsearch, q, rt)
 			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
 			close(u.streamCh)
 		}()
@@ -498,7 +507,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if u.out == nil {
 		u.out = &vectorindex.SearchOutput{}
 	}
-	return veccache.Cache.SearchInto(sp, u.tblcfg.IndexTable, newsearch, q, rt, u.out)
+	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session

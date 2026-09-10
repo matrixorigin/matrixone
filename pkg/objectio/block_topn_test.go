@@ -176,6 +176,251 @@ func TestBlockTopNSelections(t *testing.T) {
 	}
 }
 
+func TestReadBlockBySearchAndTopNReusesFilterColumns(t *testing.T) {
+	mp := newTopNTestMP(t)
+	source := newTopNTestVector(t, mp, []float32{4, 1, 3, 2, 6, 5})
+	payload, _ := encodeTopNTestChunks(t, source, 2, mp)
+	storage := newBlockTopNTestFS(t)
+	location, meta := persistBlockTopNTest(t, storage, source, payload, mp)
+	filterExtent := meta.GetBlockMeta(0).ColumnMeta(0).Location()
+	topExtent := meta.GetBlockMeta(0).ColumnMeta(1).Location()
+	storage.FlushCache(t.Context())
+	fs := &blockTopNTestFS{FileService: storage}
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	payloadOut := vector.NewVec(types.T_array_float32.ToType())
+	defer pk.Free(mp)
+	defer payloadOut.Free(mp)
+	op := newTopNTestOp(2)
+	rows, distances, _, err := ReadBlockBySearchAndTopN(
+		t.Context(),
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		[]uint16{0, 2},
+		[]types.Type{types.T_int64.ToType(), types.T_array_float32.ToType()},
+		[]*vector.Vector{pk, payloadOut},
+		1,
+		types.T_array_float32.ToType(),
+		func(filters []vector.Vector) ([]int64, error) {
+			require.Len(t, filters, 1)
+			require.Equal(t, []int64{0, 1, 2, 3, 4, 5}, vector.MustFixedColWithTypeCheck[int64](&filters[0]))
+			return []int64{0, 2, 4}, nil
+		},
+		op,
+		fs,
+		location,
+		mp,
+		fileservice.SkipFullFilePreloads,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2}, rows)
+	require.Equal(t, []float64{16, 9}, distances)
+	require.Equal(t, []int64{0, 2}, vector.MustFixedColWithTypeCheck[int64](pk))
+	require.Equal(t, []float32{10}, types.BytesToArray[float32](payloadOut.GetBytesAt(0)))
+	require.Equal(t, []float32{12}, types.BytesToArray[float32](payloadOut.GetBytesAt(1)))
+	require.Equal(t, 1, countTopNReadsWithin(fs.requests, filterExtent), "filter/output column must be read once")
+	require.Positive(t, countTopNReadsWithin(fs.requests, topExtent))
+}
+
+func TestReadBlockBySearchAndTopNEmptyFilterSkipsVector(t *testing.T) {
+	mp := newTopNTestMP(t)
+	source := newTopNTestVector(t, mp, []float32{4, 1, 3, 2})
+	payload, _ := encodeTopNTestChunks(t, source, 2, mp)
+	storage := newBlockTopNTestFS(t)
+	location, meta := persistBlockTopNTest(t, storage, source, payload, mp)
+	topExtent := meta.GetBlockMeta(0).ColumnMeta(1).Location()
+	storage.FlushCache(t.Context())
+	fs := &blockTopNTestFS{FileService: storage}
+	out := vector.NewVec(types.T_int64.ToType())
+	defer out.Free(mp)
+
+	rows, distances, _, err := ReadBlockBySearchAndTopN(
+		t.Context(),
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		[]*vector.Vector{out},
+		1,
+		types.T_array_float32.ToType(),
+		func([]vector.Vector) ([]int64, error) { return []int64{}, nil },
+		newTopNTestOp(2),
+		fs,
+		location,
+		mp,
+		fileservice.SkipFullFilePreloads,
+	)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.Empty(t, distances)
+	require.Zero(t, out.Length())
+	require.Zero(t, countTopNReadsWithin(fs.requests, topExtent), "empty membership must not read vector chunks")
+}
+
+func TestReadBlockBySearchAndTopNLegacyVector(t *testing.T) {
+	mp := newTopNTestMP(t)
+	source := newTopNTestVector(t, mp, []float32{4, 1, 3, 2})
+	storage := newBlockTopNTestFS(t)
+	location, _ := persistBlockTopNTest(t, storage, source, nil, mp)
+	storage.FlushCache(t.Context())
+	pk := vector.NewVec(types.T_int64.ToType())
+	defer pk.Free(mp)
+
+	rows, distances, _, err := ReadBlockBySearchAndTopN(
+		t.Context(),
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		[]*vector.Vector{pk},
+		1,
+		types.T_array_float32.ToType(),
+		func([]vector.Vector) ([]int64, error) { return []int64{0, 1, 3}, nil },
+		newTopNTestOp(2),
+		storage,
+		location,
+		mp,
+		fileservice.SkipFullFilePreloads,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3}, rows)
+	require.Equal(t, []float64{1, 4}, distances)
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColWithTypeCheck[int64](pk))
+}
+
+func TestReadBlockBySearchAndTopNRejectsInvalidSelections(t *testing.T) {
+	mp := newTopNTestMP(t)
+	source := newTopNTestVector(t, mp, []float32{4, 1, 3, 2})
+	payload, _ := encodeTopNTestChunks(t, source, 2, mp)
+	storage := newBlockTopNTestFS(t)
+	location, _ := persistBlockTopNTest(t, storage, source, payload, mp)
+	for _, test := range []struct {
+		name string
+		rows []int64
+	}{
+		{name: "nil", rows: nil},
+		{name: "duplicate", rows: []int64{1, 1}},
+		{name: "unsorted", rows: []int64{2, 1}},
+		{name: "negative", rows: []int64{-1}},
+		{name: "past end", rows: []int64{4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := vector.NewVec(types.T_int64.ToType())
+			defer out.Free(mp)
+			_, _, _, err := ReadBlockBySearchAndTopN(
+				t.Context(),
+				[]uint16{0},
+				[]types.Type{types.T_int64.ToType()},
+				[]uint16{0},
+				[]types.Type{types.T_int64.ToType()},
+				[]*vector.Vector{out},
+				1,
+				types.T_array_float32.ToType(),
+				func([]vector.Vector) ([]int64, error) { return test.rows, nil },
+				newTopNTestOp(2),
+				storage,
+				location,
+				mp,
+				fileservice.SkipFullFilePreloads,
+			)
+			require.Error(t, err)
+			require.Zero(t, out.Length())
+		})
+	}
+}
+
+func TestReadBlockBySearchAndTopNValidatesContract(t *testing.T) {
+	type arguments struct {
+		filterColumns      []uint16
+		filterTypes        []types.Type
+		outputColumns      []uint16
+		outputTypes        []types.Type
+		outputDestinations []*vector.Vector
+		topColumn          uint16
+		topType            types.Type
+		selectRows         func([]vector.Vector) ([]int64, error)
+		topReader          *IndexReaderTopOp
+		mp                 *mpool.MPool
+	}
+
+	mp := newTopNTestMP(t)
+	out := vector.NewVec(types.T_int64.ToType())
+	defer out.Free(mp)
+	valid := func() arguments {
+		return arguments{
+			filterColumns:      []uint16{0},
+			filterTypes:        []types.Type{types.T_int64.ToType()},
+			outputColumns:      []uint16{0},
+			outputTypes:        []types.Type{types.T_int64.ToType()},
+			outputDestinations: []*vector.Vector{out},
+			topColumn:          1,
+			topType:            types.T_array_float32.ToType(),
+			selectRows:         func([]vector.Vector) ([]int64, error) { return []int64{}, nil },
+			topReader:          newTopNTestOp(1),
+			mp:                 mp,
+		}
+	}
+	for _, test := range []struct {
+		name    string
+		wantErr string
+		mutate  func(*arguments)
+	}{
+		{name: "empty filter", wantErr: "invalid exact-filter columns", mutate: func(a *arguments) {
+			a.filterColumns = nil
+			a.filterTypes = nil
+		}},
+		{name: "mismatched output", wantErr: "invalid exact-filter output columns", mutate: func(a *arguments) {
+			a.outputTypes = nil
+		}},
+		{name: "nil selector", wantErr: "nil exact-filter block topn input", mutate: func(a *arguments) {
+			a.selectRows = nil
+		}},
+		{name: "ordered topn", wantErr: "unsupported exact-filter vector topn input", mutate: func(a *arguments) {
+			a.topReader.OrderedLimit = true
+		}},
+		{name: "filter is vector column", wantErr: "invalid exact-filter column", mutate: func(a *arguments) {
+			a.filterColumns = []uint16{1}
+		}},
+		{name: "duplicate filter", wantErr: "duplicate exact-filter column", mutate: func(a *arguments) {
+			a.filterColumns = []uint16{0, 0}
+			a.filterTypes = []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+		}},
+		{name: "nil output", wantErr: "invalid exact-filter output column", mutate: func(a *arguments) {
+			a.outputDestinations = []*vector.Vector{nil}
+		}},
+		{name: "duplicate output", wantErr: "duplicate exact-filter output column", mutate: func(a *arguments) {
+			a.outputColumns = []uint16{0, 0}
+			a.outputTypes = []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+			a.outputDestinations = []*vector.Vector{out, out}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := valid()
+			test.mutate(&a)
+			_, _, _, err := ReadBlockBySearchAndTopN(
+				t.Context(), a.filterColumns, a.filterTypes, a.outputColumns, a.outputTypes,
+				a.outputDestinations, a.topColumn, a.topType, a.selectRows, a.topReader,
+				nil, Location{}, a.mp, fileservice.SkipFullFilePreloads,
+			)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
+func countTopNReadsWithin(requests [][]topNReadRange, extent Extent) int {
+	count := 0
+	start := int64(extent.Offset())
+	end := start + int64(extent.Length())
+	for _, request := range requests {
+		for _, entry := range request {
+			if entry.offset >= start && entry.offset < end {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func TestBlockTopNCacheInteroperability(t *testing.T) {
 	mp := newTopNTestMP(t)
 	source := newTopNTestVector(t, mp, []float32{4, 1, 3, 2, 6, 5})

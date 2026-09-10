@@ -2155,6 +2155,12 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
+	// The search caches the loaded index under "<centroid table>:<version>", in a cache that is
+	// process-global. Left behind, the SECOND -count pass is served from it and never opens the
+	// relations this test exists to watch -- metadataReader.closed stays 0 and the assertions
+	// below fail on a run that proved nothing was wrong. Registered before the cache can be
+	// populated so it also runs after a failed assertion.
+	t.Cleanup(func() { cache.Cache.RemovePrefix("centroids_init") })
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
