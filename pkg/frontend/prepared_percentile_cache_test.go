@@ -41,8 +41,41 @@ func TestShouldCachePrepareCompileRejectsPercentileParameter(t *testing.T) {
 		}}}},
 	}}}
 	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, shouldCachePreparedRuntimeSpecialization(prepared))
 
 	prepared.GetQuery().Nodes[0].AggList[0].GetF().Args[1] =
 		plan2.MakePlan2Float64ConstExprWithType(0.5)
 	require.True(t, shouldCachePrepareCompile(prepared))
+	require.True(t, shouldCachePreparedRuntimeSpecialization(prepared))
+}
+
+func TestPreparedPercentileDisablesMixedRuntimeSpecializationCache(t *testing.T) {
+	percentile := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	runtimeNumericMarker := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_any)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}},
+	}
+	prepared := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			ProjectList: []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "abs"},
+					Args: []*plan.Expr{runtimeNumericMarker},
+				}},
+			}},
+			AggList: []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: plan2.NamePercentileDisc},
+					Args: []*plan.Expr{
+						{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+						percentile,
+					},
+				}},
+			}},
+		}},
+	}}}
+	require.False(t, shouldCachePreparedRuntimeSpecialization(prepared))
 }

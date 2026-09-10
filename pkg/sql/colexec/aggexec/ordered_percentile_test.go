@@ -732,6 +732,8 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
+		require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp))
+		require.NoError(t, vec.SetStringSource(types.StringSourceCOMStmt))
 		return vec
 	}
 
@@ -750,6 +752,8 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	results, err := left.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "beta", results[0].GetStringAt(0))
+	require.Equal(t, types.RuntimeStringBinary, results[0].GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
 
 	results[0].Free(mp)
 	leftValues.Free(mp)

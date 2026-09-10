@@ -495,6 +495,22 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	extended := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_varchar.ToType())},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion60)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, extended),
+		"extended discrete percentile input types require MORPC protocol version 61",
+	)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion61)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
@@ -559,7 +575,7 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfPercentileDisc,
 		false,
-		[]*plan.Expr{makeTestVarExpr("value")},
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_int64.ToType())},
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
@@ -971,6 +987,10 @@ func TestScopeContainsVarExprReturnsFalseWithoutVar(t *testing.T) {
 
 func makeTestVarExpr(name string) *plan.Expr {
 	typ := types.T_text.ToType()
+	return makeTestVarExprWithType(name, typ)
+}
+
+func makeTestVarExprWithType(name string, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan2.MakePlan2Type(&typ),
 		Expr: &plan.Expr_V{

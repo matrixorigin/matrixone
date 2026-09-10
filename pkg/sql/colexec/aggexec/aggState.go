@@ -101,6 +101,11 @@ type aggInfo struct {
 	// saved-argument node. The wire format remains a sequence of keys in that
 	// order, so older partial-state readers see the same payload representation.
 	preserveDistinctInputOrder bool
+	// preserveStringMetadata keeps row-level string domain/source metadata with
+	// saved aggregate arguments. Aggregates whose result is a selected input
+	// value (currently discrete percentile) need this because saveArg otherwise
+	// retains only raw bytes and loses the selected value's runtime semantics.
+	preserveStringMetadata bool
 	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
 	// representation when its resident implementation can now omit empty state.
 	// Private spill records deliberately keep the compact zero-size marker.
@@ -1119,6 +1124,52 @@ func (ag *aggState) insertArgValueWithInserter(
 }
 
 func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool) error {
+	return ag.fillArgPayload(mp, y, val, distinct)
+}
+
+const (
+	aggStringMetadataMagic0     byte = 0xf1
+	aggStringMetadataMagic1     byte = 0x53 // 'S'
+	aggStringMetadataMagic2     byte = 0x4d // 'M'
+	aggStringMetadataVersion    byte = 1
+	aggStringMetadataHeaderSize      = 6
+)
+
+func (ag *aggState) fillArgWithStringMetadata(
+	mp *mpool.MPool,
+	y uint16,
+	val []byte,
+	domain types.RuntimeStringDomain,
+	source types.StringSource,
+	distinct bool,
+) error {
+	header := kAggArgPrefixSz
+	if !distinct {
+		header += kAggArgOrdinalSz
+	}
+	if len(val) > math.MaxInt-header-aggStringMetadataHeaderSize {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	k, err := ag.resizeArgScratch(mp, header+aggStringMetadataHeaderSize+len(val))
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+	payload := k[header:]
+	payload[0] = aggStringMetadataMagic0
+	payload[1] = aggStringMetadataMagic1
+	payload[2] = aggStringMetadataMagic2
+	payload[3] = aggStringMetadataVersion
+	payload[4] = byte(domain)
+	payload[5] = byte(source)
+	copy(payload[aggStringMetadataHeaderSize:], val)
+	if !distinct {
+		binary.BigEndian.PutUint32(k[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
+	}
+	return ag.insertPreparedArg(mp, y, k, distinct)
+}
+
+func (ag *aggState) fillArgPayload(mp *mpool.MPool, y uint16, val []byte, distinct bool) error {
 	header := kAggArgPrefixSz
 	if !distinct {
 		header += kAggArgOrdinalSz
@@ -1138,6 +1189,32 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
 	}
 	return ag.insertPreparedArg(mp, y, k, distinct)
+}
+
+func decodeAggStringMetadata(payload []byte) (
+	raw []byte,
+	domain types.RuntimeStringDomain,
+	source types.StringSource,
+	encoded bool,
+	error error,
+) {
+	if len(payload) < aggStringMetadataHeaderSize ||
+		payload[0] != aggStringMetadataMagic0 ||
+		payload[1] != aggStringMetadataMagic1 ||
+		payload[2] != aggStringMetadataMagic2 {
+		return payload, types.RuntimeStringInherit, types.StringSourceExpression, false, nil
+	}
+	if payload[3] != aggStringMetadataVersion {
+		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+			moerr.NewInvalidInputNoCtx("invalid aggregate string metadata version")
+	}
+	domain = types.RuntimeStringDomain(payload[4])
+	source = types.StringSource(payload[5])
+	if !domain.Valid() || !source.Valid() {
+		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+			moerr.NewInvalidInputNoCtx("invalid aggregate string metadata")
+	}
+	return payload[aggStringMetadataHeaderSize:], domain, source, true, nil
 }
 
 func (ag *aggState) fillDistinctArgInInputOrder(
@@ -2444,7 +2521,20 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				continue
 			}
 			bs := vectors[0].GetRawBytesAt(row)
-			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
+			var fillErr error
+			if ae.preserveStringMetadata && vectors[0].GetType().Oid.IsMySQLString() {
+				domain := vectors[0].GetRuntimeStringDomainAt(row)
+				source := vectors[0].GetStringSourceAt(row)
+				if domain != types.RuntimeStringInherit || source != types.StringSourceExpression {
+					fillErr = ae.state[x].fillArgWithStringMetadata(
+						ae.mp, y, bs, domain, source, distinct)
+				} else {
+					fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
+				}
+			} else {
+				fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
+			}
+			if err := fillErr; err != nil {
 				return err
 			}
 			continue

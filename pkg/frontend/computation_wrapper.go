@@ -1713,10 +1713,22 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
+	// Percentile values are consumed while the physical aggregate is built.
+	// Unlike the other runtime-specialization categories, the value is not
+	// retained as a parameter vector in the resulting plan.  Do not let the
+	// one-entry runtime cache install or retrieve a compile for such a plan:
+	// a second EXECUTE with the same parameter domain but a different percentile
+	// would otherwise run the first execution's immutable aggregate config.
+	runtimeCacheEligible := shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
+		shouldCachePreparedRuntimeSpecialization(executionPlan)
+	if !runtimeCacheEligible {
+		prepareStmt.clearRuntimeSpecializationCache()
+	}
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 		stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
+		runtimeCacheEligible &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
@@ -2832,6 +2844,14 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 		}
 	}
 	return !query.GetHasForeignKeyAction()
+}
+
+// shouldCachePreparedRuntimeSpecialization is stricter than the ordinary
+// prepared Compile cache. Runtime specialization can cache a physical compile
+// keyed by parameter domains; percentile markers are value-sensitive physical
+// configuration and therefore cannot share that cache even when domains match.
+func shouldCachePreparedRuntimeSpecialization(p *plan.Plan) bool {
+	return !plan2.PreparedPlanHasPercentileParams(p)
 }
 
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {

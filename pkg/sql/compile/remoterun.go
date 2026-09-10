@@ -1881,6 +1881,13 @@ func validateRemoteAggregateProtocol(
 					"ordered-set percentile remote execution requires MORPC protocol version 17",
 				)
 			}
+			if agg.GetAggID() == aggexec.AggIdOfPercentileDisc &&
+				orderedSetPercentileDiscUsesExtendedType(agg) &&
+				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"extended discrete percentile input types require MORPC protocol version 61",
+				)
+			}
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
@@ -1897,6 +1904,30 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+// orderedSetPercentileDiscUsesExtendedType identifies the input family added
+// by the generic discrete-percentile executor. MORPC v17 only guarantees the
+// historical numeric implementation; an older worker would accept the
+// aggregate ID but fail when it tries to instantiate VARCHAR, DATE, UUID,
+// DECIMAL256, or another newly sortable type.
+func orderedSetPercentileDiscUsesExtendedType(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return false
+	default:
+		return true
+	}
 }
 
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {

@@ -210,11 +210,12 @@ func newOrderedPercentileDiscreteExec(
 	exec := &orderedPercentileDiscreteExec{}
 	exec.mp = mp
 	exec.aggInfo = aggInfo{
-		aggId:     aggID,
-		argTypes:  []types.Type{param},
-		retType:   param,
-		emptyNull: true,
-		saveArg:   true,
+		aggId:                  aggID,
+		argTypes:               []types.Type{param},
+		retType:                param,
+		emptyNull:              true,
+		saveArg:                true,
+		preserveStringMetadata: true,
 	}
 	return exec
 }
@@ -396,6 +397,15 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 			}
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
+		domain := types.RuntimeStringInherit
+		source := types.StringSourceExpression
+		encodedMetadata := false
+		if exec.argTypes[0].Oid.IsMySQLString() {
+			payload, domain, source, encodedMetadata, err = decodeAggStringMetadata(payload)
+			if err != nil {
+				return err
+			}
+		}
 		if !exec.argTypes[0].IsVarlen() &&
 			len(payload) != exec.argTypes[0].TypeSize() {
 			return moerr.NewInternalErrorNoCtx(
@@ -407,6 +417,14 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		}
 		if err := values.SetRawBytesAt(index, payload, exec.mp); err != nil {
 			return err
+		}
+		if encodedMetadata {
+			if err := values.SetRuntimeStringDomainAtWithMP(index, domain, exec.mp); err != nil {
+				return err
+			}
+			if err := values.SetStringSourceAtWithMP(index, source, exec.mp); err != nil {
+				return err
+			}
 		}
 		index++
 		return nil

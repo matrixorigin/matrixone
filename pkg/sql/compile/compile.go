@@ -7666,6 +7666,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func supportsRemoteOrderedSetExtendedTypes(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion61
+}
+
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
