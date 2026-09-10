@@ -720,6 +720,8 @@ message PrepareParamInfo {
   repeated bool is_bin = 5;
   repeated bool is_binary_string = 6;
   repeated uint32 string_sources = 7;
+  // Explicit per-parameter runtime string domains; gated by MORPC v58.
+  repeated uint32 runtime_string_domains = 8;
 }
 
 message ProcessInfo {

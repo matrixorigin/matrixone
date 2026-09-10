@@ -33,12 +33,14 @@ import (
 )
 
 const (
-	hashBuildRecoveryQueryCap = int64(28 << 20)
-	// Ninety-six full three-BIGINT batches contain 18 MiB of vector data. Hash
-	// cells then cross the original 28 MiB hard budget after batch retention,
+	hashBuildRecoveryQueryCap = int64(25 << 20)
+	// Eighty full three-BIGINT batches contain 15 MiB of vector data. Hash
+	// cells then cross the 25 MiB hard budget after batch retention,
 	// preserving the map-admission recovery path without a million-row fixture.
+	// Keep headroom for retained vectors and recovery scratch. Scaling the cap
+	// down proportionally would reject batch retention before map allocation.
 	// A small tail also exercises partial-batch recovery accounting.
-	hashBuildRecoveryRows = colexec.DefaultBatchSize*96 + colexec.DefaultBatchSize/16
+	hashBuildRecoveryRows = colexec.DefaultBatchSize*80 + colexec.DefaultBatchSize/16
 )
 
 // TestHashBuildSharedBudgetRecoverySQL is the SQL-protocol counterexample for

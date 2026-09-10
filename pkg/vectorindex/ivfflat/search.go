@@ -325,6 +325,9 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if sqlproc == nil || sqlproc.Proc == nil {
 		return
 	}
+	if sqlproc.IvfMembershipFilterObject != nil {
+		return nil
+	}
 
 	if len(sqlproc.IvfRuntimeFilterData) == 0 {
 		if len(sqlproc.RuntimeFilterSpecs) == 0 {
@@ -751,13 +754,16 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if cursor == nil {
 			cursor = &vectorindex.IvfSearchCursor{}
 		}
-		if len(cursor.RankedCentroidIDs) == 0 {
+		if len(cursor.RankedCentroidIDs) == 0 && !rt.IvfRoutePrepared {
 			cursor.RankedCentroidIDs, err = idx.rankCentroids(sqlproc, query, idxcfg)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
 
+		if rt.IvfPrepareRouteOnly {
+			return []any{}, []float64{}, nil
+		}
 		activeCentroidIDs := buildActiveCentroidIDs(cursor, rt.Probe)
 		if len(activeCentroidIDs) == 0 {
 			return []any{}, []float64{}, nil
@@ -792,7 +798,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if !directExactMembership {
+		if !directExactMembership && (sqlproc == nil || !sqlproc.IvfMembershipFilterRequired) {
 			if err = idx.getBloomFilter(sqlproc); err != nil {
 				return nil, nil, err
 			}
@@ -806,7 +812,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				scanCentroidIDs = nil
 				cursor.Exhausted = true
 			}
-			res, err = idx.scanEntries(
+			res, err = idx.scanEntriesInDomain(
 				sqlproc,
 				idxcfg,
 				tblcfg,
@@ -816,6 +822,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				includeCols,
 				rt.PushdownFilters,
 				roundLimit,
+				directExactMembership,
 			)
 		} else if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 			sql, err = idx.buildExactSearchSQL(
