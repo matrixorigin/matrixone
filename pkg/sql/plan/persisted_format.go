@@ -23,26 +23,43 @@ import (
 )
 
 // preservePersistedFormatCompatibility keeps catalog expressions executable by
-// pre-v59 CNs, including after downgrade. Catalog consumers can evaluate locally
-// without crossing the remote pipeline gate. Keep their historical string
-// argument and approximate rounding contract regardless of the current protocol;
-// only transient query expressions opt into typed numeric FORMAT semantics.
+// older CNs, including after downgrade. Catalog consumers can evaluate locally
+// without crossing remote pipeline capability gates. Keep historical overloads
+// for functions whose newer transient-query semantics require new overload IDs.
 // Call before constant folding so folded and non-folded catalog values agree.
 func preservePersistedFormatCompatibility(ctx context.Context, expr *planpb.Expr) error {
 	return planpb.VisitExprTree(expr, func(current *planpb.Expr) error {
 		fn := current.GetF()
-		if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil {
+		if fn == nil || fn.Func == nil {
 			return nil
 		}
 		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		if id != function.FORMAT || !makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
-			return nil
+		switch id {
+		case function.FORMAT:
+			if len(fn.Args) < 2 || fn.Args[0] == nil || !makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+				return nil
+			}
+			arg, err := appendCastBeforeExpr(ctx, fn.Args[0], planpb.Type{
+				Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+			if err != nil {
+				return err
+			}
+			fn.Args[0] = arg
+		case function.SUBSTRING_INDEX:
+			if len(fn.Args) < 3 || fn.Args[2] == nil {
+				return nil
+			}
+			countType := makeTypeByPlan2Expr(fn.Args[2])
+			if countType.Oid != types.T_decimal64 && countType.Oid != types.T_decimal128 {
+				return nil
+			}
+			count, err := appendCastBeforeExpr(ctx, fn.Args[2], planpb.Type{Id: int32(types.T_float64)})
+			if err != nil {
+				return err
+			}
+			fn.Args[2] = count
+			fn.Func.Obj = function.EncodeOverloadID(function.SUBSTRING_INDEX, 0)
 		}
-		arg, err := appendCastBeforeExpr(ctx, fn.Args[0], planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
-		if err != nil {
-			return err
-		}
-		fn.Args[0] = arg
 		return nil
 	})
 }

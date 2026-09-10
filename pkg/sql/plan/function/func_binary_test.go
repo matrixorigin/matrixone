@@ -4871,6 +4871,12 @@ func TestSubStrIndexDecimalOverloads(t *testing.T) {
 		resolved, err := GetFunctionByName(proc.Ctx, "substring_index", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), counts.typ})
 		require.NoError(t, err)
 		require.False(t, resolved.needCast)
+		_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
+		if counts.typ.Oid == types.T_decimal64 {
+			require.Equal(t, int32(3), overloadIndex)
+		} else {
+			require.Equal(t, int32(4), overloadIndex)
+		}
 		ov, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
 		require.NoError(t, err)
 		exec, _, _, _ := ov.GetExecuteMethod()
@@ -4878,6 +4884,30 @@ func TestSubStrIndexDecimalOverloads(t *testing.T) {
 			[]string{"a,b", "c,d", "", "", ""}, []bool{false, false, true, true, true}), fEvalFn(exec))
 		ok, info := tc.Run()
 		require.True(t, ok, info)
+
+		partial := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", "c,d", "", "", ""}, []bool{true, false, true, true, true}), fEvalFn(exec)).
+			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, false, false}})
+		ok, info = partial.Run()
+		require.True(t, ok, info)
+
+		allNull := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
+			make([]string, 5), []bool{true, true, true, true, true}), fEvalFn(exec)).
+			WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: true})
+		ok, info = allNull.Run()
+		require.True(t, ok, info)
+	}
+
+	for oid, wantIndex := range map[types.T]int32{
+		types.T_float64: 0,
+		types.T_uint64:  1,
+		types.T_int64:   2,
+	} {
+		resolved, err := GetFunctionByName(proc.Ctx, "substring_index",
+			[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), oid.ToType()})
+		require.NoError(t, err)
+		_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
+		require.Equal(t, wantIndex, overloadIndex, oid.String())
 	}
 }
 

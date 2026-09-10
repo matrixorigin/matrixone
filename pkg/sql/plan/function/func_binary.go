@@ -7197,13 +7197,19 @@ func getDecimalCount[T types.Decimal64 | types.Decimal128](typ types.Type, val T
 	return int64(whole.B0_63)
 }
 
-func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
 	counts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
 	typ := counts.GetType()
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null1 := vs.GetStrValue(i)
 		d, null2 := delims.GetStrValue(i)
 		c, null3 := counts.GetValue(i)
@@ -7221,7 +7227,7 @@ func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Ve
 			return err
 		}
 	}
-	return nil
+	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
