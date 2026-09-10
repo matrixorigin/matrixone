@@ -134,6 +134,15 @@ func TestFencingTupleRejectsInvalidUTF8(t *testing.T) {
 	require.ErrorContains(t, err, "invalid UTF-8")
 }
 
+func TestUnmarshalControlRejectsInvalidWireUTF8(t *testing.T) {
+	wire := []byte(`{"version":1,"kind":"InputBatch","tuple":{"account_id":1,"statement_id":"`)
+	wire = append(wire, 0xff)
+	wire = append(wire, []byte(`","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"sequence":1}`)...)
+	_, err := UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "invalid UTF-8")
+}
+
 func TestSequenceKeepsHalfCloseIndependentFromResults(t *testing.T) {
 	var sequence Sequence
 	require.NoError(t, sequence.AcceptInput(1))
