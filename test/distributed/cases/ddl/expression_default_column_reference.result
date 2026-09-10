@@ -144,9 +144,17 @@ select a, b from t_ctas order by a;
 a    b
 10    11
 20    21
+create table t_ctas_target_only (
+a int default 1,
+b int default (a + 1)
+) as select 7 as c;
 select a, b, c from t_ctas_target_only;
 a    b    c
 1    2    7
+create table t_ctas_target_only_volatile (
+a double default (rand()),
+b double default (a)
+) as select 7 as c;
 select a = b as same_source, c from t_ctas_target_only_volatile;
 same_source    c
 1    7
