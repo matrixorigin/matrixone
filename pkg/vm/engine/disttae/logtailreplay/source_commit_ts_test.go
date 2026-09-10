@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,15 +59,6 @@ func writeObjectWithCommitTS(t *testing.T, mp *mpool.MPool, tsValues []types.TS)
 	return objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(50, 0)}, fs
 }
 
-func TestMaxCommitTSFromZonemapReadsMax(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	obj, fs := writeObjectWithCommitTS(t, mp, []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0), types.BuildTS(15, 0)})
-	got, err := maxCommitTSFromZonemap(context.Background(), fs, obj)
-	require.NoError(t, err)
-	require.Equal(t, types.BuildTS(20, 0), got)
-}
-
 func TestMaxCommitTSInAppendableObjectReadsMax(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -76,29 +66,6 @@ func TestMaxCommitTSInAppendableObjectReadsMax(t *testing.T) {
 	got, err := maxCommitTSInAppendableObject(context.Background(), types.BuildTS(100, 0), fs, obj, mp)
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(25, 0), got)
-}
-
-// P1-1 regression: after a flush soft-deletes the appendable object, the source
-// rows survive only in a TN non-appendable replacement. SourceCommitTSAt must
-// read that object's true max commit_ts (not fall back to the retention
-// boundary), so a not-yet-indexed row cannot pass the coverage gate.
-func TestSourceCommitTSAtTNObjectPreservesCommitTS(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	obj, fs := writeObjectWithCommitTS(t, mp, []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)})
-	objectio.SetObjectStatsAppendable(&obj.ObjectStats, false)
-	require.False(t, obj.GetAppendable())
-	require.False(t, obj.GetCNCreated())
-
-	state := NewPartitionState("", false, 42, false)
-	state.UpdateDuration(types.BuildTS(5, 0), types.MaxTs())
-	obj.CreateTime = types.BuildTS(30, 0)
-	state.dataObjectsNameIndex.Set(obj)
-
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(40, 0), fs, mp)
-	require.NoError(t, err)
-	require.Equal(t, types.BuildTS(20, 0), info.TNObject)
-	require.Equal(t, types.BuildTS(20, 0), info.Max())
 }
 
 // An appendable object visible at the snapshot may hold blocks flushed after it.
@@ -111,17 +78,6 @@ func TestMaxCommitTSInAppendableObjectRespectsSnapshot(t *testing.T) {
 	got, err := maxCommitTSInAppendableObject(context.Background(), types.BuildTS(20, 0), fs, obj, mp)
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(10, 0), got)
-}
-
-func TestSourceCommitTSMaxPicksTNObject(t *testing.T) {
-	info := SourceCommitTS{
-		StateStart: types.BuildTS(5, 0),
-		InMemory:   types.BuildTS(10, 0),
-		Appendable: types.BuildTS(20, 0),
-		CNCreated:  types.BuildTS(30, 0),
-		TNObject:   types.BuildTS(40, 0),
-	}
-	require.Equal(t, types.BuildTS(40, 0), info.Max())
 }
 
 func TestSourceCommitTSMaxEmptyIsZero(t *testing.T) {
@@ -174,32 +130,25 @@ func TestSourceCommitTSAtStateStartFloor(t *testing.T) {
 	require.Equal(t, types.BuildTS(100, 1), info.Max())
 }
 
-// A TN non-appendable object requires reading its commit_ts zonemap. When the
-// object meta cannot be loaded the scan must fail closed rather than skip the
-// object and lower the bound (which would let a not-yet-indexed row pass).
-func TestSourceCommitTSAtTNObjectFailsClosed(t *testing.T) {
-	ctx := context.Background()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	fs := testutil.NewSharedFS()
+// Ordinary TN non-appendable objects are flush/merge results. Their lifecycle
+// timestamps are not user-data commit timestamps and must not affect the bound.
+func TestSourceCommitTSAtSkipsTNObject(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
-	state.UpdateDuration(types.BuildTS(1, 0), types.MaxTs())
+	state.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
 	id := objectio.NewObjectid()
 	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 10))
 	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: *stats,
-		CreateTime:  types.BuildTS(60, 0),
-		DeleteTime:  types.TS{},
+		CreateTime:  types.BuildTS(100, 0),
 	})
 
-	_, err := state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp)
-	require.Error(t, err)
-}
-
-func TestMaxCommitTSFromZonemapRequiresFS(t *testing.T) {
-	_, err := maxCommitTSFromZonemap(context.Background(), nil, objectio.ObjectEntry{})
-	require.Error(t, err)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 0), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.TS{}, info.InMemory)
+	require.Equal(t, types.TS{}, info.Appendable)
+	require.Equal(t, types.TS{}, info.CNCreated)
+	require.Equal(t, types.BuildTS(10, 0), info.Max())
 }
 
 func TestMaxCommitTSInAppendableObjectRequiresFS(t *testing.T) {

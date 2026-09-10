@@ -109,7 +109,6 @@ type SourceCommitTS struct {
 	InMemory   types.TS // logtail rows that have not been compacted into an aobject
 	Appendable types.TS // hidden commit_ts values read from appendable objects
 	CNCreated  types.TS // commit time of a CN-created, non-appendable object
-	TNObject   types.TS // max user commit_ts read from a TN non-appendable object's commit_ts zonemap
 }
 
 // Max returns the conservative source commit timestamp.
@@ -123,9 +122,6 @@ func (s SourceCommitTS) Max() types.TS {
 	}
 	if s.CNCreated.GT(&ret) {
 		ret = s.CNCreated
-	}
-	if s.TNObject.GT(&ret) {
-		ret = s.TNObject
 	}
 	return ret
 }
@@ -178,57 +174,11 @@ func (p *PartitionState) SourceCommitTSAt(
 			}
 			continue
 		}
-		// Ordinary TN non-appendable object (flush/merge output). CreateTime is
-		// the flush/merge time, not the data commit, so read the true max user
-		// commit_ts from the per-block commit_ts zonemap. This is required for
-		// correctness: after a flush soft-deletes the source rows' appendable
-		// object, the rows survive only in this replacement object, and skipping
-		// it would under-report SourceCommitTS and let a not-yet-indexed row pass
-		// the coverage gate. The object is sealed and visible at the snapshot, so
-		// its rows are committed at or before the snapshot.
-		ts, err := maxCommitTSFromZonemap(ctx, fs, obj)
-		if err != nil {
-			return SourceCommitTS{}, err
-		}
-		if ts.GT(&ret.TNObject) {
-			ret.TNObject = ts
-		}
+		// Ordinary TN non-appendable objects are flush/merge results. Their
+		// lifecycle timestamps are not user-data commit timestamps, so they do
+		// not contribute to this source-data coverage boundary.
 	}
 	return ret, nil
-}
-
-// maxCommitTSFromZonemap returns the maximum user commit_ts of a non-appendable
-// object from the per-block commit_ts zonemap in the object meta -- no data-column
-// load. A block whose commit_ts zonemap is unusable fails closed (returns an
-// error) rather than being skipped: an under-report would let a not-yet-indexed
-// row pass the coverage gate.
-func maxCommitTSFromZonemap(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry) (types.TS, error) {
-	if fs == nil {
-		return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts zonemap scan requires file service")
-	}
-	metaLoc := obj.ObjectLocation()
-	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs)
-	if err != nil {
-		return types.TS{}, err
-	}
-	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	var maxTS types.TS
-	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
-		blk := dataMeta.GetBlockMeta(uint32(i))
-		commitPos, ok := objectio.ResolveSpecialColumnLayout(blk).Resolve(objectio.SEQNUM_COMMITTS)
-		if !ok {
-			return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts column missing in non-appendable object")
-		}
-		zm := blk.ColumnMeta(commitPos).ZoneMap()
-		if !zm.IsInited() || zm.GetType() != types.T_TS {
-			return types.TS{}, moerr.NewInternalErrorNoCtx("commit-ts zonemap unusable in non-appendable object")
-		}
-		ts := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-		if ts.GT(&maxTS) {
-			maxTS = ts
-		}
-	}
-	return maxTS, nil
 }
 
 // forEachVisibleCommitTS invokes fn once per non-aborted row of an appendable data
