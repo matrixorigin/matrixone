@@ -70,10 +70,12 @@ func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func pythonTypesEqual(left, right types.Type) bool {
-	return left.Oid == right.Oid &&
-		left.Width == right.Width &&
-		left.Scale == right.Scale &&
-		left.Charset == right.Charset
+	// Type.Eq applies SQL value semantics. In particular, integer display
+	// width and the legacy scale marker are not part of the value contract;
+	// CASE and table expressions are allowed to materialize those fields
+	// differently while retaining the same fixed-width Arrow type. Decimal,
+	// string, temporal, and vector metadata remain part of the comparison.
+	return left.Eq(right)
 }
 
 // param parameters is same with param inputs in function checkPythonUdf

@@ -170,6 +170,12 @@ func TestPythonBindingNormalizesDecimalMetadata(t *testing.T) {
 	require.Equal(t, required, result.finalType[1])
 }
 
+func TestPythonTypeEqualityUsesSQLIntegerSemantics(t *testing.T) {
+	declared := types.New(types.T_int32, 0, -1)
+	caseResult := types.New(types.T_int32, 32, -1)
+	require.True(t, pythonTypesEqual(declared, caseResult))
+}
+
 func TestPythonExecutionValidatesDescriptorAndInputTypes(t *testing.T) {
 	empty, err := vector.NewConstBytes(types.T_text.ToType(), nil, 0, nil)
 	require.NoError(t, err)
