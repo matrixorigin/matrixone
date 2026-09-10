@@ -612,6 +612,27 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid invocation field timeout"):
             worker._required_positive_float({"timeout": float("nan")}, "timeout", 60.0)
 
+    def test_control_rejects_unknown_envelope_fields(self):
+        tuple_value = {
+            "account_id": 0,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        value = {
+            "version": 1,
+            "kind": "InputBatch",
+            "tuple": tuple_value,
+            "sequence": 1,
+            "future_field": "must not be ignored",
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported control field"):
+            worker._decode_control(json.dumps(value).encode())
+        with self.assertRaisesRegex(ValueError, "unsupported control field"):
+            worker._encode_control(value)
+
     def test_result_ack_rejects_zero_sequence(self):
         state = worker._InvocationState({}, 1)
         state.last_result = 1
