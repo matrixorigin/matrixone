@@ -361,8 +361,8 @@ func mathStringTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 }
 
 // mathStringTypeMatchKeepBoolStringFallback preserves CEIL/FLOOR's existing
-// BOOL-to-VARCHAR overload while still routing character arguments through
-// the MySQL numeric-prefix string overload.
+// BOOL-to-VARCHAR overload while routing character arguments through the
+// stable DOUBLE cast path.
 func mathStringTypeMatchKeepBoolStringFallback(overloads []overload, inputs []types.Type) checkResult {
 	for _, input := range inputs {
 		if input.Oid == types.T_bool {
