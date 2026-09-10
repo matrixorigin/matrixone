@@ -41,6 +41,21 @@ type allocatedPorts struct {
 	ports map[int]struct{}
 }
 
+// testPortAllocationError keeps the probe cause available to callers while
+// complying with the repository's error-construction policy.
+type testPortAllocationError struct {
+	message string
+	cause   error
+}
+
+func (e *testPortAllocationError) Error() string {
+	return e.message
+}
+
+func (e *testPortAllocationError) Unwrap() error {
+	return e.cause
+}
+
 var randomPorts = allocatedPorts{
 	ports: map[int]struct{}{},
 }
@@ -67,12 +82,17 @@ func (a *allocatedPorts) allocate(probe func(int) error) (int, error) {
 			if errors.Is(err, syscall.EADDRINUSE) {
 				continue
 			}
-			return 0, fmt.Errorf("probe test port %d: %w", port, err)
+			return 0, &testPortAllocationError{
+				message: fmt.Sprintf("probe test port %d: %v", port, err),
+				cause:   err,
+			}
 		}
 		a.ports[port] = struct{}{}
 		return port, nil
 	}
-	return 0, fmt.Errorf("no available test port after %d attempts", maxPortAllocationAttempts)
+	return 0, &testPortAllocationError{
+		message: fmt.Sprintf("no available test port after %d attempts", maxPortAllocationAttempts),
+	}
 }
 
 func probeTestPort(port int) error {
