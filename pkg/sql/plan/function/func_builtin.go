@@ -4212,9 +4212,10 @@ func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		return momath.Exp(v)
+func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		r := math.Exp(v)
+		return r, math.IsInf(r, 0)
 	}, selectList)
 }
 

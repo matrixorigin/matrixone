@@ -444,10 +444,20 @@ func runHakeeperTaskServiceTestWithCNStoreTimeout(
 	cnStoreTimeout time.Duration,
 	fn func(*testing.T, *store, taskservice.TaskService),
 ) {
+	runHakeeperTaskServiceTestWithWorkers(t, cnStoreTimeout, true, fn)
+}
+
+func runHakeeperTaskServiceTestWithWorkers(
+	t *testing.T,
+	cnStoreTimeout time.Duration,
+	workers bool,
+	fn func(*testing.T, *store, taskservice.TaskService),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = !workers
 		cfg.HAKeeperConfig.CNStoreTimeout.Duration = cnStoreTimeout
 		return cfg
 	}
@@ -1387,7 +1397,9 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
-	runHakeeperTaskServiceTest(t, fn)
+	// This case drives bootstrap and scheduling explicitly; a background
+	// HAKeeper check would race with bootstrap and mutate scheduler state.
+	runHakeeperTaskServiceTestWithWorkers(t, 5*time.Second, false, fn)
 }
 
 func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
