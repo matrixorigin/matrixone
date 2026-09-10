@@ -61,8 +61,11 @@ func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T
 		nil, []bool{false, false, false}, []bool{false, false, false})
 	arg := newInsertIgnoreMultiDedupArgument(input)
 	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.warningKeyMetadataReady)
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
+	require.True(t, arg.warningKeyMetadataReady)
+	require.Len(t, arg.warningKeyMetadata, 2)
 	require.Equal(t, []int32{1, 2},
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
 	require.Equal(t, uint64(1), session.total)
@@ -70,6 +73,31 @@ func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T
 		code: moerr.ER_DUP_ENTRY,
 		msg:  "Duplicate entry '10' for key 'v'",
 	}}, session.warnings)
+
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestInsertIgnoreMultiDedupSkipsMetadataForNoConflict(t *testing.T) {
+	session := &preInsertWarningSession{}
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+
+	input := makeInsertIgnoreMultiDedupBatch(t, proc,
+		[]int32{1, 2}, []int32{10, 20},
+		nil, []bool{false, false}, []bool{false, false})
+	arg := newInsertIgnoreMultiDedupArgument(input)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.False(t, arg.warningKeyMetadataReady)
+	require.Zero(t, session.total)
+	require.Empty(t, session.warnings)
 
 	arg.Free(proc, false, nil)
 	input.Clean(proc.Mp())

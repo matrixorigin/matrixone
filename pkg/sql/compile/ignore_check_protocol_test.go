@@ -89,6 +89,11 @@ func TestIgnoreCheckCoordinatorCompatibility(t *testing.T) {
 	}
 }
 
+func TestStatementIgnoreEnabledHandlesIncompleteProcess(t *testing.T) {
+	require.False(t, statementIgnoreEnabled(nil))
+	require.False(t, statementIgnoreEnabled(&process.Process{}))
+}
+
 func TestIgnoreCheckRemoteEncodingRechecksCapability(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})

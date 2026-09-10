@@ -86,4 +86,99 @@ Warning  ¦  3819  ¦  Check constraint 'ck_pos' is violated
 select * from ck order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 2  ¦  2
+create table composite_pk(
+a int,
+b int,
+v int,
+primary key(a, b)
+);
+insert into composite_pk values (1, 2, 10);
+insert ignore into composite_pk values (1, 2, 11), (1, 3, 12), (2, 2, 22);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '(1,2)' for key '(a,b)'
+select * from composite_pk order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  2  ¦  10  𝄀
+1  ¦  3  ¦  12  𝄀
+2  ¦  2  ¦  22
+create table warning_limit(id int primary key);
+insert into warning_limit values (1);
+insert ignore into warning_limit values
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+(1), (1), (1), (1), (1);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'
+select count(*) from warning_limit;
+➤ count(*)[-5,64,0]  𝄀
+1
 drop database issue_28254_ignore_warnings;

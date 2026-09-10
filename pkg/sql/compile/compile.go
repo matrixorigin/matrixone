@@ -5593,11 +5593,19 @@ func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) [
 	return []*Scope{c.newMergeScope(ss)}
 }
 
+// statementIgnoreEnabled is defensive because a few compile/serialization
+// tests construct a Process shell without its shared BaseProcess.  The normal
+// execution path always has both objects, but a protocol gate must not turn a
+// malformed/incomplete process into a panic while handling an error path.
+func statementIgnoreEnabled(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
+}
+
 // An older CN resolves the same CHECK function ID but throws instead of
 // filtering invalid INSERT IGNORE rows. Keep only this filter local while
 // upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
 func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
-	if node == nil || len(node.FilterList) == 0 || c.proc == nil || !c.proc.GetStmtProfile().GetStatementIgnore() ||
+	if node == nil || len(node.FilterList) == 0 || !statementIgnoreEnabled(c.proc) ||
 		supportsRemoteIgnoreCheck(c.proc.GetService()) {
 		return false
 	}

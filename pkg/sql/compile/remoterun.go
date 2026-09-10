@@ -2356,7 +2356,7 @@ func binaryStringSemanticFunction(functionID int32) bool {
 // Recheck at serialization: a scope compiled before a capability change must
 // never reach an older CN with the new meaning of CHECK_CONSTRAINT_ASSERT.
 func validateRemoteIgnoreCheckPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
-	if proc == nil || !proc.GetStmtProfile().GetStatementIgnore() ||
+	if !statementIgnoreEnabled(proc) ||
 		supportsRemoteIgnoreCheck(proc.GetService()) ||
 		!pipelineContainsFunction(p, isCheckConstraintFunction) {
 		return nil

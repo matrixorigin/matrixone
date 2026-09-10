@@ -59,4 +59,31 @@ update ignore ck set v = -v;
 show warnings;
 select * from ck order by id;
 
+-- Composite keys must render the logical user tuple, not the serialized index
+-- key.
+create table composite_pk(
+    a int,
+    b int,
+    v int,
+    primary key(a, b)
+);
+insert into composite_pk values (1, 2, 10);
+insert ignore into composite_pk values (1, 2, 11), (1, 3, 12), (2, 2, 22);
+show warnings;
+select * from composite_pk order by a, b;
+
+-- The count is exact even when SHOW WARNINGS retains only its bounded prefix.
+create table warning_limit(id int primary key);
+insert into warning_limit values (1);
+insert ignore into warning_limit values
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1);
+show warnings;
+select count(*) from warning_limit;
+
 drop database issue_28254_ignore_warnings;

@@ -1,6 +1,6 @@
 # INSERT IGNORE constraint-warning diagnostics
 
-Design revision: 1 (2026-09-10). Owner: XuPeng-SH.  Issue: [#28254](https://github.com/matrixorigin/matrixone/issues/28254).  Implementation: [#28459](https://github.com/matrixorigin/matrixone/pull/28459).
+Design revision: 2 (2026-09-10). Owner: XuPeng-SH.  Issue: [#28254](https://github.com/matrixorigin/matrixone/issues/28254).  Implementation: [#28459](https://github.com/matrixorigin/matrixone/pull/28459).
 
 This document defines the warning contract for rows that are already skipped
 by `INSERT IGNORE` or `UPDATE IGNORE`.  It is intentionally limited to
@@ -78,7 +78,10 @@ concatenated logical types for composite/index keys.  This lets warnings render
 user values instead of serialized index bytes.  Plans from before these fields
 are accepted with a safe best-effort fallback.  Metadata bounds are checked
 before slicing so malformed cached/remote plans cannot panic the diagnostic
-path.
+path.  The decoded metadata is built at most once per prepared
+`PreInsertUnique` operator, and only when a retained warning actually needs
+text rendering; no-conflict batches and the already-bounded tail do not pay
+that cost, and it is not copied for every input batch.
 
 CHECK assertions in IGNORE mode are barrier filters: false rows are removed,
 one `ER_CHECK_CONSTRAINT_VIOLATED` warning is accumulated per row, and the
@@ -90,10 +93,10 @@ evaluates once per input row and preserves the count.
 
 Older CNs know the existing assertion function ID but interpret a false result
 as an error.  Therefore IGNORE-aware CHECK execution is assigned reserved
-MORPC capability version 62.  The current mainline advertises v59 while v60
-and v61 are allocated by other changes; this PR deliberately keeps CHECK
-filters on the coordinator until all participating CNs advertise v62.  Remote
-source scans remain remote, and ordinary CHECK enforcement is unchanged.
+MORPC capability version 62.  The current mainline advertises v60; this PR
+deliberately keeps CHECK filters on the coordinator until all participating CNs
+advertise v62.  Remote source scans remain remote, and ordinary CHECK
+enforcement is unchanged.
 
 Placement checks and a second serialization-time check prevent a scope compiled
 before a capability change from being sent with the new meaning.  Once the
@@ -104,9 +107,11 @@ PR.
 ## Cost and failure containment
 
 Each accumulator and remote collector retains at most 64 records.  Counts use
-saturating `uint64` arithmetic.  Formatting stops after the retained capacity,
-so a large ignored batch does not allocate or stringify every duplicate key.
-The attempt binding map is proportional to live processes/scopes, not rows.
+saturating `uint64` arithmetic.  Each producer stops formatting after its
+local retained capacity, while the attempt collector applies the same global
+bound; a large ignored statement therefore does not allocate or stringify
+every duplicate key.  The attempt binding map is proportional to live
+processes/scopes, not rows.
 No goroutine, timer, retry loop, or unbounded queue is introduced.  Key
 formatting has a recoverable diagnostic boundary: an invalid internal tuple
 returns an internal rendering error to the IGNORE caller, which increments the

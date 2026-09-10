@@ -51,6 +51,11 @@ func (preInsertUnique *PreInsertUnique) OpType() vm.OpType {
 }
 
 func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
+	// The context belongs to the prepared plan, but the operator may be reused
+	// for a different plan after Reset/Prepare.  Never carry diagnostic metadata
+	// across that boundary.
+	preInsertUnique.warningKeyMetadata = nil
+	preInsertUnique.warningKeyMetadataReady = false
 	if preInsertUnique.OpAnalyzer == nil {
 		preInsertUnique.OpAnalyzer = process.NewAnalyzer(preInsertUnique.GetIdx(), preInsertUnique.IsFirst, preInsertUnique.IsLast, "pre_insert_unique")
 	} else {
@@ -387,10 +392,6 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore()
 	var duplicateWarnings process.WarningAccumulator
-	var warningKeyMetadata []insertIgnoreWarningKey
-	if warningsEnabled {
-		warningKeyMetadata = buildInsertIgnoreKeyMetadata(ctx)
-	}
 	recordDuplicateWarning := func(keyIdx, row int) {
 		if !warningsEnabled || keyIdx < 0 || keyIdx >= len(keyColumns) {
 			return
@@ -415,6 +416,14 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			duplicateWarnings.AddCount()
 			return
 		}
+		// Key metadata is needed only when a retained warning is rendered. Keep
+		// the no-conflict and already-bounded paths free of metadata work, then
+		// reuse the immutable result for later input batches of this plan.
+		if !preInsertUnique.warningKeyMetadataReady {
+			preInsertUnique.warningKeyMetadata = buildInsertIgnoreKeyMetadata(ctx)
+			preInsertUnique.warningKeyMetadataReady = true
+		}
+		warningKeyMetadata := preInsertUnique.warningKeyMetadata
 		var keyName string
 		var keyTypes []plan.Type
 		var ok bool
