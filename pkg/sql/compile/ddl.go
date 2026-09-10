@@ -6419,6 +6419,9 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 		(opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts)) {
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
+	if opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcLosslessStart
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
 		Executor: executor,
@@ -6810,7 +6813,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			return
 		}
 	} else if opts.startTsFromSnapshot {
-		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
+		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
 			return
 		}
 	}
@@ -6841,6 +6844,20 @@ func validateStableInitialSnapshotCompileProtocol(
 		}
 	}
 	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
+}
+
+func validateLosslessNoFullStartCompileProtocol(ctx context.Context, c *Compile) error {
+	protocolVersion := int64(defines.MORPCVersion4)
+	if c != nil && c.proc != nil {
+		if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				if version, valid := value.(int64); valid {
+					protocolVersion = version
+				}
+			}
+		}
+	}
+	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
 func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {

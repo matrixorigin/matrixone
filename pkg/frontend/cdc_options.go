@@ -288,7 +288,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			return
 		}
 	} else if opts.startTsFromSnapshot {
-		if err = validateStableInitialSnapshotProtocol(ctx, true, currentProtocolVersion(ses.proc)); err != nil {
+		if err = cdc.ValidateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
 	}
@@ -316,6 +316,9 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	if (!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)) ||
 		(opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts)) {
 		executor = task.TaskCode_InitCdcStableEpoch
+	}
+	if opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcLosslessStart
 	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
