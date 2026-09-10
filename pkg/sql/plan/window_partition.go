@@ -130,10 +130,12 @@ func selectWindowHashPartitionWithMode(
 	partitionNode.SpillMem = 0
 
 	child := builder.qry.Nodes[partitionNode.Children[0]]
-	if child.Stats == nil || !finitePositiveWindowStat(child.Stats.Outcnt) {
+	if child.Stats == nil || !finitePositiveWindowStat(child.Stats.Outcnt) ||
+		!finitePositiveWindowStat(child.Stats.Rowsize) {
 		return false
 	}
 	n := child.Stats.Outcnt
+	rowSize := child.Stats.Rowsize
 	if n < float64(colexec.DefaultBatchSize) {
 		return false
 	}
@@ -168,8 +170,8 @@ func selectWindowHashPartitionWithMode(
 	threshold := builder.aggSpillMem
 	resolvedThreshold := colexec.ResolveSpillThreshold(threshold)
 	useHash := algorithm == windowPartitionAlgorithmHash
-	if (useHash && windowHashPartitionMemoryFits(n, groupCount, keyWidth, resolvedThreshold)) ||
-		(!useHash && shouldUseWindowHashPartition(n, groupCount, keyWidth, len(partitionNode.OrderBy), threshold, resolvedThreshold)) {
+	if (useHash && windowHashPartitionMemoryFits(n, groupCount, keyWidth, rowSize, resolvedThreshold)) ||
+		(!useHash && shouldUseWindowHashPartition(n, groupCount, keyWidth, len(partitionNode.OrderBy), rowSize, threshold, resolvedThreshold)) {
 		partitionNode.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_HASH
 		partitionNode.SpillMem = threshold
 		return true
@@ -201,11 +203,11 @@ func windowPartitionKeyWidth(expr *planpb.Expr) (int, bool) {
 
 func shouldUseWindowHashPartition(
 	n, groupCount float64,
-	keyWidth, keyCount int,
+	keyWidth, keyCount int, rowSize float64,
 	configuredThreshold, resolvedThreshold int64,
 ) bool {
 	if !finitePositiveWindowStat(n) || !finitePositiveWindowStat(groupCount) || groupCount > n ||
-		keyWidth <= 0 || keyCount <= 0 || resolvedThreshold <= 0 {
+		keyWidth <= 0 || keyCount <= 0 || !finitePositiveWindowStat(rowSize) || resolvedThreshold <= 0 {
 		return false
 	}
 	if n < float64(colexec.DefaultBatchSize) {
@@ -222,14 +224,21 @@ func shouldUseWindowHashPartition(
 	if hashWork >= sortWork {
 		return false
 	}
-	return windowHashPartitionMemoryFits(n, groupCount, keyWidth, resolvedThreshold)
+	return windowHashPartitionMemoryFits(n, groupCount, keyWidth, rowSize, resolvedThreshold)
 }
 
-func windowHashPartitionMemoryFits(n, groupCount float64, keyWidth int, resolvedThreshold int64) bool {
+func windowHashPartitionMemoryFits(
+	n, groupCount float64,
+	keyWidth int,
+	rowSize float64,
+	resolvedThreshold int64,
+) bool {
 	if !finitePositiveWindowStat(n) || !finitePositiveWindowStat(groupCount) || groupCount > n ||
-		keyWidth <= 0 || resolvedThreshold <= 0 {
+		keyWidth <= 0 || !finitePositiveWindowStat(rowSize) || resolvedThreshold <= 0 {
 		return false
 	}
 	hashAux := 16*n + groupCount*float64(keyWidth+windowHashEntryOverhead)
-	return !math.IsInf(hashAux, 0) && !math.IsNaN(hashAux) && hashAux <= float64(resolvedThreshold)
+	retained := n * rowSize
+	total := hashAux + retained
+	return !math.IsInf(total, 0) && !math.IsNaN(total) && total <= float64(resolvedThreshold)
 }
