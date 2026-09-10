@@ -380,7 +380,6 @@ func TestCeilFloorDecimalCanReturnBigInt(t *testing.T) {
 	}
 	for _, input := range inputs {
 		for _, function := range functions {
-			function := function
 			switch input.typ.Oid {
 			case types.T_decimal128:
 				if function.name == "ceil" {
