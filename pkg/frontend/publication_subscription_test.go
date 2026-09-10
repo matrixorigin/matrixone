@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -459,46 +461,78 @@ func Test_doAlterPublication2(t *testing.T) {
 
 func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 	tests := []struct {
-		name        string
-		protocol    int64
-		publication string
-		statement   string
-		lookupDB    string
-		wantErr     bool
+		name                string
+		protocol            int64
+		publication         string
+		publicationID       uint64
+		publicationAccounts string
+		statement           string
+		lookupDB            string
+		lookupPersisted     bool
+		databaseOwner       uint32
+		targetLookupDB      string
+		tableLookupDB       string
+		wantTableAccount    uint32
+		wantErr             bool
 	}{
 		{
-			name:        "v60 explicit database rejects",
-			protocol:    defines.MORPCVersion60,
-			publication: "branch_db",
-			statement:   "alter publication pub1 account acc1 database replacement_db comment 'updated'",
-			lookupDB:    "replacement_db",
-			wantErr:     true,
+			name:          "v61 explicit database rejects",
+			protocol:      defines.MORPCVersion61,
+			publication:   "branch_db",
+			publicationID: 7,
+			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:      "replacement_db",
+			wantErr:       true,
 		},
 		{
-			name:        "v60 effective database rejects",
-			protocol:    defines.MORPCVersion60,
-			publication: "branch_db",
-			statement:   "alter publication pub1 account acc1 comment 'updated'",
-			lookupDB:    "branch_db",
-			wantErr:     true,
+			name:            "v61 effective database rejects",
+			protocol:        defines.MORPCVersion61,
+			publication:     "branch_db",
+			publicationID:   7,
+			statement:       "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted: true,
+			wantErr:         true,
 		},
 		{
-			name:        "v61 explicit database succeeds",
-			protocol:    defines.MORPCVersion61,
-			publication: "branch_db",
-			statement:   "alter publication pub1 account acc1 database replacement_db comment 'updated'",
-			lookupDB:    "replacement_db",
+			name:          "v62 explicit database succeeds",
+			protocol:      defines.MORPCVersion62,
+			publication:   "branch_db",
+			publicationID: 7,
+			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:      "replacement_db",
 		},
 		{
-			name:        "v61 effective database succeeds",
-			protocol:    defines.MORPCVersion61,
-			publication: "branch_db",
-			statement:   "alter publication pub1 account acc1 comment 'updated'",
-			lookupDB:    "branch_db",
+			name:            "v62 effective database succeeds",
+			protocol:        defines.MORPCVersion62,
+			publication:     "branch_db",
+			publicationID:   7,
+			statement:       "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted: true,
+		},
+		{
+			name:                "v62 effective target account database succeeds",
+			protocol:            defines.MORPCVersion62,
+			publication:         "branch_db",
+			publicationID:       7,
+			publicationAccounts: "acc1",
+			statement:           "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted:     true,
+			databaseOwner:       1,
+		},
+		{
+			name:                "v62 replacement target account database succeeds",
+			protocol:            defines.MORPCVersion62,
+			publication:         "branch_db",
+			publicationID:       7,
+			publicationAccounts: "acc1",
+			statement:           "alter publication pub1 account acc1 database replacement_db table t comment 'updated'",
+			targetLookupDB:      "replacement_db",
+			tableLookupDB:       "replacement_db",
+			wantTableAccount:    1,
 		},
 		{
 			name:        "account level remains database independent",
-			protocol:    defines.MORPCVersion60,
+			protocol:    defines.MORPCVersion61,
 			publication: pubsub.TableAll,
 			statement:   "alter publication pub1 account acc1 comment 'updated'",
 		},
@@ -536,10 +570,14 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 			})
 			columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
 			bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows([]string{"exists"}, [][]interface{}{{1}})
+			publicationAccounts := test.publicationAccounts
+			if publicationAccounts == "" {
+				publicationAccounts = pubsub.AccountAll
+			}
 			pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
 			bh.sql2result[pubSQL] = newMrsForRestoreStringRows(
 				[]string{"account_id", "account_name", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
-				[][]interface{}{{int64(sysAccountID), sysAccountName, "pub1", test.publication, uint64(0), pubsub.TableAll, pubsub.AccountAll, "", nil, uint64(0), uint64(0), "old"}},
+				[][]interface{}{{int64(sysAccountID), sysAccountName, "pub1", test.publication, test.publicationID, pubsub.TableAll, publicationAccounts, "", nil, uint64(0), uint64(0), "old"}},
 			)
 			if test.lookupDB != "" {
 				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.lookupDB, true, uint64(sysAccountID))
@@ -547,6 +585,27 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
 					[]string{"dat_id", "dat_type"},
 					[][]interface{}{{uint64(7), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.lookupPersisted {
+				dbSQL := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, test.publicationID, sanitizeSQLInput(test.publication))
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"account_id", "dat_type"},
+					[][]interface{}{{uint64(test.databaseOwner), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.targetLookupDB != "" {
+				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, 1)
+				require.NoError(t, err)
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"dat_id", "dat_type"},
+					[][]interface{}{{uint64(8), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.tableLookupDB != "" {
+				bh.sql2result["show tables from "+sqlquote.Ident(test.tableLookupDB)] = newMrsForRestoreStringRows(
+					[]string{"Tables_in_" + test.tableLookupDB},
+					[][]interface{}{{"t"}},
 				)
 			}
 			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
@@ -572,10 +631,37 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 				require.Contains(t, bh.executedSQLs, "commit;")
 			}
 
-			if test.lookupDB == "" {
+			if test.lookupDB == "" && !test.lookupPersisted && test.targetLookupDB == "" {
 				for _, sql := range bh.executedSQLs {
 					require.NotContains(t, sql, "from mo_catalog.mo_database")
 				}
+			}
+			if test.lookupPersisted {
+				persistedLookup := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, test.publicationID, sanitizeSQLInput(test.publication))
+				require.Contains(t, bh.executedSQLs, persistedLookup)
+				publisherLookup, err := getSqlForGetDbIdAndType(ctx, test.publication, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				require.NotContains(t, bh.executedSQLs, publisherLookup)
+			}
+			if test.targetLookupDB != "" {
+				publisherLookup, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				targetLookup, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, 1)
+				require.NoError(t, err)
+				require.Contains(t, bh.executedSQLs, publisherLookup)
+				require.Contains(t, bh.executedSQLs, targetLookup)
+				require.Contains(t, strings.Join(bh.executedSQLs, "\n"), "database_id = 8")
+			}
+			if test.tableLookupDB != "" {
+				tableSQL := "show tables from " + sqlquote.Ident(test.tableLookupDB)
+				foundTableLookup := false
+				for i, sql := range bh.executedSQLs {
+					if sql == tableSQL {
+						foundTableLookup = true
+						require.Equal(t, test.wantTableAccount, bh.executionAccountIDs[i])
+					}
+				}
+				require.True(t, foundTableLookup)
 			}
 		})
 	}
