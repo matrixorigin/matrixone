@@ -2667,11 +2667,15 @@ func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
 
 func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
 	start := types.BuildTS(100, 5)
+	updater := newWatermarkUpdaterStub()
 	h := newTableStreamHarness(t,
 		withHarnessNoFull(true),
 		withHarnessStartTs(start),
+		withHarnessWatermarkUpdater(updater, nil),
 	)
 	h.Stream().start.Done() // invoke processOneRound directly
+	_, err := updater.GetOrAddCommitted(h.Context(), h.Stream().watermarkKey, &start)
+	require.NoError(t, err)
 	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
 		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
 	})
