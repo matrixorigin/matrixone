@@ -10082,6 +10082,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 

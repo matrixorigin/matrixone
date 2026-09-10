@@ -42,3 +42,25 @@ validation, or CI verification. `TestWarningAttemptNestedAndBounded` proves chil
 success followed by parent discard; its name must not be treated as evidence for
 every nested outcome. Implementation acceptance and rebase validation are
 recorded separately in the PR body.
+
+## Internal SQL handoff amendment
+
+The subsequent implementation review found that new top-level internal SQL
+processes inherited Session but not the active warning attempt. The corrective
+design captures the current explicit `Process.WarningSink` in a typed context
+value at internal SQL call boundaries and installs it before child planning.
+It does not capture the mutable Process or replace Session. An explicit nil
+binding masks an inherited binding; no sink and no inherited value allocates
+nothing. Each retry captures its own sink, while old contexts retain the sealed
+old sink. The same small carrier serves the internal executor and frontend
+SqlHelper bridges. The independent GPT-6 Astra medium follow-up accepted the
+common handoff and required both bridges to preserve this ownership rule.
+Outcome tests must use the real internal executor boundary, not manually pass
+the parent collector into `child.finish`.
+
+The independent source-level delta review of this correction found no production
+blocker: both bridges capture/install the sink, preserve Session, and mask stale
+bindings correctly. Test limits remain explicit: the child-failure case may
+fail during planning, while parent terminal outcomes use collector transitions.
+Existing real `Compile.Run` failure/retry tests are complementary evidence.
+Execution and SCA results are recorded separately in the PR body.

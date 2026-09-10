@@ -23,7 +23,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,8 +34,82 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
+	for _, outcome := range []string{"success", "parent failure", "child failure", "retry"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &remoteWarningSession{}
+			proc.Session = session
+			ctx := attachInternalExecutorSession(defines.AttachAccountId(context.Background(), catalog.System_Account), session)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				switch name {
+				case "group_concat_max_len":
+					return int64(5), nil
+				case "lower_case_table_names":
+					return int64(1), nil
+				case plan2.SQLSelectLimitVariable:
+					return ^uint64(0), nil
+				default:
+					return "STRICT_TRANS_TABLES", nil
+				}
+			})
+			ctrl := gomock.NewController(t)
+			proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			buf := buffer.New()
+			t.Cleanup(buf.Free)
+			internal := &sqlExecutor{addr: proc.GetService(), eng: newStubEngine(), mp: proc.Mp(), txnClient: proc.Base.TxnClient, buf: buf}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, internal)
+			t.Cleanup(func() {
+				if existed {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, internal)
+				}
+			})
+			parent := newWarningAttempt(proc)
+			defer func() { parent.finish(false, session) }()
+			c := &Compile{proc: proc}
+			sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
+			if outcome == "child failure" {
+				parent.collector.AppendWarningDiagnostic(1260, "parent")
+				sql = "select cast('not-an-integer' as bigint)"
+			}
+			res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
+			if outcome == "child failure" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, res.Batches, 1)
+				require.Equal(t, "abcde", string(res.Batches[0].Vecs[0].GetBytesAt(0)))
+				res.Close()
+			}
+			require.Zero(t, session.totalWarnings, "internal SQL must not publish directly to Session")
+			if outcome == "retry" {
+				parent.finish(false, session)
+				parent = newWarningAttempt(proc)
+				res, err = c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
+				require.NoError(t, err)
+				res.Close()
+			}
+			parent.finish(outcome != "parent failure", session)
+			want := uint64(1)
+			if outcome == "parent failure" {
+				want = 0
+			}
+			require.Equal(t, want, session.totalWarnings)
+			require.Same(t, session, proc.Session)
+			require.Nil(t, proc.WarningSink)
+		})
+	}
+}
 
 func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 	for _, outcome := range []string{"success", "retry", "failure", "panic"} {
