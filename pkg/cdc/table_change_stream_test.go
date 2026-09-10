@@ -2674,6 +2674,7 @@ func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
 		withHarnessWatermarkUpdater(updater, nil),
 	)
 	h.Stream().start.Done() // invoke processOneRound directly
+	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
 	_, err := updater.GetOrAddCommitted(h.Context(), h.Stream().watermarkKey, &start)
 	require.NoError(t, err)
 	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
