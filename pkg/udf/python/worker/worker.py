@@ -469,7 +469,15 @@ def _encode_control(value: Dict[str, Any]) -> bytes:
     value.setdefault("version", PROTOCOL_VERSION)
     _tuple_key(value["tuple"])
     _validate_control_fields(value, wire=False)
-    data = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    try:
+        data = json.dumps(
+            value,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError("PROTOCOL: invalid control JSON") from exc
     if len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: control is too large")
     return data

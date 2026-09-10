@@ -799,6 +799,25 @@ class WorkerContractTest(unittest.TestCase):
                 ).encode()
             )
 
+    def test_control_encoder_rejects_nonstandard_json_numbers(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        for number in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaisesRegex(ValueError, "invalid control JSON"):
+                worker._encode_control(
+                    {
+                        "kind": "OpenInvocation",
+                        "tuple": tuple_value,
+                        "payload": {"number": number},
+                    }
+                )
+
     def test_control_rejects_unknown_fencing_tuple_fields(self):
         tuple_value = {
             "account_id": 0,
