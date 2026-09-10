@@ -1582,7 +1582,15 @@ select avg(d) over (partition by d) from decimal01 where d = 2888888888888888888
 avg(d) over (partition by d)
 28888888888888888888888888888888888.1230000
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
-invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
+sum(d) over (partition by d order by d rows between 1 preceding and 1 following)
+null
+null
+-15683024624308624626317573082.684
+-15683024624308624626317573082.684
+0.000
+28888888888888888888888888888888888.123
+199999999999999999999999999999999999.666
+199999999999999999999999999999999999.666
 drop table decimal01;
 drop table if exists date01;
 create table date01(id date);
