@@ -128,27 +128,32 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, ty
 	// The build_ts of the generation a probe would search, read once here and returned so the
 	// partial-plan path reuses it as the table_changes lower bound rather than reading it again.
 	buildTS := types.BuildTS(searchedBuildTS(ctx, req), 0)
-	// An unknown build_ts, no bar provider, or a not-live maintenance job all decline before the bar
-	// is computed -- so a not-yet-built, unmaintainable, or provider-less index never pays the source
-	// commit scan. build_ts is still returned for the planner's partial-plan gap bound.
+	// An unknown build_ts or no bar provider declines before any bar work: the planner full-scans, so
+	// build_ts is only returned for the partial-plan gap bound.
 	if buildTS.IsEmpty() || req.SourceCommitTS == nil {
 		return false, buildTS, nil
-	}
-	live, err := indexJobLive(ctx, req)
-	if err != nil || !live {
-		return false, buildTS, err
 	}
 	// The bar build_ts must reach: the max source commit the read must see, computed from the source
 	// relation's partition state AS OF THE READ (current txn, or a txn cloned at the snapshot). build_ts
 	// is read at the same point (the snapshot-bound generation for a historical read), so covered means
 	// the index reflects every source commit the read sees. build_ts is passed as mustExceed: the bar is
 	// only compared against it, so the provider may return early once it knows the source is behind.
+	//
+	// This runs BEFORE the liveness gate on purpose: the provider also fails closed on transaction-local
+	// writes to the source, and that guard must hold even for a not-live index. A not-live-but-built index
+	// still takes the partial plan (a table_changes tail completes the frozen generation), and that tail
+	// cannot see uncommitted workspace rows -- so an unchecked local write would be dropped. Surfacing the
+	// error here forces the planner to full-scan instead.
 	bar, err := req.SourceCommitTS(ctx, buildTS)
 	if err != nil {
 		return false, buildTS, err
 	}
 	if bar.IsEmpty() {
 		return false, buildTS, nil
+	}
+	live, err := indexJobLive(ctx, req)
+	if err != nil || !live {
+		return false, buildTS, err
 	}
 	return !buildTS.LT(&bar), buildTS, nil
 }

@@ -302,6 +302,22 @@ func TestCoversSnapshotReturnsBuildTS(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, covered)
 	require.Equal(t, int64(4242), bts.Physical())
+}
+
+// The bar provider's fail-closed error (e.g. a transaction-local write to the source) must surface
+// even when the index is NOT live -- so it is consulted BEFORE the liveness query. A not-live-but-built
+// index still takes the partial plan, whose table_changes tail cannot see the uncommitted write; letting
+// "not live" win here would decline without error and the planner would emit that unsafe partial plan.
+func TestCoversSnapshotBarGuardBeatsLiveness(t *testing.T) {
+	iscpSQL := mockGate(t, []logRow{{state: 99}}, 4242) // NOT live, build_ts valid
+	r := gateReq(100)
+	r.SourceCommitTS = func(context.Context, types.TS) (types.TS, error) {
+		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable with transaction-local writes")
+	}
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
+	require.Error(t, err)
+	require.False(t, covered)
+	require.Empty(t, *iscpSQL, "the bar guard must be consulted before the liveness query")
 
 	// an incomplete request declines with the zero TS.
 	_, zero, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{})

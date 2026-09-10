@@ -501,8 +501,10 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 		TableID:  scanNode.TableDef.TblId,
 		IndexDef: idx,
 		Snapshot: types.TimestampToTS(txn.SnapshotTS()),
-		// The bar is computed lazily and only if build_ts is a live, non-empty value it could gate;
-		// mustExceed lets the provider stop once the source is known to be behind build_ts.
+		// The bar is computed lazily, only once build_ts is known to be a non-empty value it could
+		// gate; mustExceed lets the provider stop once the source is known to be behind build_ts. The
+		// provider also fails closed on transaction-local writes, so this doubles as the guard that
+		// keeps the partial plan from dropping uncommitted rows.
 		SourceCommitTS: func(c context.Context, mustExceed types.TS) (types.TS, error) {
 			return commitTSProvider.SourceCommitTS(c, mustExceed)
 		},
