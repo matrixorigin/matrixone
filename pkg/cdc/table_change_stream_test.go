@@ -997,6 +997,9 @@ func TestTableChangeStream_NoFullStaleReadDoesNotAdvanceDurableStart(t *testing.
 	startTs := types.BuildTS(100, 5)
 	h := newTableStreamHarness(t, withHarnessNoFull(true), withHarnessStartTs(startTs))
 	defer h.Close()
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
 
 	h.SetCollectError(moerr.NewErrStaleReadNoCtx("db1", "t1"))
 	err := h.RunStream(h.NewActiveRoutine())
