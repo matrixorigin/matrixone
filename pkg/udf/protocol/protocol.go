@@ -263,6 +263,13 @@ func UnmarshalControl(data []byte) (Control, error) {
 	if len(data) == 0 || len(data) > MaxControlBytes {
 		return Control{}, fmt.Errorf("%w: control size %d is outside the allowed range", ErrProtocol, len(data))
 	}
+	// encoding/json replaces invalid UTF-8 in JSON strings with U+FFFD.  A
+	// fencing tuple is an identity, so accepting that replacement would make a
+	// malformed wire tuple refer to a different invocation than the sender
+	// intended.  Reject the bytes before any JSON decoder can normalize them.
+	if !utf8.Valid(data) {
+		return Control{}, fmt.Errorf("%w: control contains invalid UTF-8", ErrProtocol)
+	}
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return Control{}, fmt.Errorf("%w: %v", ErrProtocol, err)
 	}
