@@ -102,6 +102,10 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 	builder, _, stats := newBuilder(t)
 
 	builder.determineWindowPartitionAlgorithms(2)
+	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+
+	setAlgorithm(builder, "COST")
+	builder.determineWindowPartitionAlgorithms(2)
 	require.Equal(t, planpb.Node_PARTITION_ALGORITHM_HASH, builder.qry.Nodes[1].PartitionAlgorithm)
 	require.Equal(t, int64(1<<30), builder.qry.Nodes[1].SpillMem)
 
@@ -198,13 +202,13 @@ func TestResolveWindowPartitionAlgorithm(t *testing.T) {
 		err   error
 		want  windowPartitionAlgorithm
 	}{
-		{name: "nil context", want: windowPartitionAlgorithmCost},
+		{name: "nil context", want: windowPartitionAlgorithmSort},
 		{name: "cost", value: "COST", want: windowPartitionAlgorithmCost},
 		{name: "sort", value: "sort", want: windowPartitionAlgorithmSort},
 		{name: "hash", value: "HASH", want: windowPartitionAlgorithmHash},
-		{name: "unknown value", value: "MERGE", want: windowPartitionAlgorithmCost},
-		{name: "wrong type", value: int64(1), want: windowPartitionAlgorithmCost},
-		{name: "resolver error", err: errors.New("missing variable"), want: windowPartitionAlgorithmCost},
+		{name: "unknown value", value: "MERGE", want: windowPartitionAlgorithmSort},
+		{name: "wrong type", value: int64(1), want: windowPartitionAlgorithmSort},
+		{name: "resolver error", err: errors.New("missing variable"), want: windowPartitionAlgorithmSort},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if test.name == "nil context" {

@@ -42,28 +42,31 @@ const (
 
 type windowPartitionAlgorithm uint8
 
-// resolveWindowPartitionAlgorithm defaults conservatively to COST for
+// resolveWindowPartitionAlgorithm defaults conservatively to SORT for
 // lightweight compiler contexts that predate the session variable or return an
-// invalid value.
+// invalid value. COST remains an explicit opt-in until the default-enable
+// design gate has independent approval.
 func resolveWindowPartitionAlgorithm(ctx CompilerContext) windowPartitionAlgorithm {
 	if ctx == nil {
-		return windowPartitionAlgorithmCost
+		return windowPartitionAlgorithmSort
 	}
 	value, err := ctx.ResolveVariable(windowPartitionAlgorithmVariable, true, false)
 	if err != nil {
-		return windowPartitionAlgorithmCost
+		return windowPartitionAlgorithmSort
 	}
 	mode, ok := value.(string)
 	if !ok {
-		return windowPartitionAlgorithmCost
+		return windowPartitionAlgorithmSort
 	}
 	switch strings.ToLower(mode) {
+	case "cost":
+		return windowPartitionAlgorithmCost
 	case "sort":
 		return windowPartitionAlgorithmSort
 	case "hash":
 		return windowPartitionAlgorithmHash
 	default:
-		return windowPartitionAlgorithmCost
+		return windowPartitionAlgorithmSort
 	}
 }
 
