@@ -18,7 +18,10 @@ case 和 package 的耗时排行；仍在运行的 case 继续由 active-case �
 
 UT 运行期间默认每 60 秒写一条 heartbeat，记录最近 stage/label、active case 数、进程
 数、报告路径和 checkpoint；取消时再把原始 JSON、checkpoint、stderr 和排行复制到
-`ut-report/`。这些文件是诊断输入，不参与测试结论，解析失败也不能覆盖原始退出码。
+`ut-report/`。active-case 扫描会跳过不改变状态的 `output` 事件；主报告在同一文件
+系统上优先用 hard link 快照，避免失败时复制一份完整 JSON。CI artifact 只上传快照和
+尚未合并的 helper report，避免再次上传主报告。这些文件是诊断输入，不参与测试结论，
+解析失败也不能覆盖原始退出码。
 当前 reusable `matrixorigin/CI` workflow 只打印 `top.txt`，没有上传 `ut-report`；要在
 GitHub UI 下载原始现场，需要在该 workflow 增加 always-run 的 `actions/upload-artifact`
 步骤。这个上传步骤属于 CI 基础设施 PR，不能由 MatrixOne 的 `make ut` 单独完成。

@@ -365,13 +365,22 @@ function snapshot_ut_diagnostics(){
     local destination="${UT_DIAGNOSTIC_DIR}"
     mkdir -p "${destination}"
     if [[ -f "${UT_REPORT}" && "${UT_REPORT}" != "${destination}/ut-report.json" ]]; then
-        cp "${UT_REPORT}" "${destination}/ut-report.json"
+        if [[ ! -e "${destination}/ut-report.json" ]] &&
+            ! ln "${UT_REPORT}" "${destination}/ut-report.json" 2>/dev/null; then
+            cp "${UT_REPORT}" "${destination}/ut-report.json"
+        fi
     fi
     if [[ -f "${UT_CHECKPOINT}" && "${UT_CHECKPOINT}" != "${destination}/ut-checkpoint.log" ]]; then
-        cp "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log"
+        if [[ ! -e "${destination}/ut-checkpoint.log" ]] &&
+            ! ln "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log" 2>/dev/null; then
+            cp "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log"
+        fi
     fi
     if [[ -f "${UT_STDERR}" && "${UT_STDERR}" != "${destination}/ut-stderr.log" ]]; then
-        cp "${UT_STDERR}" "${destination}/ut-stderr.log"
+        if [[ ! -e "${destination}/ut-stderr.log" ]] &&
+            ! ln "${UT_STDERR}" "${destination}/ut-stderr.log" 2>/dev/null; then
+            cp "${UT_STDERR}" "${destination}/ut-stderr.log"
+        fi
     fi
     logger "ERR" "UT diagnostic snapshot: ${destination}"
 }
