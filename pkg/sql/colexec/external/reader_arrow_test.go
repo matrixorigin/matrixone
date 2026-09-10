@@ -327,6 +327,127 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestExternalArrowLoadVersionedMinIOIdentity(t *testing.T) {
+	testExternalArrowLoadVersionedMinIOIdentity(t)
+}
+
+func testExternalArrowLoadVersionedMinIOIdentity(t *testing.T) {
+	server := startLocalArrowMinIO(t)
+	ctx := context.Background()
+	require.NoError(t, server.client.SetBucketVersioning(ctx, server.bucket,
+		minio.BucketVersioningConfiguration{Status: "Enabled"}))
+
+	fs, err := fileservice.NewS3FS(
+		ctx,
+		fileservice.ObjectStorageArguments{
+			Name: "etl", Endpoint: "http://" + server.endpoint,
+			Region: "us-east-1", Bucket: server.bucket,
+			KeyID: server.user, KeySecret: server.password, IsMinio: true,
+		},
+		fileservice.DisabledCacheConfig, nil, true, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+
+	put := func(t *testing.T, key string, payload []byte) minio.UploadInfo {
+		t.Helper()
+		info, err := server.client.PutObject(ctx, server.bucket, key,
+			bytes.NewReader(payload), int64(len(payload)),
+			minio.PutObjectOptions{ContentType: "application/vnd.apache.arrow.file"})
+		require.NoError(t, err)
+		require.NotEmpty(t, info.VersionID)
+		return info
+	}
+	open := func(t *testing.T, path string, size int64, container string, identity fileservice.ObjectIdentity) (*ArrowReader, *process.Process, func()) {
+		t.Helper()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(64 << 20)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+		param := externalArrowParam(fs, path, size, container)
+		param.Fileparam.FileIndex = 1
+		param.Fileparam.Filepath = path
+		param.ArrowObjectIdentities = []*pipeline.ArrowObjectIdentity{{
+			FileIndex: 0, VersionId: identity.VersionID, Etag: identity.ETag,
+			Size: identity.Size, LastModifiedUnixNano: identity.LastModified.UnixNano(),
+		}}
+		reader, err := NewArrowReader(param, proc, account)
+		require.NoError(t, err)
+		empty, err := reader.Open(param, proc)
+		require.NoError(t, err)
+		require.False(t, empty)
+		return reader, proc, func() {
+			require.NoError(t, reader.Close())
+			require.Zero(t, account.Snapshot().Used)
+			account.Seal()
+			_, err := registry.Finalize(account)
+			require.NoError(t, err)
+		}
+	}
+
+	t.Run("file-v1-survives-v2", func(t *testing.T) {
+		payload := makeExternalArrowIPC(t, tree.ARROW_CONTAINER_FILE)
+		key := "versioned/file.arrow"
+		v1 := put(t, key, payload)
+		path := "etl:" + key
+		identity, err := fs.StatFileIdentity(ctx, path)
+		require.NoError(t, err)
+		require.Equal(t, v1.VersionID, identity.VersionID)
+
+		reader, proc, closeReader := open(t, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE, identity)
+		defer closeReader()
+		replacement := append([]byte(nil), payload...)
+		replacement[len(replacement)/2] ^= 0xff
+		v2 := put(t, key, replacement)
+		require.NotEqual(t, v1.VersionID, v2.VersionID)
+
+		output := batch.NewOffHeap([]string{"id", "name"})
+		_, err = reader.ReadBatch(ctx, output, proc, nil)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](output.Vecs[0]))
+		output.Clean(proc.Mp())
+	})
+
+	t.Run("deleted-v1-fails-closed", func(t *testing.T) {
+		payload := makeExternalArrowIPC(t, tree.ARROW_CONTAINER_FILE)
+		key := "versioned/deleted.arrow"
+		v1 := put(t, key, payload)
+		path := "etl:" + key
+		identity, err := fs.StatFileIdentity(ctx, path)
+		require.NoError(t, err)
+		require.Equal(t, v1.VersionID, identity.VersionID)
+
+		reader, proc, closeReader := open(t, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE, identity)
+		defer closeReader()
+		require.NoError(t, server.client.RemoveObject(ctx, server.bucket, key,
+			minio.RemoveObjectOptions{VersionID: v1.VersionID}))
+		_, err = reader.ReadBatch(ctx, batch.NewWithSize(2), proc, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("stream-v1-survives-latest-update", func(t *testing.T) {
+		payload := makeExternalArrowIPC(t, tree.ARROW_CONTAINER_STREAM)
+		key := "versioned/stream.arrow"
+		v1 := put(t, key, payload)
+		path := "etl:" + key
+		identity, err := fs.StatFileIdentity(ctx, path)
+		require.NoError(t, err)
+		require.Equal(t, v1.VersionID, identity.VersionID)
+
+		reader, proc, closeReader := open(t, path, int64(len(payload)), tree.ARROW_CONTAINER_STREAM, identity)
+		defer closeReader()
+		replacement := append([]byte(nil), payload...)
+		replacement[len(replacement)/2] ^= 0xff
+		put(t, key, replacement)
+		output := batch.NewOffHeap([]string{"id", "name"})
+		_, err = reader.ReadBatch(ctx, output, proc, nil)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](output.Vecs[0]))
+		output.Clean(proc.Mp())
+	})
+}
+
 type localArrowMinIO struct {
 	endpoint string
 	bucket   string
