@@ -3842,13 +3842,15 @@ func buildPlanWithPrepareMode(
 	// Authorize its target table at this common planning boundary so direct
 	// compilation, prepared-plan rebuilds, and compile retries share the same
 	// admission check.
-	if session, ok := ses.(*Session); ok {
-		authStats, authErr := authenticateLoadBeforePlan(
-			reqCtx, session, stmt, ctx.DefaultDatabase())
-		if authErr != nil {
-			return nil, authErr
+	if _, isLoad := stmt.(*tree.Load); isLoad {
+		if session, ok := ses.(*Session); ok {
+			authStats, authErr := authenticateLoadBeforePlan(
+				reqCtx, session, stmt, ctx.DefaultDatabase())
+			if authErr != nil {
+				return nil, authErr
+			}
+			stats.PermissionAuth.Add(&authStats)
 		}
-		stats.PermissionAuth.Add(&authStats)
 	}
 
 	stats.PlanStart()
