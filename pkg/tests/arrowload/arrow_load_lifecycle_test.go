@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +60,33 @@ func TestArrowLoadFailedStatementKeepsEarlierTransactionWrite(t *testing.T) {
 	mustExec(t, db, fmt.Sprintf(
 		"load data infile {'filepath'='%s','format'='arrow'} into table txn_failed_load", valid))
 	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from txn_failed_load"))
+}
+
+// TestArrowLoadMetricsPublishBeforeTransactionCommit distinguishes reader
+// publication telemetry from transaction durability: the reader metrics must
+// record a successfully published batch even when the enclosing transaction is
+// explicitly rolled back and the target table remains empty.
+func TestArrowLoadMetricsPublishBeforeTransactionCommit(t *testing.T) {
+	c := startArrowLoadCluster(t, 1, true, false, false)
+	db := openArrowLoadDB(t, c, 0)
+	mustExec(t, db, "create database if not exists arrow_lifecycle")
+	mustExec(t, db, "use arrow_lifecycle")
+	mustExec(t, db, "create table metrics_before_commit(id bigint not null, name varchar(50))")
+	path := fixtureIDName(t, t.TempDir(), "metrics.arrow", containerFile,
+		[][]idNameRow{{{id: 1, name: "published-then-rolled-back"}}})
+
+	recordsBefore := promtestutil.ToFloat64(metric.ArrowLoadRecordCounter)
+	batchesBefore := promtestutil.ToFloat64(metric.ArrowLoadBatchCounter)
+	rowsBefore := promtestutil.ToFloat64(metric.ArrowLoadRowCounter)
+	mustExec(t, db, "begin")
+	mustExec(t, db, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table metrics_before_commit", path))
+	mustExec(t, db, "rollback")
+
+	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from metrics_before_commit"))
+	require.Equal(t, recordsBefore+1, promtestutil.ToFloat64(metric.ArrowLoadRecordCounter))
+	require.Equal(t, batchesBefore+1, promtestutil.ToFloat64(metric.ArrowLoadBatchCounter))
+	require.Equal(t, rowsBefore+1, promtestutil.ToFloat64(metric.ArrowLoadRowCounter))
 }
 
 // TestArrowLoadKillQueryRollsBackAndKeepsConnectionUsable holds a real,
