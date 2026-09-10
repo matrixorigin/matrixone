@@ -58,5 +58,5 @@ func ClusterHasIndexProvenance(ctx CompilerContext) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion60
+	return ok && version >= defines.MORPCVersion61
 }
