@@ -691,6 +691,22 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported control field"):
             worker._encode_control(value)
 
+    def test_control_rejects_unknown_fencing_tuple_fields(self):
+        tuple_value = {
+            "account_id": 0,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+            "future_epoch": 2,
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported fencing tuple field"):
+            worker._tuple_key(tuple_value)
+        value = {"version": 1, "kind": "InputBatch", "tuple": tuple_value, "sequence": 1}
+        with self.assertRaisesRegex(ValueError, "unsupported fencing tuple field"):
+            worker._decode_control(json.dumps(value).encode())
+
     def test_control_rejects_duplicate_json_fields(self):
         wire = (
             b'{"version":1,"kind":"InputBatch","tuple":{"account_id":1,'
