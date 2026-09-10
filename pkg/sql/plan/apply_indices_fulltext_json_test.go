@@ -533,3 +533,34 @@ func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
 		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
 		"a probe must not be truncated, whatever the rest of the shape allows")
 }
+
+// A prepared plan carrying an injected json coverage probe must be flagged so it rebuilds every
+// EXECUTE: its covered/partial decision reflects the async index's freshness at build time, which
+// no schema version tracks, so a reused plan would drop rows committed after it was cached. A user
+// MATCH builds the same fulltext2_search node but is freshness-tolerant, so only JSONProbeMode counts.
+func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
+	mkPlan := func(nodes ...*plan.Node) *Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
+	}
+	ftNode := func(mode int64) *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Name: fulltext2_search_func_name}},
+			TblFuncExprList: []*plan.Expr{
+				makePlan2StringConstExprWithType("cfg"),
+				jpStrLit("pattern"),
+				{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: mode}}}},
+			},
+		}
+	}
+	require.False(t, PreparedPlanDependsOnIndexCoverage(nil), "nil plan")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan()), "no nodes")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN})),
+		"a plain scan is reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(ftNode(0))),
+		"a user MATCH (non-JSONProbe mode) is freshness-tolerant and reusable")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(ftNode(fulltext2.JSONProbeMode))),
+		"an injected json coverage probe must force a rebuild")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
+		"the probe must be found among other nodes")
+}

@@ -370,6 +370,39 @@ func (builder *QueryBuilder) recordJSONPartialProbe(scanNode *plan.Node, jsonPre
 	builder.jsonPartialProbes[scanNode.NodeId] = jsonPartialProbe{buildTS: buildTS, jsonPred: DeepCopyExpr(jsonPred)}
 }
 
+// PreparedPlanDependsOnIndexCoverage reports whether a prepared plan carries an injected
+// json_extract fulltext2 coverage probe. That probe's covered/partial/skip decision is made from
+// the async index's freshness at plan-build time -- state no table schema version represents -- so
+// reusing the plan after the index falls behind would drop rows committed in the gap: a covered
+// probe filters them out, and a partial plan's table_changes window is frozen. Such a plan must be
+// rebuilt on every EXECUTE. A user MATCH also builds a fulltext2_search node but is search-semantics
+// (freshness-tolerant); the JSONProbeMode argument distinguishes the injected probe and is required.
+func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
+	if p == nil {
+		return false
+	}
+	query := p.GetQuery()
+	if query == nil {
+		return false
+	}
+	for _, node := range query.GetNodes() {
+		if node == nil || node.TableDef == nil || node.TableDef.TblFunc == nil ||
+			node.TableDef.TblFunc.Name != fulltext2_search_func_name {
+			continue
+		}
+		args := node.GetTblFuncExprList()
+		if len(args) < 3 {
+			continue
+		}
+		if lit := args[2].GetLit(); lit != nil {
+			if v, ok := lit.Value.(*plan.Literal_I64Val); ok && v.I64Val == fulltext2.JSONProbeMode {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // jsonProbeKind is how addJSONFulltextProbes may use a json_extract fulltext2 index for one
 // comparison.
 type jsonProbeKind int
