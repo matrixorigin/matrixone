@@ -30,6 +30,9 @@ CI PR 合并后，失败或取消的 job 会生成
 `gh run download <run-id> -n <artifact-name>` 下载，再运行
 `python3 optools/summarize_ut_slow_cases.py ut-report/ut-report.json` 查看已完成的慢
 case，结合 `ut-report/ut-checkpoint.log` 和 helper report 判断卡点。
+CI 上传副本设置 250 MiB 总预算和 5 分钟超时；超出预算的文件保留带截断标记的头尾，
+`manifest.txt` 记录原始与保存字节数。该预算只约束诊断 artifact，不改变测试输入、
+coverage 或失败结论。
 
 ## Revision 7: bounded light/issues overlap on one runner
 
