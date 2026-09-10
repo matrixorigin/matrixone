@@ -53,10 +53,8 @@ policy version `v1`:
 
 | Logical dependency | Actions job match |
 | --- | --- |
-| PR validation | exact `CHECK PR VALID` |
-| scope classification | exact `Classify CI changes` |
+| PR validation, scope classification, and BVT planning | exact `CI preflight` |
 | documentation check | exact `Documentation whitespace check` |
-| BVT planning | exact `Plan complementary BVT groups` |
 | MatrixOne UT/SCA caller | exact Ubuntu UT and Linux/arm64 SCA job names |
 | UT coverage caller | exact eligibility and Ubuntu coverage job names |
 | Compose BVT caller | exact active Compose + Proxy BVT job name |
@@ -101,8 +99,8 @@ field, rejects `3.0-dev`, and uses `base_sha` for the local policy-blob check.
 Because these values are evaluated by the trusted `pull_request_target`
 workflow at trigger time, later PR retargeting cannot change the decision.
 
-The token permissions are limited to `contents: read`, `pull-requests: read`,
-and `actions: write`. The last permission is needed only for
+The token permissions are limited to `contents: read` and `actions: write`.
+The latter permission is needed only for
 `cancelWorkflowRun`. The script cannot push commits, edit PRs, or mutate issues.
 
 Existing runs without `CI_REQUIRED/v1` metadata are intentionally not

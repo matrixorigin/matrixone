@@ -13,6 +13,28 @@
 // limitations under the License.
 'use strict';
 
+const ALWAYS_REQUIRED_JOBS = Object.freeze(['preflight']);
+const REQUIRED_JOBS_BY_SCOPE = Object.freeze({
+  docs: Object.freeze(['docs-check']),
+  ut: Object.freeze(['matrixone-ci']),
+  bvt: Object.freeze(['matrixone-compose-ci', 'matrixone-standalone-ci']),
+  full: Object.freeze(['matrixone-ci', 'matrixone-ut-coverage',
+    'matrixone-compose-ci', 'matrixone-standalone-ci', 'matrixone-coverage-merge']),
+});
+
+function requiredJobsForScope(scope) {
+  const required = REQUIRED_JOBS_BY_SCOPE[scope];
+  if (!required) throw new Error(`Invalid CI scope: ${scope}`);
+  return required;
+}
+
+function requiredJobUnion() {
+  return [...new Set([
+    ...ALWAYS_REQUIRED_JOBS,
+    ...Object.values(REQUIRED_JOBS_BY_SCOPE).flat(),
+  ])];
+}
+
 // This allowlist is deliberately narrow: test helpers, fixtures, configuration,
 // dependencies, CI code and unknown paths all retain the complete test suite.
 function category(path) {
@@ -71,14 +93,7 @@ function verifyResults(scope, needs) {
       needs.preflight?.outputs?.pr_valid !== 'true') {
     throw new Error('PR validation or scope planning did not succeed');
   }
-  const required = {
-    docs: ['docs-check'],
-    ut: ['matrixone-ci'],
-    bvt: ['matrixone-compose-ci', 'matrixone-standalone-ci'],
-    full: ['matrixone-ci', 'matrixone-ut-coverage',
-      'matrixone-compose-ci', 'matrixone-standalone-ci', 'matrixone-coverage-merge'],
-  }[scope];
-  if (!required) throw new Error(`Invalid CI scope: ${scope}`);
+  const required = requiredJobsForScope(scope);
   if (scope === 'full' || scope === 'bvt') {
     const { compose_group, launch_group, generation } = needs.preflight.outputs;
     if (!['0', '1'].includes(compose_group) || !['0', '1'].includes(launch_group) ||
@@ -97,4 +112,13 @@ function verifyResults(scope, needs) {
     (scope === 'full' ? '' : ' Coverage was not evaluated for this test/document-only change.');
 }
 
-module.exports = { category, classify, resolveScope, verifyResults };
+module.exports = {
+  ALWAYS_REQUIRED_JOBS,
+  REQUIRED_JOBS_BY_SCOPE,
+  category,
+  classify,
+  requiredJobsForScope,
+  requiredJobUnion,
+  resolveScope,
+  verifyResults,
+};
