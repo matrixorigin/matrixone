@@ -30,6 +30,13 @@ deallocate prepare wait_ftj;
 insert into t values (4, '{"foo":"needle"}', 'c4'), (5, '{"foo":"hay"}', 'c5');
 select id from t where json_extract_string(j,'$.foo') = 'needle' order by id;
 
+-- Cross-arm dedup: update a BAKED needle (row 1) to a different-but-still-needle value in the gap.
+-- Row 1 is now in BOTH arms -- the index (bulk) arm still holds its old needle posting, and the
+-- table_changes tail carries its new needle value -- so UNION ALL plus the group-by dedup must
+-- collapse it. It must appear exactly ONCE (a dedup regression would return id 1 twice).
+update t set j = '{"foo":"needle","v":2}' where id = 1;
+select id from t where json_extract_string(j,'$.foo') = 'needle' order by id;
+
 -- Update match->nomatch: baked row 3 (needle) becomes hay. The stale index arm still holds 3 as a
 -- needle, but the base re-check on current values drops it.
 update t set j = '{"foo":"hay"}' where id = 3;
