@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/cespare/xxhash/v2"
@@ -314,60 +314,80 @@ func appendU16(dst []byte, value uint16) []byte {
 
 // EncodePart appends one complete v2 envelope containing a single part.
 // `dst` may have a prefix, but the newly appended envelope is bounded by
-// MaxKeyBytes.  Integer input must be exactly Domain.Width bytes in big-endian
-// two's-complement (signed) or unsigned form. Decimal input is an ASCII
-// decimal literal converted to Domain.Scale and normalized to a canonical
-// sign/scale/coefficient payload.
+// MaxKeyBytes.  Input values may overlap the append destination; they are
+// normalized before the destination is written. Integer input must be exactly
+// Domain.Width bytes in big-endian two's-complement (signed) or unsigned form.
+// Decimal input is an ASCII decimal literal converted to Domain.Scale and
+// normalized to a canonical sign/scale/coefficient payload.
 func EncodePart(dst []byte, part Part) ([]byte, error) {
 	return EncodeComposite(dst, []Part{part})
 }
 
 // EncodeComposite appends a framed composite identity.  A part count and
 // length-delimited descriptors prevent concatenation ambiguity and preserve
-// NULL versus an empty non-NULL value.
+// NULL versus an empty non-NULL value. Input values may overlap dst, including
+// values from the append capacity; all parts are normalized before dst is
+// written so such overlap is safe for composite keys as well.
 func EncodeComposite(dst []byte, parts []Part) ([]byte, error) {
 	if len(parts) == 0 || len(parts) > MaxParts {
 		return dst, wrapCodecError(ErrMalformedKey, "part count %d", len(parts))
 	}
-	start := len(dst)
 	if MaxKeyBytes < envelopeHeader {
 		return dst, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
-	dst = append(dst, magic...)
-	dst = append(dst, CodecVersion)
-	dst = appendU16(dst, uint16(len(parts)))
+	type preparedPart struct {
+		null    bool
+		typ     TypeFamily
+		specID  uint16
+		params  []byte
+		payload []byte
+	}
+	prepared := make([]preparedPart, 0, len(parts))
 	used := envelopeHeader
 	for _, part := range parts {
 		spec, params, err := domainSpec(part.Domain)
 		if err != nil {
-			return dst[:start], err
+			return dst, err
 		}
 		remaining, ok := keyRemaining(used)
 		if len(params) > maxParameter || !ok || remaining < partFixedHeader || len(params) > remaining-partFixedHeader {
-			return dst[:start], wrapCodecError(ErrMalformedKey, "encoded part is too large")
+			return dst, wrapCodecError(ErrMalformedKey, "encoded part is too large")
 		}
 		partOverhead := partFixedHeader + len(params)
 		if partOverhead > remaining {
-			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+			return dst, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 		}
 		payloadBudget := MaxKeyBytes - used - partOverhead
 		payload, err := normalizeLimited(part.Domain, spec, part.Value, part.Null, payloadBudget)
 		if err != nil {
-			return dst[:start], err
+			return dst, err
 		}
 		if len(params) > maxParameter || len(payload) > maxPayload {
-			return dst[:start], wrapCodecError(ErrMalformedKey, "encoded part is too large")
+			return dst, wrapCodecError(ErrMalformedKey, "encoded part is too large")
 		}
 		if len(payload) > payloadBudget {
-			return dst[:start], wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
+			return dst, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 		}
-		dst = append(dst, boolByte(part.Null), byte(part.Domain.Type))
-		dst = appendU16(dst, spec.id)
-		dst = appendU16(dst, uint16(len(params)))
-		dst = append(dst, params...)
-		dst = appendU32(dst, uint32(len(payload)))
-		dst = append(dst, payload...)
+		prepared = append(prepared, preparedPart{
+			null:    part.Null,
+			typ:     part.Domain.Type,
+			specID:  spec.id,
+			params:  params,
+			payload: payload,
+		})
 		used += partOverhead + len(payload)
+	}
+
+	dst = append(dst, magic...)
+	dst = append(dst, CodecVersion)
+	dst = appendU16(dst, uint16(len(parts)))
+	for _, part := range prepared {
+		dst = append(dst, boolByte(part.null), byte(part.typ))
+		dst = appendU16(dst, part.specID)
+		dst = appendU16(dst, uint16(len(part.params)))
+		dst = append(dst, part.params...)
+		dst = appendU32(dst, uint32(len(part.payload)))
+		dst = append(dst, part.payload...)
 	}
 	return dst, nil
 }
@@ -701,79 +721,110 @@ func normalizeDecimalLimited(value []byte, width uint16, targetScale int16, payl
 	if payloadBudget < 9 {
 		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
-	s := strings.TrimSpace(string(value))
-	if s == "" {
+	start, end := trimDecimalSpace(value)
+	if start == end {
 		return nil, wrapCodecError(ErrInvalidValue, "empty decimal")
 	}
 	neg := false
-	if s[0] == '+' || s[0] == '-' {
-		neg = s[0] == '-'
-		s = s[1:]
+	if value[start] == '+' || value[start] == '-' {
+		neg = value[start] == '-'
+		start++
 	}
-	if s == "" {
+	if start == end {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
 	}
-	dot := strings.IndexByte(s, '.')
-	if dot >= 0 && strings.IndexByte(s[dot+1:], '.') >= 0 {
-		return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
+
+	dot := -1
+	digitCount := 0
+	for i := start; i < end; i++ {
+		switch c := value[i]; {
+		case c == '.':
+			if dot >= 0 {
+				return nil, wrapCodecError(ErrInvalidValue, "decimal syntax")
+			}
+			dot = i
+		case c >= '0' && c <= '9':
+			digitCount++
+		default:
+			return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
+		}
 	}
-	whole, frac := s, ""
-	if dot >= 0 {
-		whole, frac = s[:dot], s[dot+1:]
-	}
-	if !allDigits(whole) || !allDigits(frac) {
-		return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
-	}
-	if whole == "" && frac == "" {
+	if digitCount == 0 {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal requires digits")
 	}
 
+	wholeStart, wholeEnd := start, end
+	fracStart := end
+	if dot >= 0 {
+		wholeEnd = dot
+		fracStart = dot + 1
+	}
+	fracEnd := end
 	// Strip fractional trailing zeroes before counting the scale. This keeps
 	// equivalent spellings such as 1.20 and 1.2 on the same exact path and
 	// avoids narrowing a potentially very large input length to int16.
-	frac = strings.TrimRight(frac, "0")
-	inputScale := len(frac)
-	digits := strings.TrimLeft(whole+frac, "0")
-	if digits == "" {
+	for fracEnd > fracStart && value[fracEnd-1] == '0' {
+		fracEnd--
+	}
+	digits := decimalDigits{
+		value:      value,
+		wholeStart: wholeStart,
+		wholeEnd:   wholeEnd,
+		fracStart:  fracStart,
+		fracEnd:    fracEnd,
+	}
+	coefficientStart := 0
+	coefficientEnd := digits.len()
+	for coefficientStart < coefficientEnd && digits.at(coefficientStart) == '0' {
+		coefficientStart++
+	}
+	if coefficientStart == coefficientEnd {
 		return encodeDecimalPayload(false, 0, nil)
 	}
 
 	// Reducing the scale is exact only when every discarded decimal digit is
-	// zero. Work on the string first so values with 32768 or more fractional
-	// digits cannot wrap an int16 before this check.
+	// zero. Work on the raw spans first so values with 32768 or more
+	// fractional digits cannot wrap an int16 before this check or allocate a
+	// copy of the input.
+	inputScale := fracEnd - fracStart
 	target := int(targetScale)
 	scale := inputScale
 	if inputScale > target {
-		remove := inputScale - target
-		if remove > len(digits) || !allZero(digits[len(digits)-remove:]) {
+		if target < 0 && inputScale > math.MaxInt+target {
 			return nil, wrapCodecError(ErrInvalidValue, "decimal precision exceeds declared scale")
 		}
-		digits = strings.TrimLeft(digits[:len(digits)-remove], "0")
-		if digits == "" {
-			return encodeDecimalPayload(false, 0, nil)
+		remove := inputScale - target
+		if remove > coefficientEnd-coefficientStart || !digits.allZero(coefficientEnd-remove, coefficientEnd) {
+			return nil, wrapCodecError(ErrInvalidValue, "decimal precision exceeds declared scale")
 		}
+		coefficientEnd -= remove
 		scale = target
 	}
 
 	// Canonical payloads remove coefficient trailing zeroes while decreasing
 	// the signed payload scale. The loop is bounded by the significant input
 	// digits, and every decrement is checked before it can leave int16.
-	for len(digits) > 0 && digits[len(digits)-1] == '0' {
+	for coefficientEnd > coefficientStart && digits.at(coefficientEnd-1) == '0' {
 		if scale == math.MinInt16 {
 			return nil, wrapCodecError(ErrInvalidValue, "decimal scale underflow")
 		}
-		digits = digits[:len(digits)-1]
+		coefficientEnd--
 		scale--
 	}
-	if digits == "" {
+	if coefficientEnd == coefficientStart {
 		return encodeDecimalPayload(false, 0, nil)
 	}
-	if len(digits) > maxDecimalDigits(width) {
+	coefficientLength := coefficientEnd - coefficientStart
+	if coefficientLength > maxDecimalDigits(width) {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient exceeds width %d", width)
 	}
 
+	coefficientDigits := make([]byte, coefficientLength)
+	for i := range coefficientDigits {
+		coefficientDigits[i] = digits.at(coefficientStart + i)
+	}
 	coeff := new(big.Int)
-	if _, ok := coeff.SetString(digits, 10); !ok {
+	if _, ok := coeff.SetString(string(coefficientDigits), 10); !ok {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal coefficient")
 	}
 	coeffBytes := coeff.Bytes()
@@ -784,6 +835,54 @@ func normalizeDecimalLimited(value []byte, width uint16, targetScale int16, payl
 		return nil, wrapCodecError(ErrMalformedKey, "key exceeds %d bytes", MaxKeyBytes)
 	}
 	return encodeDecimalPayload(neg, scale, coeffBytes)
+}
+
+type decimalDigits struct {
+	value      []byte
+	wholeStart int
+	wholeEnd   int
+	fracStart  int
+	fracEnd    int
+}
+
+func (d decimalDigits) len() int {
+	return d.wholeEnd - d.wholeStart + d.fracEnd - d.fracStart
+}
+
+func (d decimalDigits) at(index int) byte {
+	wholeLength := d.wholeEnd - d.wholeStart
+	if index < wholeLength {
+		return d.value[d.wholeStart+index]
+	}
+	return d.value[d.fracStart+index-wholeLength]
+}
+
+func (d decimalDigits) allZero(start, end int) bool {
+	for i := start; i < end; i++ {
+		if d.at(i) != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+func trimDecimalSpace(value []byte) (start, end int) {
+	start, end = 0, len(value)
+	for start < end {
+		r, size := utf8.DecodeRune(value[start:end])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		start += size
+	}
+	for start < end {
+		r, size := utf8.DecodeLastRune(value[start:end])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		end -= size
+	}
+	return start, end
 }
 
 func encodeDecimalPayload(negative bool, scale int, coeff []byte) ([]byte, error) {
@@ -808,26 +907,8 @@ func encodeDecimalPayload(negative bool, scale int, coeff []byte) ([]byte, error
 	return out, nil
 }
 
-func allZero(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] != '0' {
-			return false
-		}
-	}
-	return true
-}
-
 func maxDecimalDigits(width uint16) int {
 	maximum := new(big.Int).Lsh(big.NewInt(1), uint(width)*8)
 	maximum.Sub(maximum, big.NewInt(1))
 	return len(maximum.String())
-}
-
-func allDigits(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
 }

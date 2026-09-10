@@ -279,6 +279,27 @@ func TestDecimalScaleBoundariesDoNotNarrowFractionLength(t *testing.T) {
 			t.Fatalf("fractional length %d with discarded non-zero digits: %v", fractionalLength, err)
 		}
 	}
+	value := append([]byte("0."), bytes.Repeat([]byte{'0'}, 65535)...)
+	value = append(value, '1')
+	if _, err := EncodePart(nil, Part{Domain: domain, Value: value}); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("non-zero digit after 65535 fractional zeroes was accepted: %v", err)
+	}
+	leadingZeroValue := append(bytes.Repeat([]byte{'0'}, 65536), '1')
+	got, err := EncodePart(nil, Part{Domain: domain, Value: leadingZeroValue})
+	if err != nil {
+		t.Fatalf("large leading-zero decimal was rejected: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("large leading-zero decimal changed canonical key: %X != %X", got, want)
+	}
+	trailingFractionValue := append([]byte("1."), bytes.Repeat([]byte{'0'}, 65536)...)
+	got, err = EncodePart(nil, Part{Domain: domain, Value: trailingFractionValue})
+	if err != nil {
+		t.Fatalf("large trailing-fraction-zero decimal was rejected: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("large trailing-fraction-zero decimal changed canonical key: %X != %X", got, want)
+	}
 	for _, value := range []string{".", "+.", "-."} {
 		if _, err := EncodePart(nil, Part{Domain: domain, Value: []byte(value)}); !errors.Is(err, ErrInvalidValue) {
 			t.Fatalf("digitless decimal %q was accepted: %v", value, err)
@@ -288,6 +309,38 @@ func TestDecimalScaleBoundariesDoNotNarrowFractionLength(t *testing.T) {
 		if _, err := EncodePart(nil, Part{Domain: Domain{Type: Decimal, Width: 8, Scale: 1}, Value: []byte(value)}); err != nil {
 			t.Fatalf("legal decimal spelling %q was rejected: %v", value, err)
 		}
+	}
+	negativeScale, err := normalizeDecimal([]byte("1000"), 8, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	negativeScaleEquivalent, err := normalizeDecimal([]byte("1000"), 8, -3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(negativeScale, negativeScaleEquivalent) {
+		t.Fatalf("exact negative-scale conversion changed canonical key: %X != %X", negativeScale, negativeScaleEquivalent)
+	}
+}
+
+func TestNormalizeDecimalRejectsOversizedCoefficientBeforeCopy(t *testing.T) {
+	value := bytes.Repeat([]byte{'1'}, MaxKeyBytes+1)
+	domain := Domain{Type: Decimal, Width: 1, Scale: 0}
+	if _, err := EncodePart(nil, Part{Domain: domain, Value: value}); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("oversized coefficient error=%v", err)
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < 3; i++ {
+		if _, err := normalizeDecimalLimited(value, domain.Width, domain.Scale, MaxKeyBytes); !errors.Is(err, ErrInvalidValue) {
+			t.Fatalf("oversized coefficient iteration %d error=%v", i, err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("oversized coefficient allocated %d bytes while being rejected", allocated)
 	}
 }
 
@@ -358,6 +411,70 @@ func TestEncodeCompositeMaxKeyBytesBoundaries(t *testing.T) {
 		prefix = nil
 		runtime.GC()
 	})
+}
+
+func TestEncodeCompositeSupportsOverlappingValues(t *testing.T) {
+	backing := make([]byte, 6, 128)
+	copy(backing, "abcdef")
+	got, err := EncodePart(backing[:0], Part{Domain: binaryDomain(0), Value: backing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := EncodePart(nil, Part{Domain: binaryDomain(0), Value: []byte("abcdef")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("overlapping single-part value changed: %X != %X", got, want)
+	}
+
+	backing = make([]byte, 4, 128)
+	copy(backing, "pre:")
+	storage := backing[:cap(backing)]
+	copy(storage[4:], "firstsecond")
+	parts := []Part{
+		{Domain: binaryDomain(0), Value: storage[4:9]},
+		{Domain: binaryDomain(0), Value: storage[9:15]},
+	}
+	got, err = EncodeComposite(backing[:4], parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEnvelope, err := EncodeComposite(nil, []Part{
+		{Domain: binaryDomain(0), Value: []byte("first")},
+		{Domain: binaryDomain(0), Value: []byte("second")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append([]byte("pre:"), wantEnvelope...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("overlapping composite values changed: %X != %X", got, want)
+	}
+	if err := ValidateEncoded(got[4:]); err != nil {
+		t.Fatalf("ValidateEncoded overlapping composite envelope: %v", err)
+	}
+}
+
+func TestEncodeCompositeSecondPartOverLimitLeavesDestinationUntouched(t *testing.T) {
+	firstPayload := []byte("x")
+	firstOverhead := partFixedHeader + len(binaryParams(binaryDomain(0)))
+	secondOverhead := firstOverhead
+	secondBudget := MaxKeyBytes - envelopeHeader - firstOverhead - len(firstPayload) - secondOverhead
+	secondPayload := bytes.Repeat([]byte{'x'}, secondBudget+1)
+	dst := make([]byte, 0, 256)
+	dst = append(dst, "prefix"...)
+	before := append([]byte(nil), dst...)
+	_, err := EncodeComposite(dst, []Part{
+		{Domain: binaryDomain(0), Value: firstPayload},
+		{Domain: binaryDomain(0), Value: secondPayload},
+	})
+	if !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("second over-limit part error=%v", err)
+	}
+	if !bytes.Equal(dst, before) {
+		t.Fatalf("destination changed before second part rejection: %X != %X", dst, before)
+	}
 }
 
 func TestValidateEncodedRejectsMalformedInput(t *testing.T) {
