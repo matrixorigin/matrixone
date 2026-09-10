@@ -564,3 +564,153 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
 }
+
+// rebaseToTableChanges rewrites base-scan column references onto the table_changes output columns
+// (matched by name) so the json predicate can filter the tail; a reference to a column the tail
+// does not expose makes the whole predicate unpushable (nil), leaving it to the base re-check.
+func TestRebaseToTableChanges(t *testing.T) {
+	b := &QueryBuilder{}
+	const scanTag int32 = 10
+	const tcTag int32 = 20
+	scanNode := &plan.Node{
+		BindingTags: []int32{scanTag},
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id"}, {Name: "j"}, {Name: "content"},
+		}},
+	}
+	// table_changes prepends four metadata columns before the source columns.
+	tcNode := &plan.Node{TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "change_type"}, {Name: "commit_ts"}, {Name: "__mo_table_id"}, {Name: "__mo_schema_version"},
+		{Name: "id"}, {Name: "j"}, {Name: "content"},
+	}}}
+
+	// json_extract(j, ...) = 'x' -- the j reference (scanTag:1) rebinds to tcTag:5.
+	colJ := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 1, Name: "j"}}}
+	pred := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "="},
+		Args: []*plan.Expr{colJ, makePlan2StringConstExprWithType("x")},
+	}}}
+	out := b.rebaseToTableChanges(pred, scanNode, tcNode, tcTag)
+	require.NotNil(t, out)
+	got := out.GetF().Args[0].GetCol()
+	require.Equal(t, tcTag, got.RelPos)
+	require.Equal(t, int32(5), got.ColPos)
+
+	// Name empty -> resolved from scanNode.Cols[ColPos]; "content" is tcTag:6.
+	colByPos := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 2}}}
+	out2 := b.rebaseToTableChanges(colByPos, scanNode, tcNode, tcTag)
+	require.NotNil(t, out2)
+	require.Equal(t, tcTag, out2.GetCol().RelPos)
+	require.Equal(t, int32(6), out2.GetCol().ColPos)
+
+	// A column the tail does not expose makes the predicate unpushable.
+	colMissing := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 0, Name: "hidden_only"}}}
+	require.Nil(t, b.rebaseToTableChanges(colMissing, scanNode, tcNode, tcTag))
+
+	// A reference bound to some other node is left untouched.
+	colOther := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 99, ColPos: 1}}}
+	out3 := b.rebaseToTableChanges(colOther, scanNode, tcNode, tcTag)
+	require.NotNil(t, out3)
+	require.Equal(t, int32(99), out3.GetCol().RelPos)
+	require.Equal(t, int32(1), out3.GetCol().ColPos)
+}
+
+// recordJSONPartialProbe stashes the tail's build_ts lower bound and a deep copy of the json
+// predicate, keyed by the base-scan node id, for applyJoinFullTextIndices to consume at the splice.
+func TestRecordJSONPartialProbe(t *testing.T) {
+	b := &QueryBuilder{}
+	pred := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}}
+	scanNode := &plan.Node{NodeId: 7}
+	b.recordJSONPartialProbe(scanNode, pred, types.BuildTS(1234, 5))
+	got, ok := b.jsonPartialProbes[7]
+	require.True(t, ok)
+	require.Equal(t, int64(1234), got.buildTS.Physical())
+	require.NotSame(t, pred, got.jsonPred, "predicate must be deep-copied, not aliased")
+}
+
+// unionFtWithTail combines the index (bulk) arm and the table_changes tail arm on the (pk, score)
+// layout with UNION ALL, projecting through the left (ft) tag, and returns a pk reference through
+// the new union tag; the group-by dedup above it then collapses the pks the two arms share.
+func TestUnionFtWithTail(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+	pkType := plan.Type{Id: int32(types.T_int64)}
+	scoreType := plan.Type{Id: int32(types.T_float32)}
+
+	ftTag := builder.genNewBindTag()
+	ftID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc:   &plan.TableFunction{Name: fulltext2_search_func_name},
+			Cols:      []*plan.ColDef{{Name: "__mo_ft_doc_id", Typ: pkType}, {Name: "__mo_ft_score", Typ: scoreType}},
+		},
+		BindingTags: []int32{ftTag},
+	}, ctx)
+
+	tailTag := builder.genNewBindTag()
+	tailID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Stats:       &plan.Stats{},
+		BindingTags: []int32{tailTag},
+		ProjectList: []*plan.Expr{
+			{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tailTag, ColPos: 0}}},
+			{Typ: scoreType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 0}}}},
+		},
+	}, ctx)
+
+	unionID, pkcol := builder.unionFtWithTail(ctx, ftID, ftTag, tailID, pkType)
+	un := builder.qry.Nodes[unionID]
+	require.Equal(t, plan.Node_UNION_ALL, un.NodeType)
+	require.Equal(t, []int32{ftID, tailID}, un.Children)
+	require.Len(t, un.ProjectList, 2)
+	require.Equal(t, ftTag, un.ProjectList[0].GetCol().RelPos, "union projects through the left (ft) tag")
+	require.Equal(t, un.BindingTags[0], pkcol.GetCol().RelPos)
+	require.Equal(t, int32(0), pkcol.GetCol().ColPos)
+}
+
+// buildJSONProbeTail builds the freshness-gap arm: table_changes over (build_ts, snapshot] filtered
+// to change_type='insert' AND the json predicate (rebased onto the tail columns), projected to
+// (pk, score) so it unions with the bulk arm. This drives the full happy path against a resolvable
+// ordinary table.
+func TestBuildJSONProbeTail(t *testing.T) {
+	mockCtx := newFullTextJoinMockCompilerContext()
+	tableDef := makeFullTextJoinTestTableDef("ft", true)
+	tableDef.TableType = catalog.SystemOrdinaryRel
+	mockCtx.objects["ft"] = &plan.ObjectRef{SchemaName: "test", ObjName: "ft"}
+	mockCtx.tables["ft"] = tableDef
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	mockCtx.GetProcess().Base.TxnOperator = fakeCoverageTxn{}
+
+	scanTag := builder.genNewBindTag()
+	scanNode := makeFullTextJoinTestScan(tableDef, scanTag, nil)
+	pkType := scanNode.TableDef.Cols[0].Typ // id
+
+	// json predicate on "body" (base scan col 3); table_changes re-exposes it by name.
+	jsonPred := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "="},
+		Args: []*plan.Expr{
+			{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "body"}}},
+			makePlan2StringConstExprWithType("x"),
+		},
+	}}}
+	p := jsonPartialProbe{buildTS: types.BuildTS(100, 0), jsonPred: jsonPred}
+
+	tailID, ok := builder.buildJSONProbeTail(ctx, scanNode, p, pkType)
+	require.True(t, ok)
+
+	proj := builder.qry.Nodes[tailID]
+	require.Equal(t, plan.Node_PROJECT, proj.NodeType)
+	require.Len(t, proj.ProjectList, 2, "tail projects (pk, score)")
+
+	filter := builder.qry.Nodes[proj.Children[0]]
+	require.Equal(t, plan.Node_FILTER, filter.NodeType)
+	require.Len(t, filter.FilterList, 2, "change_type='insert' AND the pushed json predicate")
+
+	tc := builder.qry.Nodes[filter.Children[0]]
+	require.Equal(t, plan.Node_FUNCTION_SCAN, tc.NodeType)
+	require.Equal(t, "table_changes", tc.TableDef.TblFunc.Name)
+}
