@@ -49,6 +49,20 @@ MAX_LEDGER_BYTES = 16 << 20
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
+_CONTROL_KEYS = frozenset(
+    {
+        "version",
+        "kind",
+        "tuple",
+        "sequence",
+        "last_sequence",
+        "ack_sequence",
+        "finish_id",
+        "status",
+        "reason",
+        "payload",
+    }
+)
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
@@ -295,6 +309,8 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
         or not value["kind"]
     ):
         raise ValueError("PROTOCOL: unsupported control")
+    if set(value) - _CONTROL_KEYS:
+        raise ValueError("PROTOCOL: unsupported control field")
     _tuple_key(value.get("tuple") or {})
     return value
 
@@ -341,6 +357,8 @@ def _required_uint64(value: Dict[str, Any], key: str, allow_zero: bool = False) 
 
 def _encode_control(value: Dict[str, Any]) -> bytes:
     value = dict(value)
+    if set(value) - _CONTROL_KEYS:
+        raise ValueError("PROTOCOL: unsupported control field")
     value.setdefault("version", PROTOCOL_VERSION)
     _tuple_key(value["tuple"])
     data = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
