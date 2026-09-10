@@ -89,29 +89,31 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				{value: "TRUE", wantDirect: "true", wantRound: 1},
 			} {
 				mustExec(t, ctx, conn, "SET @bool_mixed = "+test.value)
-				rows, err := conn.QueryContext(ctx,
-					"EXECUTE bool_mixed USING @bool_mixed, @bool_mixed")
-				require.NoError(t, err)
-				columns, err := rows.ColumnTypes()
-				require.NoError(t, err)
-				require.Len(t, columns, 2)
-				require.Equal(t, "TEXT", columns[0].DatabaseTypeName(),
-					"a direct SQL EXECUTE parameter keeps its text result contract")
-				require.True(t, rows.Next())
-				var gotDirect sql.NullString
-				var gotRound sql.NullFloat64
-				require.NoError(t, rows.Scan(&gotDirect, &gotRound))
-				require.False(t, rows.Next())
-				require.NoError(t, rows.Err())
-				require.Equal(t, test.wantDirectN, !gotDirect.Valid, test.value)
-				if !test.wantDirectN {
-					require.Equal(t, test.wantDirect, gotDirect.String, test.value)
-				}
-				require.Equal(t, test.wantRoundN, !gotRound.Valid, test.value)
-				if !test.wantRoundN {
-					require.Equal(t, test.wantRound, gotRound.Float64, test.value)
-				}
-				rows.Close()
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed USING @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 2)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(),
+						"a direct SQL EXECUTE parameter keeps its text result contract")
+					require.True(t, rows.Next())
+					var gotDirect sql.NullString
+					var gotRound sql.NullFloat64
+					require.NoError(t, rows.Scan(&gotDirect, &gotRound))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, test.wantDirectN, !gotDirect.Valid, test.value)
+					if !test.wantDirectN {
+						require.Equal(t, test.wantDirect, gotDirect.String, test.value)
+					}
+					require.Equal(t, test.wantRoundN, !gotRound.Valid, test.value)
+					if !test.wantRoundN {
+						require.Equal(t, test.wantRound, gotRound.Float64, test.value)
+					}
+				}()
 			}
 			stmt, err := conn.PrepareContext(ctx, query)
 			require.NoError(t, err)
