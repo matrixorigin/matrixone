@@ -147,24 +147,22 @@ func TestRegexpIndependentOperandRoles(t *testing.T) {
 	}
 }
 
-func TestRegexpTextPrefixValidationBySource(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	test := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"text"}, nil),
-	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil), nil)
-	parameter := test.parameters[0]
+func TestRegexpPredicateInvalidTextPrefix(t *testing.T) {
+	op := newOpBuiltInRegexp()
 	for _, tc := range []struct {
-		source types.StringSource
-		want   bool
+		pattern, subject string
+		want             bool
 	}{
-		{types.StringSourceExpression, false},
-		{types.StringSourceLiteral, false},
-		{types.StringSourceUserVariable, true},
-		{types.StringSourceSQLPrepare, true},
-		{types.StringSourceCOMStmt, true},
+		{"a", "\xffa", false},
+		{"^a", "a\xff", true},
+		{"a$", "a\xff", true},
+		{".", "\xffa", false},
+		{"a", "a\xff", true},
+		{"z", "a\xff", false},
 	} {
-		require.NoError(t, parameter.SetStringSource(tc.source))
-		require.Equal(t, tc.want, regexpTextNeedsPrefixValidation(parameter, 0), tc.source)
+		reg, err := op.regMap.getRegularMatcherForMatchWithMode(tc.pattern, false)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, regexpMatchTextWithValidPrefix(reg, tc.subject), tc)
 	}
 }
 
@@ -189,24 +187,14 @@ func TestRegexpOutputEncoding(t *testing.T) {
 func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
 	subject := "a" + strings.Repeat("x", 1<<20)
 	op := newOpBuiltInRegexp()
-	for _, tc := range []struct {
-		name     string
-		validate bool
-	}{
-		{"ordinary_text", false},
-		{"runtime_text", true},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			for b.Loop() {
-				value := subject
-				if tc.validate {
-					value = regexpValidTextPrefix(value)
-				}
-				matched, err := op.regMap.regularMatchWithMode("^a", value, false)
-				if err != nil || !matched {
-					b.Fatalf("matched=%v err=%v", matched, err)
-				}
-			}
-		})
+	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if !regexpMatchTextWithValidPrefix(reg, subject) {
+			b.Fatal("expected match")
+		}
 	}
 }

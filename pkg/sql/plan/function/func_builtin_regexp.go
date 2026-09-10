@@ -970,10 +970,23 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 				func(subject, pattern string) (bool, error) {
 					var match bool
 					var err error
-					if like {
-						match, err = op.regMap.regularLikeWithMode(pattern, subject, "c", binary)
+					if binary {
+						if like {
+							match, err = op.regMap.regularLikeWithMode(pattern, subject, "c", true)
+						} else {
+							match, err = op.regMap.regularMatchWithMode(pattern, subject, true)
+						}
 					} else {
-						match, err = op.regMap.regularMatchWithMode(pattern, subject, binary)
+						pattern = regexpValidTextPrefix(pattern)
+						var reg *regexp.Regexp
+						if like {
+							reg, err = op.regMap.getRegularLikeMatcherForPureMatchTypeWithMode(pattern, "", false)
+						} else {
+							reg, err = op.regMap.getRegularMatcherForMatchWithMode(pattern, false)
+						}
+						if err == nil {
+							match = regexpMatchTextWithValidPrefix(reg, subject)
+						}
 					}
 					if negate {
 						match = !match
@@ -1033,12 +1046,10 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 		if !binary {
 			if parameters[0].GetIsBinaryStringAt(int(i)) {
 				subjectString = regexpBinaryBytesToText(subjectString)
-			} else if regexpTextNeedsPrefixValidation(parameters[0], int(i)) {
-				subjectString = regexpValidTextPrefix(subjectString)
 			}
 			if parameters[1].GetIsBinaryStringAt(int(i)) {
 				patternString = regexpBinaryBytesToText(patternString)
-			} else if regexpTextNeedsPrefixValidation(parameters[1], int(i)) {
+			} else {
 				patternString = regexpValidTextPrefix(patternString)
 			}
 		}
@@ -1060,12 +1071,17 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 			continue
 		}
 
-		match := regexpMatchCompiled(
-			reg,
-			subjectString,
-			binary,
-			binary && strings.ContainsRune(pureMatchType, 'i'),
-		)
+		match := false
+		if binary || parameters[0].GetIsBinaryStringAt(int(i)) {
+			match = regexpMatchCompiled(
+				reg,
+				subjectString,
+				binary,
+				binary && strings.ContainsRune(pureMatchType, 'i'),
+			)
+		} else {
+			match = regexpMatchTextWithValidPrefix(reg, subjectString)
+		}
 		if negate {
 			match = !match
 		}
@@ -2549,6 +2565,24 @@ func (rs *regexpSet) getRegularLikeMatcherForPureMatchTypeWithMode(
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
 	reg, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(rule, binary, binaryCaseFold)
 	return reg, err
+}
+
+// regexpMatchTextWithValidPrefix preserves MySQL's invalid-text truncation
+// without imposing a full subject scan on successful prefix matches. A match
+// can only depend on bytes through its end; if that prefix is valid, trailing
+// bytes cannot invalidate the boolean result. A miss must inspect the complete
+// valid prefix because truncation can create an end-anchored match.
+func regexpMatchTextWithValidPrefix(reg *regexp.Regexp, str string) bool {
+	matched := reg.FindStringIndex(str)
+	if matched != nil {
+		prefix := regexpValidTextPrefix(str[:matched[1]])
+		if len(prefix) == matched[1] {
+			return true
+		}
+		return reg.MatchString(prefix)
+	}
+	prefix := regexpValidTextPrefix(str)
+	return len(prefix) != len(str) && reg.MatchString(prefix)
 }
 
 func regexpMatchCompiled(reg *regexp.Regexp, str string, binary, binaryCaseFold bool) bool {

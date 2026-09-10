@@ -152,7 +152,13 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 			{"replace_encoding", "select regexp_replace(?, ?, 'X')", "éa", "a", [4]string{"éX", "Ã©X", "éX", "Ã©X"}, true},
 			{"replacement_unicode", "select regexp_replace(?, ?, '中')", "éa", ".", [4]string{"中中", "中中中", "中中", "中中中"}, true},
 			{"invalid_subject", "select regexp_instr(?, ?)", "\xffa", "a", [4]string{"0", "2", "0", "2"}, false},
+			{"invalid_subject_regexp", "select ? regexp ?", "\xffa", "a", [4]string{"0", "1", "0", "1"}, false},
+			{"invalid_subject_rlike", "select ? rlike ?", "\xffa", "a", [4]string{"0", "1", "0", "1"}, false},
+			{"invalid_subject_like", "select regexp_like(?, ?)", "\xffa", "a", [4]string{"0", "1", "0", "1"}, false},
 			{"invalid_pattern", "select regexp_instr(?, ?)", "abc", "a\xffb", [4]string{"1", "1", "0", "0"}, false},
+			{"invalid_pattern_regexp", "select ? regexp ?", "abc", "a\xffb", [4]string{"1", "1", "0", "0"}, false},
+			{"invalid_pattern_rlike", "select ? rlike ?", "abc", "a\xffb", [4]string{"1", "1", "0", "0"}, false},
+			{"invalid_pattern_like", "select regexp_like(?, ?)", "abc", "a\xffb", [4]string{"1", "1", "0", "0"}, false},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				stmt, err := connection.PrepareContext(ctx, tc.query)

@@ -54,9 +54,7 @@ func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
 	if p.converter.parameter.GetIsBinaryStringAt(int(row)) {
 		text = p.converter.forMatchDomain(text, int(row), matchingBinary)
 	} else {
-		if regexpTextNeedsPrefixValidation(p.converter.parameter, int(row)) {
-			text = regexpValidTextPrefix(text)
-		}
+		text = regexpValidTextPrefix(text)
 		if matchingBinary {
 			text = regexpTextToBinaryBytes(text)
 		}
@@ -64,22 +62,10 @@ func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
 	return functionUtil.QuickStrToBytes(text), false
 }
 
-// Literal and expression vectors have already passed MO's UTF-8-producing SQL
-// operators. Runtime values can carry arbitrary client/user-variable bytes and
-// need MySQL's valid-prefix behavior. Keeping this source check outside the
-// scanner preserves regexp short-circuiting for ordinary text columns.
-func regexpTextNeedsPrefixValidation(parameter *vector.Vector, row int) bool {
-	switch parameter.GetStringSourceAt(row) {
-	case types.StringSourceUserVariable, types.StringSourceSQLPrepare, types.StringSourceCOMStmt:
-		return true
-	default:
-		return false
-	}
-}
-
 // MySQL passes the successfully decoded prefix to the regexp library when a
-// runtime text operand contains an invalid UTF-8 sequence. Binary bytes never
-// take this path.
+// text operand contains an invalid UTF-8 sequence. StringSource identifies an
+// owner, not UTF-8 validity: VARCHAR columns and expressions can also contain
+// arbitrary bytes when sql_mode permits them.
 func regexpValidTextPrefix(value string) string {
 	for i := 0; i < len(value); {
 		if value[i] < utf8.RuneSelf {

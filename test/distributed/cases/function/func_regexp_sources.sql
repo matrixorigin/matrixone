@@ -51,6 +51,11 @@ select regexp_substr(@rs,'.',null), regexp_substr(@rs,'.',1,null);
 select regexp_replace(@rs,'.',null), regexp_replace(@rs,'.','X',null), regexp_replace(@rs,'.','X',1,null);
 set @rs=x'ff61';
 select @rs regexp 'a', regexp_like(@rs,'a'), regexp_instr(@rs,'a'), hex(regexp_substr(@rs,'.')), hex(regexp_replace(@rs,'a','X'));
+set sql_mode='';
+create table invalid_text(v varchar(10));
+insert into invalid_text values (x'ff61');
+select hex(v), regexp_instr(v,'a'), v regexp 'a', v rlike 'a', regexp_like(v,'a') from invalid_text;
+drop table invalid_text;
 
 -- SQL markers retain a text result charset, unlike bare binary variables.
 prepare regexp_markers from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
