@@ -704,6 +704,23 @@ func validateDataBranchDeleteDatabaseTarget(
 	return tableIDs, nil
 }
 
+// lockDataBranchDeleteDatabaseTarget establishes the authorization point for a
+// database delete. CREATE/ALTER/DROP object DDL takes the same mo_database row
+// lock, so holding it through validation and the nested DROP makes the marker
+// and complete ordinary-table set stable until the owning transaction ends.
+func lockDataBranchDeleteDatabaseTarget(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	dbName string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName)
+}
+
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {
 	whereClause := buildTableInfoListWhereClause(dbName, "", accId)
 	// Sequences and views do not have data-branch metadata receipts.
