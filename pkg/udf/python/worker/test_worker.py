@@ -309,6 +309,69 @@ class WorkerContractTest(unittest.TestCase):
             server.shutdown()
         self.assertEqual(0, handler.call_count)
 
+    def test_exchange_rejects_duplicate_open_control(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        fence = {
+            "account_id": 1,
+            "statement_id": "review",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "duplicate-open",
+            "lease_epoch": 1,
+        }
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        payload = {
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "abi_contract": worker.ABI_CONTRACT,
+            "adapter_version": worker.ADAPTER_VERSION,
+            "sdk_version": worker.SDK_VERSION,
+            "args": [descriptor],
+            "return": descriptor,
+            "source": "def f(ctx, x): return x",
+            "handler": "f",
+            "max_batch_bytes": 1 << 20,
+            "max_batch_rows": 1024,
+            "handler_timeout_seconds": 2,
+        }
+
+        def control(kind, **fields):
+            return worker._encode_control(dict(kind=kind, tuple=fence, **fields))
+
+        duplicate = control("OpenInvocation", payload=payload)
+        chunks = iter(
+            [
+                types.SimpleNamespace(data=None, app_metadata=duplicate),
+                types.SimpleNamespace(
+                    data=None, app_metadata=control("EndInput", last_sequence=1)
+                ),
+            ]
+        )
+        reader = types.SimpleNamespace(
+            schema=None, read_chunk=lambda: next(chunks)
+        )
+
+        class Writer:
+            def begin(self, schema):
+                pass
+
+            def write_metadata(self, data):
+                pass
+
+            def write_with_metadata(self, record, data):
+                pass
+
+        try:
+            with self.assertRaisesRegex(ValueError, "duplicate OpenInvocation"):
+                server.do_exchange(
+                    types.SimpleNamespace(is_cancelled=lambda: False),
+                    types.SimpleNamespace(command=duplicate),
+                    reader,
+                    Writer(),
+                )
+        finally:
+            server.shutdown()
+
     @unittest.skipUnless(os.name == "posix", "process-group test")
     def test_descendant_is_killed_after_handler_leader_exits(self):
         with tempfile.TemporaryDirectory(prefix="mo-udf-owned-child-") as artifact:
