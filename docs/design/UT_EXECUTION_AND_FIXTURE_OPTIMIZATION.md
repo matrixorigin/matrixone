@@ -1,11 +1,11 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Accepted for this PR，revision 4
+- 状态：Accepted for this PR，revision 5
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。revision 5 将 CI race-UT 恢复为一个完整 suite、一个 runner，保留相同的 package partition、race 和失败门禁；`pkg/logservice` 的独立进程 companion 仅作为 `UT_OVERLAP_LOGSERVICE=1` 的显式 A/B。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
 
 ## 1. 问题与不变量
 
@@ -65,6 +65,8 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 
 复用现有完整且不重叠的 UT shard partition。单 runner 内可以先用 `go test -c` 做不执行测试 binary 的预编译，把 embedded 包的 build/link 与 issues 的共享 cluster body 重叠；预编译失败仍由正式测试命令给出权威结果，预编译进程必须接受同一取消路径。本 PR 提供这个路径，但 `UT_PREBUILD_EMBEDDED=0` 是默认值；只有同一 checkout、race/tags、CPU/memory 和缓存模式的 A/B 证明关键路径收益后，才可在 CI 显式打开。再在相同条件下 A/B embedded `-p1` 与 `-p2`，决定是否扩大 package 并发。plan shards 只有在显式消耗一个 heavy 进程 slot、证明非空、全集覆盖、不重复和可清理后才并行；`UT_OVERLAP_PLAN=0` 默认保持顺序。每个 runner 默认一个 active complete cluster。
 
+CI 的默认路径使用 `UT_SHARD=all` 在一个 runner 上顺序执行这些阶段。这样会删除四个 shard 重复的 checkout、native build、Go cache 和 setup，降低 runner-minutes；它不会把旧的四 runner wall time 直接当成单 runner wall time。`pkg/logservice` 不依赖 embedded cluster，也不持有共享 issues fixture，因此可以在 HNSW 完成后以 `-p1` 私有进程与 issues body 重叠。设置 `UT_OVERLAP_LOGSERVICE=1` 时，脚本先验证该 package 仍在完整 scope、没有进入 dependency-derived embedded scope，并把它从 light group 移入 companion group；companion 在 serial issues 结束后等待、合并报告，之后才进入 embedded 阶段。分片路径和 `UT_PREBUILD_EMBEDDED=1` 会禁用该 companion 并把 package 留在 light group，避免遗漏或重复执行。该开关默认关闭，须在同一 runner、同一 race/tags、同一 cgroup 的至少三次交替 A/B 中确认 wall time、CPU throttling、memory peak、flaky rate 和报告完整性后才适合开启。
+
 只有当同进程合并、reset 和静态分片后仍有实测的 cluster startup 瓶颈，才另行设计跨进程 cluster service。那时必须补租约、generation、失联、reset、server crash、内部 hook 不可复用和权限隔离契约；本设计不把 daemon、动态 scheduler 或无界 admission slot 作为第一批改动。
 
 ## 4. 观测与度量
@@ -95,7 +97,7 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 ## 7. 交付拆分
 
 1. 本 revision：runner checkpoint、报告早创建、取消进程组清理、`run_ut.sh` 执行阶段的 70 分钟外层兜底、helper 报告所有权和诊断测试。`make ut` 的 `cgo/config` prerequisites 在该 timeout 之前运行；它们仍由各自命令负责失败和重试，不把 70 分钟描述成整个 make job 的硬上限。
-2. 本 revision 提供 compile-only embedded prebuild，但默认关闭（`UT_PREBUILD_EMBEDDED=0`）；plan overlap 同样默认关闭（`UT_OVERLAP_PLAN=0`）。打开任一开关前必须补同资源 A/B 和负向取消证据。
+2. 本 revision 提供 compile-only embedded prebuild，但默认关闭（`UT_PREBUILD_EMBEDDED=0`）；plan overlap 同样默认关闭（`UT_OVERLAP_PLAN=0`），logservice companion 也默认关闭（`UT_OVERLAP_LOGSERVICE=0`）。打开任一开关前必须补同资源 A/B 和负向取消证据。
 3. 本 revision：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after；后续继续逐组验证，不跨越不同 topology 或 global hook 合并。
 4. 后续 PR：清理慢测试的重复 setup、无契约等待和过大数据，逐项保留 oracle 证明。
 5. 后续 PR：静态 shard/runner 资源 A/B；只有证据支持时再考虑跨进程共享 cluster。

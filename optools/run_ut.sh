@@ -47,6 +47,10 @@ UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"0"}
+# Keep the logservice companion as an explicit A/B knob.  It is only selected
+# for the complete single-runner suite after package ownership is revalidated;
+# shard jobs must never silently drop it from the light wave.
+UT_OVERLAP_LOGSERVICE=${UT_OVERLAP_LOGSERVICE:-"0"}
 # A helper may own two independent child process groups. Its trap gives each
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
@@ -73,6 +77,9 @@ PLAN_RACE_JOB_PID=""
 PLAN_RACE_REPORT=""
 CLUSTER_PREBUILD_JOB_PID=""
 CLUSTER_PREBUILD_REPORT=""
+LOGSERVICE_RACE_JOB_PID=""
+LOGSERVICE_RACE_REPORT=""
+LOGSERVICE_RACE_STDERR=""
 ENGINE_RACE_TEST_BINARY=""
 ENGINE_RACE_JOB_PID=""
 ENGINE_RACE_REPORT=""
@@ -297,6 +304,114 @@ function consume_plan_race_report(){
     fi
 }
 
+function consume_logservice_race_report(){
+    if [[ -z "${LOGSERVICE_RACE_REPORT}" ]]; then
+        return 0
+    fi
+
+    # The companion owns a private JSON report while it overlaps the serial
+    # issues process.  Transfer it only after the process has stopped, under
+    # the same TERM-pending guard used by the other helper reports.
+    local saved_term_trap
+    local term_pending=0
+    local append_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    if [[ -s "${LOGSERVICE_RACE_STDERR}" ]]; then
+        local stderr_source="${LOGSERVICE_RACE_STDERR}"
+        append_ut_report "${stderr_source}" "${UT_STDERR}"
+        if (( $? != 0 )); then
+            logger "ERR" "failed to consume logservice race stderr; preserving ${stderr_source}"
+            restore_ut_term_trap "${saved_term_trap}"
+            if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+                handle_ut_termination
+            fi
+            return 1
+        fi
+        # Clear ownership as soon as the atomic append commits. Cleanup is
+        # best-effort; leaving an already-consumed source cannot cause a retry
+        # to duplicate diagnostics.
+        LOGSERVICE_RACE_STDERR=""
+        remove_ut_report_file "${stderr_source}"
+    fi
+    append_ut_report "${LOGSERVICE_RACE_REPORT}" "${UT_REPORT}"
+    append_status=$?
+    if (( append_status != 0 )); then
+        logger "ERR" "failed to consume logservice race report; preserving ${LOGSERVICE_RACE_REPORT}"
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+            handle_ut_termination
+        fi
+        return "${append_status}"
+    fi
+    rm -f "${LOGSERVICE_RACE_REPORT}"
+    LOGSERVICE_RACE_REPORT=""
+    LOGSERVICE_RACE_STDERR=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function start_logservice_race(){
+    local logservice_package=$1
+    local saved_term_trap=""
+    local term_pending=0
+
+    if [[ -z "${logservice_package}" ]]; then
+        return 2
+    fi
+    LOGSERVICE_RACE_REPORT="${G_WKSP}/${G_TS}-logservice-race-report.out"
+    LOGSERVICE_RACE_STDERR="${G_WKSP}/${G_TS}-logservice-race-stderr.out"
+    : > "${LOGSERVICE_RACE_REPORT}"
+    : > "${LOGSERVICE_RACE_STDERR}"
+    mark_ut_stage "logservice" "logservice race-test package" start \
+        "" "package=${logservice_package} parallel=1 companion=true"
+    logger "INF" "Start ${logservice_package} as a bounded companion race-test process"
+    # Keep TERM observable while the shell creates the process group and
+    # publishes its pid. Without this small ownership transaction a signal
+    # between `&` and `$!` could leave an untracked go test descendant behind.
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    set -m
+    env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json \
+        -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race \
+        "${logservice_package}" > "${LOGSERVICE_RACE_REPORT}" \
+        2> "${LOGSERVICE_RACE_STDERR}" &
+    LOGSERVICE_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    checkpoint_ut_event "pid-start" "logservice" "logservice race-test package" "" \
+        "child_pid=${LOGSERVICE_RACE_JOB_PID} package=${logservice_package} parallel=1 companion=true"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then
+        handle_ut_termination
+    fi
+}
+
+function finish_logservice_race(){
+    local logservice_status=0
+    local report_status=0
+
+    if [[ -z "${LOGSERVICE_RACE_JOB_PID}" ]]; then
+        return 0
+    fi
+    wait "${LOGSERVICE_RACE_JOB_PID}" || logservice_status=$?
+    LOGSERVICE_RACE_JOB_PID=""
+    mark_ut_stage "logservice" "logservice race-test package" finish "${logservice_status}"
+    consume_logservice_race_report
+    report_status=$?
+    if (( report_status != 0 )); then
+        logservice_status=1
+    fi
+    if (( logservice_status != 0 )); then
+        logger "ERR" "logservice race-test package failed with status ${logservice_status}"
+    fi
+    return "${logservice_status}"
+}
+
 function handle_ut_termination(){
     trap - TERM
     if (( UT_TERMINATING != 0 )); then
@@ -304,11 +419,30 @@ function handle_ut_termination(){
     fi
     UT_TERMINATING=1
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
-        "current_pid=${CURRENT_UT_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
+        "current_pid=${CURRENT_UT_PID} logservice_pid=${LOGSERVICE_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
+    # Notify every owner before waiting on any one group.  A helper that is
+    # finishing a build or report transfer must see TERM at the same boundary
+    # as the foreground command; otherwise a long foreground wait can consume
+    # the entire cancellation budget before the helper is even signalled.
     if [[ -n "${CURRENT_UT_PID}" ]]; then
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
         terminate_ut_process_group "${CURRENT_UT_PID}" TERM
+    fi
+    if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
+        terminate_ut_process_group "${ENGINE_RACE_JOB_PID}" TERM
+    fi
+    if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
+        terminate_ut_process_group "${PLAN_RACE_JOB_PID}" TERM
+    fi
+    if [[ -n "${LOGSERVICE_RACE_JOB_PID}" ]]; then
+        terminate_ut_process_group "${LOGSERVICE_RACE_JOB_PID}" TERM
+    fi
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        terminate_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" TERM
+    fi
+
+    if [[ -n "${CURRENT_UT_PID}" ]]; then
         # Leave the outer timeout's kill-after budget for descendants that do
         # not honour TERM; do not block the diagnostic path indefinitely.
         wait_for_ut_process_group "${CURRENT_UT_PID}" 20
@@ -316,24 +450,26 @@ function handle_ut_termination(){
         CURRENT_UT_PID=""
     fi
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
-        terminate_ut_process_group "${ENGINE_RACE_JOB_PID}" TERM
         wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || true
         ENGINE_RACE_JOB_PID=""
     fi
     if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
-        terminate_ut_process_group "${PLAN_RACE_JOB_PID}" TERM
         wait_for_ut_process_group "${PLAN_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${PLAN_RACE_JOB_PID}" 2>/dev/null || true
         PLAN_RACE_JOB_PID=""
     fi
-    consume_plan_race_report
+    if [[ -n "${LOGSERVICE_RACE_JOB_PID}" ]]; then
+        wait_for_ut_process_group "${LOGSERVICE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
+        wait "${LOGSERVICE_RACE_JOB_PID}" 2>/dev/null || true
+        LOGSERVICE_RACE_JOB_PID=""
+    fi
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
-        terminate_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" TERM
         wait_for_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${CLUSTER_PREBUILD_JOB_PID}" 2>/dev/null || true
         CLUSTER_PREBUILD_JOB_PID=""
     fi
+    consume_plan_race_report
     if [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
         if [[ -s "${CLUSTER_PREBUILD_REPORT}" ]]; then
             cat "${CLUSTER_PREBUILD_REPORT}" >> "${UT_STDERR}"
@@ -342,6 +478,7 @@ function handle_ut_termination(){
             "${G_WKSP}/${G_TS}-embedded-prebuild-"*.test
         CLUSTER_PREBUILD_REPORT=""
     fi
+    consume_logservice_race_report
     consume_engine_race_report
     if [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
         rm -f "${ENGINE_RACE_TEST_BINARY}"
@@ -877,6 +1014,7 @@ function run_tests(){
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
+    echo "#  LOGSERVICE OVERLAP: $UT_OVERLAP_LOGSERVICE"
     echo "#  HELPER TERM GRACE: $UT_HELPER_TERM_GRACE_TICKS ticks"
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
@@ -917,6 +1055,12 @@ function run_tests(){
     fi
     if ! [[ "${UT_OVERLAP_PLAN}" =~ ^[01]$ ]]; then
         logger "ERR" "UT_OVERLAP_PLAN must be 0 or 1, got '${UT_OVERLAP_PLAN}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_OVERLAP_LOGSERVICE}" =~ ^[01]$ ]]; then
+        logger "ERR" "UT_OVERLAP_LOGSERVICE must be 0 or 1, got '${UT_OVERLAP_LOGSERVICE}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -1003,17 +1147,21 @@ function run_tests(){
         local cluster_test_scope
         local resource_heavy_test_scope
         local light_test_scope
+        local logservice_package=""
+        local logservice_companion_scope=""
         local package
         local cluster_package_parallel=2
         local package_status=0
         local light_status=0
         local hnsw_status=0
         local serial_status=0
+        local logservice_status=0
         local cluster_status=0
         local resource_heavy_status=0
         local engine_status=0
         local plan_status=0
         local report_status=0
+        local logservice_companion_enabled=0
         local resource_heavy_parallel=1
         local engine_race_parallel=1
         local shard_engine=1
@@ -1113,6 +1261,41 @@ function run_tests(){
             ${cluster_test_scope} \
             ${resource_heavy_test_scope})
 
+        # logservice starts independent local services and does not depend on
+        # the embedded cluster fixture.  Keep it in the ordinary light wave
+        # unless the caller explicitly requests the complete-suite A/B.  The
+        # companion is never selected for a shard or alongside the compile
+        # prebuild, so every selected shard still executes its full package
+        # scope exactly once.
+        if (( UT_OVERLAP_LOGSERVICE == 1 )); then
+            if [[ "${UT_SHARD}" != "all" ]]; then
+                logger "WRN" "UT_OVERLAP_LOGSERVICE is only valid for UT_SHARD=all; keeping pkg/logservice in light wave"
+            elif (( UT_PREBUILD_EMBEDDED == 1 )); then
+                logger "WRN" "UT_OVERLAP_LOGSERVICE disabled while UT_PREBUILD_EMBEDDED=1; keeping pkg/logservice in light wave"
+            else
+                if ! logservice_package=$(go list ${GO_MODULE_MODE} ./pkg/logservice); then
+                    logger "ERR" "Failed to resolve ./pkg/logservice for the companion race-test"
+                    UT_TEST_STATUS=1
+                    return 0
+                fi
+                if ! printf '%s\n' "${test_scope}" | grep -Fqx "${logservice_package}"; then
+                    logger "ERR" "Resolved ${logservice_package} is outside the complete UT package scope"
+                    UT_TEST_STATUS=1
+                    return 0
+                fi
+                if printf '%s\n' "${cluster_test_scope}" | grep -Fqx "${logservice_package}"; then
+                    logger "ERR" "Refusing logservice companion: ${logservice_package} owns an embedded-cluster dependency"
+                    UT_TEST_STATUS=1
+                    return 0
+                fi
+                logservice_companion_scope="${logservice_package}"
+                light_test_scope=$(remove_packages_from_scope \
+                    "${light_test_scope}" "${logservice_companion_scope}")
+                logservice_companion_enabled=1
+                logger "INF" "Reserve ${logservice_companion_scope} for the serial-issues companion wave"
+            fi
+        fi
+
         if ! validate_complete_partition \
             "UT package" \
             "${test_scope}" \
@@ -1122,7 +1305,8 @@ function run_tests(){
             "${cluster_test_scope}" \
             "${resource_heavy_test_scope}" \
             "${engine_test_scope}" \
-            "${plan_package}"; then
+            "${plan_package}" \
+            "${logservice_companion_scope}"; then
             logger "ERR" "Race-UT package groups are not a complete disjoint partition"
             UT_TEST_STATUS=1
             return 0
@@ -1143,6 +1327,14 @@ function run_tests(){
             logger "INF" "Run HNSW race-test package with exclusive runner CPU"
             run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
             hnsw_status=$?
+        fi
+
+        # HNSW is deliberately CPU-exclusive.  Once it has finished, the
+        # independent logservice package can overlap only the serial issues
+        # body; its private report is joined before embedded-cluster work
+        # begins, keeping at most one additional test process alive.
+        if (( logservice_companion_enabled == 1 )); then
+            start_logservice_race "${logservice_companion_scope}"
         fi
 
         # Compile the next embedded wave while the exclusive issues package is
@@ -1166,6 +1358,11 @@ function run_tests(){
                     logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
                 fi
             done
+        fi
+
+        if (( logservice_companion_enabled == 1 )); then
+            finish_logservice_race
+            logservice_status=$?
         fi
 
         # These packages link embedded clusters with substantial race-detector
@@ -1293,7 +1490,7 @@ function run_tests(){
             PLAN_RACE_TEST_BINARY=""
         fi
 
-        if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
+        if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || logservice_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
