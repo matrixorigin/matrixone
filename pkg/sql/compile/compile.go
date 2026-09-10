@@ -309,7 +309,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
-	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+	if err := refreshGroupConcatMaxLen(c.scopes, proc, c.groupConcatMaxLenFloor); err != nil {
 		return err
 	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
@@ -536,6 +536,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.groupConcatMaxLenFloor = 0
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -5175,7 +5176,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	}
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) {
+		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5188,7 +5189,11 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		}
 	} else {
 		local := getEngineNode(c)
-		local.Mcpu = 1
+		parallelism, err := c.vectorIndexScanParallelism(node, local.Mcpu)
+		if err != nil {
+			return nil, err
+		}
+		local.Mcpu = parallelism
 		local.CNCNT = 1
 		local.CNIDX = 0
 		nodes = engine.Nodes{local}
@@ -5196,11 +5201,10 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ss := make([]*Scope, 0, len(nodes))
 	for i := range nodes {
-		// One adaptive reader owns one centroid cursor and one bounded top-k.
-		// Parallelism is expressed by independent CN partitions, not duplicate
-		// readers over the same partition.
-		nodes[i].Mcpu = 1
 		nodeCopy := plan2.DeepCopyNode(node)
+		if nodeCopy.Stats != nil {
+			nodeCopy.Stats.Dop = int32(nodes[i].Mcpu)
+		}
 		s := newScope(Remote)
 		s.NodeInfo = nodes[i]
 		s.TxnOffset = c.TxnOffset
@@ -5216,6 +5220,37 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func requiredVectorMembership(node *plan.Node) bool {
+	for _, spec := range node.GetRuntimeFilterProbeList() {
+		if spec != nil && spec.UseMembershipFilter && spec.MustApply {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) vectorIndexScanParallelism(node *plan.Node, capacity int) (int, error) {
+	if !requiredVectorMembership(node) || node.GetVectorIndexScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
+		return 1, nil
+	}
+	resolve := c.proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return 1, nil
+	}
+	value, err := resolve("optimizer_hints", true, false)
+	if ctxErr := c.proc.Ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+	if err != nil {
+		return 1, nil
+	}
+	hints, ok := value.(string)
+	if !ok || !plan2.VectorLocalDOPEnabled(hints) {
+		return 1, nil
+	}
+	return max(1, min(int(node.Stats.Dop), capacity, c.ncpu)), nil
 }
 
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
@@ -10047,6 +10082,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 
@@ -10269,3 +10305,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	}
 	return false
 }
+
+// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
+// physical compilation. Zero keeps ordinary statements fully dynamic.
+func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

@@ -50,9 +50,9 @@ create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
 insert into t1 select (coalesce(9223372036854775808, 1));
-Data truncation: data out of range: data type int64, value '9223372036854775808'
 select * from t1;
 ➤ a[-5,64,0]  𝄀
+9223372036854775808  𝄀
 9223372036854775808  𝄀
 9223372036854775808
 drop table t1;

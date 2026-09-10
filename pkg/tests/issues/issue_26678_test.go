@@ -49,8 +49,7 @@ func TestIssue26678MaxExecutionTime(t *testing.T) {
 		require.NoError(t, err)
 		defer defaultConn.Close()
 
-		_, err = timedConn.ExecContext(ctx, "set @@session.max_execution_time=100")
-		require.NoError(t, err)
+		setSessionMaxExecutionTime(t, ctx, timedConn, 100)
 		var timeout int64
 		require.NoError(t, timedConn.QueryRowContext(
 			ctx,
@@ -70,21 +69,20 @@ func TestIssue26678MaxExecutionTime(t *testing.T) {
 		require.Less(t, time.Since(started), time.Second,
 			"max_execution_time did not stop SELECT near its deadline")
 
-		// A statement timeout must not cancel the session or its explicit
-		// transaction. MatrixOne rolls back only the failed statement here.
-		require.NoError(t, timedConn.QueryRowContext(ctx, "select 1").Scan(&slept))
-		require.Equal(t, 1, slept)
+		requireSessionUsableAfterTimeout(t, ctx, timedConn)
+
+		setSessionMaxExecutionTime(t, ctx, timedConn, 100)
 		_, err = timedConn.ExecContext(ctx, "begin")
 		require.NoError(t, err)
 		err = timedConn.QueryRowContext(ctx, "select sleep(2)").Scan(&slept)
 		requireQueryTimeout(t, err)
-		require.NoError(t, timedConn.QueryRowContext(ctx, "select 1").Scan(&slept))
-		require.Equal(t, 1, slept)
+		requireSessionUsableAfterTimeout(t, ctx, timedConn)
 		_, err = timedConn.ExecContext(ctx, "rollback")
 		require.NoError(t, err)
 
 		// COM_STMT_EXECUTE follows the prepared SELECT, not the outer EXECUTE
 		// command, when deciding whether the timeout applies.
+		setSessionMaxExecutionTime(t, ctx, timedConn, 100)
 		prepared, err := timedConn.PrepareContext(ctx, "select sleep(?)")
 		require.NoError(t, err)
 		defer func() {
@@ -93,11 +91,29 @@ func TestIssue26678MaxExecutionTime(t *testing.T) {
 		err = prepared.QueryRowContext(ctx, 2).Scan(&slept)
 		requireQueryTimeout(t, err)
 
-		_, err = timedConn.ExecContext(ctx, "set @@session.max_execution_time=0")
-		require.NoError(t, err)
+		requireSessionUsableAfterTimeout(t, ctx, timedConn)
 		require.NoError(t, timedConn.QueryRowContext(ctx, "select sleep(0.05)").Scan(&slept))
 		require.Zero(t, slept)
 	})
+}
+
+func setSessionMaxExecutionTime(t *testing.T, ctx context.Context, conn *sql.Conn, milliseconds int) {
+	t.Helper()
+	_, err := conn.ExecContext(ctx, fmt.Sprintf("set @@session.max_execution_time=%d", milliseconds))
+	require.NoError(t, err)
+}
+
+func requireSessionUsableAfterTimeout(t *testing.T, ctx context.Context, conn *sql.Conn) {
+	t.Helper()
+
+	// max_execution_time applies to each eligible SELECT. Disable it before
+	// checking session recovery so a slow test runner cannot time out SELECT 1
+	// under a new, valid 100 ms deadline.
+	setSessionMaxExecutionTime(t, ctx, conn, 0)
+
+	var result int
+	require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&result))
+	require.Equal(t, 1, result)
 }
 
 func requireQueryTimeout(t *testing.T, err error) {
