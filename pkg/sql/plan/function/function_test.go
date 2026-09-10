@@ -33,7 +33,7 @@ import (
 func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	// An older CN may receive an overload selected by a newer CN. It must
 	// reject the unknown index instead of panicking while indexing Overloads.
-	unknown := encodeOverloadID(STR_TO_DATE, 3)
+	unknown := encodeOverloadID(STR_TO_DATE, 99)
 	_, err := GetFunctionById(context.Background(), unknown)
 	require.Error(t, err)
 	_, exists := GetFunctionByIdWithoutError(unknown)

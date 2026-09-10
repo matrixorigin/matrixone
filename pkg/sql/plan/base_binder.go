@@ -5310,6 +5310,8 @@ func bindFuncExprImplByPlanExpr(
 		if preparedStrToDateArgs(originalBoundExpr, name, args) {
 			if len(args) == 3 {
 				args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
+			} else {
+				args = append(args, DeepCopyExpr(originalBoundExpr.GetF().Args[2]))
 			}
 			break
 		}
@@ -5327,6 +5329,10 @@ func bindFuncExprImplByPlanExpr(
 			}
 			tp, fsp := ExtractToDateReturnType(sval.Sval)
 			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
+		} else {
+			// Lower dynamic formats to the legacy three-argument overload. This
+			// keeps serialized plans executable by older CNs during rolling upgrades.
+			args = append(args, makePlan2DateConstNullExprWithScale(types.T_datetime, 6))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
@@ -6491,11 +6497,12 @@ func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
 		return false
 	}
 	fn := original.GetF()
-	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, name) || len(fn.Args) != len(args) {
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, name) ||
+		(len(fn.Args) != len(args) && !(len(fn.Args) == 3 && len(args) == 2)) {
 		return false
 	}
 	if len(fn.Args) == 2 {
-		return true
+		return false
 	}
 	if len(fn.Args) != 3 || fn.Args[2] == nil || fn.Args[2].GetLit() == nil || !fn.Args[2].GetLit().Isnull {
 		return false

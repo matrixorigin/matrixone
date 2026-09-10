@@ -11059,16 +11059,6 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return builtInStrToTime
 				},
 			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_datetime, 6, 6)
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInStrToDatetime
-				},
-			},
 		},
 	},
 
