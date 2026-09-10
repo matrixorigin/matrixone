@@ -260,7 +260,7 @@ SELECT g, JSON_ARRAYAGG(d256_39) AS array256_39, JSON_OBJECTAGG(k, d256_39) AS o
 SELECT g, JSON_ARRAYAGG(d256_40) AS array256_40, JSON_OBJECTAGG(k, d256_40) AS object256_40 FROM json_decimal_agg_28587 GROUP BY g ORDER BY g;
 SELECT g, JSON_ARRAYAGG(d256_65) AS array256_65, JSON_OBJECTAGG(k, d256_65) AS object256_65 FROM json_decimal_agg_28587 GROUP BY g ORDER BY g;
 SELECT JSON_ARRAYAGG(d64) AS empty_array, JSON_OBJECTAGG(k, d64) AS empty_object FROM json_decimal_agg_28587 WHERE g = 6;
-SET @json_decimal_value_28587 = '0.12345678901234568';
+SET @json_decimal_value_28587 = '0.12345678901234567';
 PREPARE json_decimal_stmt_28587 FROM 'SELECT JSON_ARRAYAGG(CAST(? AS DECIMAL(18,17))) AS prepared_array, JSON_OBJECTAGG(''p'', CAST(? AS DECIMAL(18,17))) AS prepared_object';
 EXECUTE json_decimal_stmt_28587 USING @json_decimal_value_28587, @json_decimal_value_28587;
 DEALLOCATE PREPARE json_decimal_stmt_28587;
