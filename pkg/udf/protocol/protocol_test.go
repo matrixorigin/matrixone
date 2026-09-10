@@ -16,6 +16,7 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -46,6 +47,19 @@ func TestControlRoundTripIsBoundedAndVersioned(t *testing.T) {
 	require.ErrorIs(t, err, ErrProtocol)
 	_, err = MarshalControl(Control{Kind: "", Tuple: testTuple()})
 	require.ErrorIs(t, err, ErrProtocol)
+}
+
+func TestControlRejectsUnknownEnvelopeFields(t *testing.T) {
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	object["future_field"] = "must not be ignored"
+	wire, err = json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "unknown field")
 }
 
 func TestSystemAccountIsValidFencingIdentity(t *testing.T) {

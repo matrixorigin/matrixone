@@ -18,11 +18,13 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -113,8 +115,17 @@ func UnmarshalControl(data []byte) (Control, error) {
 		return Control{}, fmt.Errorf("%w: control size %d is outside the allowed range", ErrProtocol, len(data))
 	}
 	var control Control
-	if err := json.Unmarshal(data, &control); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&control); err != nil {
 		return Control{}, fmt.Errorf("%w: decode control: %v", ErrProtocol, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Control{}, fmt.Errorf("%w: control contains trailing JSON", ErrProtocol)
+		}
+		return Control{}, fmt.Errorf("%w: decode trailing control data: %v", ErrProtocol, err)
 	}
 	if control.Version != Version || control.Kind == "" {
 		return Control{}, fmt.Errorf("%w: unsupported control version %d", ErrProtocol, control.Version)
