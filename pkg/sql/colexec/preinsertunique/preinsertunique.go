@@ -409,6 +409,12 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		keyVec := inputBat.Vecs[keyPos]
 		row = vectorRowIndex(keyVec, row)
+		if row < 0 || row >= keyVec.Length() {
+			// A legacy selection/vector mismatch is diagnostic-only. Do not let
+			// fallback rendering turn an already-rejected row into a panic.
+			duplicateWarnings.AddCount()
+			return
+		}
 		var keyName string
 		var keyTypes []plan.Type
 		var ok bool
@@ -656,10 +662,11 @@ func buildInsertIgnoreKeyMetadata(ctx *plan.PreInsertUkCtx) []insertIgnoreWarnin
 		if count <= 0 {
 			return nil
 		}
-		end := offset + int(count)
-		if offset < 0 || end > len(ctx.KeyTypes) {
+		if offset < 0 || offset > len(ctx.KeyTypes) ||
+			int64(count) > int64(len(ctx.KeyTypes)-offset) {
 			return nil
 		}
+		end := offset + int(count)
 		keyTypes := make([]plan.Type, int(count))
 		for j, typ := range ctx.KeyTypes[offset:end] {
 			if typ == nil {

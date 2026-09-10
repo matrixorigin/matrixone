@@ -19,7 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -73,4 +75,66 @@ func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T
 	input.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBuildInsertIgnoreKeyMetadataRejectsMalformedCounts(t *testing.T) {
+	typ := &plan.Type{Id: int32(types.T_int32)}
+	for _, tc := range []struct {
+		name string
+		ctx  *plan.PreInsertUkCtx
+	}{
+		{
+			name: "count exceeds type payload",
+			ctx: &plan.PreInsertUkCtx{
+				KeyColumns:    []int32{0},
+				KeyNames:      []string{"id"},
+				KeyTypes:      []*plan.Type{typ},
+				KeyTypeCounts: []int32{2},
+			},
+		},
+		{
+			name: "negative count",
+			ctx: &plan.PreInsertUkCtx{
+				KeyColumns:    []int32{0},
+				KeyNames:      []string{"id"},
+				KeyTypes:      []*plan.Type{typ},
+				KeyTypeCounts: []int32{-1},
+			},
+		},
+		{
+			name: "nil type",
+			ctx: &plan.PreInsertUkCtx{
+				KeyColumns:    []int32{0},
+				KeyNames:      []string{"id"},
+				KeyTypes:      []*plan.Type{nil},
+				KeyTypeCounts: []int32{1},
+			},
+		},
+		{
+			name: "unconsumed type payload",
+			ctx: &plan.PreInsertUkCtx{
+				KeyColumns:    []int32{0},
+				KeyNames:      []string{"id"},
+				KeyTypes:      []*plan.Type{typ, typ},
+				KeyTypeCounts: []int32{1},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Nil(t, buildInsertIgnoreKeyMetadata(tc.ctx))
+		})
+	}
+
+	valid := &plan.PreInsertUkCtx{
+		KeyColumns:    []int32{0, 1},
+		KeyNames:      []string{"id", "(a,b)"},
+		KeyTypes:      []*plan.Type{typ, typ, typ},
+		KeyTypeCounts: []int32{1, 2},
+	}
+	metadata := buildInsertIgnoreKeyMetadata(valid)
+	require.Len(t, metadata, 2)
+	require.Equal(t, "id", metadata[0].name)
+	require.Equal(t, "(a,b)", metadata[1].name)
+	require.Len(t, metadata[0].types, 1)
+	require.Len(t, metadata[1].types, 2)
 }

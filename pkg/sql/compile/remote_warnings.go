@@ -36,6 +36,31 @@ type warningDiagnosticBatchSink interface {
 	AppendWarningBatch(total uint64, codes []uint16, messages []string)
 }
 
+// appendWarningBatchToSink preserves the bounded diagnostic batch when the
+// sink supports it and falls back to the legacy one-record interface for
+// older sessions. The sink is captured by the remote sender for one execution
+// attempt, so a closed collector rejects late callbacks from a failed retry.
+func appendWarningBatchToSink(destination any, total uint64, codes []uint16, messages []string) {
+	if destination == nil || total == 0 {
+		return
+	}
+	if sink, ok := destination.(warningDiagnosticBatchSink); ok {
+		sink.AppendWarningBatch(total, codes, messages)
+		return
+	}
+	sink, ok := destination.(warningDiagnosticSink)
+	if !ok {
+		return
+	}
+	limit := len(codes)
+	if len(messages) < limit {
+		limit = len(messages)
+	}
+	for i := 0; i < limit; i++ {
+		sink.AppendWarningDiagnostic(codes[i], messages[i])
+	}
+}
+
 const remoteWarningRetentionLimit = 64
 
 // remoteWarningCollector gives a remote pipeline the small process.Session
@@ -71,7 +96,11 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 		s.mu.Unlock()
 		return
 	}
-	s.warningCount += total
+	if ^uint64(0)-s.warningCount < total {
+		s.warningCount = ^uint64(0)
+	} else {
+		s.warningCount += total
+	}
 	limit := s.maxRetained
 	if limit <= 0 {
 		limit = remoteWarningRetentionLimit

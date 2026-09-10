@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +28,16 @@ import (
 // DEDUP join. FLOAT/DOUBLE primary-key identity expressions are serial(...)
 // encodings, so decode those bytes with the original column types instead of
 // leaking the binary identity key into the user-facing duplicate-entry error.
-func FormatDedupKey(vec *vector.Vector, row int, colTypes []plan.Type) (string, error) {
+func FormatDedupKey(vec *vector.Vector, row int, colTypes []plan.Type) (key string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			key = ""
+			err = moerr.NewInternalErrorNoCtxf("cannot format duplicate key: %v", recovered)
+		}
+	}()
+	if vec == nil || row < 0 || row >= vec.Length() {
+		return "", moerr.NewInternalErrorNoCtxf("cannot format duplicate key at row %d", row)
+	}
 	if len(colTypes) == 1 {
 		originalType := types.T(colTypes[0].Id)
 		if (originalType == types.T_float32 || originalType == types.T_float64) &&
@@ -52,7 +62,16 @@ func FormatDedupKey(vec *vector.Vector, row int, colTypes []plan.Type) (string, 
 // diagnostic.  Index-table keys are normally serialized into a varchar; when
 // that serialization contains a tuple, decode it back to the logical key so
 // INSERT/UPDATE IGNORE warnings match the existing duplicate error path.
-func FormatDedupEntry(vec *vector.Vector, row int, colName string, colTypes []plan.Type) (string, error) {
+func FormatDedupEntry(vec *vector.Vector, row int, colName string, colTypes []plan.Type) (entry string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			entry = ""
+			err = moerr.NewInternalErrorNoCtxf("cannot format duplicate key: %v", recovered)
+		}
+	}()
+	if vec == nil || row < 0 || row >= vec.Length() {
+		return "", moerr.NewInternalErrorNoCtxf("cannot format duplicate key at row %d", row)
+	}
 	if len(colTypes) == 1 && colName == catalog.IndexTableIndexColName &&
 		vec.GetType().Oid == types.T_varchar {
 		t, _, schema, err := types.DecodeTuple(vec.GetBytesAt(row))

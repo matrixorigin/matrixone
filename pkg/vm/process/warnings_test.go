@@ -53,44 +53,21 @@ func TestWarningAccumulatorRetainsBoundedDiagnosticsAndExactCount(t *testing.T) 
 	require.Len(t, accumulator.Codes, warningDiagnosticRetentionLimit)
 }
 
-func TestWarningAttemptDiscardsFailedAttemptAndCommitsSurvivor(t *testing.T) {
+func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	session := new(warningTestSession)
 	proc := &Process{Base: &BaseProcess{}, Session: session}
-
-	proc.BeginWarningAttempt(0)
-	AppendWarningBatch(proc, 2, []uint16{1062}, []string{"duplicate"})
-	proc.AbortWarningAttempt(0)
-	require.Zero(t, session.total)
-	require.Empty(t, session.codes)
-
-	proc.BeginWarningAttempt(1)
-	AppendWarningBatch(proc, 1, []uint16{3819}, []string{"check failed"})
-	proc.CommitWarningAttempt(1)
-	require.Equal(t, uint64(1), session.total)
-	require.Equal(t, []uint16{3819}, session.codes)
-	require.Equal(t, []string{"check failed"}, session.messages)
-}
-
-func TestWarningAttemptSharesStateWithChildProcess(t *testing.T) {
-	session := new(warningTestSession)
-	proc := &Process{Base: &BaseProcess{}, Session: session}
+	attempt := new(warningTestSession)
+	proc.WarningSink = attempt
 	child := proc.NewNoContextChildProc(0)
 
-	proc.BeginWarningAttempt(0)
-	AppendWarningBatch(child, 1, []uint16{1062}, []string{"duplicate"})
-	proc.CommitWarningAttempt(0)
-	require.Equal(t, uint64(1), session.total)
-	require.Equal(t, []uint16{1062}, session.codes)
-}
+	AppendWarningBatch(child, 2, []uint16{1062, 1062}, []string{"duplicate", "duplicate"})
+	require.Zero(t, session.total, "an active execution sink must own diagnostics")
+	require.Equal(t, uint64(2), attempt.total)
+	require.Equal(t, []uint16{1062, 1062}, attempt.codes)
 
-func TestUnboundWarningBatchRemainsDirectAfterAttempt(t *testing.T) {
-	session := new(warningTestSession)
-	proc := &Process{Base: &BaseProcess{}, Session: session}
-	proc.BeginWarningAttempt(0)
-	proc.AbortWarningAttempt(0)
-
-	// Unbound local diagnostics do not carry a generation and remain compatible
-	// with callers that use WarningAccumulator outside Compile.Run.
+	// Outside Compile.Run (or for an internal/background process without an
+	// attempt sink), the session remains the compatibility fallback.
+	proc.WarningSink = nil
 	AppendWarningBatch(proc, 1, []uint16{1292}, []string{"truncated"})
 	require.Equal(t, uint64(1), session.total)
 	require.Equal(t, []uint16{1292}, session.codes)

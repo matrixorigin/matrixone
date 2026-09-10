@@ -27,8 +27,9 @@ func newWarningAttempt(proc *process.Process) *warningAttempt {
 	if proc == nil {
 		return nil
 	}
-	_, single := proc.GetWarningSink().(warningDiagnosticSink)
-	_, batch := proc.GetWarningSink().(warningDiagnosticBatchSink)
+	destination := proc.GetWarningSink()
+	_, single := destination.(warningDiagnosticSink)
+	_, batch := destination.(warningDiagnosticBatchSink)
 	if !single && !batch {
 		return nil
 	}
@@ -82,13 +83,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	for i, w := range warnings {
 		codes[i], messages[i] = w.Code, w.Message
 	}
-	if sink, ok := destination.(warningDiagnosticBatchSink); ok {
-		sink.AppendWarningBatch(total, codes, messages)
-	} else if sink, ok := destination.(warningDiagnosticSink); ok {
-		for i := range codes {
-			sink.AppendWarningDiagnostic(codes[i], messages[i])
-		}
-	}
+	appendWarningBatchToSink(destination, total, codes, messages)
 }
 
 func (a *warningAttempt) discard() {
