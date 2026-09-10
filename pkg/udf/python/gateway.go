@@ -127,13 +127,6 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if err := validateInvocation(invocation); err != nil {
 		return err
 	}
-	if invocation.Length == 0 {
-		return result.PreExtendAndReset(0)
-	}
-	if err := g.connect(); err != nil {
-		return err
-	}
-
 	args := make([]TypeDescriptor, len(invocation.Args))
 	for i, typ := range invocation.Args {
 		var err error
@@ -144,6 +137,12 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	}
 	returnDescriptor, err := NewTypeDescriptor(invocation.ReturnType)
 	if err != nil {
+		return err
+	}
+	if invocation.Length == 0 {
+		return result.PreExtendAndReset(0)
+	}
+	if err := g.connect(); err != nil {
 		return err
 	}
 	openBody, err := json.Marshal(openPayload{Handler: invocation.Handler, Source: invocation.Source, Mode: invocation.Mode, NullPolicy: invocation.NullPolicy, ABIContract: invocation.ABIContract, AdapterVersion: invocation.AdapterVersion, SDKVersion: invocation.SDKVersion, Context: cloneMap(invocation.Context), Args: args, Return: returnDescriptor, MaxBatchBytes: g.cfg.MaxBatchBytes, MaxBatchRows: g.cfg.MaxBatchRows, HandlerTimeoutSeconds: g.cfg.RequestTimeout.Seconds()})
@@ -333,11 +332,12 @@ func (g *Gateway) receiveResultBatch(
 				if len(data.DataBody) != 0 {
 					return 0, fmt.Errorf("python udf: result schema contains a body")
 				}
-				if len(data.AppMetadata) > 0 {
-					control, err := protocol.UnmarshalControl(data.AppMetadata)
-					if err != nil || control.Tuple != tuple || control.Kind != "ResultSchema" {
-						return 0, fmt.Errorf("python udf: invalid result schema metadata")
-					}
+				if len(data.AppMetadata) == 0 {
+					return 0, fmt.Errorf("python udf: result schema is missing metadata")
+				}
+				control, err := protocol.UnmarshalControl(data.AppMetadata)
+				if err != nil || control.Tuple != tuple || control.Kind != "ResultSchema" {
+					return 0, fmt.Errorf("python udf: invalid result schema metadata")
 				}
 				*schemaFrame = &ArrowFrame{Header: append([]byte(nil), data.DataHeader...)}
 				continue
@@ -504,8 +504,8 @@ func (g *Gateway) action(ctx context.Context, kind string, control protocol.Cont
 	if err != nil {
 		return err
 	}
-	if ack.Tuple != control.Tuple || ack.Kind != "Ack" {
-		return fmt.Errorf("python udf: %s returned an invalid ACK", kind)
+	if err := validateActionAck(kind, control, ack); err != nil {
+		return err
 	}
 	if ack.Status != statusOK {
 		return fmt.Errorf("python udf: %s rejected: %s", kind, ack.Reason)
@@ -515,6 +515,25 @@ func (g *Gateway) action(ctx context.Context, kind string, control protocol.Cont
 			return fmt.Errorf("python udf: %s returned multiple results", kind)
 		}
 		return err
+	}
+	return nil
+}
+
+func validateActionAck(kind string, request, ack protocol.Control) error {
+	if ack.Tuple != request.Tuple || ack.Kind != "Ack" {
+		return fmt.Errorf("python udf: %s returned an invalid ACK", kind)
+	}
+	switch kind {
+	case "AcknowledgeResults":
+		if ack.AckSequence != request.AckSequence {
+			return fmt.Errorf("python udf: %s ACK sequence %d, expected %d", kind, ack.AckSequence, request.AckSequence)
+		}
+	case "AcknowledgeFinish":
+		if ack.FinishID != request.FinishID {
+			return fmt.Errorf("python udf: %s ACK finish ID does not match the request", kind)
+		}
+	default:
+		return fmt.Errorf("python udf: unsupported action %q", kind)
 	}
 	return nil
 }
