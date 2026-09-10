@@ -246,6 +246,8 @@ test('workflow has a five-minute trusted, bounded, least-privilege controller', 
   const watchdog = readFileSync(`${__dirname}/../workflows/cancel-doomed-pr-ci.yaml`, 'utf8');
   assert.match(watchdog, /cron: '\*\/5 \* \* \* \*'/);
   assert.match(watchdog, /cancel-in-progress: false/);
+  assert.match(watchdog,
+    /github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\)/);
   assert.match(watchdog, /^permissions: \{\}$/m);
   assert.match(watchdog, /^      actions: write$/m);
   assert.match(watchdog, /^      contents: read$/m);
