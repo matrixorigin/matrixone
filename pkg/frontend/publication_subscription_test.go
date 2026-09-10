@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -453,6 +455,130 @@ func Test_doAlterPublication2(t *testing.T) {
 		convey.So(err, convey.ShouldBeError)
 
 	})
+}
+
+func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
+	tests := []struct {
+		name        string
+		protocol    int64
+		publication string
+		statement   string
+		lookupDB    string
+		wantErr     bool
+	}{
+		{
+			name:        "v60 explicit database rejects",
+			protocol:    defines.MORPCVersion60,
+			publication: "branch_db",
+			statement:   "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:    "replacement_db",
+			wantErr:     true,
+		},
+		{
+			name:        "v60 effective database rejects",
+			protocol:    defines.MORPCVersion60,
+			publication: "branch_db",
+			statement:   "alter publication pub1 account acc1 comment 'updated'",
+			lookupDB:    "branch_db",
+			wantErr:     true,
+		},
+		{
+			name:        "v61 explicit database succeeds",
+			protocol:    defines.MORPCVersion61,
+			publication: "branch_db",
+			statement:   "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:    "replacement_db",
+		},
+		{
+			name:        "v61 effective database succeeds",
+			protocol:    defines.MORPCVersion61,
+			publication: "branch_db",
+			statement:   "alter publication pub1 account acc1 comment 'updated'",
+			lookupDB:    "branch_db",
+		},
+		{
+			name:        "account level remains database independent",
+			protocol:    defines.MORPCVersion60,
+			publication: pubsub.TableAll,
+			statement:   "alter publication pub1 account acc1 comment 'updated'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			tenant := &TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			}
+			ses := newSes(nil, ctrl)
+			ses.tenant = tenant
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			setPu("", pu)
+			ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+			setProtocolVersionForTest(t, ses.GetService(), test.protocol)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			t.Cleanup(bhStub.Reset)
+
+			bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+				{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+				{int64(1), "acc1", "open", uint64(1), nil},
+			})
+			columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
+			bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows([]string{"exists"}, [][]interface{}{{1}})
+			pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
+			bh.sql2result[pubSQL] = newMrsForRestoreStringRows(
+				[]string{"account_id", "account_name", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
+				[][]interface{}{{int64(sysAccountID), sysAccountName, "pub1", test.publication, uint64(0), pubsub.TableAll, pubsub.AccountAll, "", nil, uint64(0), uint64(0), "old"}},
+			)
+			if test.lookupDB != "" {
+				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.lookupDB, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"dat_id", "dat_type"},
+					[][]interface{}{{uint64(7), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
+				newMrsForRestoreStringRows(
+					[]string{"sub_account_id", "sub_account_name", "sub_name", "sub_time", "pub_account_id", "pub_account_name", "pub_name", "pub_database", "pub_tables", "pub_time", "pub_comment", "status"},
+					nil,
+				)
+
+			stmts, err := mysql.Parse(ctx, test.statement, 1)
+			require.NoError(t, err)
+			err = doAlterPublication(ctx, ses, stmts[0].(*tree.AlterPublication))
+			if test.wantErr {
+				require.ErrorContains(t, err, "is not a user database")
+				require.Contains(t, bh.executedSQLs, "rollback;")
+				require.NotContains(t, bh.executedSQLs, "commit;")
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, sql, "update mo_catalog.mo_pubs")
+					require.NotContains(t, sql, "update mo_catalog.mo_subs")
+					require.NotContains(t, sql, "insert into mo_catalog.mo_subs")
+				}
+			} else {
+				require.NoError(t, err)
+				require.Contains(t, bh.executedSQLs, "commit;")
+			}
+
+			if test.lookupDB == "" {
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, sql, "from mo_catalog.mo_database")
+				}
+			}
+		})
+	}
 }
 
 func Test_doDropPublication(t *testing.T) {
