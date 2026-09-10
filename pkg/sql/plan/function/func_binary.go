@@ -70,7 +70,8 @@ func doFaultPoint(
 		podResp []fj.PodResponse
 	)
 
-	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(proc.Ctx, sql); err != nil {
+	ctx := process.ContextWithWarningSink(proc.Ctx, proc.WarningSink)
+	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql); err != nil {
 		return false, err
 	}
 
@@ -9735,7 +9736,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 		if (truncated || conversionTruncated) && proc != nil {
-			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+			if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 				renderedValue := renderWarningValue(i)
 				if conversionTruncated {
 					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,

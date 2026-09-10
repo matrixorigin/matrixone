@@ -442,6 +442,7 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	proc.WarningSink = process.WarningSinkFromContext(exec.ctx)
 	if session, ok := proc.Session.(interface{ GetSessId() uuid.UUID }); ok {
 		// Internal temporary CREATEs belong to the original connection, including
 		// the physical-name prefix used by orphan-table cleanup.

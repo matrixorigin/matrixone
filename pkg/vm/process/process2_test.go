@@ -39,6 +39,7 @@ func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return
 func TestChildProcessesInheritSession(t *testing.T) {
 	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	parent.Session = &childProcessSession{}
+	parent.WarningSink = &struct{ generation int }{1}
 
 	child := parent.NewNoContextChildProc(0)
 	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
@@ -47,6 +48,9 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.Session, child.Session)
 	require.Same(t, parent.Session, channelChild.Session)
 	require.Same(t, parent.Session, contextChild.Session)
+	require.Same(t, parent.WarningSink, child.GetWarningSink())
+	require.Same(t, parent.WarningSink, channelChild.GetWarningSink())
+	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
 }
 
 func TestBuildPipelineContext(t *testing.T) {

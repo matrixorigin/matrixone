@@ -570,6 +570,9 @@ type Process struct {
 	Ctx     context.Context
 	Cancel  context.CancelCauseFunc
 	Session Session
+	// WarningSink is an immutable execution-attempt destination. Children inherit
+	// the pointer; remote callbacks retain it after a failed attempt is sealed.
+	WarningSink any
 }
 
 type sqlHelper interface {
@@ -1150,4 +1153,12 @@ func (proc *Process) DebugBreakDump(cond bool) {
 	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
+}
+
+// GetWarningSink preserves session diagnostics outside an execution attempt.
+func (proc *Process) GetWarningSink() any {
+	if proc.WarningSink != nil {
+		return proc.WarningSink
+	}
+	return proc.Session
 }
