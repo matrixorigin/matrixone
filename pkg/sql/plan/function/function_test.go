@@ -30,6 +30,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
+	// An older CN may receive an overload selected by a newer CN. It must
+	// reject the unknown index instead of panicking while indexing Overloads.
+	unknown := encodeOverloadID(STR_TO_DATE, 3)
+	_, err := GetFunctionById(context.Background(), unknown)
+	require.Error(t, err)
+	_, exists := GetFunctionByIdWithoutError(unknown)
+	require.False(t, exists)
+	require.False(t, GetFunctionIsWinOrderFunById(unknown))
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
