@@ -2633,6 +2633,46 @@ func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
 	}
 }
 
+func TestBuiltInCotUsesStableReciprocalAndNullsOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []float64{1e-20, -1e-20, 1e-308, -1e-308, 1e100, -1e100, math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, 0, 1}
+	nulls := []bool{false, false, false, false, false, false, false, false, false, true}
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), inputs, nulls)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+		builtInCot,
+	)
+	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+	require.NoError(t, builtInCot(tcc.parameters, tcc.result, proc, tcc.fnLength, nil))
+
+	result := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
+	for i, input := range inputs {
+		value, isNull := result.GetValue(uint64(i))
+		if i >= 6 {
+			require.True(t, isNull, "Cot(%g) should return NULL", input)
+			continue
+		}
+		require.False(t, isNull, "Cot(%g) unexpectedly returned NULL", input)
+		require.Equal(t, 1/math.Tan(input), value)
+	}
+
+	constant := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestConstInput(types.T_float64.ToType(), []float64{1e-20, 1e-20}, nil)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+		builtInCot,
+	)
+	require.NoError(t, constant.result.PreExtendAndReset(constant.fnLength))
+	require.NoError(t, builtInCot(constant.parameters, constant.result, proc, constant.fnLength, nil))
+	constantResult := vector.GenerateFunctionFixedTypeParameter[float64](constant.result.GetResultVector())
+	for i := 0; i < constant.fnLength; i++ {
+		value, isNull := constantResult.GetValue(uint64(i))
+		require.False(t, isNull)
+		require.Equal(t, 1/math.Tan(1e-20), value)
+	}
+}
+
 func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
@@ -2650,7 +2690,7 @@ func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 		{
 			name:  "cot skips masked zero",
 			input: []float64{0, 1},
-			value: math.Tan(math.Pi/2 - 1),
+			value: 1 / math.Tan(1),
 			fn:    builtInCot,
 		},
 	}

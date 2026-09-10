@@ -2431,6 +2431,14 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "round", "truncate":
+				// Precision endpoints do not bound ROUND's interior extrema or
+				// TRUNCATE's sign-dependent precision direction. Only derive a
+				// range when precision is independent of the row value.
+				if len(args) > 1 && !isConst(args[1]) {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "isnull", "is_null":
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
