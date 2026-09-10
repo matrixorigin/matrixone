@@ -62,6 +62,13 @@ func TestControlRejectsUnknownEnvelopeFields(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 }
 
+func TestControlRejectsDuplicateJSONFields(t *testing.T) {
+	wire := []byte(`{"version":1,"kind":"InputBatch","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"sequence":1,"sequence":2}`)
+	_, err := UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "duplicate control JSON field")
+}
+
 func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
 	tuple := testTuple()
 	tuple.AccountID = 0
