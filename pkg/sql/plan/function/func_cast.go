@@ -407,6 +407,10 @@ func preparedFloatToInt64(input string) (int64, error) {
 	return explicitFloatToInt64(value)
 }
 
+func isPreparedNumericCastOutOfRange(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrOutOfRange) || errors.Is(err, strconv.ErrRange)
+}
+
 func preparedDecimalToUint64(input string) (uint64, error) {
 	rounded, err := roundPreparedDecimalIntegerString(input)
 	if err != nil {
@@ -6614,7 +6618,7 @@ func strToSignedWithProc[T constraints.Signed](
 						r, err = preparedDecimalToInt64(s)
 					}
 					if err != nil {
-						if strings.Contains(err.Error(), "value out of range") || errors.Is(err, strconv.ErrRange) {
+						if isPreparedNumericCastOutOfRange(err) {
 							return moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
 						}
 						return moerr.NewInvalidArg(ctx, "cast to int", s)
@@ -7240,7 +7244,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 						value, tErr = preparedDecimalToUint64(s)
 					}
 					if tErr != nil {
-						if strings.Contains(tErr.Error(), "value out of range") || errors.Is(tErr, strconv.ErrRange) {
+						if isPreparedNumericCastOutOfRange(tErr) {
 							return moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
 						}
 						return moerr.NewInvalidArg(ctx, "cast to uint64", s)

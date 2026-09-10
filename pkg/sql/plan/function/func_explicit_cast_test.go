@@ -334,6 +334,33 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 	})
 }
 
+func TestExplicitCastPreparedFloatOverflowKeepsRangeError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		target types.Type
+		zero   any
+	}{
+		{name: "signed", target: types.T_int64.ToType(), zero: []int64{}},
+		{name: "unsigned", target: types.T_uint64.ToType(), zero: []uint64{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e100"}, nil),
+					NewFunctionTestInput(test.target, test.zero, nil),
+				},
+				NewFunctionTestResult(test.target, true, test.zero, nil), NewExplicitCast)
+			testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc,
+				testCase.fnLength, testCase.selectList)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		})
+	}
+}
+
 func TestExplicitCastFloatOverflowErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
