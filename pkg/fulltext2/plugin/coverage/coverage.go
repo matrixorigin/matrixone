@@ -116,11 +116,18 @@ func parseWatermark(s string) (types.TS, bool) {
 //     stale warm cache from over-reporting coverage. The bar is the snapshot TS for a
 //     historical read (fixed past state) and SourceCommitTS for a current read.
 //
+// It also returns build_ts, the generation's coverage point, for the planner's partial-plan gap
+// bound. build_ts is computed once and returned on every non-guard path (including not-live), so
+// the planner needs no second read; liveness gates only the covered decision, not the gap bound.
+//
 // An empty bar, an unknown build_ts (0), or any lookup error declines.
-func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, error) {
+func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, types.TS, error) {
 	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
-		return false, nil
+		return false, types.TS{}, nil
 	}
+	// The build_ts of the generation a probe would search, read once here and returned so the
+	// partial-plan path reuses it as the table_changes lower bound rather than reading it again.
+	buildTS := types.BuildTS(searchedBuildTS(ctx, req), 0)
 	// The bar build_ts must reach. A historical read sees a fixed past state, so the bar
 	// is the snapshot TS itself (build_ts >= snapshot ⇒ every source commit up to it is
 	// indexed); SourceCommitTS is not used for a snapshot read. A current read uses the
@@ -130,24 +137,13 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 		bar = types.TimestampToTS(*req.ScanSnapshotTS)
 	}
 	if bar.IsEmpty() {
-		return false, nil
+		return false, buildTS, nil
 	}
 	live, err := indexJobLive(ctx, req)
 	if err != nil || !live {
-		return false, err
+		return false, buildTS, err
 	}
-	covered := types.BuildTS(searchedBuildTS(ctx, req), 0)
-	return !covered.LT(&bar), nil
-}
-
-// IndexBuildTS returns build_ts of the generation a probe would search (0 = unknown),
-// for the planner's partial-plan gap decision (SourceCommitTS - build_ts). It does NOT
-// check liveness -- that is CoversSnapshot's job; this only exposes the coverage point.
-func (Hooks) IndexBuildTS(ctx context.Context, req coverage.Request) types.TS {
-	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
-		return types.TS{}
-	}
-	return types.BuildTS(searchedBuildTS(ctx, req), 0)
+	return !buildTS.LT(&bar), buildTS, nil
 }
 
 // searchedBuildTS reads build_ts of the generation a probe would actually search, the SAME

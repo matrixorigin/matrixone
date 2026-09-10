@@ -88,12 +88,12 @@ type Hooks interface {
 	// error the caller has to interpret. Returning true when the index is behind
 	// produces wrong query results; returning false only forgoes an
 	// optimization.
-	CoversSnapshot(ctx context.Context, req Request) (bool, error)
-
-	// IndexBuildTS reports the source-table commit the generation a probe would search
-	// reflects (0 = unknown). When CoversSnapshot is false because the index is behind on
-	// a current read, the planner uses this to size the gap (SourceCommitTS - build_ts) and
-	// decide whether a partial plan -- index bulk plus a table_changes gap scan -- is
-	// cheaper than a full table scan. It does not check liveness.
-	IndexBuildTS(ctx context.Context, req Request) types.TS
+	//
+	// It also returns the build_ts of the generation a probe would search (0 = unknown) --
+	// the same value the coverage decision is derived from. When covered is false on a
+	// current read, the planner uses this build_ts as the lower bound of a table_changes
+	// tail (a partial plan) instead of a full scan; returning it here avoids a second
+	// metadata read. build_ts is reported even when the index is not live (liveness gates
+	// only the mandatory-filter decision, not the gap bound).
+	CoversSnapshot(ctx context.Context, req Request) (covered bool, buildTS types.TS, err error)
 }

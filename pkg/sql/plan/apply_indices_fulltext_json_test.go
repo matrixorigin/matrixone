@@ -745,8 +745,8 @@ func (fakeSourceRel) SourceCommitTS(context.Context) (types.TS, error) {
 // coverage lookups, so the whole decision surface is exercised without a live index. A fulltext2
 // json index is AlwaysAsync, so decideJSONProbe runs the full path rather than short-circuiting.
 func TestDecideJSONProbeMatrix(t *testing.T) {
-	origCovers, origBuild := coversSnapshotFn, indexBuildTSFn
-	defer func() { coversSnapshotFn, indexBuildTSFn = origCovers, origBuild }()
+	origCovers := coversSnapshotFn
+	defer func() { coversSnapshotFn = origCovers }()
 
 	idx := jpJSONIndex("j", `{"parser":"json"}`)
 	newCase := func(withEngine bool) (*QueryBuilder, *plan.Node) {
@@ -779,63 +779,61 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	asSnapshot := func(scan *plan.Node) {
 		scan.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000}}
 	}
-	covers := func(v bool, err error) {
-		coversSnapshotFn = func(context.Context, string, coverage.Request) (bool, error) { return v, err }
-	}
-	buildTS := func(ts types.TS) {
-		indexBuildTSFn = func(context.Context, string, coverage.Request) types.TS { return ts }
+	// covers stubs CoversSnapshot to return the (covered, build_ts, err) the decision keys on.
+	covers := func(v bool, bts types.TS, err error) {
+		coversSnapshotFn = func(context.Context, string, coverage.Request) (bool, types.TS, error) {
+			return v, bts, err
+		}
 	}
 
 	// current read, behind, build_ts known, table_changes-eligible -> partial
-	covers(false, nil)
-	buildTS(types.BuildTS(100, 0))
+	covers(false, types.BuildTS(100, 0), nil)
 	b, scan := newCase(true)
 	kind, bts := b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbePartial, kind)
 	require.Equal(t, int64(100), bts.Physical())
 
 	// current read, behind, unknown build_ts -> skip
-	buildTS(types.TS{})
+	covers(false, types.TS{}, nil)
 	b, scan = newCase(true)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
 
 	// current read, covered -> covered
-	covers(true, nil)
+	covers(true, types.TS{}, nil)
 	b, scan = newCase(true)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeCovered, kind)
 
 	// snapshot read, covered -> covered (skips the source-relation lookup)
+	covers(true, types.TS{}, nil)
 	b, scan = newCase(false)
 	asSnapshot(scan)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeCovered, kind)
 
 	// snapshot read, not covered -> skip; snapshots are binary, never partial
-	covers(false, nil)
-	buildTS(types.BuildTS(100, 0))
+	covers(false, types.BuildTS(100, 0), nil)
 	b, scan = newCase(false)
 	asSnapshot(scan)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
 
 	// coverage lookup error -> skip (fail closed)
-	covers(false, moerr.NewInternalErrorNoCtx("boom"))
+	covers(false, types.TS{}, moerr.NewInternalErrorNoCtx("boom"))
 	b, scan = newCase(true)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
 
 	// current read with no storage engine -> skip
-	covers(true, nil)
+	covers(true, types.TS{}, nil)
 	b, scan = newCase(false)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
 
 	// composite/hidden primary key -> skip: table_changes drops the hidden pk column, so the tail
 	// cannot be anchored; a partial plan would hard-error at the splice, so decline to a full scan.
-	covers(false, nil)
-	buildTS(types.BuildTS(100, 0))
+	covers(false, types.BuildTS(100, 0), nil)
 	b, scan = newCase(true)
 	scan.TableDef.Cols = append(scan.TableDef.Cols,
 		&plan.ColDef{Name: "__mo_cpkey_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_varchar)}})
@@ -846,8 +844,7 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 
 	// build_ts already at/after the read snapshot -> empty (build_ts, snapshot] window -> skip; the
 	// index already covers this read and table_changes would reject from >= to.
-	covers(false, nil)
-	buildTS(types.BuildTS(2_000_000_000_000_000_000, 0)) // > the fakeCoverageTxn snapshot (1.7e18)
+	covers(false, types.BuildTS(2_000_000_000_000_000_000, 0), nil) // > the fakeCoverageTxn snapshot (1.7e18)
 	b, scan = newCase(true)
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind, "empty window (build_ts >= snapshot) -> full scan")

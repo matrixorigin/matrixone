@@ -106,7 +106,7 @@ func gateReq(sourceCommit int64) coverage.Request {
 // only shape that grants the probe.
 func TestCoversSnapshotCovered(t *testing.T) {
 	sql := mockGate(t, []logRow{{state: iscpJobStateRunning}}, 200)
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 	require.NoError(t, err)
 	require.True(t, covered)
 
@@ -122,7 +122,7 @@ func TestCoversSnapshotCovered(t *testing.T) {
 // Equality is coverage: build_ts need only reach the source commit.
 func TestCoversSnapshotBuildTSExactlyAtSource(t *testing.T) {
 	mockGate(t, []logRow{{state: iscpJobStateCompleted}}, 100)
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 	require.NoError(t, err)
 	require.True(t, covered)
 }
@@ -150,7 +150,7 @@ func TestCoversSnapshotFailsClosed(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			mockGate(t, c.jobs, c.durableBuildTS)
-			covered, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+			covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 			require.NoError(t, err)
 			require.False(t, covered)
 		})
@@ -166,7 +166,7 @@ func TestCoversSnapshotHistorical(t *testing.T) {
 	r := gateReq(300) // SourceCommitTS deliberately > build_ts; must be ignored
 	histTS := timestamp.Timestamp{PhysicalTime: 50}
 	r.ScanSnapshotTS = &histTS
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
 	require.True(t, covered)
 }
@@ -177,7 +177,7 @@ func TestCoversSnapshotHistoricalBehind(t *testing.T) {
 	r := gateReq(0) // no SourceCommitTS at all; the bar is the snapshot
 	histTS := timestamp.Timestamp{PhysicalTime: 100}
 	r.ScanSnapshotTS = &histTS
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 	require.NoError(t, err)
 	require.False(t, covered)
 }
@@ -189,7 +189,7 @@ func TestCoversSnapshotIgnoresDroppedRows(t *testing.T) {
 		{state: iscpJobStateRunning, dropped: true},
 		{state: iscpJobStateRunning},
 	}, 200)
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 	require.NoError(t, err)
 	require.True(t, covered)
 }
@@ -218,7 +218,7 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	noSourceTS := full
 	noSourceTS.SourceCommitTS = types.TS{}
 	for _, r := range []coverage.Request{noIdx, noTxn, noTable, noSourceTS} {
-		covered, err := Hooks{}.CoversSnapshot(sysCtx(), r)
+		covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 		require.NoError(t, err)
 		require.False(t, covered)
 	}
@@ -232,7 +232,7 @@ func TestCoversSnapshotLookupError(t *testing.T) {
 	execWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("boom")
 	}
-	covered, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 	require.Error(t, err)
 	require.False(t, covered)
 }
@@ -240,7 +240,7 @@ func TestCoversSnapshotLookupError(t *testing.T) {
 // A context with no tenant cannot name the account in the predicate.
 func TestCoversSnapshotNoAccount(t *testing.T) {
 	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 200)
-	covered, err := Hooks{}.CoversSnapshot(context.Background(), gateReq(100))
+	covered, _, err := Hooks{}.CoversSnapshot(context.Background(), gateReq(100))
 	require.Error(t, err)
 	require.False(t, covered)
 }
@@ -268,16 +268,26 @@ func TestParseWatermark(t *testing.T) {
 	}
 }
 
-// IndexBuildTS returns the searched generation's build_ts for the planner's gap sizing: zero for an
-// incomplete request, else the cold-path MAX(build_ts) from the metadata table. It does not check
-// liveness (that is CoversSnapshot's job).
-func TestIndexBuildTS(t *testing.T) {
-	// an incomplete request yields the zero TS (fail closed)
-	zero := Hooks{}.IndexBuildTS(sysCtx(), coverage.Request{})
-	require.True(t, zero.IsEmpty())
-
-	// cold cache -> MAX(build_ts) from the metadata table (liveness rows are irrelevant here)
-	mockGate(t, nil, 4242)
-	bts := Hooks{}.IndexBuildTS(sysCtx(), gateReq(0))
+// CoversSnapshot returns the searched generation's build_ts (cold path: MAX(build_ts) from the
+// metadata) alongside the verdict, so the planner reuses it for the partial-plan gap bound. It is
+// returned even when the index is not live, since liveness gates only the covered decision.
+func TestCoversSnapshotReturnsBuildTS(t *testing.T) {
+	// live and build_ts (4242) past the source commit (100): covered, build_ts returned.
+	mockGate(t, []logRow{{state: iscpJobStateRunning}}, 4242)
+	covered, bts, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	require.NoError(t, err)
+	require.True(t, covered)
 	require.Equal(t, int64(4242), bts.Physical())
+
+	// not live: not covered, but build_ts is still reported for the partial-plan gap bound.
+	mockGate(t, []logRow{{state: 99}}, 4242)
+	covered, bts, err = Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
+	require.NoError(t, err)
+	require.False(t, covered)
+	require.Equal(t, int64(4242), bts.Physical())
+
+	// an incomplete request declines with the zero TS.
+	_, zero, err := Hooks{}.CoversSnapshot(sysCtx(), coverage.Request{})
+	require.NoError(t, err)
+	require.True(t, zero.IsEmpty())
 }
