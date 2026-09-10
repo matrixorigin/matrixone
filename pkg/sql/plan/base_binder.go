@@ -3627,9 +3627,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
-	if b.builder != nil && b.builder.isPrepareStatement {
-		b.markPreparedStringDomainSubquerySources(name, args)
-	}
 	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
 	if coerceErr != nil {
 		return nil, coerceErr
