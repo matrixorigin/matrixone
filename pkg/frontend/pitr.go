@@ -1279,13 +1279,27 @@ func restoreToAccountWithPitr(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account '%d', restore timestamp : %d", pitrName, curAccount, ts))
 
-	var dbNames []string
-	// delete current dbs
-	if dbNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+	var currentDBNames, restoreDBNames []string
+	if restoreDBNames, err = showDatabasesWithPitr(ctx, sid, bh, pitrName, ts); err != nil {
+		return
+	}
+	if err = preflightLogicalRestoreDatabases(
+		ctx,
+		restoreDBNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+		},
+	); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs
+	if currentDBNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			// drop existing cluster table
 			if curAccount == 0 && dbName == moCatalog {
@@ -1304,16 +1318,7 @@ func restoreToAccountWithPitr(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesWithPitr(
-		ctx,
-		sid,
-		bh,
-		pitrName,
-		ts); err != nil {
-		return
-	}
-
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if err = restoreToDatabaseWithPitr(
 			ctx,
 			sid,
@@ -1427,11 +1432,18 @@ func restoreToDatabaseOrTableWithPitr(
 	}
 
 	var (
-		createDbSql string
-		tableInfos  []*tableInfo
-		isSubDb     bool
+		definition logicalRestoreDatabaseDefinition
+		tableInfos []*tableInfo
+		isSubDb    bool
 	)
-	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	definition, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	if err != nil {
+		return
+	}
+	createDbSql := definition.createSQL
+	ctx, err = prepareLogicalRestoreDatabase(
+		ctx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
 	if err != nil {
 		return
 	}
@@ -2515,24 +2527,24 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	dbName string,
 	accountId uint32,
 	ts int64,
-) (string, error) {
+) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", pitrName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 // createPubByPitr create pub after the database is created by pitr

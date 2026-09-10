@@ -36,10 +36,13 @@ import (
 )
 
 func TestIsUserDatabaseType(t *testing.T) {
-	require.True(t, isUserDatabaseType(""))
-	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch))
-	require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription))
-	require.False(t, isUserDatabaseType("unknown"))
+	for _, version := range []int64{defines.MORPCVersion61, defines.MORPCVersion62} {
+		require.True(t, isUserDatabaseType("", version))
+		require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription, version))
+		require.False(t, isUserDatabaseType("unknown", version))
+	}
+	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion61))
+	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion62))
 }
 
 func Test_doCreatePublication(t *testing.T) {
@@ -96,6 +99,7 @@ func Test_doCreatePublication(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Service().Return("").AnyTimes()
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
@@ -312,6 +316,7 @@ func Test_doAlterPublication(t *testing.T) {
 
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Service().Return("").AnyTimes()
 		// begin; commit; rollback
 		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
