@@ -77,6 +77,17 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "PROTOCOL: execution payload is not a valid Arrow stream"):
             worker._deserialize_record_batch(b"not-an-arrow-stream")
 
+    def test_descriptor_domain_is_strict(self):
+        invalid = [
+            {"type_id": worker.VARCHAR, "width": -1, "offset_width": 32},
+            {"type_id": worker.INT64, "offset_width": 64},
+            {"type_id": worker.DECIMAL64, "width": 3, "scale": 4, "offset_width": 32},
+            {"type_id": worker.VECF32, "width": 65536, "offset_width": 0},
+        ]
+        for descriptor in invalid:
+            with self.assertRaisesRegex(ValueError, "TYPE_CONTRACT"):
+                worker._field("value", descriptor)
+
     def test_closing_control_preserves_zero_last_sequence(self):
         fence = {
             "account_id": 1,
