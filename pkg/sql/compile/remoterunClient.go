@@ -106,7 +106,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
-	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
+	if sink, ok := s.Proc.GetWarningSink().(warningDiagnosticSink); ok {
 		sender.warningSink = sink
 	}
 
