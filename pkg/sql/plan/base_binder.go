@@ -5572,6 +5572,16 @@ func bindFuncExprImplByPlanExpr(
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	// Literal-domain refinement participates in overload lookup, so the
+	// physical arguments must honor a refined OID even when the selected
+	// overload itself requires no additional cast.  In particular, leaving an
+	// integer literal uncast after resolving DECIMAL + DECIMAL makes the decimal
+	// kernel consume an integer vector with decimal scale semantics.
+	if len(argsCastType) == 0 &&
+		(name == "+" || name == "-" || name == "*") &&
+		!sameFunctionArgumentTypes(argsType, lookupTypes) {
+		argsCastType = lookupTypes
+	}
 	// CONVERT's executor consumes a VARCHAR cast, but its declared result bound
 	// belongs to the pre-cast source type. Derive metadata before inserting the
 	// execution cast so fixed numeric/temporal/UUID widths are not replaced by
@@ -5999,6 +6009,18 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func sameFunctionArgumentTypes(left, right []types.Type) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !left[i].Eq(right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
@@ -7218,7 +7240,13 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		if hasDecimalInput && inputs[i].IsIntOrUint() {
+		// Integer literal precision matters for multiplication because the
+		// declared integer type's full domain can otherwise make a small factor
+		// spuriously widen the product.  Addition and subtraction already derive
+		// their safe result precision from the integer domain; retaining their
+		// established Decimal128 coercion also avoids changing outer-join decimal
+		// expression execution paths.
+		if name == "*" && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue

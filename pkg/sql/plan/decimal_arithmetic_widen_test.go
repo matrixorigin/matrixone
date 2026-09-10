@@ -86,6 +86,40 @@ func TestDecimalArithmeticSmallIntegerLiteralKeepsDecimal128(t *testing.T) {
 	require.Equal(t, int32(38), result.Typ.Width)
 }
 
+func TestDecimalMultiplyIntegerLiteralUsesRefinedCast(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal64, 10, 2)
+	result, err := BindFuncExprImplByPlanExpr(ctx, "*", []*planpb.Expr{
+		decimalArithmeticTestColumn(decimalType, 0), makePlan2Int64ConstExprWithType(8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), result.Typ.Id)
+	require.Equal(t, int32(2), result.Typ.Scale)
+
+	args := result.GetF().Args
+	require.Len(t, args, 2)
+	require.Equal(t, int32(types.T_decimal64), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_decimal64), args[1].Typ.Id)
+	require.Equal(t, int32(0), args[1].Typ.Scale)
+	require.NotNil(t, args[1].GetF(), "the integer literal must be physically cast")
+}
+
+func TestDecimalAddIntegerLiteralRetainsDecimal128Coercion(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal64, 10, 2)
+	result, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
+		decimalArithmeticTestColumn(decimalType, 0), makePlan2Int64ConstExprWithType(8),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), result.Typ.Id)
+	require.Equal(t, int32(2), result.Typ.Scale)
+
+	args := result.GetF().Args
+	require.Len(t, args, 2)
+	require.Equal(t, int32(types.T_decimal128), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_decimal128), args[1].Typ.Id)
+}
+
 func TestWideDecimalProductRemainsWideInComparison(t *testing.T) {
 	ctx := context.Background()
 	leftType := types.New(types.T_decimal128, 38, 0)

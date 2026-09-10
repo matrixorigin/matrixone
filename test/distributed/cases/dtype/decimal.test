@@ -404,7 +404,7 @@ SELECT * FROM decimal08;
 
 SELECT a + 1 FROM decimal08;
 
--- Abnormal:value overflow
+-- The exact product needs 39 digits and is widened to Decimal256.
 SELECT a * 2 FROM decimal08;
 
 SELECT a / 3 FROM decimal08;
