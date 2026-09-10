@@ -128,7 +128,8 @@ func avgDecimalScale(inputScale int32) int32 {
 }
 
 func SumReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
+	typ := typs[0]
+	switch typ.Oid {
 	case types.T_float32, types.T_float64:
 		return types.T_float64.ToType()
 	case types.T_int8, types.T_int16, types.T_int32, types.T_year:
@@ -139,14 +140,18 @@ func SumReturnType(typs []types.Type) types.Type {
 		return types.T_uint64.ToType()
 	case types.T_uint64:
 		return types.New(types.T_decimal128, 38, 0)
-	case types.T_decimal64:
-		return types.New(types.T_decimal128, 38, typs[0].Scale)
-	case types.T_decimal128:
-		return types.New(types.T_decimal128, 38, typs[0].Scale)
-	case types.T_decimal256:
-		return types.New(types.T_decimal256, 65, typs[0].Scale)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		// Reserve the same 22 aggregate digits exposed by MySQL's DECIMAL
+		// SUM metadata. Keeping the accumulator in Decimal128 when that
+		// precision crosses 38 makes the result depend on input order: an
+		// intermediate sum can overflow even when the final value fits.
+		precision := min(typ.Width+22, int32(65))
+		if precision <= 38 {
+			return types.New(types.T_decimal128, precision, typ.Scale)
+		}
+		return types.New(types.T_decimal256, precision, typ.Scale)
 	}
-	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
+	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typ))
 }
 
 func int64OfCheck(v1, v2, sum int64) error {
@@ -1931,9 +1936,13 @@ func makeSumAvgExec(
 	case types.T_float64:
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
+		if isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			return newSumAvgDecExec[types.Decimal64, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
-		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+		if (isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256) ||
+			(!isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256) {
 			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 		}
 		return newSumDecimal128FastExec(mp, isSum, aggID, isDistinct, param)

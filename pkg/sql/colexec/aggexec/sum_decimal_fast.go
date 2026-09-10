@@ -100,7 +100,13 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	stateTyp := sumTyp
+	if !isSum {
+		// The fast AVG accumulator is physically Decimal128 even when SUM for
+		// the same input advertises a wider Decimal256 result.
+		stateTyp = types.New(types.T_decimal128, 38, param.Scale)
+	}
+	exec.aggInfo.stateTypes = []types.Type{stateTyp, types.T_int64.ToType()}
 	return &exec
 }
 
@@ -443,7 +449,13 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	stateTyp := sumTyp
+	if !isSum {
+		// The fast AVG accumulator is physically Decimal128 even when SUM for
+		// the same input advertises a wider Decimal256 result.
+		stateTyp = types.New(types.T_decimal128, 38, param.Scale)
+	}
+	exec.aggInfo.stateTypes = []types.Type{stateTyp, types.T_int64.ToType()}
 	return &exec
 }
 

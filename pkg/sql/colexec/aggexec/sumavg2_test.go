@@ -43,6 +43,69 @@ func buildAvgFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, v
 	return vec
 }
 
+func TestSumDecimalReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		want  types.Type
+	}{
+		{name: "decimal64 stays decimal128", input: types.New(types.T_decimal64, 10, 4), want: types.New(types.T_decimal128, 32, 4)},
+		{name: "wide decimal64 promotes", input: types.New(types.T_decimal64, 18, 4), want: types.New(types.T_decimal256, 40, 4)},
+		{name: "decimal128 promotes", input: types.New(types.T_decimal128, 38, 0), want: types.New(types.T_decimal256, 60, 0)},
+		{name: "decimal256 caps", input: types.New(types.T_decimal256, 50, 10), want: types.New(types.T_decimal256, 65, 10)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, SumReturnType([]types.Type{test.input}))
+		})
+	}
+}
+
+func TestSumDecimal128UsesDecimal256Accumulator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal128, 38, 0)
+	maxValue, err := types.ParseDecimal128("99999999999999999999999999999999999999", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	negativeMax := maxValue.Minus()
+
+	for _, test := range []struct {
+		name   string
+		values []types.Decimal128
+		want   string
+	}{
+		{
+			name:   "two maximum values",
+			values: []types.Decimal128{maxValue, maxValue},
+			want:   "199999999999999999999999999999999999998",
+		},
+		{
+			name:   "intermediate overflow cancels",
+			values: []types.Decimal128{maxValue, maxValue, negativeMax, negativeMax},
+			want:   "0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := buildAvgFixedVector(t, mp, typ, test.values)
+			defer input.Free(mp)
+
+			exec := makeSumAvgExec(mp, true, AggIdOfSum, false, typ)
+			defer exec.Free()
+			require.IsType(t, &sumAvgDecExec[types.Decimal128, types.Decimal256]{}, exec)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, types.New(types.T_decimal256, 60, 0), *results[0].GetType())
+			got := vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0)
+			require.Equal(t, test.want, got.Format(0))
+		})
+	}
+}
+
 func TestAvgExactNumericReturnType(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -823,8 +886,8 @@ func TestWindowSlidingSumAvgCapability(t *testing.T) {
 		{name: "int32 sum", aggID: AggIdOfSum, typ: types.T_int32.ToType(), want: true},
 		{name: "int64 sum", aggID: AggIdOfSum, typ: types.T_int64.ToType(), want: true},
 		{name: "decimal64 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal64, 18, 2), want: true},
-		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
-		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
+		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2), want: true},
+		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2), want: true},
 		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
 		{name: "int32 avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType(), want: true},
 		{name: "int64 avg", aggID: AggIdOfAvg, typ: types.T_int64.ToType(), want: true},
