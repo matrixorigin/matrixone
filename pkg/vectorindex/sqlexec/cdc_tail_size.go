@@ -182,6 +182,25 @@ func chunkBound(sqlproc *SqlProcess, db, storageTable string, vectorBytes int64)
 // runSqlForTest indirects the read so the sizing rules are testable without a cluster.
 var runSqlForTest = RunSql
 
+// MaxBuildTS returns MAX(build_ts) across the WHOLE metadata table -- base sub-index
+// generations AND cdc_tail frames -- the greatest source-table commit the index reflects,
+// for the async-index freshness gate. Reads the whole table (unlike LoadMetadata, which some
+// algos restrict to base rows), so the cdc_tail's fresher build_ts is not dropped. Returns 0
+// (= unknown) when the build_ts column is absent (an index predating the provenance migration)
+// or on any read error; 0 is a safe under-report (treats the index as less current, never more).
+func MaxBuildTS(sqlproc *SqlProcess, db, table, buildTsCol string) int64 {
+	if !HasProvenanceColumns(sqlproc, db, table, buildTsCol) {
+		return 0
+	}
+	sql := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+		buildTsCol, sqlquote.QualifiedIdent(db, table))
+	ts, err := scalarInt64(sqlproc, sql)
+	if err != nil {
+		return 0
+	}
+	return ts
+}
+
 // scalarInt64 reads a one-column, one-row result.
 //
 // A SIZING read must never CRASH a load, and RunSql reaches the executor, which PANICS rather

@@ -549,3 +549,10 @@ func (m *MockSearchSearchError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vecto
 func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *MockSearch) BuildTS() int64            { return 0 }
+func (m *MockAnySearch) BuildTS() int64         { return 0 }
+func (m *MockSearchLoadError) BuildTS() int64   { return 0 }
+func (m *MockSearchSearchError) BuildTS() int64 { return 0 }
+func (m *MockRuntimeSearch) BuildTS() int64     { return 0 }

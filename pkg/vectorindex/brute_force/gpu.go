@@ -149,6 +149,9 @@ func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // the HOST arena only: the dataset lives in Go memory and is uploaded per search, so nothing is
 // device RESIDENT between queries -- the transient device copy is bounded by the search itself,
 // not by this cache entry's lifetime.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GpuAdhocBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
 func (idx *GpuAdhocBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	return int64(len(idx.dataset)) * int64(util.UnsafeSizeOf[T]()), 0
 }
@@ -390,6 +393,9 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 // charged to the DEVICE arena only -- unlike GpuAdhocBruteForceIndex, which keeps its vectors in
 // Go memory and uploads per search, this index owns a built device-resident cuVS index for the
 // whole life of the cache entry, and the Go copy is released at build time.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GpuBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
 func (idx *GpuBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	return 0, int64(idx.count) * int64(idx.dimension) * int64(util.UnsafeSizeOf[T]())
 }

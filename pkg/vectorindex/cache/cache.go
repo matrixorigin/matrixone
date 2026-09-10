@@ -183,6 +183,10 @@ type VectorIndexSearchIf interface {
 	// The cache calls it once, right after Load, and caches the result on the entry, so it
 	// need not be cheap and is never called on the search path.
 	GetIndexSize() (hostBytes, deviceBytes int64)
+	// BuildTS reports the greatest source-table commit this loaded generation reflects,
+	// for the async-index freshness gate. fulltext2 returns MAX(metadata.build_ts); the
+	// vector algos, whose freshness is handled elsewhere, return 0. 0 = unknown.
+	BuildTS() int64
 	Destroy()
 }
 

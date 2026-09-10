@@ -882,3 +882,6 @@ func houseKeepingSync(t *testing.T, c *VectorIndexCache) {
 	require.Eventually(t, func() bool { return !c.capRefreshing.Load() }, 30*time.Second, time.Millisecond,
 		"the cap refresh never finished")
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *mutatingSizeSearch) BuildTS() int64 { return 0 }

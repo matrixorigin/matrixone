@@ -84,6 +84,12 @@ type Fulltext2Search struct {
 	loadedTail int64
 	genValid   bool
 
+	// buildTS is MAX(metadata.build_ts) over the loaded generation (base + cdc_tail):
+	// the greatest source-table commit this index reflects. Captured at Load so it
+	// matches exactly the generation this object searches. 0 = unknown (pre-migration
+	// index or read error), which callers must treat as "not current".
+	buildTS int64
+
 	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
 	// following Load will cost before any base is mapped, and so Load can run the heap-budget
 	// check without repeating the aggregate. Superseded by the loaded segments once Load
@@ -160,6 +166,11 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
 
+	// Capture the base-table coverage of exactly what was just loaded, in the same
+	// txn/snapshot as the data, so the freshness gate compares the generation this
+	// object will actually search.
+	s.buildTS = MaxBuildTS(sqlproc, s.cfg, false /* base + cdc_tail */)
+
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
 	// stays false and IsStale reports the entry as uncheckable-hence-stale (evict + reload to
@@ -200,6 +211,12 @@ func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 		mapped += int64(len(seg.mmapData))
 	}
 	return ndoc*estBytesPerDocHeap + mapped, 0
+}
+
+// BuildTS returns the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), captured at Load. 0 = unknown.
+func (s *Fulltext2Search) BuildTS() int64 {
+	return s.buildTS
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by

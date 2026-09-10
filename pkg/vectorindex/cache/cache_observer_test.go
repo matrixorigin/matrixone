@@ -418,3 +418,6 @@ func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *test
 
 	require.True(t, c.evictEntry("renewed", entry, ""))
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *observerMock) BuildTS() int64 { return 0 }
