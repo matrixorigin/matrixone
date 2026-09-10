@@ -469,7 +469,12 @@ type ResetParamRefRule struct {
 	// sqlExecuteNumericParams carries the logical source value of SQL EXECUTE
 	// user variables. String-backed sources retain their separate MySQL numeric-
 	// prefix domain and must not own a result/common-value domain.
-	sqlExecuteNumericParams      []*plan.Expr
+	sqlExecuteNumericParams []*plan.Expr
+	// sqlExecuteStringMathParams carries the permissive MySQL numeric-prefix
+	// source for string arguments used by ABS/CEIL/FLOOR/MOD/ROUND/SIGN/
+	// TRUNCATE. It is kept separate so a marker reused in generic arithmetic
+	// still follows strict conversion in that occurrence.
+	sqlExecuteStringMathParams   []*plan.Expr
 	sqlExecuteStringBackedParams []bool
 	// numericPrefixDependent records rewritten expressions whose value domain
 	// was selected from an execute-time numeric-prefix parameter. The dependency
@@ -1005,7 +1010,8 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	if !typOK {
 		return nil, false, nil
 	}
-	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
+	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 &&
+		!typ.Oid.IsMySQLString() {
 		return nil, false, nil
 	}
 	isBin := false
@@ -1863,11 +1869,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
+			var sqlExecuteNumericSource *plan.Expr
+			if hasParamPos && paramPos < len(rule.sqlExecuteNumericParams) {
+				sqlExecuteNumericSource = rule.sqlExecuteNumericParams[paramPos]
+				if sqlExecuteNumericSource == nil &&
+					isPreparedStringMathFunction(functionName) &&
+					paramPos < len(rule.sqlExecuteStringMathParams) {
+					sqlExecuteNumericSource = rule.sqlExecuteStringMathParams[paramPos]
+				}
+			}
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				paramPos < len(rule.sqlExecuteNumericParams) &&
-				rule.sqlExecuteNumericParams[paramPos] != nil &&
+				sqlExecuteNumericSource != nil &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
 					functionName, paramPos, rule.sqlExecuteStringBackedParams)
 			sharedControlParam := false
@@ -1915,7 +1929,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// SQL user variable's current source domain before descending into
 				// that cast; evaluating it first can reject a valid DECIMAL value
 				// using the overload selected for the initial TEXT marker.
-				source := rule.sqlExecuteNumericParams[paramPos]
+				source := sqlExecuteNumericSource
 				rewrittenArg = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
 			} else {
 				var applyErr error

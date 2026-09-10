@@ -1059,7 +1059,7 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS argument.  The result is plan
+// whose values supply deferred numeric function arguments. The result is plan
 // metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
 // decoded.  In particular, this avoids scanning/deep-copying the entire plan
@@ -1069,15 +1069,17 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		return nil
 	}
 	positions := make(map[int32]struct{})
+	// ABS predates function-level fallback metadata and keeps its marker on the
+	// provisional argument. Preserve that representation while also accepting
+	// new whole-expression markers.
+	for _, pos := range preparedPlanFunctionFallbackParamPositions(preparePlan, "abs") {
+		positions[pos] = struct{}{}
+	}
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+		if !isPreparedNumericFallbackExpr(expr) {
 			return nil
 		}
-		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
-			return nil
-		}
-		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+		for pos := range preparedNumericValueParamPositions(expr) {
 			positions[pos] = struct{}{}
 		}
 		return nil
@@ -5784,21 +5786,27 @@ func preparedSQLExecuteNumericParamExpr(
 	value any,
 	isBin bool,
 	sourceType types.Type,
+	allowNonnumericPrefix bool,
 ) (*Expr, error) {
 	source, err := preparedRuntimeParamExpr(ctx, value, isBin, sourceType)
 	if err != nil {
 		return nil, err
 	}
 	if isStringBackedType(sourceType) {
-		if _, ok := function.GetNumericStringPrefix(fmt.Sprintf("%v", value)); !ok {
-			// An entirely non-numeric string must retain the existing cast/error
-			// contract of the prepared expression. The approximate arithmetic
-			// source path only owns strings with a MySQL numeric prefix.
-			return nil, nil
+		if !allowNonnumericPrefix {
+			if _, ok := function.GetNumericStringPrefix(fmt.Sprint(value)); !ok {
+				// Generic arithmetic keeps the historical strict conversion for a
+				// wholly nonnumeric SQL EXECUTE string.  Numeric-prefix functions
+				// (ABS/CEIL/FLOOR/MOD/ROUND/SIGN/TRUNCATE) opt in below so MySQL's
+				// zero-with-warning behavior is preserved there.
+				return nil, nil
+			}
 		}
 		// A SQL string user variable enters arithmetic through MySQL's
-		// approximate numeric-prefix domain. Keep that distinct from a DECIMAL
-		// user variable, even though both arrive in the frontend's text vector.
+		// approximate numeric-prefix domain. This includes an empty or wholly
+		// non-numeric string, whose prefix conversion is zero with a warning.
+		// Keep that distinct from a DECIMAL user variable, even though both
+		// arrive in the frontend's text vector.
 		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
 	}
 	if sourceType.Oid == types.T_bool {
@@ -5811,6 +5819,42 @@ func preparedSQLExecuteNumericParamExpr(
 		return source, nil
 	}
 	return nil, nil
+}
+
+func preparedParamUsesStringMathFunction(plan0 *Plan, position int) bool {
+	if plan0 == nil {
+		return false
+	}
+	found := false
+	_ = plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
+		if found || expr == nil {
+			return nil
+		}
+		impl := expr.GetF()
+		if impl == nil || impl.Func == nil {
+			return nil
+		}
+		if !isPreparedStringMathFunction(impl.Func.GetObjName()) {
+			return nil
+		}
+		for _, arg := range impl.Args {
+			if exprContainsPreparedPosition(arg, position) {
+				found = true
+				break
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+func isPreparedStringMathFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
@@ -6040,8 +6084,13 @@ func replaceParamValsWithSelection(
 	selected []bool,
 ) (bool, error) {
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
+	allowNonnumericStringPrefix := make([]bool, len(paramVals))
+	for i := range paramVals {
+		allowNonnumericStringPrefix[i] = preparedParamUsesStringMathFunction(plan0, i)
+	}
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
+	sqlExecuteStringMathParams := make([]*Expr, len(paramVals))
 	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -6084,12 +6133,25 @@ func replaceParamValsWithSelection(
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
-					ctx, param.Value, param.IsBin, param.SourceType)
+					ctx, param.Value, param.IsBin, param.SourceType, false)
 				if err != nil {
 					return false, err
 				}
+				if allowNonnumericStringPrefix[i] {
+					sqlExecuteStringMathParams[i], err = preparedSQLExecuteNumericParamExpr(
+						ctx, param.Value, param.IsBin, param.SourceType, true)
+					if err != nil {
+						return false, err
+					}
+				}
 				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
+						Typ:  makePlan2Type(&param.SourceType),
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
+					})
+				}
+				if sqlExecuteStringMathParams[i] != nil && (numericPrefixSource || retainParamRef) {
+					attachPreparedRuntimeParamSource(sqlExecuteStringMathParams[i], &plan.Expr{
 						Typ:  makePlan2Type(&param.SourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
@@ -6154,12 +6216,14 @@ func replaceParamValsWithSelection(
 	for _, position := range fixedIntegerPositions {
 		if position >= 0 && int(position) < len(sqlExecuteNumericParams) {
 			sqlExecuteNumericParams[position] = nil
+			sqlExecuteStringMathParams[position] = nil
 			sqlExecuteStringBackedParams[position] = false
 		}
 	}
 
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
+	paramRule.sqlExecuteStringMathParams = sqlExecuteStringMathParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
 	// Keep the original execute-time values and protocol categories on the

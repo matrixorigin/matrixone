@@ -324,6 +324,76 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// mathStringTypeMatch keeps VARCHAR inputs on a dedicated string overload.
+// Math functions convert those
+// values with the same numeric-prefix rules as an implicit string-to-DOUBLE
+// cast instead of first routing them through an integer overload.
+func mathStringTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 && len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	stringOverload := -1
+	for i, ov := range overloads {
+		if len(ov.args) == len(inputs) && ov.args[0] == types.T_varchar {
+			if stringOverload == -1 {
+				stringOverload = i
+			}
+		}
+	}
+	if stringOverload == -1 {
+		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+	}
+	if inputs[0].Oid == types.T_varchar {
+		targets := make([]types.Type, len(inputs))
+		needsCast := false
+		for i := range inputs {
+			targets[i] = overloads[stringOverload].args[i].ToType()
+			needsCast = needsCast || inputs[i].Oid != overloads[stringOverload].args[i]
+		}
+		if needsCast {
+			return newCheckResultWithCast(stringOverload, targets)
+		}
+		return newCheckResultWithSuccess(stringOverload)
+	}
+
+	return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+}
+
+// mathStringTypeMatchKeepBoolStringFallback preserves CEIL/FLOOR's existing
+// BOOL-to-VARCHAR overload while still routing character arguments through
+// the MySQL numeric-prefix string overload.
+func mathStringTypeMatchKeepBoolStringFallback(overloads []overload, inputs []types.Type) checkResult {
+	for _, input := range inputs {
+		if input.Oid == types.T_bool {
+			return fixedTypeMatch(overloads, inputs)
+		}
+	}
+	return mathStringTypeMatch(overloads, inputs)
+}
+
+// modTypeMatch gives character operands the DOUBLE conversion domain used by
+// MySQL math functions.  Keep the existing arithmetic matrix for native
+// numeric inputs so its integer, floating-point, and DECIMAL return contracts
+// remain unchanged.
+func modTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if inputs[0].Oid == types.T_varchar || inputs[1].Oid == types.T_varchar ||
+		inputs[0].Oid == types.T_any || inputs[1].Oid == types.T_any {
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
+	}
+	has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+	if has {
+		if modOperatorSupports(t1, t2) {
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+	} else if modOperatorSupports(inputs[0], inputs[1]) {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
 // OID/width/charset while applying the ordinary fixed matcher to control
 // arguments. Varlena string executors can consume every string family; casting

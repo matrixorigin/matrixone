@@ -440,16 +440,18 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 				[]float64{0, 0}, []bool{true, true}),
 		},
 		{
-			name: "unmasked malformed value remains error",
+			name: "unmasked malformed value converts to zero",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"not-a-number"}, []bool{false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
 		},
 		{
-			name: "non-null empty string remains error",
+			name: "non-null empty string converts to zero",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{""}, []bool{false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
 		},
 		{
 			name: "masked malformed row",

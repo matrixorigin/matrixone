@@ -1,0 +1,79 @@
+DROP DATABASE IF EXISTS issue28487_math_string;
+CREATE DATABASE issue28487_math_string;
+USE issue28487_math_string;
+SELECT
+ABS('1.5') AS abs_literal,
+CEIL(' 1.5') AS ceil_literal,
+CEILING('abc') AS ceiling_literal,
+FLOOR('1.5tail') AS floor_literal,
+MOD('-1.5', 2) AS mod_literal,
+MOD(2, '-1.5tail') AS mod_right_literal,
+ROUND('1.5') AS round_literal,
+SIGN('+1.5') AS sign_literal,
+TRUNCATE('1.5tail', 1) AS truncate_literal;
+➤ abs_literal[8,53,31]  ¦  ceil_literal[8,53,31]  ¦  ceiling_literal[8,53,31]  ¦  floor_literal[8,53,31]  ¦  mod_literal[8,53,31]  ¦  mod_right_literal[8,53,31]  ¦  round_literal[8,53,31]  ¦  sign_literal[-5,64,0]  ¦  truncate_literal[8,53,31]  𝄀
+1.5  ¦  2.0  ¦  0.0  ¦  1.0  ¦  -1.5  ¦  0.5  ¦  2.0  ¦  1  ¦  1.5
+CREATE TABLE src(id INT PRIMARY KEY, s VARCHAR(30));
+INSERT INTO src VALUES
+(1, '1.5'),
+(2, '-1.5'),
+(3, ' 1.5'),
+(4, '+1.5'),
+(5, '1.5tail'),
+(6, 'abc'),
+(7, ''),
+(8, NULL);
+SELECT
+id,
+ABS(s) AS abs_varchar,
+CEIL(s) AS ceil_varchar,
+FLOOR(s) AS floor_varchar,
+MOD(s, 2) AS mod_varchar,
+ROUND(s) AS round_varchar,
+SIGN(s) AS sign_varchar,
+TRUNCATE(s, 1) AS truncate_varchar
+FROM src
+WHERE id < 8
+ORDER BY id;
+➤ id[4,32,0]  ¦  abs_varchar[8,53,31]  ¦  ceil_varchar[8,53,31]  ¦  floor_varchar[8,53,31]  ¦  mod_varchar[8,53,31]  ¦  round_varchar[8,53,31]  ¦  sign_varchar[-5,64,0]  ¦  truncate_varchar[8,53,31]  𝄀
+1  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+2  ¦  1.5  ¦  -1.0  ¦  -2.0  ¦  -1.5  ¦  -2.0  ¦  -1  ¦  -1.5  𝄀
+3  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+4  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+5  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+6  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0  𝄀
+7  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+SELECT id, ABS(s) AS abs_null FROM src WHERE id = 8;
+➤ id[4,32,0]  ¦  abs_null[8,53,31]  𝄀
+8  ¦  null
+PREPARE math_string_numeric_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, FLOOR(?) AS floor_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+1.5  ¦  2.0  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5
+SET @math_string_numeric_v_28487 = 'abc';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+SET @math_string_numeric_v_28487 = '';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+DEALLOCATE PREPARE math_string_numeric_stmt_28487;
+PREPARE math_string_numeric_null_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = NULL;
+EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  mod_prepare[-5,64,0]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
+SELECT
+ABS(-2) AS abs_int,
+CEIL(1.5) AS ceil_float,
+FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS floor_decimal,
+MOD(5, 2) AS mod_int,
+ROUND(1.5) AS round_float,
+SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal,
+TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal;
+➤ abs_int[-5,64,0]  ¦  ceil_float[3,2,0]  ¦  floor_decimal[3,5,0]  ¦  mod_int[-5,64,0]  ¦  round_float[3,2,0]  ¦  sign_decimal[-5,64,0]  ¦  truncate_decimal[3,5,1]  𝄀
+2  ¦  2  ¦  -2  ¦  1  ¦  2  ¦  -1  ¦  1.0
+DROP DATABASE issue28487_math_string;

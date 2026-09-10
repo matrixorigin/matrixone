@@ -7595,7 +7595,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ABS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7678,6 +7678,16 @@ var supportedMathBuiltIns = []FuncNew{
 					return AbsArray[float64]
 				},
 			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsStr
+				},
+			},
 		},
 	},
 	// function `sqrt`
@@ -7725,7 +7735,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIGN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7786,6 +7796,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SignDecimal256
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SignStr
 				},
 			},
 		},
@@ -8231,7 +8251,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: CEIL,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -8364,6 +8384,16 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilStr
 				},
 			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilStr
+				},
+			},
 		},
 	},
 
@@ -8458,7 +8488,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: FLOOR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -8584,6 +8614,16 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorStr
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9084,7 +9124,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ROUND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9205,6 +9245,26 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return RoundDecimal256
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundStr
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundStr
 				},
 			},
 		},
@@ -9215,7 +9275,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: TRUNCATE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9336,6 +9396,26 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TruncateDecimal256
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateStr
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateStr
 				},
 			},
 		},

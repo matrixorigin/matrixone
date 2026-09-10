@@ -959,6 +959,47 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), round.GetF().Args[0].Typ.Id)
 }
 
+func TestPreparedMathStringParametersRebindToStringOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+		sql  string
+		fn   string
+		want types.T
+	}{
+		{name: "abs", sql: "prepare stmt_math_abs from 'select abs(?)'", fn: "abs", want: types.T_float64},
+		{name: "ceil", sql: "prepare stmt_math_ceil from 'select ceil(?)'", fn: "ceil", want: types.T_float64},
+		{name: "ceiling", sql: "prepare stmt_math_ceiling from 'select ceiling(?)'", fn: "ceiling", want: types.T_float64},
+		{name: "floor", sql: "prepare stmt_math_floor from 'select floor(?)'", fn: "floor", want: types.T_float64},
+		{name: "round", sql: "prepare stmt_math_round from 'select round(?)'", fn: "round", want: types.T_float64},
+		{name: "sign", sql: "prepare stmt_math_sign from 'select sign(?)'", fn: "sign", want: types.T_int64},
+		{name: "truncate", sql: "prepare stmt_math_truncate from 'select truncate(?)'", fn: "truncate", want: types.T_float64},
+		{name: "mod", sql: "prepare stmt_math_mod from 'select mod(?, 2)'", fn: "mod", want: types.T_float64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			preparedPlan := prepared.GetDcl().GetPrepare().Plan
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparedPlan))
+
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, []any{ParamValue{
+				Value:          "1.5tail",
+				RuntimeType:    types.T_varchar.ToType(),
+				HasRuntimeType: true,
+			}})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, test.fn)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(test.want), fn.Typ.Id)
+			if test.fn == "mod" {
+				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+			} else {
+				require.Equal(t, int32(types.T_varchar), fn.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	ctx := context.Background()
 
