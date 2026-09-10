@@ -494,6 +494,12 @@ type QueryBuilder struct {
 	// they sit under a GROUP BY that does not re-expose the scan's columns.
 	jsonProbeFtNodes map[int32]bool
 
+	// jsonPartialProbes records, per base-scan node id, that a json_extract probe runs against a
+	// BEHIND index on a current read: applyJoinFullTextIndices must fill the freshness gap by
+	// unioning the index (bulk) arm with a table_changes tail over (buildTS, snapshot]. Set by
+	// addJSONFulltextProbes, consumed at the join splice.
+	jsonPartialProbes map[int32]jsonPartialProbe
+
 	aggSpillMem int64
 
 	// spill memory for join

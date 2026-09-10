@@ -136,25 +136,38 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, er
 	if err != nil || !live {
 		return false, err
 	}
-	// Target the exact generation the search will load, and target it the SAME way for
-	// both build_ts sources: a {snapshot=...}/AS OF read uses the snapshot-bound cache key
-	// (index_table@snapshot) AND reads the durable metadata as of that snapshot; a current
-	// read uses the plain key AND the current txn. Deriving both from this one choice keeps
-	// the warm (cache) and cold (metadata) paths from disagreeing about which generation
-	// they measure.
+	covered := types.BuildTS(searchedBuildTS(ctx, req), 0)
+	return !covered.LT(&bar), nil
+}
+
+// IndexBuildTS returns build_ts of the generation a probe would search (0 = unknown),
+// for the planner's partial-plan gap decision (SourceCommitTS - build_ts). It does NOT
+// check liveness -- that is CoversSnapshot's job; this only exposes the coverage point.
+func (Hooks) IndexBuildTS(ctx context.Context, req coverage.Request) types.TS {
+	if req.IndexDef == nil || req.Txn == nil || req.TableID == 0 {
+		return types.TS{}
+	}
+	return types.BuildTS(searchedBuildTS(ctx, req), 0)
+}
+
+// searchedBuildTS reads build_ts of the generation a probe would actually search, the SAME
+// way for both sources: a {snapshot=...}/AS OF read uses the snapshot-bound cache key
+// (index_table@snapshot) AND reads the durable metadata as of that snapshot; a current read
+// uses the plain key AND the current txn. Deriving both from this one choice keeps the warm
+// (cache) and cold (metadata) paths from disagreeing about which generation they measure.
+// Warm: the loaded generation's build_ts from the cache; cold: MAX(build_ts) from metadata.
+// 0 = unknown.
+func searchedBuildTS(ctx context.Context, req coverage.Request) int64 {
 	key, metaTxn := req.IndexStorageTable, req.Txn
 	if req.ScanSnapshotTS != nil {
 		key = veccache.SnapshotKey(req.IndexStorageTable, *req.ScanSnapshotTS)
 		metaTxn = req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
 	}
-	// The loaded generation's build_ts when the index is warm in this CN's cache; a cold
-	// cache would load the durable metadata, so read its MAX(build_ts) instead.
 	buildTS, ok := veccache.Cache.GetBuildTS(key)
 	if !ok {
 		buildTS = maxDurableBuildTS(ctx, req, metaTxn)
 	}
-	covered := types.BuildTS(buildTS, 0)
-	return !covered.LT(&bar), nil
+	return buildTS
 }
 
 // indexJobLive reports whether the index has a live ISCP maintenance job: at least one

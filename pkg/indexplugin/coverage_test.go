@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
@@ -50,6 +51,8 @@ type stubHooks struct {
 	err     error
 	calls   *int
 }
+
+func (h stubHooks) IndexBuildTS(context.Context, coverage.Request) types.TS { return types.TS{} }
 
 func (h stubHooks) CoversSnapshot(context.Context, coverage.Request) (bool, error) {
 	if h.calls != nil {

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 
@@ -332,7 +333,8 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if idxDef == nil {
 			continue
 		}
-		if !builder.indexCoversSnapshot(scanNode, idxDef) {
+		kind, buildTS := builder.decideJSONProbe(scanNode, idxDef)
+		if kind == jsonProbeSkip {
 			continue
 		}
 		probe, ok := c.probe()
@@ -343,31 +345,69 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if match == nil {
 			continue
 		}
+		// A behind index (partial) still injects the bulk probe here; the freshness gap is
+		// filled with a table_changes tail when applyJoinFullTextIndices builds the join. The
+		// json comparison f stays in FilterList so the base scan re-checks it on current values.
+		if kind == jsonProbePartial {
+			builder.recordJSONPartialProbe(scanNode, f, buildTS)
+		}
 		scanNode.FilterList = append(scanNode.FilterList, match)
 		return
 	}
 }
 
-// indexCoversSnapshot reports whether idx may back a mandatory probe. A
-// synchronous index always may. An async index is checked against the largest
-// source DML commit represented by this CN's partition state. Returns false on
-// nil builder/compCtx/process/transaction or any uncertainty.
-func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
+// jsonPartialProbe is the tail-construction input recorded for a behind-index json probe.
+type jsonPartialProbe struct {
+	buildTS  types.TS   // the searched generation's build_ts: exclusive lower bound of the tail
+	jsonPred *plan.Expr // the json_extract comparison, pushed onto table_changes to shrink the tail
+}
+
+// recordJSONPartialProbe marks scanNode's json probe as partial so the join builder fills the gap.
+func (builder *QueryBuilder) recordJSONPartialProbe(scanNode *plan.Node, jsonPred *plan.Expr, buildTS types.TS) {
+	if builder.jsonPartialProbes == nil {
+		builder.jsonPartialProbes = make(map[int32]jsonPartialProbe)
+	}
+	builder.jsonPartialProbes[scanNode.NodeId] = jsonPartialProbe{buildTS: buildTS, jsonPred: DeepCopyExpr(jsonPred)}
+}
+
+// jsonProbeKind is how addJSONFulltextProbes may use a json_extract fulltext2 index for one
+// comparison.
+type jsonProbeKind int
+
+const (
+	// jsonProbeSkip: the index cannot be trusted here -- leave the full scan (fail closed).
+	jsonProbeSkip jsonProbeKind = iota
+	// jsonProbeCovered: the index is current for the read -- emit a mandatory probe.
+	jsonProbeCovered
+	// jsonProbePartial: a current read whose index is behind -- complete the bulk probe with a
+	// table_changes tail from the returned build_ts. json_extract only; snapshots never partial.
+	jsonProbePartial
+)
+
+// decideJSONProbe evaluates idx against scanNode's read and reports how a probe may use it, plus
+// (for jsonProbePartial) the build_ts the searched generation reached -- the lower bound of the
+// table_changes tail that fills the freshness gap. A synchronous index always covers. An async
+// index is asked; if it does not cover, a current read (scanSnapshot nil) with a known build_ts
+// is completed partially, while a historical read declines (snapshots are binary). Fails closed to
+// jsonProbeSkip on any uncertainty: a full scan is always correct, an unsound probe is not.
+//
+// No cost gate guards the partial path: the tail is emitted whenever the index is behind.
+func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.IndexDef) (jsonProbeKind, types.TS) {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
-		return true
+		return jsonProbeCovered, types.TS{}
 	}
 	if builder == nil || builder.compCtx == nil || scanNode == nil ||
 		scanNode.TableDef == nil || scanNode.TableDef.TblId == 0 {
-		return false
+		return jsonProbeSkip, types.TS{}
 	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
-		return false
+		return jsonProbeSkip, types.TS{}
 	}
 	txn := proc.GetTxnOperator()
 	if txn == nil {
-		return false
+		return jsonProbeSkip, types.TS{}
 	}
 	// Resolve the index's hidden tables so the freshness check can read the loaded
 	// generation's build_ts (cache, keyed by the storage table) or the durable
@@ -391,25 +431,26 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 	if scanSnapshotTS == nil {
 		eng := proc.GetSessionInfo().StorageEngine
 		if eng == nil {
-			return false
+			return jsonProbeSkip, types.TS{}
 		}
 		_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), txn, scanNode.TableDef.TblId)
 		if err != nil {
 			logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
-			return false
+			return jsonProbeSkip, types.TS{}
 		}
 		commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
 		if !ok {
-			return false
+			return jsonProbeSkip, types.TS{}
 		}
 		sourceCommitTS, err = commitTSProvider.SourceCommitTS(proc.GetTopContext())
 		if err != nil {
 			logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
-			return false
+			return jsonProbeSkip, types.TS{}
 		}
 	}
 	// proc.Ctx is canceled during planning; use the top context.
-	covered, err := indexplugin.CoversSnapshot(proc.GetTopContext(), algo, coverage.Request{
+	ctx := proc.GetTopContext()
+	req := coverage.Request{
 		CNUUID:             proc.GetService(),
 		Txn:                txn,
 		TableID:            scanNode.TableDef.TblId,
@@ -420,12 +461,199 @@ func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.
 		IndexMetadataDB:    dbName,
 		IndexMetadataTable: metaTbl,
 		ScanSnapshotTS:     scanSnapshotTS,
-	})
+	}
+	covered, err := indexplugin.CoversSnapshot(ctx, algo, req)
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
-		return false
+		return jsonProbeSkip, types.TS{}
 	}
-	return covered
+	if covered {
+		return jsonProbeCovered, types.TS{}
+	}
+	// Not covered. A historical read cannot be completed with a tail -- snapshots are binary and
+	// always have a snapshot-bound generation -- so decline. A current read that is merely behind
+	// is completed with a table_changes tail from the generation's build_ts.
+	if scanSnapshotTS != nil {
+		return jsonProbeSkip, types.TS{}
+	}
+	buildTS := indexplugin.IndexBuildTS(ctx, algo, req)
+	if buildTS.IsEmpty() {
+		return jsonProbeSkip, types.TS{}
+	}
+	// The tail is table_changes over the gap. If that TVF cannot serve this table (partitioned,
+	// temporary, no explicit pk, or a column colliding with its reserved metadata names), a partial
+	// plan is impossible -- decline to a full scan rather than emit an incomplete bulk-only probe.
+	if validateTableChangesSource(scanNode.ObjRef, scanNode.TableDef) != nil {
+		return jsonProbeSkip, types.TS{}
+	}
+	return jsonProbePartial, buildTS
+}
+
+// indexCoversSnapshot reports whether idx is current enough to back a mandatory probe.
+func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
+	kind, _ := builder.decideJSONProbe(scanNode, idx)
+	return kind == jsonProbeCovered
+}
+
+// buildJSONProbeTail builds the freshness-gap arm of a behind-index json probe: table_changes over
+// (buildTS, snapshot] restricted to inserts matching the json predicate, projected to (pk, score) so
+// it unions cleanly with the fulltext2_search bulk arm. It returns the project node id, or false if
+// the tail cannot be built. The base scan re-checks every WHERE conjunct on current values, so this
+// arm need only be a SUPERSET of the gap matches; pushing json_pred here just shrinks it.
+func (builder *QueryBuilder) buildJSONProbeTail(ctx *BindContext, scanNode *plan.Node, p jsonPartialProbe, pkType plan.Type) (int32, bool) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || scanNode.ObjRef == nil || scanNode.TableDef.Pkey == nil {
+		return 0, false
+	}
+	txn := proc.GetTxnOperator()
+	if txn == nil {
+		return 0, false
+	}
+	// from is EXCLUSIVE in table_changes (it advances by one), and buildTS is the last commit the
+	// index reflects, so (buildTS, snapshot] is exactly the gap. to is the read snapshot; it must be
+	// <= the statement snapshot, which it is by construction.
+	snap := txn.SnapshotTS()
+	fromStr := fmt.Sprintf("%d-%d", p.buildTS.Physical(), p.buildTS.Logical())
+	toStr := fmt.Sprintf("%d-%d", snap.PhysicalTime, snap.LogicalTime)
+	exprs := []*plan.Expr{
+		makePlan2StringConstExprWithType(scanNode.ObjRef.SchemaName),
+		makePlan2StringConstExprWithType(scanNode.ObjRef.ObjName),
+		makePlan2StringConstExprWithType(fromStr),
+		makePlan2StringConstExprWithType(toStr),
+	}
+	tcID, err := builder.buildTableChanges(nil, ctx, exprs, nil)
+	if err != nil {
+		logutil.Debugf("json partial probe: table_changes build failed for %s: %v", scanNode.ObjRef.ObjName, err)
+		return 0, false
+	}
+	tcNode := builder.qry.Nodes[tcID]
+	tcTag := tcNode.BindingTags[0]
+
+	// Locate the pk column (by name) in the table_changes output, which carries all non-hidden
+	// source columns after the four change-metadata columns.
+	pkPos := int32(-1)
+	for i, cd := range tcNode.TableDef.Cols {
+		if cd.Name == scanNode.TableDef.Pkey.PkeyColName {
+			pkPos = int32(i)
+			break
+		}
+	}
+	if pkPos < 0 {
+		return 0, false
+	}
+
+	// FILTER: change_type = 'insert' (the current state of a gap row; an update is delete+insert,
+	// so the insert row carries the new values) AND the json predicate rebased onto these columns.
+	changeType := &plan.Expr{
+		Typ:  tcNode.TableDef.Cols[0].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tcTag, ColPos: 0}},
+	}
+	insertOnly, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=",
+		[]*plan.Expr{changeType, makePlan2StringConstExprWithType("insert")})
+	if err != nil {
+		return 0, false
+	}
+	filters := []*plan.Expr{insertOnly}
+	if jp := builder.rebaseToTableChanges(p.jsonPred, scanNode, tcNode, tcTag); jp != nil {
+		filters = append(filters, jp)
+	}
+	filterID := builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{tcID},
+		FilterList: filters,
+	}, ctx)
+
+	// PROJECT (pk, 0::float32) to mirror the fulltext2_search (doc_id, score) layout so the two
+	// arms union. The placeholder score is dropped by the group-by dedup above the union.
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{filterID},
+		ProjectList: []*plan.Expr{
+			{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tcTag, ColPos: pkPos}}},
+			{Typ: plan.Type{Id: int32(types.T_float32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 0}}}},
+		},
+		BindingTags: []int32{projTag},
+	}, ctx)
+	return projID, true
+}
+
+// rebaseToTableChanges rewrites, in place, every base-scan ColRef in expr to the matching
+// table_changes output column (by name), so a WHERE predicate can be evaluated on the tail. It
+// returns nil (do not push) if any referenced column is absent from the table_changes output --
+// the base scan still re-checks it, so the tail is merely a larger superset.
+func (builder *QueryBuilder) rebaseToTableChanges(expr *plan.Expr, scanNode, tcNode *plan.Node, tcTag int32) *plan.Expr {
+	scanTag := scanNode.BindingTags[0]
+	pushable := true
+	var walk func(e *plan.Expr)
+	walk = func(e *plan.Expr) {
+		if e == nil || !pushable {
+			return
+		}
+		switch impl := e.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col.RelPos != scanTag {
+				return
+			}
+			name := impl.Col.Name
+			if name == "" && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(scanNode.TableDef.Cols) {
+				name = scanNode.TableDef.Cols[impl.Col.ColPos].Name
+			}
+			newPos := int32(-1)
+			for i, cd := range tcNode.TableDef.Cols {
+				if cd.Name == name {
+					newPos = int32(i)
+					break
+				}
+			}
+			if newPos < 0 {
+				pushable = false
+				return
+			}
+			impl.Col.RelPos = tcTag
+			impl.Col.ColPos = newPos
+		case *plan.Expr_F:
+			for _, a := range impl.F.Args {
+				walk(a)
+			}
+		case *plan.Expr_List:
+			for _, s := range impl.List.List {
+				walk(s)
+			}
+		}
+	}
+	walk(expr)
+	if !pushable {
+		return nil
+	}
+	return expr
+}
+
+// unionFtWithTail builds UNION ALL(ft bulk arm, tail arm) on the (pk, score) layout, returning the
+// union node id and a pk reference through it. Both children expose col 0 = pk, col 1 = score; the
+// union projects them referencing the left (ft) tag, and the executor maps the right arm
+// positionally. A group-by dedup above the union then collapses duplicate pks (a row inserted
+// <= buildTS and updated in the gap appears in both arms, and the probe repeats a doc per term).
+func (builder *QueryBuilder) unionFtWithTail(ctx *BindContext, ftID, ftTag, tailID int32, pkType plan.Type) (int32, *plan.Expr) {
+	ftNode := builder.qry.Nodes[ftID]
+	tailNode := builder.qry.Nodes[tailID]
+	unionTag := builder.genNewBindTag()
+	unionID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_UNION_ALL,
+		Children: []int32{ftID, tailID},
+		ProjectList: []*plan.Expr{
+			{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 0}}},
+			{
+				Typ:  setOperationOutputType(plan.Node_UNION_ALL, ftNode.TableDef.Cols[1].Typ, tailNode.ProjectList[1].Typ),
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 1}},
+			},
+		},
+		BindingTags: []int32{unionTag},
+	}, ctx)
+	return unionID, &plan.Expr{
+		Typ:  pkType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: unionTag, ColPos: 0}},
+	}
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose

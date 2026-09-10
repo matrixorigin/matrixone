@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -126,6 +127,20 @@ func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (boo
 		return false, err
 	}
 	return covered, nil
+}
+
+// IndexBuildTS returns the source-table commit the generation a probe would search reflects
+// (0 = unknown / no coverage capability), for the planner's partial-plan gap decision.
+func IndexBuildTS(ctx context.Context, algo string, req coverage.Request) types.TS {
+	p, ok := Get(algo)
+	if !ok {
+		return types.TS{}
+	}
+	cp, ok := p.(CoveragePlugin)
+	if !ok {
+		return types.TS{}
+	}
+	return cp.Coverage().IndexBuildTS(ctx, req)
 }
 
 // All returns every registered plugin. Useful for catalog enumeration.

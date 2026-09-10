@@ -651,6 +651,22 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// where a repeated pk multiplies base-table rows. Group by the doc id to
 		// collapse them — the aggregate already spills and is already tested.
 		if mode == fulltext2.JSONProbeMode {
+			// A behind index only reflects commits up to its build_ts. Fill the gap by unioning the
+			// bulk (index) arm with a table_changes tail over (build_ts, snapshot]; the group-by
+			// dedup below then collapses pks the two arms share. The base scan re-checks the json
+			// predicate on current values, so the stale index arm cannot leak an updated row.
+			if p, isPartial := builder.jsonPartialProbes[scanNode.NodeId]; isPartial {
+				if tailID, ok := builder.buildJSONProbeTail(ctx, scanNode, p, pkType); ok {
+					ftScanID := curr_ftnode_id
+					curr_ftnode_id, curr_ftnode_pkcol = builder.unionFtWithTail(ctx, ftScanID, curr_ftnode_tag, tailID, pkType)
+					// The score-sort/runtime-filter passes key their probe skip on the scan id held
+					// in ret_filter_node_ids/served (set above, pre-union), so keep it marked.
+					if builder.jsonProbeFtNodes == nil {
+						builder.jsonProbeFtNodes = make(map[int32]bool)
+					}
+					builder.jsonProbeFtNodes[ftScanID] = true
+				}
+			}
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
 
