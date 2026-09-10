@@ -4361,6 +4361,20 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 	}
 	planContext = plan2.AttachJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
+
+	// LOAD planning may inspect an external source before producing a plan.
+	// Authorize its target table at this common planning boundary so direct
+	// compilation, prepared-plan rebuilds, and compile retries share the same
+	// admission check.
+	if session, ok := ses.(*Session); ok {
+		authStats, authErr := authenticateLoadBeforePlan(
+			reqCtx, session, stmt, ctx.DefaultDatabase())
+		if authErr != nil {
+			return nil, authErr
+		}
+		stats.PermissionAuth.Add(&authStats)
+	}
+
 	stats.PlanStart()
 
 	crs := new(perfcounter.CounterSet)
@@ -4388,19 +4402,12 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 	return build()
 }
 
-// buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
-// after the plan has been successfully built.
+// buildPlanWithAuthorization wraps buildPlan with the plan-level permission
+// check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
+// the common planning boundary shared by this and direct compile paths.
 var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
-
-	if session, ok := ses.(*Session); ok {
-		authStats, err := authenticateLoadBeforePlan(reqCtx, session, stmt)
-		if err != nil {
-			return nil, err
-		}
-		stats.PermissionAuth.Add(&authStats)
-	}
 
 	// Step 1: Call buildPlan to construct the execution plan
 	plan, err := buildPlan(reqCtx, ses, ctx, stmt)

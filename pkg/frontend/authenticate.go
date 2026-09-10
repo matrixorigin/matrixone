@@ -9387,6 +9387,7 @@ func authenticateLoadBeforePlan(
 	ctx context.Context,
 	ses *Session,
 	stmt tree.Statement,
+	defaultDatabase string,
 ) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
@@ -9399,6 +9400,9 @@ func authenticateLoadBeforePlan(
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
+
+	restoreDatabase := bindSessionDatabaseForStatement(ses, defaultDatabase)
+	defer restoreDatabase()
 
 	ok, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx, ses, stmt, nil)
 	stats.Add(&delta)
