@@ -144,6 +144,17 @@ func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T
 	}
 }
 
+func TestInternalStatementContextSuppressesInheritedJSONMergeWarning(t *testing.T) {
+	parent := plan.WithJSONMergeWarningContext(
+		context.Background(), nil, plan.JSONMergeWarningUser)
+	internal := markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parent))
+
+	origin, ok := plan.JSONMergeWarningOriginFromContext(internal)
+	require.True(t, ok)
+	require.Equal(t, plan.JSONMergeWarningInternalReprepare, origin)
+}
+
 func TestCompilerContextUnsupportedOperations(t *testing.T) {
 	r := func() {
 		err := recover()
