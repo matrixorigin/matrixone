@@ -904,7 +904,7 @@ func hasExactMicrosecondScale(value int64, scale int32) bool {
 }
 func decimalFromArray(value decimal128.Num, narrow bool) (any, error) {
 	high, low := uint64(value.HighBits()), value.LowBits()
-	if narrow && high != 0 && high != math.MaxUint64 {
+	if narrow && !decimal128FitsDecimal64(high, low) {
 		return nil, fmt.Errorf("TYPE_CONTRACT: Decimal128 result does not fit Decimal64")
 	}
 	if narrow {
@@ -912,6 +912,15 @@ func decimalFromArray(value decimal128.Num, narrow bool) (any, error) {
 	}
 	return types.Decimal128{B0_63: low, B64_127: high}, nil
 }
+
+func decimal128FitsDecimal64(high, low uint64) bool {
+	// A signed 128-bit value fits in signed 64 bits only when the high word is
+	// a proper sign extension of the low word. Checking the high word alone
+	// would turn +2^63 into the negative Decimal64 minimum.
+	return (high == 0 && low <= math.MaxInt64) ||
+		(high == math.MaxUint64 && low >= uint64(1)<<63)
+}
+
 func appendTemporalResult(input *array.Struct, typ types.T, index int, result vector.FunctionResultWrapper) error {
 	if input.IsNull(index) {
 		return appendTemporalNull(typ, result)
