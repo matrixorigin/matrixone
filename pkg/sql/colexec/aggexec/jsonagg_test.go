@@ -520,7 +520,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
 		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
-		{"unsupported", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, "", "unsupported type"},
+		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 
 	for _, tt := range cases {
