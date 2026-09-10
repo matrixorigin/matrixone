@@ -1667,6 +1667,13 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		}
 		return dt, nil
 	} else {
+		// AddInterval validates microsecond results in the encoded datetime
+		// domain.  Do not reconstruct a rejected negative value below: integer
+		// division in ToDate can otherwise make -1..-999999 microseconds look
+		// like the minimum date and publish ZeroDatetime instead of NULL.
+		if iTyp == types.MicroSecond {
+			return 0, datetimeOverflowMaxError
+		}
 		// MySQL behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
 		// - If overflow beyond minimum (diff < 0):
@@ -1763,7 +1770,11 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 		}
 		return dt.ToTimestamp(loc), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		// The vector callers translate this sentinel into a row-local NULL.
+		// AddInterval returning false means the computed calendar value is
+		// outside the supported temporal domain, not that the whole query is
+		// malformed.
+		return 0, datetimeOverflowMaxError
 	}
 }
 

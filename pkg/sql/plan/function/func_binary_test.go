@@ -4487,6 +4487,7 @@ func TestFromUnixTimeReturnType(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func initStrCmpTestCase() []tcTemp {
@@ -12752,6 +12753,137 @@ func TestDoDatetimeAddComprehensive(t *testing.T) {
 			} else {
 				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
 			}
+		})
+	}
+}
+
+func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
+	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	ordinaryTimestamp, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	ordinaryTimestampNext, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000001", 6)
+	require.NoError(t, err)
+
+	t.Run("helpers preserve rejected domain", func(t *testing.T) {
+		for _, delta := range []int64{-1, -2} {
+			_, err = doDatetimeAdd(minDatetime, delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+
+			_, err = doDateStringAdd("0001-01-01 00:00:00.000000", delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+		}
+
+		got, err := doDatetimeAdd(minDatetime, 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+		got, err = doDateStringAdd("0001-01-01 00:00:00.000000", 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+
+		_, err = doTimestampAdd(time.UTC, maxTimestamp, 1, types.MicroSecond)
+		require.True(t, isDatetimeOverflowMaxError(err))
+	})
+
+	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().TimeZone = time.UTC
+		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		require.NoError(t, vector.AppendFixedList(timestampVec,
+			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
+
+		var parameters []*vector.Vector
+		if dateAddSyntax {
+			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
+		} else {
+			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
+		}
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(3))
+		t.Cleanup(func() {
+			for _, parameter := range parameters {
+				parameter.Free(proc.Mp())
+			}
+			result.Free()
+		})
+		return proc, parameters, result
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD timestamp column", dateAddSyntax: true, fn: TimestampAdd},
+		{name: "TIMESTAMPADD timestamp column", fn: TimestampAddTimestamp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, parameters, result := timestampInputs(t, test.dateAddSyntax)
+			require.NoError(t, test.fn(parameters, result, proc, 3, nil))
+			resultVec := result.GetResultVector()
+			require.True(t, resultVec.GetNulls().Contains(0), "upper overflow must be row-local NULL")
+			require.False(t, resultVec.GetNulls().Contains(1), "ordinary neighbor must remain valid")
+			require.True(t, resultVec.GetNulls().Contains(2), "input NULL must remain NULL")
+			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](resultVec).GetValue(1)
+			require.False(t, isNull)
+			require.Equal(t, ordinaryTimestampNext, got)
+		})
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD string column", dateAddSyntax: true, fn: DateStringAdd},
+		{name: "TIMESTAMPADD string column", fn: TimestampAddString},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			stringVec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendStringList(stringVec, []string{
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"2024-01-01 00:00:00.000000",
+			}, []bool{false, false, false, true}, proc.Mp()))
+			intervalVec := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
+
+			var parameters []*vector.Vector
+			if test.dateAddSyntax {
+				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
+			} else {
+				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
+			}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			require.NoError(t, result.PreExtendAndReset(4))
+			t.Cleanup(func() {
+				for _, parameter := range parameters {
+					parameter.Free(proc.Mp())
+				}
+				result.Free()
+			})
+
+			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
+			resultNulls := result.GetResultVector().GetNulls()
+			require.True(t, resultNulls.Contains(0), "one microsecond below minimum must be NULL")
+			require.True(t, resultNulls.Contains(1), "two microseconds below minimum must be NULL")
+			require.False(t, resultNulls.Contains(2), "exact minimum must remain valid")
+			require.True(t, resultNulls.Contains(3), "input NULL must remain NULL")
 		})
 	}
 }

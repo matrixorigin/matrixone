@@ -204,6 +204,16 @@ DATE_SUB(CAST('0001-01-01 00:00:00.000000' AS DATETIME(6)), INTERVAL 2 MICROSECO
 TIMESTAMPADD(MICROSECOND, -2, CAST('0001-01-01 00:00:00.000000' AS DATETIME(6))) IS NULL AS timestampadd_below_min;
 sub_one_below_min    sub_two_below_min    timestampadd_below_min
 1    1    1
+SELECT
+DATE_ADD(CAST('9999-12-31 23:59:59.999999' AS TIMESTAMP(6)), INTERVAL 1 MICROSECOND) IS NULL AS date_add_timestamp_overflow,
+TIMESTAMPADD(MICROSECOND, 1, CAST('9999-12-31 23:59:59.999999' AS TIMESTAMP(6))) IS NULL AS timestampadd_timestamp_overflow,
+DATE_ADD(CAST('0001-01-01 00:00:00.000000' AS DATETIME(6)), INTERVAL 0 MICROSECOND) IS NULL AS typed_exact_min_null,
+DATE_ADD(CAST('0001-01-01 00:00:00.000000' AS DATETIME(6)), INTERVAL -1 MICROSECOND) IS NULL AS typed_below_min_null,
+DATE_ADD('0001-01-01 00:00:00.000000', INTERVAL 0 MICROSECOND) IS NULL AS string_exact_min_null,
+DATE_ADD('0001-01-01 00:00:00.000000', INTERVAL -1 MICROSECOND) IS NULL AS string_one_below_min_null,
+TIMESTAMPADD(MICROSECOND, -2, '0001-01-01 00:00:00.000000') IS NULL AS string_two_below_min_null;
+date_add_timestamp_overflow    timestampadd_timestamp_overflow    typed_exact_min_null    typed_below_min_null    string_exact_min_null    string_one_below_min_null    string_two_below_min_null
+1    1    0    1    0    1    1
 DROP DATABASE IF EXISTS pr28316_temporal;
 CREATE DATABASE pr28316_temporal;
 USE pr28316_temporal;
@@ -214,6 +224,41 @@ d9 DECIMAL(20,9),
 f DOUBLE,
 dt6 DATETIME(6)
 );
+CREATE TABLE temporal_boundary (
+id INT,
+ts TIMESTAMP(6),
+value_text VARCHAR(26)
+);
+INSERT INTO temporal_boundary VALUES
+(1, '9999-12-31 23:59:59.999999', '0001-01-01 00:00:00.000000'),
+(2, '2024-01-01 00:00:00.000000', '2024-01-01 00:00:00.000000'),
+(3, NULL, NULL);
+SELECT
+id,
+DATE_ADD(ts, INTERVAL 1 MICROSECOND) IS NULL AS date_add_ts_null,
+TIMESTAMPADD(MICROSECOND, 1, ts) IS NULL AS timestampadd_ts_null,
+DATE_ADD(value_text, INTERVAL -2 MICROSECOND) IS NULL AS date_add_string_null,
+TIMESTAMPADD(MICROSECOND, -2, value_text) IS NULL AS timestampadd_string_null
+FROM temporal_boundary ORDER BY id;
+id    date_add_ts_null    timestampadd_ts_null    date_add_string_null    timestampadd_string_null
+1    1    1    1    1
+2    0    0    0    0
+3    1    1    1    1
+PREPARE temporal_boundary_stmt FROM
+'SELECT DATE_ADD(CAST(? AS TIMESTAMP(6)), INTERVAL 1 MICROSECOND) IS NULL AS date_add_ts_null, TIMESTAMPADD(MICROSECOND, 1, CAST(? AS TIMESTAMP(6))) IS NULL AS timestampadd_ts_null, DATE_ADD(?, INTERVAL -2 MICROSECOND) IS NULL AS date_add_string_null, TIMESTAMPADD(MICROSECOND, -2, ?) IS NULL AS timestampadd_string_null';
+SET @boundary_ts = '9999-12-31 23:59:59.999999', @boundary_text = '0001-01-01 00:00:00.000000';
+EXECUTE temporal_boundary_stmt USING @boundary_ts, @boundary_ts, @boundary_text, @boundary_text;
+date_add_ts_null    timestampadd_ts_null    date_add_string_null    timestampadd_string_null
+1    1    1    1
+SET @boundary_ts = '2024-01-01 00:00:00.000000', @boundary_text = '2024-01-01 00:00:00.000000';
+EXECUTE temporal_boundary_stmt USING @boundary_ts, @boundary_ts, @boundary_text, @boundary_text;
+date_add_ts_null    timestampadd_ts_null    date_add_string_null    timestampadd_string_null
+0    0    0    0
+SET @boundary_ts = '9999-12-31 23:59:59.999999', @boundary_text = '0001-01-01 00:00:00.000000';
+EXECUTE temporal_boundary_stmt USING @boundary_ts, @boundary_ts, @boundary_text, @boundary_text;
+date_add_ts_null    timestampadd_ts_null    date_add_string_null    timestampadd_string_null
+1    1    1    1
+DEALLOCATE PREPARE temporal_boundary_stmt;
 INSERT INTO temporal_src VALUES
 (1, 1704067200.123, 1704067200.123456789, 1704067200.123456, '2024-01-01 00:00:00.123456');
 SELECT
