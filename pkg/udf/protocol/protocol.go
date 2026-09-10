@@ -114,6 +114,9 @@ func UnmarshalControl(data []byte) (Control, error) {
 	if len(data) == 0 || len(data) > MaxControlBytes {
 		return Control{}, fmt.Errorf("%w: control size %d is outside the allowed range", ErrProtocol, len(data))
 	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return Control{}, fmt.Errorf("%w: %v", ErrProtocol, err)
+	}
 	var control Control
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -134,6 +137,65 @@ func UnmarshalControl(data []byte) (Control, error) {
 		return Control{}, err
 	}
 	return control, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := walkJSONValue(decoder); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("control contains trailing JSON")
+		}
+		return fmt.Errorf("decode trailing control data: %v", err)
+	}
+	return nil
+}
+
+func walkJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("decode control JSON: %v", err)
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("decode control object key: %v", err)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("control object key is not a string")
+			}
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("duplicate control JSON field %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected control JSON delimiter %q", delim)
+	}
 }
 
 // Sequence validates the independent input and result directions of one
