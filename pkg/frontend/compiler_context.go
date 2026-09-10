@@ -910,6 +910,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			if len(argList) != len(args) { // mismatch
 				continue
 			}
+			udf.Args = argList
+			if err = udf.ValidatePythonTypeContract(); err != nil {
+				return nil, err
+			}
 
 			toList := make([]types.T, len(args))
 			for j := range argList {
@@ -925,7 +929,6 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 				continue
 			}
 
-			udf.Args = argList
 			matchedList = append(matchedList, &MatchUdf{
 				Udf:      udf,
 				Cost:     cost,
