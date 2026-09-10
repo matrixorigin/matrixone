@@ -35,6 +35,7 @@ import uuid as _uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -276,6 +277,10 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
         tzdb_version = _required_context_value(raw, "session_timezone_tzdb_version")
         if "session_timezone_offset_minutes" in raw:
             raise ValueError("PROTOCOL: IANA timezone cannot carry a fixed offset")
+        try:
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("PROTOCOL: IANA timezone is not present in the local tzdb") from exc
         timezone = TimezoneContext("IANA", name=timezone_name, tzdb_version=tzdb_version)
     elif timezone_kind == "FIXED_OFFSET":
         offset_text = _required_context_value(raw, "session_timezone_offset_minutes")
