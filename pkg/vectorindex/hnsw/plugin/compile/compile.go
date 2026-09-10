@@ -115,7 +115,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
 	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
@@ -210,9 +210,9 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	logutil.Infof("[plugin] hnsw HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its resources are freed NOW, rather than
 	// lingering until the 5-min VectorIndexCacheTTL. Mirrors the create-side
-	// cache.Cache.Remove(storageDef.IndexTableName).
+	// cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
 	if storageDef, ok := defs[catalog.Hnsw_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 	}
 	return nil
 }
