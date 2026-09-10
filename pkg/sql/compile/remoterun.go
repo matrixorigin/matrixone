@@ -2064,9 +2064,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.WidenedUnaryMinus &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion60) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion61) {
 		return moerr.NewNotSupportedNoCtx(
-			"widened integer unary minus requires MORPC protocol version 60",
+			"widened integer unary minus requires MORPC protocol version 61",
 		)
 	}
 	return nil

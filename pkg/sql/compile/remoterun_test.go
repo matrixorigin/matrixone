@@ -1552,13 +1552,13 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
 				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
 				require.ErrorContains(t, err,
-					"widened integer unary minus requires MORPC protocol version 60")
+					"widened integer unary minus requires MORPC protocol version 61")
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
 				require.ErrorContains(t, err,
-					"widened integer unary minus requires MORPC protocol version 60")
+					"widened integer unary minus requires MORPC protocol version 61")
 
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion60)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61)
 				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
 				require.NoError(t, err)
 				decoded, err := decodeScope(encoded, proc, true, nil)
@@ -1568,7 +1568,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
 				decoded, err = decodeScope(encoded, proc, true, nil)
 				require.ErrorContains(t, err,
-					"widened integer unary minus requires MORPC protocol version 60")
+					"widened integer unary minus requires MORPC protocol version 61")
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 				require.Nil(t, decoded)
 			})
