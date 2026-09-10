@@ -584,6 +584,10 @@ func dataBranchCreateTable(
 	); err != nil {
 		return
 	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelTable, "",
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
@@ -621,9 +625,6 @@ func dataBranchCreateTable(
 	defer func() {
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
-
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
 
 	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 		opAccountId: opAccountID,
@@ -665,19 +666,16 @@ func dataBranchCreateDatabase(
 	); err != nil {
 		return
 	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
 			err = deferred(err)
 		}
 	}()
-	execCtx.reqCtx = context.WithValue(
-		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
-	)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
-	execCtx.reqCtx = context.WithValue(
-		execCtx.reqCtx, defines.DatTypKey{}, catalog.SystemDBTypeDataBranch,
-	)
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
@@ -724,6 +722,27 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+// installDataBranchCloneContext keeps clone-only values within one frontend
+// statement. ExecCtx spans every statement in a multi-statement COM_QUERY, so
+// mutating its request context without restoration can make an ordinary DDL
+// inherit DATA BRANCH identity or clone-lock ownership.
+func installDataBranchCloneContext(
+	execCtx *ExecCtx,
+	level tree.CloneLevelType,
+	databaseType string,
+) func() {
+	previous := execCtx.reqCtx
+	derived := context.WithValue(previous, tree.CloneLevelCtxKey{}, level)
+	derived = context.WithValue(derived, dataBranchCloneLockCtxKey{}, true)
+	if databaseType != "" {
+		derived = context.WithValue(derived, defines.DatTypKey{}, databaseType)
+	}
+	execCtx.reqCtx = derived
+	return func() {
+		execCtx.reqCtx = previous
+	}
 }
 
 func validateDataBranchCreateTxn(pessimistic bool) error {
@@ -893,6 +912,9 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
+	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+		return
+	}
 	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
 		return
 	}
