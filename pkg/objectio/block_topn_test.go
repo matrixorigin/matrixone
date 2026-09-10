@@ -315,6 +315,84 @@ func TestReadBlockBySearchAndTopNRejectsInvalidSelections(t *testing.T) {
 	}
 }
 
+func TestReadBlockBySearchAndTopNValidatesContract(t *testing.T) {
+	type arguments struct {
+		filterColumns      []uint16
+		filterTypes        []types.Type
+		outputColumns      []uint16
+		outputTypes        []types.Type
+		outputDestinations []*vector.Vector
+		topColumn          uint16
+		topType            types.Type
+		selectRows         func([]vector.Vector) ([]int64, error)
+		topReader          *IndexReaderTopOp
+		mp                 *mpool.MPool
+	}
+
+	mp := newTopNTestMP(t)
+	out := vector.NewVec(types.T_int64.ToType())
+	defer out.Free(mp)
+	valid := func() arguments {
+		return arguments{
+			filterColumns:      []uint16{0},
+			filterTypes:        []types.Type{types.T_int64.ToType()},
+			outputColumns:      []uint16{0},
+			outputTypes:        []types.Type{types.T_int64.ToType()},
+			outputDestinations: []*vector.Vector{out},
+			topColumn:          1,
+			topType:            types.T_array_float32.ToType(),
+			selectRows:         func([]vector.Vector) ([]int64, error) { return []int64{}, nil },
+			topReader:          newTopNTestOp(1),
+			mp:                 mp,
+		}
+	}
+	for _, test := range []struct {
+		name    string
+		wantErr string
+		mutate  func(*arguments)
+	}{
+		{name: "empty filter", wantErr: "invalid exact-filter columns", mutate: func(a *arguments) {
+			a.filterColumns = nil
+			a.filterTypes = nil
+		}},
+		{name: "mismatched output", wantErr: "invalid exact-filter output columns", mutate: func(a *arguments) {
+			a.outputTypes = nil
+		}},
+		{name: "nil selector", wantErr: "nil exact-filter block topn input", mutate: func(a *arguments) {
+			a.selectRows = nil
+		}},
+		{name: "ordered topn", wantErr: "unsupported exact-filter vector topn input", mutate: func(a *arguments) {
+			a.topReader.OrderedLimit = true
+		}},
+		{name: "filter is vector column", wantErr: "invalid exact-filter column", mutate: func(a *arguments) {
+			a.filterColumns = []uint16{1}
+		}},
+		{name: "duplicate filter", wantErr: "duplicate exact-filter column", mutate: func(a *arguments) {
+			a.filterColumns = []uint16{0, 0}
+			a.filterTypes = []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+		}},
+		{name: "nil output", wantErr: "invalid exact-filter output column", mutate: func(a *arguments) {
+			a.outputDestinations = []*vector.Vector{nil}
+		}},
+		{name: "duplicate output", wantErr: "duplicate exact-filter output column", mutate: func(a *arguments) {
+			a.outputColumns = []uint16{0, 0}
+			a.outputTypes = []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+			a.outputDestinations = []*vector.Vector{out, out}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := valid()
+			test.mutate(&a)
+			_, _, _, err := ReadBlockBySearchAndTopN(
+				t.Context(), a.filterColumns, a.filterTypes, a.outputColumns, a.outputTypes,
+				a.outputDestinations, a.topColumn, a.topType, a.selectRows, a.topReader,
+				nil, Location{}, a.mp, fileservice.SkipFullFilePreloads,
+			)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func countTopNReadsWithin(requests [][]topNReadRange, extent Extent) int {
 	count := 0
 	start := int64(extent.Offset())
