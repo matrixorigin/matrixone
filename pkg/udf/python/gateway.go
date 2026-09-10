@@ -340,6 +340,7 @@ func (g *Gateway) receiveResultBatch(
 	mp *mpool.MPool,
 	sequence *protocol.Sequence,
 ) (int, error) {
+	inputConsumed := false
 	for {
 		data, err := stream.Recv()
 		if err != nil {
@@ -374,6 +375,9 @@ func (g *Gateway) receiveResultBatch(
 			}
 			if control.Tuple != tuple || control.Kind != "ResultBatch" || control.Sequence != sequenceNumber {
 				return 0, fmt.Errorf("python udf: unexpected result sequence %d", control.Sequence)
+			}
+			if !inputConsumed {
+				return 0, fmt.Errorf("python udf: result sequence %d arrived before InputConsumed", sequenceNumber)
 			}
 			if err := sequence.AcceptResult(control.Sequence); err != nil {
 				return 0, err
@@ -433,6 +437,10 @@ func (g *Gateway) receiveResultBatch(
 			if control.Sequence != sequenceNumber {
 				return 0, fmt.Errorf("python udf: input sequence %d was consumed while waiting for result %d", control.Sequence, sequenceNumber)
 			}
+			if inputConsumed {
+				return 0, fmt.Errorf("python udf: input sequence %d was consumed more than once", sequenceNumber)
+			}
+			inputConsumed = true
 			continue
 		case "Error":
 			return 0, fmt.Errorf("python udf: worker error: %s", control.Reason)
@@ -480,7 +488,7 @@ func (g *Gateway) receiveFinish(
 		}
 		switch control.Kind {
 		case "InputConsumed", "ResultSchema":
-			continue
+			return fmt.Errorf("python udf: %s arrived after result stream was drained", control.Kind)
 		case "Error":
 			return fmt.Errorf("python udf: worker error: %s", control.Reason)
 		case "Finish":
