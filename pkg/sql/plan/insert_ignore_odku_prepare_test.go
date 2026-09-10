@@ -23,7 +23,7 @@ import (
 
 func TestPreparedNoKeyODKUParameters(t *testing.T) {
 	for _, modifier := range []string{"", "ignore "} {
-		for _, rhs := range []string{"?", "? + 1", "1 + ?", "? + ?", "coalesce(?, 1)"} {
+		for _, rhs := range []string{"?", "? + 1", "1 + ?", "pid + ?", "? + ?", "coalesce(?, 1)"} {
 			t.Run(modifier+rhs, func(t *testing.T) {
 				mock := NewMockOptimizer(true)
 				sql := fmt.Sprintf(

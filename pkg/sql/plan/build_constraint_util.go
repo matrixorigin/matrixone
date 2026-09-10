@@ -2049,20 +2049,25 @@ func buildValueScan(
 
 	onUpdateExprs := make([]*plan.Expr, 0)
 	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
+		// The no-key fallback does not execute the ODKU action, but its complete
+		// expression still has to be bound so every parameter marker is retained.
+		// Use the ODKU binder here because the fallback value scan has no FROM
+		// binding for target-table column references such as `id + ?`.
+		odkuBinder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
+			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
+		)
 		for _, update := range OnDuplicateUpdate {
 			if update == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
 				continue
 			}
 			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-			binder.builder = builder
-			binder.ctx = bindCtx
 			// The update action is intentionally discarded by the no-key
 			// fallback, but every marker in its RHS still belongs to the
 			// prepared statement. Bind the complete expression so a binary
 			// expression contributes parameters from both operands, in lexical
 			// order, rather than retaining only the right operand.
-			updateExpr, err := binder.BindExpr(update.Expr, 0, true)
+			updateExpr, err := odkuBinder.BindAssignmentExpr(update.Expr, col.Typ)
 			if err != nil {
 				return err
 			}
