@@ -1,0 +1,74 @@
+drop account if exists acc_gpu_idx_cap;
+create account acc_gpu_idx_cap admin_name 'admin' identified by '123456';
+SET experimental_cagra_index = 1;
+drop database if exists gpu_idx_cap_db;
+create database gpu_idx_cap_db;
+use gpu_idx_cap_db;
+create table t1(id bigint primary key, v vecf32(8));
+create table t2(id bigint primary key, v vecf32(8));
+create table t3(id bigint primary key, v vecf32(8));
+insert into t1 values
+(1,'[1,1,1,1,1,1,1,1]'), (2,'[2,2,2,2,2,2,2,2]'), (3,'[3,3,3,3,3,3,3,3]'),
+(4,'[4,4,4,4,4,4,4,4]'), (5,'[5,5,5,5,5,5,5,5]'), (6,'[6,6,6,6,6,6,6,6]'),
+(7,'[7,7,7,7,7,7,7,7]'), (8,'[8,8,8,8,8,8,8,8]'), (9,'[9,9,9,9,9,9,9,9]'),
+(10,'[10,10,10,10,10,10,10,10]');
+insert into t2 select * from t1;
+insert into t3 select * from t1;
+create index c1 using cagra on t1(v) op_type 'vector_l2_ops';
+create index c2 using cagra on t2(v) op_type 'vector_l2_ops';
+create index c3 using cagra on t3(v) op_type 'vector_l2_ops';
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+select id from t2 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+select id from t3 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+set global max_gpu_index_cache_size = 1048576;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+1048576
+use gpu_idx_cap_db;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+1048576
+select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+select id from t2 order by l2_distance(v, '[7,7,7,7,7,7,7,7]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+7
+select id from t3 order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id from t1 order by l2_distance(v, '[10,10,10,10,10,10,10,10]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+10
+select id from t2 order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+5
+select id from t3 order by l2_distance(v, '[9,9,9,9,9,9,9,9]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+9
+select a.id, b.id from
+(select id from t1 order by l2_distance(v, '[2,2,2,2,2,2,2,2]') asc limit 1) a,
+(select id from t2 order by l2_distance(v, '[8,8,8,8,8,8,8,8]') asc limit 1) b;
+➤ id[-5,64,0]  ¦  id[-5,64,0]  𝄀
+2  ¦  8
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+set global max_gpu_index_cache_size = 0;
+select id from t1 order by l2_distance(v, '[3,3,3,3,3,3,3,3]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+3
+select id from t3 order by l2_distance(v, '[9,9,9,9,9,9,9,9]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+9
+drop database if exists gpu_idx_cap_db;
+drop account if exists acc_gpu_idx_cap;

@@ -30,7 +30,8 @@ import (
 
 // Arrow LOAD tests use dedicated, non-shared embedded clusters and close them at
 // cleanup. This keeps process-local metrics and lifecycle state out of pkg/embed's
-// package-level shared clusters. All Arrow execution tests opt in explicitly.
+// package-level shared clusters. Default-path tests leave Arrow configuration
+// untouched; focused rollback tests explicitly override the kill switches.
 type arrowLoadClusterOptions struct {
 	cnCount            int
 	enabled            bool
@@ -49,7 +50,7 @@ func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distri
 }
 
 // startArrowLoadClusterWithDefaults deliberately installs no Arrow-specific
-// configuration. Tests using it prove the product default rejects Arrow LOAD.
+// configuration. Tests using it prove the product default is available.
 func startArrowLoadClusterWithDefaults(t testing.TB, cnCount int) embed.Cluster {
 	t.Helper()
 	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{

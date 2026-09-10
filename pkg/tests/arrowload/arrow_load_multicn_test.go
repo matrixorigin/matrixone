@@ -26,7 +26,7 @@ import (
 // public path. Shutdown/cancellation coverage uses deterministic request and
 // cluster-lifecycle fault injection in the dedicated rollout and MinIO tests.
 func TestArrowLoadMultiCN(t *testing.T) {
-	c := startArrowLoadCluster(t, 2, true, false, true)
+	c := startArrowLoadClusterWithDefaults(t, 2)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_multicn")
 	mustExec(t, db, "use arrow_multicn")
