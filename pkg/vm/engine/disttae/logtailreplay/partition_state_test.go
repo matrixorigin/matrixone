@@ -83,7 +83,7 @@ func TestSourceCommitTSAtIncludesPartitionStateStart(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	state.UpdateDuration(types.BuildTS(100, 1), types.MaxTs())
 
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil, types.TS{})
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(100, 1), info.StateStart)
 	require.Equal(t, types.BuildTS(100, 1), info.Max())

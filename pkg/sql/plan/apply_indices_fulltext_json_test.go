@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -748,8 +749,66 @@ func (fakeSourceEngine) GetRelationById(context.Context, client.TxnOperator, uin
 
 type fakeSourceRel struct{ engine.Relation }
 
-func (fakeSourceRel) SourceCommitTS(context.Context) (types.TS, error) {
+func (fakeSourceRel) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
 	return types.BuildTS(50, 0), nil
+}
+
+// recordingSourceEngine captures the account id bound on the context GetRelationById is called with,
+// so a test can assert a cross-account snapshot's freshness reads resolve under the snapshot's owner.
+type recordingSourceEngine struct {
+	engine.Engine
+	seen *uint32
+}
+
+func (e recordingSourceEngine) GetRelationById(ctx context.Context, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+	if id, err := defines.GetAccountId(ctx); err == nil {
+		*e.seen = id
+	}
+	return "", "", fakeSourceRel{}, nil
+}
+
+// A cross-account {snapshot=...} read must resolve its freshness reads (source relation, ISCP log,
+// index metadata) under the account that OWNS the data -- the snapshot's tenant -- not the reader's.
+// decideJSONProbe binds that account onto the context before GetRelationById; assert it arrives.
+func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
+	origCovers := coversSnapshotFn
+	defer func() { coversSnapshotFn = origCovers }()
+	coversSnapshotFn = func(context.Context, string, coverage.Request) (bool, types.TS, error) {
+		return true, types.TS{}, nil
+	}
+
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{}
+	var seen uint32
+	proc.Base.SessionInfo.StorageEngine = recordingSourceEngine{seen: &seen}
+
+	scan := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{7},
+		ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+		TableDef: &plan.TableDef{
+			TblId:     424242,
+			TableType: catalog.SystemOrdinaryRel,
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "j": 1},
+			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*plan.IndexDef{idx},
+		},
+		// A historical snapshot (earlier than the txn) owned by account 42.
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000},
+			Tenant: &plan.SnapshotTenant{TenantID: 42},
+		},
+	}
+
+	b := &QueryBuilder{compCtx: mockCtx}
+	b.decideJSONProbe(scan, idx)
+	require.Equal(t, uint32(42), seen, "cross-account snapshot freshness reads must bind the snapshot's tenant")
 }
 
 // TestDecideJSONProbeMatrix drives the covered / partial / skip decision by stubbing the two runtime

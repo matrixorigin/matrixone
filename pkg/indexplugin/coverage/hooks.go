@@ -53,11 +53,16 @@ type Request struct {
 	// Snapshot is the transaction read timestamp, retained for observability.
 	Snapshot types.TS
 
-	// SourceCommitTS is the greatest source DML commit or partition-state
-	// retention boundary represented by the query CN at Snapshot. The index is
-	// usable only after its watermark reaches this timestamp. It intentionally
-	// excludes flush/merge lifecycle timestamps.
-	SourceCommitTS types.TS
+	// SourceCommitTS lazily computes the coverage bar: the greatest source DML commit
+	// or partition-state retention boundary the query CN represents at the read point.
+	// The index is usable only after its build_ts reaches this timestamp; it excludes
+	// flush/merge lifecycle timestamps. It is a callback rather than a value so the
+	// freshness check can supply the generation's build_ts as mustExceed -- the bar is
+	// only ever compared against build_ts, so the provider may stop as soon as it knows
+	// the true value exceeds it, skipping per-object I/O. nil declines (no bar => not
+	// covered). It is invoked at most once, only after build_ts is known to be a live,
+	// non-empty value the bar could actually gate.
+	SourceCommitTS func(ctx context.Context, mustExceed types.TS) (types.TS, error)
 
 	// IndexStorageTable, IndexMetadataDB, and IndexMetadataTable are the index's
 	// hidden tables, resolved by the planner. The freshness check reads the loaded

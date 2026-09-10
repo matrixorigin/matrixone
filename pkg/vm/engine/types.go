@@ -1195,8 +1195,15 @@ type RelationHandleFactory interface {
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not
 // provide the proof and planners fail closed to a table scan.
+//
+// mustExceed is an early-exit hint, not a filter: the caller only needs to know
+// whether the true source commit is greater than this value (the index build_ts),
+// so an implementation may return as soon as it establishes that -- skipping the
+// per-object I/O it would otherwise do to compute the exact maximum. An empty
+// mustExceed disables the short-circuit and returns the exact maximum. The result
+// is always a valid lower bound: >= mustExceed when it short-circuits, else exact.
 type SourceCommitTSProvider interface {
-	SourceCommitTS(ctx context.Context) (types.TS, error)
+	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine

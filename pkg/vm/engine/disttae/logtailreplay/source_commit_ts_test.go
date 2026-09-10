@@ -99,7 +99,7 @@ func TestSourceCommitTSAtTNObjectPreservesCommitTS(t *testing.T) {
 	obj.CreateTime = types.BuildTS(30, 0)
 	state.dataObjectsNameIndex.Set(obj)
 
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(40, 0), fs, mp)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(40, 0), fs, mp, types.TS{})
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(20, 0), info.TNObject)
 	require.Equal(t, types.BuildTS(20, 0), info.Max())
@@ -143,7 +143,7 @@ func TestSourceCommitTSAtInMemory(t *testing.T) {
 	rid2 := types.NewRowIDWithObjectIDBlkNumAndRowID(objID, 0, 1)
 	state.rows.Set(&RowEntry{BlockID: rid2.CloneBlockID(), RowID: rid2, Time: types.BuildTS(300, 0)})
 
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil, types.TS{})
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(50, 0), info.InMemory)
 	require.Equal(t, types.BuildTS(50, 0), info.Max())
@@ -162,7 +162,7 @@ func TestSourceCommitTSAtCNCreated(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil, types.TS{})
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(60, 0), info.CNCreated)
 	require.Equal(t, types.BuildTS(60, 0), info.Max())
@@ -172,7 +172,7 @@ func TestSourceCommitTSAtCNCreated(t *testing.T) {
 func TestSourceCommitTSAtStateStartFloor(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	state.UpdateDuration(types.BuildTS(100, 1), types.MaxTs())
-	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil)
+	info, err := state.SourceCommitTSAt(context.Background(), types.BuildTS(200, 1), nil, nil, types.TS{})
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(100, 1), info.StateStart)
 	require.Equal(t, types.BuildTS(100, 1), info.Max())
@@ -197,8 +197,63 @@ func TestSourceCommitTSAtTNObjectFailsClosed(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	_, err := state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp)
+	_, err := state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp, types.TS{})
 	require.Error(t, err)
+}
+
+// unloadableTNObjectState builds a partition state holding one TN non-appendable object whose
+// meta cannot be loaded, so any code path that reads it fails closed (see
+// TestSourceCommitTSAtTNObjectFailsClosed). Used to prove a short-circuit skipped the read.
+func unloadableTNObjectState(t *testing.T, start types.TS) *PartitionState {
+	t.Helper()
+	state := NewPartitionState("", false, 42, false)
+	state.UpdateDuration(start, types.MaxTs())
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 10))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(60, 0),
+	})
+	return state
+}
+
+// mustExceed short-circuits before per-object I/O: an in-memory row past the threshold settles the
+// answer, so the un-loadable TN object is never read. Without the threshold the same state reaches
+// the object and fails closed -- which is exactly what proves the object read was skipped.
+func TestSourceCommitTSAtShortCircuitsBeforeObjectIO(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs := testutil.NewSharedFS()
+
+	state := unloadableTNObjectState(t, types.BuildTS(1, 0))
+	objID := objectio.NewObjectid()
+	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID, 0, 0)
+	state.rows.Set(&RowEntry{BlockID: rid.CloneBlockID(), RowID: rid, Time: types.BuildTS(150, 0)})
+
+	// Threshold 100 < the in-memory 150: return after the in-memory scan, before the object read.
+	info, err := state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp, types.BuildTS(100, 0))
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(150, 0), info.Max())
+
+	// No threshold: the object must be read, and its meta cannot load -> fail closed.
+	_, err = state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp, types.TS{})
+	require.Error(t, err)
+}
+
+// The retention-boundary floor alone can exceed the threshold, returning with no scan at all --
+// again proven by the un-loadable object going unread.
+func TestSourceCommitTSAtStateStartShortCircuits(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs := testutil.NewSharedFS()
+
+	state := unloadableTNObjectState(t, types.BuildTS(100, 0))
+	info, err := state.SourceCommitTSAt(ctx, types.BuildTS(200, 1), fs, mp, types.BuildTS(50, 0))
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(100, 0), info.Max())
 }
 
 func TestMaxCommitTSFromZonemapRequiresFS(t *testing.T) {

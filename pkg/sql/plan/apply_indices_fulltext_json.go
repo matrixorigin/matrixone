@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
@@ -457,8 +459,19 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	}
 	// The effective read TS for a {snapshot=...}/AS OF query (nil for a current read), computed
 	// exactly as the search does, so the freshness check, the coverage bar, and the tail all target
-	// the same read point.
-	scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot)
+	// the same read point. ApplyScanSnapshot also binds the snapshot's owning tenant on sp.
+	sp := sqlexec.NewSqlProcess(proc)
+	scanSnapshotTS := sp.ApplyScanSnapshot(scanNode.ScanSnapshot)
+
+	// proc.Ctx is canceled during planning; use the top context. For a cross-account snapshot the
+	// freshness reads (source relation, ISCP log, index metadata) must resolve under the account that
+	// OWNS the data, not the reader's -- else they find the wrong account's tables or nothing. sp
+	// resolves the effective account (snapshot's owner for a historical read, else the caller's own),
+	// so binding it is a no-op for an ordinary current read.
+	ctx := proc.GetTopContext()
+	if acctID, aerr := sp.EffectiveAccountID(); aerr == nil {
+		ctx = defines.AttachAccountId(ctx, acctID)
+	}
 
 	// The coverage bar is the max source commit the read must see, read from the source relation's
 	// partition state AS OF THE READ: the current txn for a current read, or a txn cloned at the
@@ -473,7 +486,7 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if eng == nil {
 		return jsonProbeSkip, types.TS{}
 	}
-	_, _, rel, err := eng.GetRelationById(proc.GetTopContext(), readTxn, scanNode.TableDef.TblId)
+	_, _, rel, err := eng.GetRelationById(ctx, readTxn, scanNode.TableDef.TblId)
 	if err != nil {
 		logutil.Debugf("json index probe: resolve source relation failed for %s: %v", idx.IndexName, err)
 		return jsonProbeSkip, types.TS{}
@@ -482,20 +495,17 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if !ok {
 		return jsonProbeSkip, types.TS{}
 	}
-	sourceCommitTS, err := commitTSProvider.SourceCommitTS(proc.GetTopContext())
-	if err != nil {
-		logutil.Debugf("json index probe: source commit timestamp unavailable for %s: %v", idx.IndexName, err)
-		return jsonProbeSkip, types.TS{}
-	}
-	// proc.Ctx is canceled during planning; use the top context.
-	ctx := proc.GetTopContext()
 	req := coverage.Request{
-		CNUUID:             proc.GetService(),
-		Txn:                txn,
-		TableID:            scanNode.TableDef.TblId,
-		IndexDef:           idx,
-		Snapshot:           types.TimestampToTS(txn.SnapshotTS()),
-		SourceCommitTS:     sourceCommitTS,
+		CNUUID:   proc.GetService(),
+		Txn:      txn,
+		TableID:  scanNode.TableDef.TblId,
+		IndexDef: idx,
+		Snapshot: types.TimestampToTS(txn.SnapshotTS()),
+		// The bar is computed lazily and only if build_ts is a live, non-empty value it could gate;
+		// mustExceed lets the provider stop once the source is known to be behind build_ts.
+		SourceCommitTS: func(c context.Context, mustExceed types.TS) (types.TS, error) {
+			return commitTSProvider.SourceCommitTS(c, mustExceed)
+		},
 		IndexStorageTable:  storeTbl,
 		IndexMetadataDB:    dbName,
 		IndexMetadataTable: metaTbl,

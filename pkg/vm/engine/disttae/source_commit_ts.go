@@ -27,7 +27,7 @@ import (
 // entries before that boundary may have been truncated from local state.
 // Transaction workspace writes intentionally fail closed: they are visible to
 // the query but cannot have reached ISCP yet.
-func (tbl *txnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
+func (tbl *txnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
 	// The workspace write list is guarded by the transaction mutex and re-sliced
 	// in place by concurrent dumps/compactions; read it under the lock.
 	txn := tbl.getTxn()
@@ -56,6 +56,7 @@ func (tbl *txnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
 		types.TimestampToTS(tbl.getTxn().op.SnapshotTS()),
 		proc.GetFileService(),
 		proc.Mp(),
+		mustExceed,
 	)
 	if err != nil {
 		return types.TS{}, err
@@ -63,14 +64,14 @@ func (tbl *txnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
 	return info.Max(), nil
 }
 
-func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context) (types.TS, error) {
+func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
 	if tbl.combined.is {
-		return tbl.combined.tbl.SourceCommitTS(ctx)
+		return tbl.combined.tbl.SourceCommitTS(ctx, mustExceed)
 	}
-	return tbl.origin.SourceCommitTS(ctx)
+	return tbl.origin.SourceCommitTS(ctx, mustExceed)
 }
 
-func (t *combinedTxnTable) SourceCommitTS(ctx context.Context) (types.TS, error) {
+func (t *combinedTxnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
 	// A combined table aggregates a partitioned table's members. Proving async
 	// index coverage would require the max source commit AND a transaction-local
 	// write check across every member, not just the primary; the primary alone

@@ -135,13 +135,31 @@ func (s SourceCommitTS) Max() types.TS {
 // disk because their ObjectEntry DeleteTime is a lifecycle timestamp and cannot
 // be used as a source DML timestamp. Any I/O uncertainty is returned to the
 // caller, which must fail closed before using an asynchronous index.
+//
+// mustExceed short-circuits: the only consumer compares Max() against an index
+// build_ts, so once the terms gathered so far already exceed mustExceed the exact
+// maximum is irrelevant and the scan returns early -- checked before each object's
+// I/O, so an in-memory or retention-boundary write past build_ts avoids the
+// per-object disk reads entirely. An empty mustExceed disables it (exact maximum).
 func (p *PartitionState) SourceCommitTSAt(
 	ctx context.Context,
 	snapshot types.TS,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	mustExceed types.TS,
 ) (SourceCommitTS, error) {
 	ret := SourceCommitTS{StateStart: p.GetStart()}
+	exceeded := func() bool {
+		if mustExceed.IsEmpty() {
+			return false
+		}
+		m := ret.Max()
+		return m.GT(&mustExceed)
+	}
+	// The retention boundary alone can settle the answer with no scan at all.
+	if exceeded() {
+		return ret, nil
+	}
 
 	// Keep committed in-memory inserts/deletes.  These entries disappear after
 	// their appendable object list is applied, at which point the object scan
@@ -150,7 +168,7 @@ func (p *PartitionState) SourceCommitTSAt(
 		if entry.Time.LE(&snapshot) && entry.Time.GT(&ret.InMemory) {
 			ret.InMemory = entry.Time
 		}
-		return true
+		return !exceeded()
 	})
 
 	iter, err := p.NewObjectsIter(snapshot, true, false)
@@ -160,6 +178,12 @@ func (p *PartitionState) SourceCommitTSAt(
 	defer iter.Close()
 
 	for iter.Next() {
+		// A term gathered so far (retention boundary, in-memory rows, or an earlier
+		// object) already passes build_ts, so this object's I/O cannot change the
+		// covered/behind answer.
+		if exceeded() {
+			return ret, nil
+		}
 		obj := iter.Entry()
 		if obj.GetAppendable() {
 			ts, err := maxCommitTSInAppendableObject(ctx, snapshot, fs, obj, mp)

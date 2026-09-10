@@ -89,13 +89,19 @@ func sysCtx() context.Context {
 	return context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7))
 }
 
+// barFn returns a SourceCommitTS callback that yields a fixed bar, ignoring mustExceed
+// (the short-circuit is exercised at the partition-state layer, not here).
+func barFn(sourceCommit int64) func(context.Context, types.TS) (types.TS, error) {
+	return func(context.Context, types.TS) (types.TS, error) { return ts(sourceCommit), nil }
+}
+
 // gateReq builds a complete request with the hidden tables resolved. With an empty
 // process cache the gate takes the cold path and reads MAX(build_ts) from the metadata.
 func gateReq(sourceCommit int64) coverage.Request {
 	return coverage.Request{
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
 		IndexDef:           &plan.IndexDef{IndexName: "ftj"},
-		SourceCommitTS:     ts(sourceCommit),
+		SourceCommitTS:     barFn(sourceCommit),
 		IndexStorageTable:  "ftj_index",
 		IndexMetadataDB:    "db",
 		IndexMetadataTable: "ftj_meta",
@@ -206,7 +212,7 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	}
 
 	full := coverage.Request{CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
-		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: ts(100)}
+		IndexDef: &plan.IndexDef{IndexName: "ftj"}, SourceCommitTS: barFn(100)}
 
 	noIdx := full
 	noIdx.IndexDef = nil
@@ -214,10 +220,10 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 	noTxn.Txn = nil
 	noTable := full
 	noTable.TableID = 0
-	// An empty source commit ts is no evidence: any watermark is >= zero, so
-	// accepting it would fail open. It must decline before touching the catalog.
+	// No bar provider is no evidence: without a way to compute the source commit the gate
+	// cannot prove coverage, so it must decline (never fail open) without touching the catalog.
 	noSourceTS := full
-	noSourceTS.SourceCommitTS = types.TS{}
+	noSourceTS.SourceCommitTS = nil
 	for _, r := range []coverage.Request{noIdx, noTxn, noTable, noSourceTS} {
 		covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), r)
 		require.NoError(t, err)
@@ -228,10 +234,20 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 
 // A lookup error is reported, and the caller still sees "not covered".
 func TestCoversSnapshotLookupError(t *testing.T) {
+	mp := mpool.MustNewZero()
 	prev := execWithResult
 	t.Cleanup(func() { execWithResult = prev })
-	execWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalErrorNoCtx("boom")
+	// A valid build_ts (so the gate reaches liveness), but the mo_iscp_log liveness read errors.
+	// The error must propagate rather than be treated as "not live".
+	execWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if strings.Contains(sql, "mo_iscp_log") {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("boom")
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(200), false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
 	covered, _, err := Hooks{}.CoversSnapshot(sysCtx(), gateReq(100))
 	require.Error(t, err)
