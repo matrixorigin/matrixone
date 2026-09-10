@@ -400,11 +400,13 @@ func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
 			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
 			sharedWaiters := newWaiterQueue()
 			sharedWaiters.init(lt.logger)
+			staleWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			staleWaiters.init(lt.logger)
 
 			stale := Lock{
 				value:   flagLockRangeStart | flagLockExclusiveMode,
 				holders: newHolders(),
-				waiters: newWaiterQueue(),
+				waiters: staleWaiters,
 			}
 			liveStart := Lock{
 				value:   flagLockRangeStart | flagLockExclusiveMode,
@@ -428,6 +430,7 @@ func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
 			lt.mu.Unlock()
 
 			require.False(t, startOK, "orphan endpoint should be removed")
+			require.True(t, staleWaiters.returned, "orphan endpoint state should be returned when unreferenced")
 			require.True(t, liveStartOK)
 			require.True(t, liveEndOK)
 			require.Same(t, sharedHolders, liveStart.holders)
@@ -436,6 +439,57 @@ func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
 			require.Same(t, sharedHolders, liveEnd.holders)
 			require.Same(t, sharedWaiters, liveEnd.waiters)
 			require.True(t, liveEnd.isLockRangeEnd())
+		},
+	)
+}
+
+func TestEmptyRangeEndpointDoesNotSpliceEnclosingLiveRange(t *testing.T) {
+	table := uint64(13)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+			staleWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			staleWaiters.init(lt.logger)
+
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			stale := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: staleWaiters,
+			}
+			liveEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{0}, liveStart)
+			lt.mu.store.Add([]byte{1}, stale)
+			lt.mu.store.Add([]byte{3}, liveEnd)
+			lt.deleteEmptyLockLocked([]byte{1}, stale)
+			_, staleOK := lt.mu.store.Get([]byte{1})
+			liveStart, liveStartOK := lt.mu.store.Get([]byte{0})
+			liveEnd, liveEndOK := lt.mu.store.Get([]byte{3})
+			lt.mu.Unlock()
+
+			require.False(t, staleOK, "enclosed orphan endpoint should be removed")
+			require.True(t, staleWaiters.returned, "enclosed orphan state should be returned when unreferenced")
+			require.True(t, liveStartOK)
+			require.True(t, liveEndOK)
+			require.Same(t, sharedHolders, liveStart.holders)
+			require.Same(t, sharedWaiters, liveStart.waiters)
+			require.Same(t, sharedHolders, liveEnd.holders)
+			require.Same(t, sharedWaiters, liveEnd.waiters)
 		},
 	)
 }

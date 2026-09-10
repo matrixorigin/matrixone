@@ -808,6 +808,7 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 			zap.Uint64("table", l.bind.Table),
 			zap.Binary("key", key))
 		l.mu.store.Delete(key)
+		l.releaseLockStatesIfUnreferencedLocked(lock)
 		return
 	}
 
@@ -822,8 +823,9 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 	// that can belong to this range. If its state was replaced while the
 	// counterpart survived, restore the empty endpoint from that counterpart
 	// instead of leaving a live range-end without a range-start. A later range
-	// start/end would have made structuralPair false above, so this cannot
-	// splice an adjacent complete range into the stale one.
+	// start/end or an enclosing earlier range would have made structuralPair
+	// false above, so this cannot splice another complete range into the stale
+	// one.
 	l.logger.Error("rebuilding mismatched range endpoint during waiter cleanup",
 		zap.Uint64("table", l.bind.Table),
 		zap.Binary("key", key),
@@ -1206,6 +1208,24 @@ func (l *localLockTable) findStructuralRangePair(
 			}
 			cur = prevKey
 		}
+	}
+
+	// A range-start inside a complete range is an orphan, not the start of a
+	// pair with that range's end. Ignore interleaved rows and stop at the first
+	// range-end, which closes the nearest earlier range.
+	cur := key
+	for {
+		prevKey, prevLock, ok := l.mu.store.Prev(cur)
+		if !ok {
+			break
+		}
+		if prevLock.isLockRangeStart() {
+			return nil, Lock{}, false
+		}
+		if prevLock.isLockRangeEnd() {
+			break
+		}
+		cur = prevKey
 	}
 
 	var pairedKey []byte
