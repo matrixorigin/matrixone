@@ -1203,10 +1203,10 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
-			// Move the deadline into the past so this test does not spend the
-			// real multi-minute bootstrap budget.
-			store.bootstrapCheckDeadline = time.Now().Add(-time.Second)
-			store.checkBootstrap(state)
+			// Drive the elapsed-time check through its explicit-time seam rather
+			// than mutating the production-owned deadline.
+			expired := time.Now().Add(store.bootstrapCheckWindow())
+			require.NoError(t, store.checkBootstrapWithSetterAt(expired, state, store.setBootstrapState))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)
