@@ -30,14 +30,32 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 				want types.Type
 			}{
 				{types.T_varchar.ToType(), types.T_float64.ToType()},
-				{types.T_date.ToType(), types.T_decimal128.ToType()},
-				{types.T_datetime.ToType(), types.T_decimal128.ToType()},
+				{types.T_date.ToType(), types.New(types.T_decimal128, 38, 0)},
 			} {
 				got, err := GetFunctionByName(context.Background(), name, []types.Type{input.typ})
 				require.NoError(t, err)
 				castTypes, shouldCast := got.ShouldDoImplicitTypeCast()
 				require.True(t, shouldCast)
 				require.Equal(t, []types.Type{input.want}, castTypes)
+			}
+		})
+	}
+}
+
+func TestMySQLNumericAggTypeCheckPreservesTemporalScale(t *testing.T) {
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
+		t.Run(name, func(t *testing.T) {
+			for _, oid := range []types.T{types.T_time, types.T_datetime, types.T_timestamp} {
+				for scale := int32(1); scale <= 6; scale++ {
+					input := types.New(oid, 0, scale)
+					got, err := GetFunctionByName(context.Background(), name, []types.Type{input})
+					require.NoError(t, err)
+					castTypes, shouldCast := got.ShouldDoImplicitTypeCast()
+					require.True(t, shouldCast)
+					require.Equal(t, []types.Type{
+						types.New(types.T_decimal128, 38, scale),
+					}, castTypes, "oid=%v scale=%d", oid, scale)
+				}
 			}
 		})
 	}

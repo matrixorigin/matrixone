@@ -771,7 +771,13 @@ func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case t.Oid == types.T_date || t.Oid == types.T_time ||
 		t.Oid == types.T_datetime || t.Oid == types.T_timestamp:
-		return newCheckResultWithCast(0, []types.Type{types.T_decimal128.ToType()})
+		scale := int32(0)
+		if t.Oid != types.T_date {
+			scale = t.Scale
+		}
+		return newCheckResultWithCast(0, []types.Type{
+			types.New(types.T_decimal128, 38, scale),
+		})
 	default:
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
