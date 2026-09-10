@@ -434,13 +434,57 @@ class WorkerContractTest(unittest.TestCase):
                 server._admit((1, "statement", "group", 1, "second", 1))
             self.assertIn(first, server._terminal)
             with server._lock:
-                server._terminal[first] = (0.0, state.terminal_bytes)
+                server._terminal[first] = worker._TerminalRecord(
+                    0.0, state.terminal_bytes, state.last_result, state.finish_id
+                )
                 server._purge_terminal_locked(1.0)
             second = server._admit((1, "statement", "group", 1, "second", 1))
             self.assertIsNotNone(second)
         finally:
             worker.MAX_LEDGER_ENTRIES = old_records
             worker.MAX_LEDGER_BYTES = old_bytes
+
+    def test_terminal_ack_requires_the_completed_fence(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        key = (1, "statement", "group", 1, "completed", 1)
+        state = server._admit(key)
+        state.last_result = 2
+        state.finish_id = "finish-2"
+        server._finish_invocation(key, state)
+
+        tuple_value = {
+            "account_id": key[0],
+            "statement_id": key[1],
+            "group_id": key[2],
+            "group_epoch": key[3],
+            "invocation_id": key[4],
+            "lease_epoch": key[5],
+        }
+        result_action = types.SimpleNamespace(
+            type="AcknowledgeResults",
+            body=worker._encode_control(
+                {
+                    "kind": "AcknowledgeResults",
+                    "tuple": tuple_value,
+                    "ack_sequence": 2,
+                }
+            ),
+        )
+        ack = worker._decode_control(next(server.do_action(None, result_action)))
+        self.assertEqual(2, ack["ack_sequence"])
+
+        wrong_action = types.SimpleNamespace(
+            type="AcknowledgeResults",
+            body=worker._encode_control(
+                {
+                    "kind": "AcknowledgeResults",
+                    "tuple": tuple_value,
+                    "ack_sequence": 1,
+                }
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "completed result"):
+            next(server.do_action(None, wrong_action))
 
     def test_active_fence_cannot_be_admitted_twice(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")

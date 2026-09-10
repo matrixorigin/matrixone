@@ -143,6 +143,14 @@ class VectorContext:
     num_rows: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _TerminalRecord:
+    expires_at: float
+    bytes: int
+    last_result: int
+    finish_id: Optional[str]
+
+
 _FENCING_CONTEXT_KEYS = frozenset(
     {"account_id", "statement_id", "group_id", "group_epoch", "invocation_id", "lease_epoch"}
 )
@@ -997,7 +1005,7 @@ class RoutineFlightServer(flight.FlightServerBase):
         super().__init__(location)
         self._lock = threading.RLock()
         self._active: Dict[tuple, _InvocationState] = {}
-        self._terminal: OrderedDict[tuple, tuple[float, int]] = OrderedDict()
+        self._terminal: OrderedDict[tuple, _TerminalRecord] = OrderedDict()
         self._terminal_bytes = 0
         self._active_bytes = 0
 
@@ -1010,10 +1018,10 @@ class RoutineFlightServer(flight.FlightServerBase):
         return len(encoded) + 128
 
     def _purge_terminal_locked(self, now: float) -> None:
-        expired = [key for key, (deadline, _) in self._terminal.items() if deadline <= now]
+        expired = [key for key, record in self._terminal.items() if record.expires_at <= now]
         for key in expired:
-            _, size = self._terminal.pop(key)
-            self._terminal_bytes -= size
+            record = self._terminal.pop(key)
+            self._terminal_bytes -= record.bytes
 
     def _admit(self, key: tuple) -> _InvocationState:
         size = self._entry_bytes(key)
@@ -1034,7 +1042,9 @@ class RoutineFlightServer(flight.FlightServerBase):
 
     def _remember_terminal_locked(self, key: tuple, state: _InvocationState) -> None:
         deadline = time.monotonic() + TERMINAL_TTL_SECONDS
-        self._terminal[key] = (deadline, state.terminal_bytes)
+        self._terminal[key] = _TerminalRecord(
+            deadline, state.terminal_bytes, state.last_result, state.finish_id
+        )
         self._terminal.move_to_end(key)
         self._terminal_bytes += state.terminal_bytes
 
@@ -1064,19 +1074,30 @@ class RoutineFlightServer(flight.FlightServerBase):
         with self._lock:
             self._purge_terminal_locked(time.monotonic())
             state = self._active.get(key)
-            terminal = key in self._terminal
+            terminal = self._terminal.get(key)
         if state is None:
-            if terminal:
-                yield _encode_control(
-                    {
-                        "kind": "Ack",
-                        "tuple": control["tuple"],
-                        "status": "OK",
-                        "ack_sequence": control.get("ack_sequence", 0),
-                        "finish_id": control.get("finish_id", ""),
-                    }
-                )
-                return
+            if terminal is None:
+                raise ValueError("PROTOCOL: unknown invocation")
+            if not terminal.finish_id:
+                raise ValueError("PROTOCOL: invocation did not complete successfully")
+            if action.type == "AcknowledgeResults":
+                sequence = _required_uint64(control, "ack_sequence")
+                if sequence != terminal.last_result:
+                    raise ValueError("PROTOCOL: terminal result ACK does not match the completed result")
+            else:
+                finish_id = _required_string(control, "finish_id")
+                if finish_id != terminal.finish_id:
+                    raise ValueError("PROTOCOL: terminal Finish ACK does not match the completed Finish")
+            yield _encode_control(
+                {
+                    "kind": "Ack",
+                    "tuple": control["tuple"],
+                    "status": "OK",
+                    "ack_sequence": control.get("ack_sequence", 0),
+                    "finish_id": control.get("finish_id", ""),
+                }
+            )
+            return
             raise ValueError("PROTOCOL: unknown invocation")
         if action.type == "AcknowledgeResults":
             state.ack_result(_required_uint64(control, "ack_sequence"))
