@@ -87,6 +87,37 @@ type Control struct {
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
+// MarshalJSON keeps closing controls self-describing when their final
+// sequence is zero.  The zero value is meaningful for an empty input stream;
+// omitting it would make EndInput(0) indistinguishable from a malformed
+// control at the Python boundary.  Other controls retain the compact
+// omission used for fields they do not own.
+func (c Control) MarshalJSON() ([]byte, error) {
+	type wireControl struct {
+		Version      int             `json:"version"`
+		Kind         string          `json:"kind"`
+		Tuple        FencingTuple    `json:"tuple"`
+		Sequence     uint64          `json:"sequence,omitempty"`
+		LastSequence *uint64         `json:"last_sequence,omitempty"`
+		AckSequence  uint64          `json:"ack_sequence,omitempty"`
+		FinishID     string          `json:"finish_id,omitempty"`
+		Status       string          `json:"status,omitempty"`
+		Reason       string          `json:"reason,omitempty"`
+		Payload      json.RawMessage `json:"payload,omitempty"`
+	}
+	wire := wireControl{
+		Version: c.Version, Kind: c.Kind, Tuple: c.Tuple,
+		Sequence: c.Sequence, AckSequence: c.AckSequence,
+		FinishID: c.FinishID, Status: c.Status, Reason: c.Reason,
+		Payload: c.Payload,
+	}
+	if c.Kind == "EndInput" || c.Kind == "Finish" || c.LastSequence != 0 {
+		lastSequence := c.LastSequence
+		wire.LastSequence = &lastSequence
+	}
+	return json.Marshal(wire)
+}
+
 // MarshalControl produces the byte representation used in the Flight
 // application metadata field.  Struct-field order is intentional: the same
 // bytes are used when a descriptor fingerprint is calculated.
