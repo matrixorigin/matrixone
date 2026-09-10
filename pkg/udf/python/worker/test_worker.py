@@ -52,6 +52,17 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "field name"):
             worker._validate_field(pa.field("other", field.type, metadata=field.metadata), "result", descriptor)
 
+    def test_type_descriptor_shape_is_strict(self):
+        with self.assertRaisesRegex(ValueError, "unsupported descriptor field"):
+            worker._field(
+                "result",
+                {"type_id": worker.INT64, "offset_width": 32, "future": 1},
+            )
+        with self.assertRaisesRegex(ValueError, "type_id must be an integer"):
+            worker._field("result", {"type_id": "23", "offset_width": 32})
+        with self.assertRaisesRegex(ValueError, "offset_width must be an integer"):
+            worker._field("result", {"type_id": worker.INT64, "offset_width": "32"})
+
     def test_zero_temporal_is_distinct_from_null(self):
         descriptor = {"type_id": worker.DATE, "offset_width": 32, "temporal_encoding": "sql_zero_struct"}
         zero = worker.SqlDate(True, None)

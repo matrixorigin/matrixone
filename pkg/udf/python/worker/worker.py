@@ -63,6 +63,21 @@ _CONTROL_KEYS = frozenset(
         "payload",
     }
 )
+_DESCRIPTOR_KEYS = frozenset(
+    {
+        "type_id",
+        "width",
+        "scale",
+        "charset",
+        "offset_width",
+        "json_encoding",
+        "temporal_encoding",
+    }
+)
+_DESCRIPTOR_INT_KEYS = frozenset(
+    {"type_id", "width", "scale", "charset", "offset_width"}
+)
+_DESCRIPTOR_TEXT_KEYS = frozenset({"json_encoding", "temporal_encoding"})
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
@@ -385,6 +400,19 @@ def _encode_control(value: Dict[str, Any]) -> bytes:
 
 
 def _canonical_descriptor(descriptor: Dict[str, Any]) -> bytes:
+    if not isinstance(descriptor, dict):
+        raise ValueError("TYPE_CONTRACT: descriptor must be an object")
+    unknown = set(descriptor) - _DESCRIPTOR_KEYS
+    if unknown:
+        raise ValueError("TYPE_CONTRACT: unsupported descriptor field")
+    if type(descriptor.get("type_id")) is not int:
+        raise ValueError("TYPE_CONTRACT: descriptor type_id must be an integer")
+    for key in _DESCRIPTOR_INT_KEYS - {"type_id"}:
+        if key in descriptor and type(descriptor[key]) is not int:
+            raise ValueError(f"TYPE_CONTRACT: descriptor {key} must be an integer")
+    for key in _DESCRIPTOR_TEXT_KEYS:
+        if key in descriptor and type(descriptor[key]) is not str:
+            raise ValueError(f"TYPE_CONTRACT: descriptor {key} must be text")
     order = ("type_id", "width", "scale", "charset", "offset_width", "json_encoding", "temporal_encoding")
     result = {}
     for key in order:
