@@ -32,21 +32,25 @@ func TestShouldUseWindowHashPartition(t *testing.T) {
 		name                 string
 		rows, groups         float64
 		width, keys          int
+		rowSize              float64
 		configured, resolved int64
 		want                 bool
 	}{
-		{name: "large narrow input", rows: 1 << 16, groups: 64, width: 8, keys: 1, resolved: largeBudget, want: true},
-		{name: "near unique output cost", rows: 1 << 16, groups: 1 << 16, width: 8, keys: 1, resolved: largeBudget},
-		{name: "near unique composite output cost", rows: 1 << 16, groups: 1 << 16, width: 24, keys: 3, resolved: largeBudget},
-		{name: "small input", rows: 1024, groups: 64, width: 8, keys: 1, resolved: largeBudget},
-		{name: "memory unsafe", rows: 1 << 16, groups: 1 << 16, width: 256, keys: 1, resolved: 1 << 20},
-		{name: "row threshold", rows: 1 << 16, groups: 64, width: 8, keys: 1, configured: 1000, resolved: 1000},
-		{name: "invalid ndv", rows: 1 << 16, groups: math.NaN(), width: 8, keys: 1, resolved: largeBudget},
-		{name: "ndv exceeds rows", rows: 1 << 16, groups: 1 << 17, width: 8, keys: 1, resolved: largeBudget},
+		{name: "large narrow input", rows: 1 << 16, groups: 64, width: 8, keys: 1, rowSize: 16, resolved: largeBudget, want: true},
+		{name: "near unique output cost", rows: 1 << 16, groups: 1 << 16, width: 8, keys: 1, rowSize: 16, resolved: largeBudget},
+		{name: "near unique composite output cost", rows: 1 << 16, groups: 1 << 16, width: 24, keys: 3, rowSize: 32, resolved: largeBudget},
+		{name: "small input", rows: 1024, groups: 64, width: 8, keys: 1, rowSize: 16, resolved: largeBudget},
+		{name: "memory unsafe", rows: 1 << 16, groups: 1 << 16, width: 256, keys: 1, rowSize: 16, resolved: 1 << 20},
+		{name: "wide retained payload", rows: 1 << 16, groups: 64, width: 8, keys: 1, rowSize: 128, resolved: 2 << 20},
+		{name: "unknown row size", rows: 1 << 16, groups: 64, width: 8, keys: 1, resolved: largeBudget},
+		{name: "row threshold", rows: 1 << 16, groups: 64, width: 8, keys: 1, rowSize: 16, configured: 1000, resolved: 1000},
+		{name: "invalid ndv", rows: 1 << 16, groups: math.NaN(), width: 8, keys: 1, rowSize: 16, resolved: largeBudget},
+		{name: "ndv exceeds rows", rows: 1 << 16, groups: 1 << 17, width: 8, keys: 1, rowSize: 16, resolved: largeBudget},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := shouldUseWindowHashPartition(
 				test.rows, test.groups, test.width, test.keys,
+				test.rowSize,
 				test.configured, test.resolved,
 			)
 			require.Equal(t, test.want, got)
@@ -72,7 +76,7 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "k"}},
 		}
 		builder.qry = &planpb.Query{Nodes: []*planpb.Node{
-			{NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 1 << 16}},
+			{NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 1 << 16, Rowsize: 16}},
 			{NodeType: planpb.Node_PARTITION, Children: []int32{0}, OrderBy: []*planpb.OrderBySpec{{Expr: key}}},
 			{NodeType: planpb.Node_WINDOW, Children: []int32{1}},
 		}}
@@ -133,6 +137,21 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 		builder, _, _ = newBuilder(t)
 		setAlgorithm(builder, "HASH")
 		builder.aggSpillMem = 1
+		builder.determineWindowPartitionAlgorithms(2)
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+	})
+
+	t.Run("wide retained payload stays on sort for COST and HASH", func(t *testing.T) {
+		builder, window, _ := newBuilder(t)
+		builder.qry.Nodes[0].Stats.Rowsize = 128
+		builder.aggSpillMem = 2 << 20
+		require.False(t, selectWindowHashPartition(builder, window))
+		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
+
+		builder, window, _ = newBuilder(t)
+		builder.qry.Nodes[0].Stats.Rowsize = 128
+		builder.aggSpillMem = 2 << 20
+		setAlgorithm(builder, "HASH")
 		builder.determineWindowPartitionAlgorithms(2)
 		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
 	})
