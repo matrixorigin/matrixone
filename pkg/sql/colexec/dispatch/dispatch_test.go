@@ -2029,3 +2029,47 @@ func TestRemoteReceiverRollbackPublishesFailure(t *testing.T) {
 	}
 	require.ErrorIs(t, terminal.Err(), cause)
 }
+
+func TestShuffleLocalReceiverTermination(t *testing.T) {
+	for _, route := range []struct {
+		name string
+		send func(*Dispatch, *process.Process, *batch.Batch, uint32) (bool, error)
+	}{
+		{"index", sendBatToIndexOutcome},
+		{"multi matched", sendBatToMultiMatchedRegOutcome},
+	} {
+		for _, abortSpool := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/spool_aborted=%t", route.name, abortSpool), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+				defer bat.Clean(proc.Mp())
+				sp := pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+				defer func() { sp.Abort(context.Canceled); sp.Close() }()
+				reg := process.NewPipelineEdge(1, 0)
+				if abortSpool {
+					// Both the abort signal and a free slot may be ready;
+					// either spool exit must propagate queryDone.
+					sp.Abort(nil)
+				} else {
+					// Reject the handoff after the spool accepted the batch.
+					reg.Abort(context.Canceled)
+				}
+				d := &Dispatch{
+					LocalRegs:          []*process.WaitRegister{reg},
+					ShuffleRegIdxLocal: []int{0},
+					ctr:                &container{sp: sp, localRegsCnt: 1},
+				}
+				done, err := route.send(d, proc, bat, 0)
+				if abortSpool {
+					require.True(t, done)
+					if err != nil {
+						require.ErrorIs(t, err, pSpool.ErrPipelineSpoolAborted)
+					}
+				} else {
+					require.False(t, done)
+					require.ErrorIs(t, err, context.Canceled)
+				}
+			})
+		}
+	}
+}
