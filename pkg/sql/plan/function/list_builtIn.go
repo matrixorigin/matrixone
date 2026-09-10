@@ -7595,7 +7595,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ABS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7685,7 +7685,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SQRT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7725,7 +7725,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIGN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7795,7 +7795,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ACOS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7816,7 +7816,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ASIN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7837,7 +7837,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ATAN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7869,7 +7869,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ATAN2,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7890,7 +7890,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: DEGREES,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -7911,7 +7911,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: RADIANS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8372,7 +8372,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: COS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8393,7 +8393,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: COT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8437,7 +8437,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: EXP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8752,7 +8752,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: LN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8773,7 +8773,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: LOG,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8804,7 +8804,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: LOG2,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8825,7 +8825,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: LOG10,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9028,7 +9028,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: POW,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9084,7 +9084,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ROUND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9215,7 +9215,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: TRUNCATE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9346,7 +9346,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9367,7 +9367,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SINH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9388,7 +9388,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: TAN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
