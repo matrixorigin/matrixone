@@ -23,6 +23,15 @@ INSERT, multi-row VALUES, INSERT SELECT, REPLACE, UPDATE, ON DUPLICATE KEY
 UPDATE, LOAD DATA, CTAS, and LIKE. It must preserve explicit values, including
 explicit `NULL`, and must keep the existing constant-default behavior.
 
+The interoperability reference is the [MySQL 8.0.13+ expression-default
+contract](https://dev.mysql.com/doc/refman/8.0/en/data-type-defaults.html):
+expression defaults may use built-in deterministic or nondeterministic
+functions, may reference table columns, cannot reference auto-increment
+columns, and cannot forward-reference generated or expression-default columns.
+MatrixOne follows those dependency and row-evaluation rules, while its
+configured protocol-60 admission is an additional deployment safeguard for
+older MatrixOne readers.
+
 Non-goals are generated-column semantics, automatic mixed-version discovery,
 reordering user declarations to make an invalid dependency legal, and a new
 catalog serialization format.
@@ -78,8 +87,10 @@ to table coordinates, then applies the same levels; already typed defaults are
 not recast as file fields.
 
 Generated columns remain computed by their existing target-table path. A default
-cannot depend on a generated column, and CTAS does not insert a source value for
-a destination generated column.
+cannot depend on a generated column. In the new CTAS explicit-source projection
+branch, a target-only generated column is omitted from the source target list so
+the target computes it; CTAS statements that do not need that branch retain
+their established source projection behavior.
 
 ## Coordinate and SQL reconstruction rules
 
