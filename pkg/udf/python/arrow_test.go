@@ -6,6 +6,7 @@
 package python
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -188,4 +189,29 @@ func TestArrowStringWidthCountsUnicodeCharacters(t *testing.T) {
 	defer values.Release()
 	descriptor := TypeDescriptor{TypeID: int32(types.T_varchar), Width: 1, OffsetWidth: 32}
 	require.NoError(t, validateArrowValueDomain(descriptor, values))
+}
+
+func TestAppendArrowResultIgnoresNullDecimalPayload(t *testing.T) {
+	decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 0}
+	validity := memory.NewBufferBytes([]byte{0})
+	values := memory.NewBufferBytes(make([]byte, 16))
+	// The physical coefficient of a NULL slot is unspecified. Make it a
+	// value that would not fit Decimal64 to ensure conversion never observes
+	// the payload after the validity check.
+	binary.LittleEndian.PutUint64(values.Bytes()[8:], 1)
+	data := array.NewData(decimalType, 1, []*memory.Buffer{validity, values}, nil, 1, 0)
+	decimals := array.NewDecimal128Data(data)
+	data.Release()
+	defer decimals.Release()
+	defer validity.Release()
+	defer values.Release()
+
+	mp := mpool.MustNewZeroNoFixed()
+	result := vector.NewFunctionResultWrapper(types.T_decimal64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	descriptor := TypeDescriptor{TypeID: int32(types.T_decimal64), Width: 18, OffsetWidth: 32}
+	require.NoError(t, AppendArrowResult(descriptor, decimals, result, mp))
+	require.True(t, result.GetResultVector().IsNull(0))
 }
