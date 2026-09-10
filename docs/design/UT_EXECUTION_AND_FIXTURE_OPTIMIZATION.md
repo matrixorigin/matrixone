@@ -1,11 +1,27 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Proposed for this PR，revision 7
+- 状态：Proposed for this PR，revision 8
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
 - 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 8: timeout observability for partial UT runs
+
+超时现场必须同时回答“现在卡在哪里”和“此前哪些 case 已经异常慢”。`run_ut.sh` 在
+收到 TERM、停止并回收自己创建的进程组后，从已经写入的 Go `-json` 前缀生成已完成
+case 和 package 的耗时排行；仍在运行的 case 继续由 active-case 分析单独列出，不能
+把它误报成已完成结果。JSON 报告按二进制行读取，尾部截断的 UTF-8 或半行只计为损坏
+行，不影响此前完整事件的输出。排行写入 `ut-report/top.txt`，因此现有 CI 的 always-run
+“Print the Top 10 Time-Consuming Tests”步骤会在超时后直接打印它。
+
+UT 运行期间默认每 60 秒写一条 heartbeat，记录最近 stage/label、active case 数、进程
+数、报告路径和 checkpoint；取消时再把原始 JSON、checkpoint、stderr 和排行复制到
+`ut-report/`。这些文件是诊断输入，不参与测试结论，解析失败也不能覆盖原始退出码。
+当前 reusable `matrixorigin/CI` workflow 只打印 `top.txt`，没有上传 `ut-report`；要在
+GitHub UI 下载原始现场，需要在该 workflow 增加 always-run 的 `actions/upload-artifact`
+步骤。这个上传步骤属于 CI 基础设施 PR，不能由 MatrixOne 的 `make ut` 单独完成。
 
 ## Revision 7: bounded light/issues overlap on one runner
 

@@ -48,7 +48,7 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "active_ut_cases.awk"} {
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "active_ut_cases.awk", "summarize_ut_slow_cases.py"} {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -181,6 +181,56 @@ kill -TERM "$$"
 	}
 	if !strings.HasSuffix(string(out), "CANCEL_REPORT\nheavy-start\nheavy-stopped\nplan-start\nplan-stopped\nengine\n") {
 		t.Fatalf("writer was not stopped before merging: %s", out)
+	}
+}
+
+func TestCancellationReportsCompletedSlowCases(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { printf "%s\n" "$2"; }
+UT_REPORT="$CASE_DIR/report.json"
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+mkdir -p "$UT_DIAGNOSTIC_DIR"
+cat > "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}
+{"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}
+{"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestBlocked"}
+EOF
+trap handle_ut_termination TERM
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+[[ "$status" == 143 ]] || exit 90
+[[ -s "$UT_DIAGNOSTIC_DIR/top.txt" ]] || exit 91
+[[ -s "$UT_DIAGNOSTIC_DIR/ut-report.json" ]] || exit 92
+[[ -s "$UT_DIAGNOSTIC_DIR/ut-checkpoint.log" ]] || exit 93
+grep -q 'TestSlow' "$UT_DIAGNOSTIC_DIR/top.txt"
+`
+	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`)
+	if err != nil {
+		t.Fatalf("cancellation diagnostics: %v\n%s", err, out)
+	}
+}
+
+func TestUTHeartbeatStopsCleanly(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { printf "%s\n" "$2"; }
+UT_HEARTBEAT_INTERVAL=1
+start_ut_heartbeat
+sleep 2
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 90
+grep -q 'event=heartbeat' "$UT_CHECKPOINT"
+`
+	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`)
+	if err != nil {
+		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
 	}
 }
 

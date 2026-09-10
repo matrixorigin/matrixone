@@ -91,6 +91,8 @@ CURRENT_UT_COMMAND_LABEL=""
 CURRENT_UT_STAGE="initializing"
 CURRENT_UT_LABEL="startup"
 UT_TERMINATING=0
+UT_HEARTBEAT_INTERVAL=${UT_HEARTBEAT_INTERVAL:-"60"}
+UT_HEARTBEAT_PID=""
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
@@ -125,6 +127,10 @@ if [[ -f $UT_STDERR ]]; then rm $UT_STDERR; fi
 if [[ -f $UT_CHECKPOINT ]]; then rm $UT_CHECKPOINT; fi
 if [[ -f $UT_FILTER ]]; then rm $UT_FILTER; fi
 if [[ -f $UT_COUNT ]]; then rm $UT_COUNT; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/top.txt" ]]; then rm "${UT_DIAGNOSTIC_DIR}/top.txt"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-report.json" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-report.json"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-checkpoint.log" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-checkpoint.log"; fi
+if [[ -f "${UT_DIAGNOSTIC_DIR}/ut-stderr.log" ]]; then rm "${UT_DIAGNOSTIC_DIR}/ut-stderr.log"; fi
 if ! mkdir -p "${BUILD_WKSP}/ut-report/failed/outputs"; then
     echo "failed to create UT diagnostic directory: ${BUILD_WKSP}/ut-report/failed/outputs" >&2
     exit 1
@@ -334,6 +340,114 @@ function report_active_ut_cases(){
         sed 's/^/[active_ut_cases] /'
 }
 
+function report_slow_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify slow UT cases"
+        return 0
+    fi
+
+    local slow_report="${UT_DIAGNOSTIC_DIR}/top.txt"
+    local slow_output=""
+    if ! slow_output=$(python3 "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" "${UT_REPORT}" 2>&1); then
+        logger "ERR" "failed to summarize slow UT cases: ${slow_output}"
+        return 0
+    fi
+
+    mkdir -p "${UT_DIAGNOSTIC_DIR}"
+    printf '%s\n' "${slow_output}" > "${slow_report}"
+    logger "ERR" "Slow or completed UT cases from ${UT_REPORT}:"
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && logger "ERR" "${line}"
+    done <<< "${slow_output}"
+}
+
+function snapshot_ut_diagnostics(){
+    local destination="${UT_DIAGNOSTIC_DIR}"
+    mkdir -p "${destination}"
+    if [[ -f "${UT_REPORT}" ]]; then
+        cp "${UT_REPORT}" "${destination}/ut-report.json"
+    fi
+    if [[ -f "${UT_CHECKPOINT}" ]]; then
+        cp "${UT_CHECKPOINT}" "${destination}/ut-checkpoint.log"
+    fi
+    if [[ -f "${UT_STDERR}" ]]; then
+        cp "${UT_STDERR}" "${destination}/ut-stderr.log"
+    fi
+    logger "ERR" "UT diagnostic snapshot: ${destination}"
+}
+
+function start_ut_heartbeat(){
+    local interval="${UT_HEARTBEAT_INTERVAL}"
+    if ! [[ "${interval}" =~ ^[1-9][0-9]*$ ]]; then
+        interval=60
+    fi
+    if [[ -n "${UT_HEARTBEAT_PID}" ]]; then
+        return 0
+    fi
+
+    (
+        trap 'exit 0' TERM INT
+        while :; do
+            sleep "${interval}" || exit 0
+            [[ "${UT_TERMINATING}" == 0 ]] || exit 0
+
+            local latest stage label active_cases active_detail process_count memory
+            latest=$(tail -n 1 "${UT_CHECKPOINT}" 2>/dev/null || true)
+            stage=$(sed -n 's/.* stage=\([^ ]*\).*/\1/p' <<< "${latest}")
+            label=$(sed -n 's/.* label=\(.*\) status=.*/\1/p' <<< "${latest}")
+            [[ -n "${stage}" ]] || stage="unknown"
+            [[ -n "${label}" ]] || label="unknown"
+            active_detail=$(awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" 2>/dev/null |
+                grep '^active UT case:' | head -n 3 | paste -sd ';' - || true)
+            active_cases=$(grep -o 'active UT case:' <<< "${active_detail}" | wc -l | tr -d ' ' || true)
+            process_count=$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
+            memory=$(cgroup_memory_metrics)
+            logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
+            checkpoint_ut_event "heartbeat" "${stage}" "${label}" "" \
+                "active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown}"
+        done
+    ) &
+    UT_HEARTBEAT_PID=$!
+    checkpoint_ut_event "heartbeat-start" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "" \
+        "pid=${UT_HEARTBEAT_PID} interval=${interval}s"
+}
+
+function stop_ut_heartbeat(){
+    if [[ -z "${UT_HEARTBEAT_PID}" ]]; then
+        return 0
+    fi
+    kill -TERM "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    wait "${UT_HEARTBEAT_PID}" 2>/dev/null || true
+    UT_HEARTBEAT_PID=""
+}
+
+function cgroup_memory_metrics(){
+    local relative_path=""
+    local cgroup_path=""
+    if [[ ! -r /proc/self/cgroup ]]; then
+        return 0
+    fi
+
+    relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
+    if [[ -n "${relative_path}" ]]; then
+        cgroup_path="/sys/fs/cgroup${relative_path}"
+        if [[ -r "${cgroup_path}/memory.current" ]]; then
+            printf 'current=%s peak=%s' \
+                "$(< "${cgroup_path}/memory.current")" \
+                "$(< "${cgroup_path}/memory.peak")"
+            return 0
+        fi
+    fi
+
+    relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
+    cgroup_path="/sys/fs/cgroup/memory${relative_path}"
+    if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        printf 'current=%s peak=%s' \
+            "$(< "${cgroup_path}/memory.usage_in_bytes")" \
+            "$(< "${cgroup_path}/memory.max_usage_in_bytes")"
+    fi
+}
+
 function report_cgroup_memory_usage(){
     local label=$1
     local relative_path=""
@@ -436,6 +550,7 @@ function handle_ut_termination(){
         exit 143
     fi
     UT_TERMINATING=1
+    stop_ut_heartbeat
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
         "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
@@ -500,6 +615,8 @@ function handle_ut_termination(){
     if [[ -s "${UT_STDERR}" ]]; then
         tail -n 40 "${UT_STDERR}" | sed 's/^/[ut_stderr] /' | tee -a "${LOG}"
     fi
+    snapshot_ut_diagnostics
+    report_slow_ut_cases
     report_active_ut_cases
     exit 143
 }
@@ -1491,6 +1608,8 @@ function run_tests(){
     # a report-parser failure can never replace the authoritative test result.
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+        snapshot_ut_diagnostics
+        report_slow_ut_cases
         report_active_ut_cases
     fi
 
@@ -1574,7 +1693,9 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     horiz_rule
     echo "# Running UT"
     horiz_rule
+    start_ut_heartbeat
     run_tests
+    stop_ut_heartbeat
 
     horiz_rule
     echo "# Post testing"
