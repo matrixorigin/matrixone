@@ -324,43 +324,37 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
-// mathStringTypeMatch keeps VARCHAR inputs on a dedicated string overload.
-// Math functions convert those
-// values with the same numeric-prefix rules as an implicit string-to-DOUBLE
-// cast instead of first routing them through an integer overload.
+// mathStringTypeMatch routes every MySQL character input through the existing
+// DOUBLE overload.  The implicit cast is warning-aware and binary-aware, so
+// HEX/BIT literals retain their numeric byte semantics and malformed text
+// follows the same diagnostics as an ordinary string-to-DOUBLE cast.  Using
+// an existing numeric overload also avoids serializing new overload IDs that
+// older CNs cannot resolve during rolling upgrades.
 func mathStringTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 1 && len(inputs) != 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	stringOverload := -1
-	for i, ov := range overloads {
-		if len(ov.args) == len(inputs) && ov.args[0] == types.T_varchar {
-			if stringOverload == -1 {
-				stringOverload = i
-			}
-		}
-	}
-	if stringOverload == -1 {
-		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
-	}
-	if inputs[0].Oid == types.T_varchar {
-		targets := make([]types.Type, len(inputs))
-		needsCast := false
-		for i := range inputs {
-			targets[i] = overloads[stringOverload].args[i].ToType()
-			needsCast = needsCast || inputs[i].Oid != overloads[stringOverload].args[i]
-		}
-		if needsCast {
-			return newCheckResultWithCast(stringOverload, targets)
-		}
-		return newCheckResultWithSuccess(stringOverload)
-	}
-	// Temporal values must not be coerced through the new VARCHAR overload.
-	// ROUND(COALESCE(date_col, date_col)) must retain the historical planner
-	// error instead of becoming a numeric-prefix conversion of the year text.
+	// Temporal values must retain the historical planner error instead of
+	// becoming a numeric-prefix conversion of their formatted year text.
 	switch inputs[0].Oid {
 	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
-		return fixedTypeMatchExcept(overloads, inputs, stringOverload)
+		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+	}
+	if inputs[0].Oid.IsMySQLString() {
+		normalized := append([]types.Type(nil), inputs...)
+		normalized[0] = types.T_float64.ToType()
+		matched := fixedTypeMatchWithBoolNumericCast(overloads, normalized)
+		if matched.status == succeedMatched || matched.status == succeedWithCast {
+			finalTypes := append([]types.Type(nil), matched.finalType...)
+			if matched.status == succeedMatched {
+				finalTypes = make([]types.Type, len(inputs))
+				for i := range inputs {
+					finalTypes[i] = normalized[i]
+				}
+			}
+			finalTypes[0] = types.T_float64.ToType()
+			return newCheckResultWithCast(matched.idx, finalTypes)
+		}
 	}
 
 	return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
@@ -386,7 +380,7 @@ func modTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	if inputs[0].Oid == types.T_varchar || inputs[1].Oid == types.T_varchar ||
+	if inputs[0].Oid.IsMySQLString() || inputs[1].Oid.IsMySQLString() ||
 		inputs[0].Oid == types.T_any || inputs[1].Oid == types.T_any {
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
 	}

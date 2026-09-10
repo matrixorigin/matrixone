@@ -959,7 +959,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), round.GetF().Args[0].Typ.Id)
 }
 
-func TestPreparedMathStringParametersRebindToStringOverloads(t *testing.T) {
+func TestPreparedMathStringParametersRebindToNumericOverloads(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
 		name string
@@ -991,11 +991,9 @@ func TestPreparedMathStringParametersRebindToStringOverloads(t *testing.T) {
 			fn := findPlanFunctionExpr(filled, test.fn)
 			require.NotNil(t, fn)
 			require.Equal(t, int32(test.want), fn.Typ.Id)
-			if test.fn == "mod" {
-				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
-			} else {
-				require.Equal(t, int32(types.T_varchar), fn.GetF().Args[0].Typ.Id)
-			}
+			// Character parameters are explicitly cast to DOUBLE so execution
+			// reuses the stable numeric overload and its warning/binary semantics.
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
 		})
 	}
 }
