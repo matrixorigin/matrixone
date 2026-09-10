@@ -334,16 +334,9 @@ func floatToUint64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
-			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
-		}
-		var converted uint64
-		if rounded < 0 {
-			converted = uint64(int64(rounded))
-		} else {
-			converted = uint64(rounded)
+		converted, err := explicitFloatToUint64(floatValue)
+		if err != nil {
+			return err
 		}
 		if err := to.Append(converted, false); err != nil {
 			return err
@@ -366,16 +359,68 @@ func floatToInt64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
-			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
+		converted, err := explicitFloatToInt64(floatValue)
+		if err != nil {
+			return err
 		}
-		if err := to.Append(int64(rounded), false); err != nil {
+		if err := to.Append(converted, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func explicitFloatToUint64(value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
+		return 0, moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	if rounded < 0 {
+		return uint64(int64(rounded)), nil
+	}
+	return uint64(rounded), nil
+}
+
+func explicitFloatToInt64(value float64) (int64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return int64(rounded), nil
+}
+
+func preparedFloatToUint64(input string) (uint64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToUint64(value)
+}
+
+func preparedFloatToInt64(input string) (int64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToInt64(value)
+}
+
+func preparedDecimalToUint64(input string) (uint64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return explicitUint64FromIntegerString(rounded)
+}
+
+func preparedDecimalToInt64(input string) (int64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return decimalInt64Explicit(rounded)
 }
 
 func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
@@ -6558,6 +6603,27 @@ func strToSignedWithProc[T constraints.Signed](
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var r int64
+					var err error
+					if kind == vector.PrepareParamFloat {
+						r, err = preparedFloatToInt64(s)
+					} else {
+						r, err = preparedDecimalToInt64(s)
+					}
+					if err != nil {
+						if strings.Contains(err.Error(), "value out of range") || errors.Is(err, strconv.ErrRange) {
+							return moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					if err = to.Append(T(r), false); err != nil {
+						return err
+					}
+					continue
+				}
 				var r int64
 				var err error
 				var integerPrefix string
@@ -7164,6 +7230,26 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				val, tErr = strconv.ParseUint(s, 16, 64)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var value uint64
+					if kind == vector.PrepareParamFloat {
+						value, tErr = preparedFloatToUint64(s)
+					} else {
+						value, tErr = preparedDecimalToUint64(s)
+					}
+					if tErr != nil {
+						if strings.Contains(tErr.Error(), "value out of range") || errors.Is(tErr, strconv.ErrRange) {
+							return moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to uint64", s)
+					}
+					if tErr = to.Append(T(value), false); tErr != nil {
+						return tErr
+					}
+					continue
+				}
 				res = &s
 				if len(explicit) > 1 && explicit[1] {
 					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =

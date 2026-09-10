@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -266,6 +267,71 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	runSigned := func(name string, kind vector.PrepareParamKind, values []string, want []int64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil), NewExplicitCast)
+			testCase.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runUnsigned := func(name string, kind vector.PrepareParamKind, values []string, want []uint64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+					NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+				},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nil), NewExplicitCast)
+			testCase.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runSigned("float uses round-to-even", vector.PrepareParamFloat,
+		[]string{"0.5", "1.5", "2.5", "-0.5", "-1.5", "-2.5"},
+		[]int64{0, 2, 2, 0, -2, -2})
+	runSigned("decimal uses exact half-away-from-zero rounding", vector.PrepareParamDecimal,
+		[]string{"0.5", "1.5", "2.5", "-0.5", "-1.5", "-2.5", "9007199254740993.5"},
+		[]int64{1, 2, 3, -1, -2, -3, 9007199254740994})
+	runUnsigned("float uses round-to-even", vector.PrepareParamFloat,
+		[]string{"1.5", "2.5", "-1.5", "-2.5"},
+		[]uint64{2, 2, math.MaxUint64 - 1, math.MaxUint64 - 1})
+	runUnsigned("decimal uses exact half-away-from-zero rounding", vector.PrepareParamDecimal,
+		[]string{"1.5", "2.5", "-1.5", "-2.5"},
+		[]uint64{2, 3, math.MaxUint64 - 1, math.MaxUint64 - 2})
+	runSigned("ordinary string keeps integer-prefix semantics", vector.PrepareParamNone,
+		[]string{"1.5", "-1.5"}, []int64{1, -1})
+	runUnsigned("ordinary string keeps integer-prefix semantics", vector.PrepareParamNone,
+		[]string{"1.5", "-1.5"}, []uint64{1, math.MaxUint64})
+
+	t.Run("row-local kinds", func(t *testing.T) {
+		testCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "1.5", "1.5"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 2, 1}, nil), NewExplicitCast)
+		testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+			vector.PrepareParamFloat, vector.PrepareParamDecimal, vector.PrepareParamNone,
+		})
+		succeed, info := testCase.Run()
+		require.True(t, succeed, info)
+	})
 }
 
 func TestExplicitCastFloatOverflowErrors(t *testing.T) {
