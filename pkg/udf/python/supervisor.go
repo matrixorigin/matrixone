@@ -20,10 +20,11 @@ import (
 )
 
 type Supervisor struct {
-	cfg Config
-	mu  sync.Mutex
-	cmd *exec.Cmd
-	log io.WriteCloser
+	cfg  Config
+	mu   sync.Mutex
+	cmd  *exec.Cmd
+	log  io.WriteCloser
+	done chan struct{}
 }
 
 var supervisorNumber atomic.Int32
@@ -67,25 +68,28 @@ func (s *Supervisor) Start() error {
 		return err
 	}
 	cmd := exec.Command(executable, "-u", workerPath, "--address="+s.cfg.Address)
+	prepareSupervisorCommand(cmd)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return err
 	}
-	s.cmd, s.log = cmd, logFile
-	go s.wait(cmd, logFile)
+	done := make(chan struct{})
+	s.cmd, s.log, s.done = cmd, logFile, done
+	go s.wait(cmd, logFile, done)
 	logutil.Infof("started Python UDF worker: %s", cmd.String())
 	return nil
 }
 
-func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser) {
+func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser, done chan struct{}) {
 	err := cmd.Wait()
 	_ = log.Close()
 	s.mu.Lock()
 	if s.cmd == cmd {
-		s.cmd, s.log = nil, nil
+		s.cmd, s.log, s.done = nil, nil, nil
 	}
 	s.mu.Unlock()
+	close(done)
 	if err != nil {
 		logutil.Errorf("Python UDF worker exited: %v", err)
 	}
@@ -93,8 +97,7 @@ func (s *Supervisor) wait(cmd *exec.Cmd, log io.WriteCloser) {
 
 func (s *Supervisor) Close() error {
 	s.mu.Lock()
-	cmd, log := s.cmd, s.log
-	s.cmd, s.log = nil, nil
+	cmd, log, done := s.cmd, s.log, s.done
 	s.mu.Unlock()
 	if cmd == nil {
 		if log != nil {
@@ -102,11 +105,12 @@ func (s *Supervisor) Close() error {
 		}
 		return nil
 	}
-	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("stop Python UDF worker: %w", err)
+	var closeErr error
+	if err := killSupervisorProcess(cmd); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		closeErr = fmt.Errorf("stop Python UDF worker: %w", err)
 	}
-	if log != nil {
-		return log.Close()
+	if done != nil {
+		<-done
 	}
-	return nil
+	return closeErr
 }

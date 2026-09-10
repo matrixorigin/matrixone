@@ -36,12 +36,15 @@ const (
 	statusOK        = "OK"
 )
 
+var errGatewayClosed = errors.New("python udf gateway is closed")
+
 type Gateway struct {
 	cfg       ClientConfig
 	conn      *grpc.ClientConn
 	flight    flight.FlightServiceClient
 	mu        sync.Mutex
 	lifecycle sync.RWMutex
+	closed    bool
 }
 
 func NewGateway(cfg ClientConfig) (*Gateway, error) {
@@ -65,6 +68,9 @@ func (g *Gateway) Language() string { return udf.LanguagePython }
 func (g *Gateway) connect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.closed {
+		return errGatewayClosed
+	}
 	if g.flight != nil {
 		return nil
 	}
@@ -88,6 +94,10 @@ func (g *Gateway) Close() error {
 	defer g.lifecycle.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.closed {
+		return nil
+	}
+	g.closed = true
 	if g.conn == nil {
 		return nil
 	}
@@ -116,6 +126,12 @@ type openPayload struct {
 func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
+	g.mu.Lock()
+	closed := g.closed
+	g.mu.Unlock()
+	if closed {
+		return errGatewayClosed
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
