@@ -294,13 +294,15 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name            string
-	Sql             string
-	PreparePlan     *plan.Plan
-	PrepareStmt     tree.Statement
-	NativeMode      bool
-	OnlyFullGroupBy bool
-	BoolSumAvg      bool
+	// Captured once even when AP or specialization discards the physical compile.
+	groupConcatMaxLenFloor uint64
+	Name                   string
+	Sql                    string
+	PreparePlan            *plan.Plan
+	PrepareStmt            tree.Statement
+	NativeMode             bool
+	OnlyFullGroupBy        bool
+	BoolSumAvg             bool
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.
