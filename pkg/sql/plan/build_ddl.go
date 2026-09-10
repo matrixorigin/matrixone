@@ -1357,7 +1357,12 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
-func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
+func genAsSelectCols(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	explicitTargetColumns map[string]struct{},
+) ([]*ColDef, *Query, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
@@ -1452,7 +1457,146 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Default: defaultDef,
 		}
 	}
+	// A copied source DEFAULT is bound in the source table's coordinate system,
+	// while the CTAS result follows SELECT output order. Normalize that first;
+	// buildTableDefs will perform the second, independent mapping from output
+	// order to the final target order (which may prepend explicit columns).
+	if err := remapCTASSourceDefaultsToOutput(
+		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
+	); err != nil {
+		return nil, nil, err
+	}
 	return cols, query, nil
+}
+
+// remapCTASSourceDefaultsToOutput converts inherited source-table column
+// references to SELECT-output positions. A source DEFAULT that refers to a
+// source column not present in the output cannot be represented by the CTAS
+// row schema; fail at DDL time instead of persisting a position that happens
+// to name an unrelated result column.
+func remapCTASSourceDefaultsToOutput(
+	ctx context.Context,
+	cols []*ColDef,
+	provenance []OutputColumnProvenance,
+	explicitTargetColumns map[string]struct{},
+) error {
+	sourceOutputPositions := make(map[int32]map[int32]int32)
+	for outputPos, p := range provenance {
+		if p.State != ProvenanceSingleSource || p.Source == nil {
+			continue
+		}
+		positions := sourceOutputPositions[p.Source.RelPos]
+		if positions == nil {
+			positions = make(map[int32]int32)
+			sourceOutputPositions[p.Source.RelPos] = positions
+		}
+		// If a source column is projected more than once, all copies carry the
+		// same value. Keep the first output position for deterministic mapping.
+		if _, exists := positions[p.Source.ColPos]; !exists {
+			positions[p.Source.ColPos] = int32(outputPos)
+		}
+	}
+
+	for outputPos, col := range cols {
+		if col == nil || col.Default == nil || col.Default.Expr == nil ||
+			outputPos >= len(provenance) {
+			continue
+		}
+		// An explicit target declaration replaces the inherited source column
+		// definition in buildTableDefs. Its default is therefore evaluated in the
+		// target schema and must not be validated against the source SELECT output.
+		if _, overridden := explicitTargetColumns[strings.ToLower(col.Name)]; overridden {
+			continue
+		}
+		p := provenance[outputPos]
+		if p.State != ProvenanceSingleSource || p.Source == nil {
+			continue
+		}
+		positions := sourceOutputPositions[p.Source.RelPos]
+		for _, refPos := range collectRefColPos(col.Default.Expr) {
+			if _, ok := positions[refPos]; !ok {
+				return moerr.NewInvalidInputf(ctx,
+					"cannot inherit default for CTAS column '%s': source column position %d is not in the SELECT output",
+					col.Name, refPos)
+			}
+		}
+		if err := remapCTASDefaultSQL(ctx, col.Default, positions, cols); err != nil {
+			return err
+		}
+		remapGeneratedColExprPositions(col.Default.Expr, positions)
+	}
+	return nil
+}
+
+type ctasDefaultNameVisitor struct {
+	names map[string]string
+}
+
+func (v *ctasDefaultNameVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if name, ok := expr.(*tree.UnresolvedName); ok && name.NumParts == 1 {
+		if target, found := v.names[strings.ToLower(name.ColName())]; found {
+			return tree.NewUnresolvedColName(target), true
+		}
+	}
+	return expr, false
+}
+
+func (v *ctasDefaultNameVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+// Rewrite names simultaneously, using the bound reference's source position.
+// Sequential string substitutions would corrupt swapped aliases and literals.
+func remapCTASDefaultSQL(ctx context.Context, def *plan.Default, positions map[int32]int32, cols []*ColDef) error {
+	names := make(map[string]string)
+	var collect func(*plan.Expr)
+	collect = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col != nil && e.Col.RelPos == 0 {
+				if pos, ok := positions[e.Col.ColPos]; ok {
+					names[strings.ToLower(e.Col.Name)] = cols[pos].Name
+					e.Col.Name = cols[pos].Name
+				}
+			}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				collect(arg)
+			}
+		case *plan.Expr_List:
+			for _, arg := range e.List.List {
+				collect(arg)
+			}
+		}
+	}
+	collect(def.Expr)
+	if len(names) == 0 || def.OriginString == "" {
+		return nil
+	}
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+def.OriginString, 1)
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "invalid inherited default SQL")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 {
+		return moerr.NewInvalidInput(ctx, "invalid inherited default SQL")
+	}
+	expr, ok := clause.Exprs[0].Expr.Accept(&ctasDefaultNameVisitor{names: names})
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "cannot rewrite inherited default SQL")
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
+	expr.Format(fmtCtx)
+	def.OriginString = fmtCtx.String()
+	return nil
 }
 
 // normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention.
@@ -1491,6 +1635,7 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 
 func buildCTASDefaultFromOrigin(
 	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+	columns ...*ColDef,
 ) (*plan.Default, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
 	if err != nil {
@@ -1507,9 +1652,20 @@ func buildCTASDefaultFromOrigin(
 	}
 
 	binder := NewDefaultBinder(ctx.GetContext(), nil, nil, typ, nil)
+	if len(columns) > 0 {
+		binder = NewDefaultBinderWithColumns(ctx.GetContext(), typ, columns)
+	}
 	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
+		return nil, err
+	}
+	if exprHasLocalColumnRef(defaultExpr) {
+		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
+			return nil, err
+		}
 	}
 	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
 	if err != nil {
@@ -1525,6 +1681,24 @@ func buildCTASDefaultFromOrigin(
 		Expr:         defaultExpr,
 		OriginString: originString,
 	}, nil
+}
+
+// Rebinding closes type overrides as well as SQL replay: merely updating a
+// ColRef's position/type cannot update its enclosing function overload. Check
+// the final physical order too, since LIKE and dump reconstruct that order.
+func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
+	for _, col := range cols {
+		if col.Default == nil || !exprHasLocalColumnRef(col.Default.Expr) {
+			continue
+		}
+		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
+			col.Default.NullAbility, col.Default.OriginString, cols...)
+		if err != nil {
+			return err
+		}
+		col.Default = bound
+	}
+	return validateDefaultColumnDependencies(ctx.GetContext(), cols)
 }
 
 func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
@@ -2330,7 +2504,15 @@ func buildCreateTable(
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(ctx, stmt.AsSource, isPrepareStmt); err != nil {
+		explicitTargetColumns := make(map[string]struct{})
+		for _, item := range stmt.Defs {
+			if colDef, ok := item.(*tree.ColumnTableDef); ok && colDef.Name != nil {
+				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
+			}
+		}
+		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -2839,6 +3021,10 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
+	// Keep the SELECT output schema in its original coordinate system. The
+	// explicit column pass may replace matching entries in asSelectCols, but
+	// inherited source defaults were bound before that replacement.
+	sourceColumnDefs := append([]*ColDef(nil), asSelectCols...)
 	var primaryKeys []string
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
@@ -3034,7 +3220,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExpr(def, colType, ctx.GetProcess())
+				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
 				if err != nil {
 					return err
 				}
@@ -3063,6 +3249,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Comment:      comment,
 				GeneratedCol: generatedCol,
 			}
+			// Keep the pre-scanned schema in lockstep with the finalized column.
+			// Later generated/default expressions use it as their row scope, and
+			// the final dependency validation uses the persisted metadata.
+			allColDefs[genColIdx] = col
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
 				asSelectCols[idx] = col
@@ -3243,6 +3433,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	if err := validateDefaultColumnDependencies(ctx.GetContext(), allColDefs); err != nil {
+		return err
+	}
+
 	if stmt.IsAsSelect {
 		// add as select cols
 		for _, col := range asSelectCols {
@@ -3260,49 +3454,103 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
-		remapGeneratedColExprsToTableOrder(createTable.TableDef.Cols, allColDefs)
-
-		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
-		var insertSqlBuilder strings.Builder
-		if stmt.CTASConflict == "ignore" {
-			insertSqlBuilder.WriteString("insert ignore into ")
-		} else if stmt.CTASConflict == "replace" {
-			insertSqlBuilder.WriteString("replace into ")
-		} else {
-			insertSqlBuilder.WriteString("insert into ")
+		remapCTASColumnExprsToTableOrder(
+			createTable.TableDef.Cols,
+			allColDefs,
+			sourceColumnDefs,
+		)
+		if err := finalizeCTASDefaults(ctx, createTable.TableDef.Cols); err != nil {
+			return err
 		}
+
+		// Insert into the new table from the SELECT source.  The ordinary path
+		// keeps the historical implicit target list.  A target-only dependency
+		// path below uses an explicit source list so omitted target columns are
+		// evaluated by the target INSERT implementation.
+		var insertSqlBuilder strings.Builder
 		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
 		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
 		targetFmtCtx.WriteByte('.')
 		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.TableDef.Name))
-		insertSqlBuilder.WriteString(targetFmtCtx.String())
-		insertSqlBuilder.WriteString(" select ")
+		targetName := targetFmtCtx.String()
 
 		cols := createTable.TableDef.Cols
-		firstCol := true
-		for i := range cols {
-			// Generated columns are computed by the target table. They are not
-			// implicit INSERT targets, so do not add a placeholder before the
-			// source projection. Otherwise a destination-only generated column
-			// shifts the source columns and makes CTAS fail with a column-count
-			// error.
-			if cols[i].GeneratedCol != nil {
-				continue
+		if ctasNeedsExplicitSourceProjection(cols, sourceColumnDefs) {
+			// Target-only expression defaults are evaluated by the ordinary INSERT
+			// default path.  Keeping them in this SELECT would bind references such
+			// as b DEFAULT (a + 1) against the source query, where a does not exist,
+			// and would also replay volatile defaults independently of their stored
+			// row values.  Supply only source columns explicitly and omit every
+			// target-only column so the target's dependency materializer owns them.
+			sourceTargets := make([]struct {
+				source *ColDef
+				target *ColDef
+			}, 0, len(sourceColumnDefs))
+			for _, sourceCol := range sourceColumnDefs {
+				finalCol := findCTASColumn(cols, sourceCol.Name)
+				if finalCol == nil {
+					return moerr.NewInvalidInputf(ctx.GetContext(),
+						"CTAS source column '%s' is missing from the target", sourceCol.Name)
+				}
+				if finalCol.GeneratedCol == nil {
+					sourceTargets = append(sourceTargets, struct {
+						source *ColDef
+						target *ColDef
+					}{source: sourceCol, target: finalCol})
+				}
 			}
-			// insert default values if col[i] only in create clause
-			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
+			if len(sourceTargets) == 0 {
+				return moerr.NewInvalidInput(ctx.GetContext(),
+					"CTAS cannot materialize source columns for a generated target")
+			}
+			writeCTASInsertPrefix(&insertSqlBuilder, stmt.CTASConflict, targetName)
+			insertSqlBuilder.WriteString(" (")
+			firstCol := true
+			for _, sourceTarget := range sourceTargets {
 				if !firstCol {
 					insertSqlBuilder.WriteString(", ")
 				}
-				insertSqlBuilder.WriteString(defaultMap[cols[i].Name])
+				writeCTASIdentifier(&insertSqlBuilder, sourceTarget.target.Name)
 				firstCol = false
 			}
+			insertSqlBuilder.WriteString(") select ")
+			firstCol = true
+			for _, sourceTarget := range sourceTargets {
+				if !firstCol {
+					insertSqlBuilder.WriteString(", ")
+				}
+				writeCTASIdentifier(&insertSqlBuilder, "__mo_ctas_source")
+				insertSqlBuilder.WriteByte('.')
+				writeCTASIdentifier(&insertSqlBuilder, sourceTarget.source.Name)
+				firstCol = false
+			}
+		} else {
+			writeCTASInsertPrefix(&insertSqlBuilder, stmt.CTASConflict, targetName)
+			insertSqlBuilder.WriteString(" select ")
+			firstCol := true
+			for i := range cols {
+				// Generated columns are computed by the target table. They are not
+				// implicit INSERT targets, so do not add a placeholder before the
+				// source projection. Otherwise a destination-only generated column
+				// shifts the source columns and makes CTAS fail with a column-count
+				// error.
+				if cols[i].GeneratedCol != nil {
+					continue
+				}
+				if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
+					if !firstCol {
+						insertSqlBuilder.WriteString(", ")
+					}
+					insertSqlBuilder.WriteString(defaultMap[cols[i].Name])
+					firstCol = false
+				}
+			}
+			if !firstCol {
+				insertSqlBuilder.WriteString(", ")
+			}
+			// add all cols from select clause
+			insertSqlBuilder.WriteString("*")
 		}
-		if !firstCol {
-			insertSqlBuilder.WriteString(", ")
-		}
-		// add all cols from select clause
-		insertSqlBuilder.WriteString("*")
 
 		// from
 		// The generated INSERT ... SELECT is re-parsed by the internal SQL
@@ -3611,6 +3859,53 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
+func findCTASColumn(cols []*ColDef, name string) *ColDef {
+	for _, col := range cols {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return col
+		}
+	}
+	return nil
+}
+
+func writeCTASIdentifier(builder *strings.Builder, name string) {
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	fmtCtx.WriteIdentifier(tree.Identifier(name))
+	builder.WriteString(fmtCtx.String())
+}
+
+func writeCTASInsertPrefix(builder *strings.Builder, conflict, targetName string) {
+	switch conflict {
+	case "ignore":
+		builder.WriteString("insert ignore into ")
+	case "replace":
+		builder.WriteString("replace into ")
+	default:
+		builder.WriteString("insert into ")
+	}
+	builder.WriteString(targetName)
+}
+
+func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
+	sourceNames := make(map[string]struct{}, len(sourceCols))
+	for _, col := range sourceCols {
+		if col != nil {
+			sourceNames[strings.ToLower(col.Name)] = struct{}{}
+		}
+	}
+	for _, col := range cols {
+		if col == nil || col.GeneratedCol != nil || col.Default == nil ||
+			col.Default.Expr == nil {
+			continue
+		}
+		if _, exists := sourceNames[strings.ToLower(col.Name)]; !exists &&
+			exprHasLocalColumnRef(col.Default.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
 func appendCheckDef(
 	ctx CompilerContext,
 	tableDef *TableDef,
@@ -3655,6 +3950,9 @@ func appendCheckDef(
 	binder.enableCanonicalNameConstValueCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
+		return err
+	}
+	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {

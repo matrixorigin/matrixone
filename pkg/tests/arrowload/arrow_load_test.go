@@ -61,6 +61,9 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
 	t.Run("CommitPhaseFailureRollback", func(t *testing.T) { testArrowCommitPhaseFailureRollback(t, db) })
 	t.Run("LocalMinIO", func(t *testing.T) { testArrowLoadLocalMinIO(t, db) })
+	t.Run("DistributedDisabledSoftFallback", func(t *testing.T) {
+		testArrowLoadDistributedDisabledSoftFallback(t, db)
+	})
 
 	// Restart is deliberately last: it destroys every existing SQL connection
 	// while preserving the cluster data directory. No later subtest may depend on
@@ -136,12 +139,12 @@ func TestArrowLoadGateDisabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
+// testArrowLoadGateS3Disabled proves the default S3 sub-gate fails closed before
 // any network I/O. Dummy, unreachable credentials are sufficient proof of the
 // ordering: the statement must be rejected by configuration rather than
 // attempting HeadObject.
-func TestArrowLoadGateS3Disabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, false, false)
+func testArrowLoadGateS3Disabled(t *testing.T, c embed.Cluster) {
+	t.Helper()
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_s3_gate_off")
 	mustExec(t, db, "use arrow_s3_gate_off")
@@ -157,23 +160,27 @@ func TestArrowLoadGateS3Disabled(t *testing.T) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadGateDistributedDisabledSoftFallback proves DistributedEnabled=false
-// is a soft fallback (silently serialize), not a hard rejection.
-func TestArrowLoadGateDistributedDisabledSoftFallback(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true /*enabled*/, true /*s3Enabled*/, false /*distributedEnabled*/)
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_distributed_off")
-	mustExec(t, db, "use arrow_distributed_off")
-	mustExec(t, db, "create table t(id bigint not null, name varchar(50))")
+// testArrowLoadDistributedDisabledSoftFallback proves DistributedEnabled=false
+// is a soft fallback (silently serialize), not a hard rejection. It shares the
+// explicitly enabled, local-only BVT cluster because it does not mutate the
+// cluster configuration or the BVT database.
+func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
+	const databaseName = "arrow_distributed_off"
+	const tableName = "`arrow_distributed_off`.`t`"
+	mustExec(t, db, "create database if not exists "+databaseName)
+	t.Cleanup(func() {
+		mustExec(t, db, "drop database if exists "+databaseName)
+	})
+	mustExec(t, db, "create table "+tableName+"(id bigint not null, name varchar(50))")
 
 	dir := t.TempDir()
 	fixtureIDName(t, dir, "part1.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 	fixtureIDName(t, dir, "part2.arrow", containerFile, [][]idNameRow{{{id: 2, name: "b"}}})
 
 	mustExec(t, db, fmt.Sprintf(
-		"load data infile {'filepath'='%s','format'='arrow'} into table t parallel 'true'",
-		filepath.Join(dir, "part*.arrow")))
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from t"))
+		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
+		filepath.Join(dir, "part*.arrow"), tableName))
+	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
 }
 
 func testArrowTypeMatrixNumeric(t *testing.T, db *sql.DB) {

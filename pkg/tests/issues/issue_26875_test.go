@@ -206,6 +206,10 @@ func runIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T, ctx co
 					id int primary key, pid int, %s,
 					foreign key(pid) references %s(id) on delete set null)`, tc.tableName, tc.indexDDL, tc.tableName))
 		mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(1,null),(2,1)", tc.tableName))
+		// The table is created on CN0 while the prepared REPLACE runs on CN1.
+		// Publish CN0's DDL commit before CN1 plans the statement; otherwise CN1
+		// can legally prepare against a catalog snapshot that predates the table.
+		mustExec(t, ctx, conn2, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 		selfStmt, prepareErr := conn2.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?,?)", tc.tableName))
 		require.NoError(t, prepareErr)
 		defer selfStmt.Close()
