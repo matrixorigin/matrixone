@@ -3754,7 +3754,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
-		Default:           "COST",
+		Default:           "SORT",
 	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",

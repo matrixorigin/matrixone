@@ -39,7 +39,9 @@ import (
 // kept in the benchmark source so every reported result has an exact, rerunnable
 // shape: 1K/64K/1M rows, 1/1%/100% NDV, one/three fixed or variable keys, and
 // ordered/unordered windows. Each input is split into two upstream batches to
-// exercise the multi-scope merge contract.
+// exercise blocking/finalization across batches. The single MockOperator does
+// not model a compiled multi-scope Merge and this benchmark is not evidence for
+// the default-enable gate.
 func BenchmarkWindowHashPartitionAcceptance(b *testing.B) {
 	for _, rows := range []int{1 << 10, 1 << 16, 1 << 20} {
 		for _, ndv := range []int{1, max(1, rows/100), rows} {

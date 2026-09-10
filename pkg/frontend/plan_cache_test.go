@@ -493,12 +493,12 @@ func TestSessionWindowPartitionAlgorithmChangeClearsPlanCache(t *testing.T) {
 	ses.cachePlan("cached-window", []tree.Statement{stmt}, []*plan.Plan{{}})
 	require.True(t, ses.isCached("cached-window"))
 
-	// Re-setting the default does not change the physical-plan contract.
-	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "COST"))
+	// Re-setting the SORT default does not change the physical-plan contract.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
 	require.True(t, ses.isCached("cached-window"))
 	require.Zero(t, stmt.freed)
 
-	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "COST"))
 	require.False(t, ses.isCached("cached-window"))
 	require.Equal(t, 1, stmt.freed)
 
@@ -519,6 +519,10 @@ func TestSessionWindowPartitionAlgorithmChangeInvalidatesPreparedPlanGeneration(
 
 	// A mode change must preserve the prepared handle while forcing EXECUTE to
 	// rebuild the logical/physical plan under the new session value.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "COST"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
 	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
 	require.True(t, prepared.needsRebuild)
 
