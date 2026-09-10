@@ -368,11 +368,13 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 -127  ¦  -32767  ¦  -2147483647  ¦  -9223372036854775807
 create table unary_minus_signed_boundary_ctas as
 select -i8 as n8, -i16 as n16, -i32 as n32 from unary_minus_signed_boundary where i8 = -128;
-show columns from unary_minus_signed_boundary_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-n8  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-n16  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-n32  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+select column_name, data_type from information_schema.columns
+where table_schema = database() and table_name = 'unary_minus_signed_boundary_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+n8  ¦  bigint  𝄀
+n16  ¦  bigint  𝄀
+n32  ¦  bigint
 select * from unary_minus_signed_boundary_ctas;
 ➤ n8[-5,64,0]  ¦  n16[-5,64,0]  ¦  n32[-5,64,0]  𝄀
 128  ¦  32768  ¦  2147483648

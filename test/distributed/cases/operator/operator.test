@@ -164,7 +164,9 @@ select -i8, -i16, -i32, -i64 from unary_minus_signed_boundary
 where i64 is null or i64 > -9223372036854775808 order by i8;
 create table unary_minus_signed_boundary_ctas as
     select -i8 as n8, -i16 as n16, -i32 as n32 from unary_minus_signed_boundary where i8 = -128;
-show columns from unary_minus_signed_boundary_ctas;
+select column_name, data_type from information_schema.columns
+where table_schema = database() and table_name = 'unary_minus_signed_boundary_ctas'
+order by ordinal_position;
 select * from unary_minus_signed_boundary_ctas;
 select -i64 from unary_minus_signed_boundary where i64 = -9223372036854775808;
 drop table unary_minus_signed_boundary_ctas;
