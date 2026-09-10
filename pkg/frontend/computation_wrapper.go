@@ -2757,7 +2757,14 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramBinaryString[i] && sourceType.Id != 0 {
+		if paramKinds[i] == vector.PrepareParamBoolean {
+			// Like binary-protocol Boolean parameters, SQL EXECUTE needs the
+			// semantic type for numeric overload selection, not its text carrier.
+			paramValue.RuntimeType = types.T_bool.ToType()
+			paramValue.HasRuntimeType = true
+			paramValue.SourceType = types.T_bool.ToType()
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] && sourceType.Id != 0 {
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		} else if paramBinaryString[i] {

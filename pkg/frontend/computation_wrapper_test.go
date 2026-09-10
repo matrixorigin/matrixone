@@ -3522,6 +3522,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
 		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
 		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary),
 	}
@@ -3539,6 +3540,10 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		{
 			Typ:  binaryTextType,
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_bool"}},
 		},
 	}
 	params, paramVals, _, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
@@ -3561,6 +3566,13 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
+	boolParam := paramVals[3].(plan2.ParamValue)
+	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
+	require.Equal(t, vector.PrepareParamBoolean, boolParam.PrepareParamKind)
+	require.True(t, boolParam.HasSourceType)
+	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
+	require.True(t, boolParam.HasRuntimeType)
+	require.Equal(t, types.T_bool.ToType(), boolParam.RuntimeType)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time
