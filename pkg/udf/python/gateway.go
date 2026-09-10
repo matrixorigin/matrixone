@@ -419,6 +419,9 @@ func (g *Gateway) receiveResultBatch(
 			}
 			return int(expectedRows), nil
 		}
+		if len(data.DataBody) != 0 {
+			return 0, fmt.Errorf("python udf: control frame contains an Arrow body")
+		}
 		control, err := protocol.UnmarshalControl(data.AppMetadata)
 		if err != nil {
 			return 0, err
@@ -476,7 +479,7 @@ func (g *Gateway) receiveFinish(
 			}
 			return fmt.Errorf("python udf: receive Finish: %w", err)
 		}
-		if data == nil || len(data.DataHeader) > 0 {
+		if data == nil || len(data.DataHeader) > 0 || len(data.DataBody) > 0 {
 			return fmt.Errorf("python udf: unexpected Arrow data while finishing")
 		}
 		control, err := protocol.UnmarshalControl(data.AppMetadata)
