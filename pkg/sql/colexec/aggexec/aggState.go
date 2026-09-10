@@ -1202,7 +1202,8 @@ func decodeAggStringMetadata(payload []byte) (
 		payload[0] != aggStringMetadataMagic0 ||
 		payload[1] != aggStringMetadataMagic1 ||
 		payload[2] != aggStringMetadataMagic2 {
-		return payload, types.RuntimeStringInherit, types.StringSourceExpression, false, nil
+		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+			moerr.NewInvalidInputNoCtx("aggregate string metadata envelope is missing")
 	}
 	if payload[3] != aggStringMetadataVersion {
 		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
@@ -2525,12 +2526,11 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			if ae.preserveStringMetadata && vectors[0].GetType().Oid.IsMySQLString() {
 				domain := vectors[0].GetRuntimeStringDomainAt(row)
 				source := vectors[0].GetStringSourceAt(row)
-				if domain != types.RuntimeStringInherit || source != types.StringSourceExpression {
-					fillErr = ae.state[x].fillArgWithStringMetadata(
-						ae.mp, y, bs, domain, source, distinct)
-				} else {
-					fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
-				}
+				// Every retained string carries the envelope, including rows with
+				// default metadata. Otherwise raw user bytes beginning with the
+				// metadata magic are indistinguishable from an encoded payload.
+				fillErr = ae.state[x].fillArgWithStringMetadata(
+					ae.mp, y, bs, domain, source, distinct)
 			} else {
 				fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
 			}

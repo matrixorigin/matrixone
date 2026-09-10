@@ -215,8 +215,8 @@ and copies every argument into the receiving account. Configuration (`p` and
 direction) is carried by the pipeline's aggregate expression, not duplicated
 inside this saved state, and the merge compatibility check requires it to match.
 
-The extension adds a versioned inner payload only when a MySQL string row has
-non-default runtime metadata:
+The extension adds a versioned inner payload to every retained MySQL string
+row, including rows whose runtime metadata has the default values:
 
 ```text
 f1 53 4d                 metadata magic
@@ -226,12 +226,14 @@ source byte              StringSource
 raw value bytes
 ```
 
-A string with inherited domain and expression source keeps the untagged raw
-payload. The v61 decoder treats an untagged payload as those defaults, rejects
-an unknown metadata version or invalid enum, and restores tagged metadata
-before sorting. Merge and intermediate/spill serialization copy this inner
-payload byte-for-byte. Result publication uses `Vector.UnionOne`, so the chosen
-row's raw value, domain, and source reach the result together.
+There is no untagged string variant. Inherited domain and expression source are
+encoded explicitly as their enum values, so user data beginning with the magic
+prefix occurs only after this envelope and cannot be mistaken for framing. The
+v61 decoder rejects a missing envelope, unknown metadata version, or invalid
+enum and restores the metadata before sorting. Merge and intermediate/spill
+serialization copy this inner payload byte-for-byte. Result publication uses
+`Vector.UnionOne`, so the chosen row's raw value, domain, and source reach the
+result together.
 
 This representation is not a promise that pre-v61 workers can execute extended
 types: those workers know the aggregate ID from v17 but do not know the new
@@ -309,7 +311,7 @@ does not substitute for traceable approval of this design revision.
 | rank, direction, NULL, groups, native numeric order, exact decimal and NaN behavior | `pkg/sql/colexec/aggexec/ordered_percentile_test.go` |
 | `VARCHAR`, `DATE`, and `DECIMAL256` execution and unchanged result type | executor tests above and the ordered-set public BVT |
 | retained-state ownership/accounting and merge | `TestOrderedPercentileDiscreteSortableTypes`, `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip` |
-| row-exact string domain/source through selection and wire merge | `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip`, `TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain` |
+| row-exact string domain/source and unambiguous magic-prefix values through selection and wire merge | `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip`, `TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain`, `TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip` |
 | v60 rejection, v61 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
 | build and changed-package regression | `make build`; targeted `go test` commands recorded on PR #28540 |
 

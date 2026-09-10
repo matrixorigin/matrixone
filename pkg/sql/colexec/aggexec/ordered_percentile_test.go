@@ -763,6 +763,98 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	restored.Free()
 }
 
+func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	typ := types.New(types.T_varbinary, 20, 0)
+	config := EncodeOrderedPercentileConfig([]byte("0.5"), false)
+	newExec := func() AggFuncExec {
+		exec, err := makeOrderedPercentileExec(
+			mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(config, 0))
+		return exec
+	}
+	newValue := func(value []byte) *vector.Vector {
+		vec := vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+		return vec
+	}
+	assertResult := func(result *vector.Vector, want []byte) {
+		require.Equal(t, want, result.GetBytesAt(0))
+		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
+		require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value []byte
+	}{
+		{
+			name: "valid metadata header lookalike",
+			value: []byte{
+				aggStringMetadataMagic0,
+				aggStringMetadataMagic1,
+				aggStringMetadataMagic2,
+				aggStringMetadataVersion,
+				byte(types.RuntimeStringInherit),
+				byte(types.StringSourceExpression),
+				'x',
+			},
+		},
+		{
+			name: "invalid metadata header lookalike",
+			value: []byte{
+				aggStringMetadataMagic0,
+				aggStringMetadataMagic1,
+				aggStringMetadataMagic2,
+				0xff,
+				0xff,
+				0xff,
+				'y',
+			},
+		},
+	} {
+		t.Run(tc.name+"/local", func(t *testing.T) {
+			exec := newExec()
+			value := newValue(tc.value)
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{value}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			assertResult(results[0], tc.value)
+
+			results[0].Free(mp)
+			value.Free(mp)
+			exec.Free()
+		})
+
+		t.Run(tc.name+"/wire merge", func(t *testing.T) {
+			source := newExec()
+			value := newValue(tc.value)
+			require.NoError(t, source.BulkFill(0, []*vector.Vector{value}))
+
+			var encoded bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(
+				1, [][]uint8{{1}}, &encoded))
+			restored := newExec()
+			require.NoError(t, restored.UnmarshalFromReader(
+				bytes.NewReader(encoded.Bytes()), mp))
+			destination := newExec()
+			require.NoError(t, destination.Merge(restored, 0, 0))
+			results, err := destination.Flush()
+			require.NoError(t, err)
+			assertResult(results[0], tc.value)
+
+			results[0].Free(mp)
+			value.Free(mp)
+			source.Free()
+			restored.Free()
+			destination.Free()
+		})
+	}
+}
+
 func TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
