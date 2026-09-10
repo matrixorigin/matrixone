@@ -167,6 +167,73 @@ func TestEqualUsesSameNormalizationAsEncoding(t *testing.T) {
 	}
 }
 
+func TestEqualEncodingAndHashIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		domain Domain
+		left   string
+		right  string
+		equal  bool
+	}{
+		{name: "general-ci case and pad", domain: generalDomain(0), left: "Alpha", right: "alpha ", equal: true},
+		{name: "general-ci accent", domain: generalDomain(0), left: "É", right: "é", equal: true},
+		{name: "general-ci different", domain: generalDomain(0), left: "alpha", right: "beta", equal: false},
+		{name: "utf8-bin case", domain: binTextDomain(0), left: "Alpha", right: "alpha", equal: false},
+		{name: "binary pad is significant", domain: binaryDomain(0), left: "Alpha", right: "Alpha ", equal: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			equal, err := Equal(tt.domain, []byte(tt.left), []byte(tt.right))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if equal != tt.equal {
+				t.Fatalf("Equal(%q,%q) = %v, want %v", tt.left, tt.right, equal, tt.equal)
+			}
+			left, err := EncodePart(nil, Part{Domain: tt.domain, Value: []byte(tt.left)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			right, err := EncodePart(nil, Part{Domain: tt.domain, Value: []byte(tt.right)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Equal(left, right) != tt.equal {
+				t.Fatalf("encoded equality = %v, want %v: %X != %X", bytes.Equal(left, right), tt.equal, left, right)
+			}
+			if tt.equal && HashEncoded(left) != HashEncoded(right) {
+				t.Fatalf("equal encoded keys have different hashes: %x != %x", HashEncoded(left), HashEncoded(right))
+			}
+		})
+	}
+}
+
+func TestCompositeEncodingHasNoConcatenationAmbiguity(t *testing.T) {
+	first, err := EncodeComposite(nil, []Part{
+		{Domain: generalDomain(0), Value: []byte("ab")},
+		{Domain: generalDomain(0), Value: []byte("c")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := EncodeComposite(nil, []Part{
+		{Domain: generalDomain(0), Value: []byte("a")},
+		{Domain: generalDomain(0), Value: []byte("bc")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first, second) {
+		t.Fatal("different composite part boundaries produced one identity")
+	}
+	if HashEncoded(first) == HashEncoded(second) {
+		// A hash collision is possible in principle, but this deterministic
+		// fixture must not accidentally make the test depend on one. Hash is
+		// only a bucket hint; the byte comparison above remains authoritative.
+		t.Fatal("composite fixture unexpectedly collided in hash")
+	}
+}
+
 func TestPrefixAndNullBoundaries(t *testing.T) {
 	domain := generalDomain(2)
 	a, err := EncodePart(nil, Part{Domain: domain, Value: []byte("A😀tail")})
@@ -463,6 +530,39 @@ func BenchmarkEncodeGeneralCI(b *testing.B) {
 	part := Part{Domain: generalDomain(0), Value: []byte("The Quick Brown Fox jumps over the lazy dog")}
 	for i := 0; i < b.N; i++ {
 		if _, err := EncodePart(nil, part); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeGeneralCIPrefix(b *testing.B) {
+	part := Part{Domain: generalDomain(12), Value: []byte("The Quick Brown Fox jumps over the lazy dog")}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := EncodePart(nil, part); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeBinary(b *testing.B) {
+	part := Part{Domain: binaryDomain(0), Value: []byte("0123456789abcdef0123456789abcdef")}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := EncodePart(nil, part); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeComposite(b *testing.B) {
+	parts := []Part{
+		{Domain: generalDomain(0), Value: []byte("tenant")},
+		{Domain: binTextDomain(8), Value: []byte("Document-000001")},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := EncodeComposite(nil, parts); err != nil {
 			b.Fatal(err)
 		}
 	}
