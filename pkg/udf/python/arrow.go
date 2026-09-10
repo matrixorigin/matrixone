@@ -600,17 +600,17 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 	if result == nil {
 		return fmt.Errorf("python udf: missing result wrapper")
 	}
-	if input.Len() == 0 {
-		return nil
-	}
-	if mp == nil {
-		return fmt.Errorf("python udf: missing memory pool for Arrow result")
-	}
 	if err := validateArrayType(descriptor, input); err != nil {
 		return err
 	}
 	if err := validateArrowValueDomain(descriptor, input); err != nil {
 		return err
+	}
+	if input.Len() == 0 {
+		return nil
+	}
+	if mp == nil {
+		return fmt.Errorf("python udf: missing memory pool for Arrow result")
 	}
 	result.GetResultVector().SetTypeScale(descriptor.Scale)
 	typ := types.T(descriptor.TypeID)

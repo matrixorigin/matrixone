@@ -182,7 +182,7 @@ func (s *Sequence) AcceptResult(sequence uint64) error {
 func (s *Sequence) AcknowledgeResults(sequence uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if sequence < s.ackedResult || sequence > s.lastResult {
+	if sequence == 0 || sequence < s.ackedResult || sequence > s.lastResult {
 		return fmt.Errorf("%w: result ACK %d outside [%d,%d]", ErrSequence, sequence, s.ackedResult, s.lastResult)
 	}
 	s.ackedResult = sequence
