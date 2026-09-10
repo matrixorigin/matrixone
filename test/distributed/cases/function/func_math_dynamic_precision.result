@@ -1,0 +1,61 @@
+drop database if exists math_dynamic_precision;
+create database math_dynamic_precision;
+use math_dynamic_precision;
+set @saved_optimizer_hints = @@optimizer_hints;
+create table precision_rows(a double, d bigint);
+insert into precision_rows values (149,-2),(149,-1),(149,0),(-149,-2),(-149,-1),(-149,0),(149,null);
+select mo_ctl('dn', 'flush', 'math_dynamic_precision.precision_rows');
+➤ mo_ctl(dn, flush, math_dynamic_precision.precision_rows)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set optimizer_hints = 'blockFilter=1';
+select a, d, round(a,d) as r from precision_rows where round(a,d) > 149 order by a,d;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+149.0  ¦  -1  ¦  150.0
+select a, d, truncate(a,d) as r from precision_rows where truncate(a,d) < -140 order by a,d;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+-149.0  ¦  0  ¦  -149.0
+set optimizer_hints = 'blockFilter=2';
+select a, d, round(a,d) as r from precision_rows where round(a,d) > 149 order by a,d;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+149.0  ¦  -1  ¦  150.0
+select a, d, truncate(a,d) as r from precision_rows where truncate(a,d) < -140 order by a,d;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+-149.0  ¦  0  ¦  -149.0
+set optimizer_hints = 'blockFilter=1';
+prepare precision_query from 'select a,d,round(a,d) as r from precision_rows where round(a,d) > ? order by a,d';
+set @threshold = 149;
+execute precision_query using @threshold;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+149.0  ¦  -1  ¦  150.0
+set @threshold = 150;
+execute precision_query using @threshold;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]
+set @threshold = null;
+execute precision_query using @threshold;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]
+set @threshold = 149;
+execute precision_query using @threshold;
+➤ a[8,53,31]  ¦  d[-5,64,0]  ¦  r[8,53,31]  𝄀
+149.0  ¦  -1  ¦  150.0
+deallocate prepare precision_query;
+create table precision_decimals(a decimal(18,2), b decimal(38,2), c decimal(65,2), d bigint);
+insert into precision_decimals values
+(149.55,149.55,149.55,-1),(-149.55,-149.55,-149.55,1),
+(9999999999999999.99,999999999999999999999999999999999999.99,999999999999999999999999999999999999999999999999999999999999999.99,2),
+(1,1,1,null);
+select a,d,round(a,d),truncate(a,d),round(b,d),truncate(b,d),round(c,d),truncate(c,d) from precision_decimals order by a;
+➤ a[3,18,2]  ¦  d[-5,64,0]  ¦  round(a, d)[3,18,2]  ¦  truncate(a, d)[3,18,2]  ¦  round(b, d)[3,38,2]  ¦  truncate(b, d)[3,38,2]  ¦  round(c, d)[3,65,2]  ¦  truncate(c, d)[3,65,2]  𝄀
+-149.55  ¦  1  ¦  -149.60  ¦  -149.50  ¦  -149.60  ¦  -149.50  ¦  -149.60  ¦  -149.50  𝄀
+1.00  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+149.55  ¦  -1  ¦  150.00  ¦  140.00  ¦  150.00  ¦  140.00  ¦  150.00  ¦  140.00  𝄀
+9999999999999999.99  ¦  2  ¦  9999999999999999.99  ¦  9999999999999999.99  ¦  999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999999999999999999999999999999.99
+set optimizer_hints = @saved_optimizer_hints;
+drop database math_dynamic_precision;

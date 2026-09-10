@@ -95,16 +95,197 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	duplicateEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
 	set := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y"}
 	ambiguousSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,"}
+	emptyFirstSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: ",x"}
+	emptyMiddleSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,,y"}
 
 	require.True(t, mysqlSpecialOrderTypeReversible(enum))
 	require.False(t, mysqlSpecialOrderTypeReversible(duplicateEnum))
 	require.True(t, mysqlSpecialOrderTypeReversible(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
+	require.True(t, setTypeHasEmptyMember(emptyFirstSet))
+	require.True(t, setTypeHasEmptyMember(emptyMiddleSet))
+	require.True(t, setTypeHasEmptyMember(ambiguousSet))
+	require.False(t, setTypeHasEmptyMember(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
 	require.Equal(t, enumFoldKey("K"), enumFoldKey("K"))
 	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
 	require.False(t, mysqlSpecialOrderTypesCompatible(enum, set))
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
+}
+
+func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
+	ctx := context.Background()
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "z,a,m"}
+	display, err := makeEnumOrSetDisplayValue(ctx, &plan.Expr{Typ: setType})
+	require.NoError(t, err)
+
+	bound, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", []*plan.Expr{
+		makePlan2StringConstExprWithType("a"), display,
+	})
+	require.NoError(t, err)
+	fn := bound.GetF()
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 3)
+	require.Equal(t, int32(types.T_uint64), fn.Args[1].Typ.Id)
+	require.Empty(t, fn.Args[1].Typ.Enumvalues)
+	require.Equal(t, "z,a,m", fn.Args[2].GetLit().GetSval())
+
+	_, err = BindFuncExprImplByPlanExpr(ctx, "find_in_set", []*plan.Expr{
+		makePlan2StringConstExprWithType("a"),
+		makePlan2StringConstExprWithType("a,b"),
+		makePlan2StringConstExprWithType("not-public"),
+	})
+	require.Error(t, err)
+}
+
+func TestFindInSetRewriteHelpersRejectInvalidProvenance(t *testing.T) {
+	search := makePlan2StringConstExprWithType("a")
+	plain := makePlan2StringConstExprWithType("a,b")
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "z,a,m"}
+	rawSet := &plan.Expr{
+		Typ:  setType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []*plan.Expr
+	}{
+		{name: "wrong arity", args: []*plan.Expr{search}},
+		{name: "nil operand", args: []*plan.Expr{search, nil}},
+		{name: "ordinary string", args: []*plan.Expr{search, plain}},
+		{
+			name: "malformed display wrapper",
+			args: []*plan.Expr{search, {
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
+					Args: []*plan.Expr{makePlan2StringConstExprWithType(setType.Enumvalues)},
+				}},
+			}},
+		},
+		{
+			name: "display wrapper with non SET storage",
+			args: []*plan.Expr{search, {
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
+					Args: []*plan.Expr{
+						makePlan2StringConstExprWithType(setType.Enumvalues),
+						makePlan2StringConstExprWithType("a"),
+					},
+				}},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, rewritten := rewriteFindInSetStoredOperand(tc.args)
+			require.False(t, rewritten)
+			require.Equal(t, tc.args, got)
+		})
+	}
+
+	rewritten, ok := rewriteFindInSetStoredOperand([]*plan.Expr{search, rawSet})
+	require.True(t, ok)
+	require.Len(t, rewritten, 3)
+	require.Equal(t, int32(types.T_uint64), rewritten[1].Typ.Id)
+	require.Empty(t, rewritten[1].Typ.Enumvalues)
+	require.Equal(t, setType.Enumvalues, rewritten[2].GetLit().GetSval())
+	require.Equal(t, setType.Enumvalues, rawSet.Typ.Enumvalues)
+}
+
+func TestFindInSetSetProvenanceThroughBindingBoundary(t *testing.T) {
+	ctx := context.Background()
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "z,a,m"}
+	bindCtx := NewBindContext(nil, nil)
+	bindCtx.bindingByTag[7] = &Binding{
+		mysqlSpecialOrderTypes: []*plan.Type{&setType},
+	}
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 0}},
+	}
+	args := []*plan.Expr{makePlan2StringConstExprWithType("a"), column}
+
+	rewritten, ok, err := rewriteFindInSetSetProvenance(ctx, nil, bindCtx, args)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, rewritten, 3)
+	require.Equal(t, moSetCastValueToIndexFun, rewritten[1].GetF().GetFunc().GetObjName())
+	require.Empty(t, rewritten[1].Typ.Enumvalues)
+	require.Equal(t, setType.Enumvalues, rewritten[2].GetLit().GetSval())
+
+	unchanged, didRewrite, err := rewriteFindInSetSetProvenance(ctx, nil, nil, args)
+	require.NoError(t, err)
+	require.False(t, didRewrite)
+	require.Equal(t, args, unchanged)
+
+	ordinaryContext := NewBindContext(nil, nil)
+	unchanged, didRewrite, err = rewriteFindInSetSetProvenance(ctx, nil, ordinaryContext, args)
+	require.NoError(t, err)
+	require.False(t, didRewrite)
+	require.Equal(t, args, unchanged)
+}
+
+func TestFindInSetInternalArityIsPlannerOnly(t *testing.T) {
+	ctx := context.Background()
+	internalArgs := []*plan.Expr{
+		makePlan2StringConstExprWithType("a"),
+		makePlan2Uint64ConstExprWithType(2),
+		makePlan2StringConstExprWithType("z,a,m"),
+	}
+
+	_, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs)
+	require.Error(t, err)
+
+	bound, err := bindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs, true, nil, true)
+	require.NoError(t, err)
+	require.Len(t, bound.GetF().GetArgs(), 3)
+
+	bound, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(ctx, nil, "find_in_set", internalArgs)
+	require.NoError(t, err)
+	require.Len(t, bound.GetF().GetArgs(), 3)
+
+	_, err = BindFuncExprImplByPlanExpr(ctx, "find_in_set", []*plan.Expr{internalArgs[0]})
+	require.Error(t, err)
+}
+
+func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		def      string
+		wantType types.T
+	}{
+		{name: "direct", sql: "select find_in_set('a', s) from enum_order_t", def: "red,green,blue", wantType: types.T_uint64},
+		{name: "derived", sql: "select find_in_set('a', s) from (select s from enum_order_t) d", def: "red,green,blue", wantType: types.T_uint64},
+		{name: "derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "cte empty member", sql: "with c as (select s from set_empty_member_t) select find_in_set('', s) from c", def: ",a", wantType: types.T_uint64},
+		{name: "union empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "union empty member then null", sql: "select find_in_set('', s) from (select s from set_empty_member_t union all select null as s) d", def: ",a", wantType: types.T_uint64},
+		{name: "union null then empty member", sql: "select find_in_set('', s) from (select null as s union all select s from set_empty_member_t) d", def: ",a", wantType: types.T_uint64},
+		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			require.NoError(t, err)
+			findInSet := findPlanFunctionExpr(logicPlan, "find_in_set")
+			require.NotNil(t, findInSet, logicPlan.String())
+			require.Len(t, findInSet.GetF().GetArgs(), 3)
+			require.Equal(t, int32(tc.wantType), findInSet.GetF().GetArgs()[1].Typ.Id)
+			require.Empty(t, findInSet.GetF().GetArgs()[1].Typ.Enumvalues)
+			require.Equal(t, tc.def, findInSet.GetF().GetArgs()[2].GetLit().GetSval())
+			if strings.Contains(tc.name, "union") && strings.Contains(tc.name, "null") {
+				require.NotNil(t, findInSet.GetF().GetArgs()[1].GetCol(), logicPlan.String())
+				require.False(t, findInSet.GetF().GetArgs()[1].Typ.NotNullable)
+			}
+			if tc.name == "derived empty member" {
+				raw := findInSet.GetF().GetArgs()[1].GetCol()
+				require.NotNil(t, raw)
+				require.Equal(t, int32(0), raw.ColPos)
+			}
+		})
+	}
 }
 
 // TestGeomFromTextSRIDInResultType verifies that a constant SRID argument to
