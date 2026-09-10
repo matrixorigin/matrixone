@@ -91,6 +91,9 @@ func (d TypeDescriptor) Type() types.Type {
 }
 func (d TypeDescriptor) canonical() ([]byte, error) { return json.Marshal(d) }
 func (d TypeDescriptor) Fingerprint() (string, error) {
+	if err := d.Validate(); err != nil {
+		return "", err
+	}
 	canonical, err := d.canonical()
 	if err != nil {
 		return "", err
@@ -112,6 +115,83 @@ func (d TypeDescriptor) Fingerprint() (string, error) {
 	h.Write([]byte{0})
 	h.Write([]byte(physicalFingerprint))
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Validate checks the semantic fields that Arrow's physical type does not
+// carry.  Keeping this at the descriptor boundary makes manually constructed
+// catalog or wire descriptors obey the same contract as descriptors produced
+// from a SQL type.
+func (d TypeDescriptor) Validate() error {
+	oid := types.T(d.TypeID)
+	if d.Width < 0 {
+		return fmt.Errorf("TYPE_CONTRACT: descriptor width must be non-negative")
+	}
+	if d.Scale < 0 {
+		return fmt.Errorf("TYPE_CONTRACT: descriptor scale must be non-negative")
+	}
+	expectedOffsetWidth := int32(32)
+	if oid == types.T_uuid || oid == types.T_array_float32 || oid == types.T_array_float64 {
+		expectedOffsetWidth = 0
+	}
+	if d.OffsetWidth != expectedOffsetWidth {
+		return fmt.Errorf("TYPE_CONTRACT: descriptor offset_width must be %d for %s", expectedOffsetWidth, oid.String())
+	}
+	if d.JSONEncoding != "" && (oid != types.T_json || d.JSONEncoding != "canonical_text") {
+		return fmt.Errorf("TYPE_CONTRACT: unsupported JSON encoding")
+	}
+	if d.TemporalEncoding != "" && (oid != types.T_date && oid != types.T_datetime && oid != types.T_timestamp || d.TemporalEncoding != "sql_zero_struct") {
+		return fmt.Errorf("TYPE_CONTRACT: unsupported temporal encoding")
+	}
+
+	switch oid {
+	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_json:
+		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: descriptor carries unused fields for %s", oid.String())
+		}
+	case types.T_decimal64, types.T_decimal128:
+		maxPrecision := int32(38)
+		if oid == types.T_decimal64 {
+			maxPrecision = 18
+		}
+		if d.Width < 1 || d.Width > maxPrecision {
+			return fmt.Errorf("TYPE_CONTRACT: decimal precision %d is outside %s range", d.Width, oid.String())
+		}
+		if d.Scale > d.Width {
+			return fmt.Errorf("TYPE_CONTRACT: decimal scale %d exceeds precision %d", d.Scale, d.Width)
+		}
+		if d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: decimal descriptor carries a charset")
+		}
+	case types.T_date:
+		if d.Scale != 0 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: DATE descriptor has invalid scale or charset")
+		}
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		if d.Scale > 6 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		if d.Charset > types.CharsetUTF8 {
+			return fmt.Errorf("TYPE_CONTRACT: unsupported text charset %d", d.Charset)
+		}
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		if d.Charset != types.CharsetBinary {
+			return fmt.Errorf("TYPE_CONTRACT: binary descriptor must use the binary charset")
+		}
+	case types.T_uuid:
+		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: UUID descriptor carries unused fields")
+		}
+	case types.T_array_float32, types.T_array_float64:
+		if d.Width < 1 || d.Width > types.MaxArrayDimension || d.Scale != 0 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: vector dimension or metadata is outside the supported range")
+		}
+	default:
+		return fmt.Errorf("TYPE_CONTRACT: unsupported MatrixOne type id %d", d.TypeID)
+	}
+	return nil
 }
 
 func (d TypeDescriptor) arrowType() (arrow.DataType, error) {
