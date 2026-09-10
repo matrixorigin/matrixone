@@ -304,7 +304,7 @@ func BuildInputRecordRange(inputs []*vector.Vector, args []types.Type, start, le
 		if err != nil {
 			return nil, nil, err
 		}
-		if inputs[i] == nil || (!inputs[i].IsConst() && inputs[i].Length() < start+length) {
+		if inputs[i] == nil || inputs[i].Length() == 0 || (!inputs[i].IsConst() && inputs[i].Length() < start+length) {
 			return nil, nil, fmt.Errorf("input column %d is shorter than batch range", i)
 		}
 	}
