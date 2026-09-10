@@ -403,10 +403,24 @@ func TestCheckBootstrapWaitsForReplicatedLogServiceRecovery(t *testing.T) {
 }
 
 func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, true, fn)
+}
+
+func runManualHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, false, fn)
+}
+
+func runHAKeeperStoreTestWithWorkers(
+	t *testing.T,
+	startLogReplica bool,
+	workers bool,
+	fn func(*testing.T, *store),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = !workers
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -919,6 +933,8 @@ func TestGetCheckerState(t *testing.T) {
 
 func TestSetInitialClusterInfo(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// Keep background ID preallocation out of the exact watermark assertions.
+		store.tickerStopper.Stop()
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
@@ -969,11 +985,15 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		assert.Equal(t, uint64(2), state.NextIDByKey["b"])
 		assert.Zero(t, state.NextIDByKey["c"])
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// This test drives the state transitions itself. Join the background
+		// checker before initialization so its ID preallocation cannot change
+		// the watermark used to verify that rejected recovery has no effect.
+		store.tickerStopper.Stop()
 		require.NoError(t, store.setInitialClusterInfo(
 			1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 
@@ -995,7 +1015,7 @@ func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 		require.Empty(t, state.NextIDByKey)
 		require.False(t, state.LogServiceRecoveryPending)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
@@ -1009,7 +1029,7 @@ func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
 }
 
 func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
-	runHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
+	runManualHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
 		require.NoError(t, s.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 		// No LogStore heartbeat: bootstrap cannot place its replica yet. Exercise
 		// the real checker result consumed by the ticker, not a synthetic nil.
@@ -1128,7 +1148,7 @@ func TestRecoveryBootstrapDefersTNUntilCompletion(t *testing.T) {
 		require.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
 		require.False(t, cb.Commands[0].Bootstrapping)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
@@ -1183,10 +1203,10 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
-			// Move the deadline into the past so this test does not spend the
-			// real multi-minute bootstrap budget.
-			store.bootstrapCheckDeadline = time.Now().Add(-time.Second)
-			store.checkBootstrap(state)
+			// Drive the elapsed-time check through its explicit-time seam rather
+			// than mutating the production-owned deadline.
+			expired := time.Now().Add(store.bootstrapCheckWindow())
+			require.NoError(t, store.checkBootstrapWithSetterAt(expired, state, store.setBootstrapState))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)
@@ -1259,7 +1279,7 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 			}
 		}
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
