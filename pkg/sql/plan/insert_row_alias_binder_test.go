@@ -153,6 +153,55 @@ func TestInsertRowAliasCorrelatedFromBuildPlanKeepsTargetLookupReachable(t *test
 	require.GreaterOrEqual(t, targetScans, 3)
 }
 
+func TestInsertRowAliasCorrelatedFromBuildPlanWithUniqueConflict(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.NoError(t, err)
+
+	var targetArbiter, targetLookup bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			targetArbiter = true
+		}
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
+			targetLookup = true
+		}
+	}
+	require.True(t, targetArbiter)
+	require.True(t, targetLookup)
+}
+
+func TestInsertRowAliasCorrelatedFromBuildPlanSupportsFakePrimaryTarget(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.fake_pk_t(a, b) values (1, 'x') as n(k, v) "+
+			"on duplicate key update b = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.fake_pk_t.a)")
+	require.NoError(t, err)
+
+	var targetArbiter, targetLookup bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
+			targetArbiter = true
+		}
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "fake_pk_t" {
+			targetLookup = true
+		}
+	}
+	require.True(t, targetArbiter)
+	require.True(t, targetLookup)
+}
+
+func TestInsertRowAliasNestedCorrelationBuilds(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = (select max(e2.deptno) from constraint_test.emp as e2 "+
+			"where e2.deptno = constraint_test.dept.deptno))")
+	require.NoError(t, err)
+}
+
 func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.fake_pk_no_unique_gen(a, g) values (1, default) as n(x, y) "+
