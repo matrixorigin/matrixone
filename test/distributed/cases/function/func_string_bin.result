@@ -23,9 +23,11 @@ select bin(-1);
 bin(-1)
 1111111111111111111111111111111111111111111111111111111111111111
 select bin(10e50);
-invalid input: The input value is out of range
+bin(10e50)
+1
 select bin(-10e50);
-invalid input: The input value is out of range
+bin(-10e50)
+1111111111111111111111111111111111111111111111111111111111111111
 select bin(0.00000000000000000000000001);
 bin(0.00000000000000000000000001)
 0
@@ -35,6 +37,53 @@ bin(-0.00000000000000000000000001)
 select bin("你好");
 bin("你好")
 0
+SELECT bin(TRUE) AS bin_true, bin(FALSE) AS bin_false;
+bin_true    bin_false
+1    0
+SELECT bin(DATE '2024-05-06') AS bin_date, bin(CAST('2024-05-06 12:34:56' AS DATETIME)) AS bin_datetime, bin(CAST('12:34:56' AS TIME)) AS bin_time;
+bin_date    bin_datetime    bin_time
+11111101000    11111101000    1100
+SELECT conv(TRUE, 10, 16) AS conv_bool, conv(CAST('15.5' AS DECIMAL(4,1)), 10, 16) AS conv_decimal;
+conv_bool    conv_decimal
+1    F
+SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.2345678901234567e-5 AS DOUBLE), 10, 16) AS conv_float_scientific;
+conv_float_large    conv_float_scientific
+1    1
+PREPARE bin_runtime FROM 'SELECT BIN(?)';
+SET @bin_runtime_value = TRUE;
+EXECUTE bin_runtime USING @bin_runtime_value;
+bin(?)
+1
+SET @bin_runtime_value = CAST('2024-05-06' AS DATE);
+EXECUTE bin_runtime USING @bin_runtime_value;
+bin(?)
+11111101000
+SET @bin_runtime_value = CAST('12:34:56' AS TIME);
+EXECUTE bin_runtime USING @bin_runtime_value;
+bin(?)
+1100
+DEALLOCATE PREPARE bin_runtime;
+PREPARE conv_runtime FROM 'SELECT CONV(?, 10, 16)';
+SET @conv_runtime_value = TRUE;
+EXECUTE conv_runtime USING @conv_runtime_value;
+CONV(?, 10, 16)
+1
+SET @conv_runtime_value = CAST('15.5' AS DECIMAL(4,1));
+EXECUTE conv_runtime USING @conv_runtime_value;
+CONV(?, 10, 16)
+F
+SET @conv_runtime_value = NULL;
+EXECUTE conv_runtime USING @conv_runtime_value;
+CONV(?, 10, 16)
+NULL
+DEALLOCATE PREPARE conv_runtime;
+CREATE TABLE typed_bin_conv(d DECIMAL(6,2), b BOOLEAN, dt DATE, dtt DATETIME, tm TIME);
+INSERT INTO typed_bin_conv VALUES (15.50, TRUE, '2024-05-06', '2024-05-06 12:34:56', '12:34:56'), (NULL, NULL, NULL, NULL, NULL);
+SELECT BIN(d), BIN(b), BIN(dt), BIN(dtt), BIN(tm), CONV(d, 10, 16), CONV(b, 10, 16), CONV(dt, 10, 16), CONV(dtt, 10, 16), CONV(tm, 10, 16) FROM typed_bin_conv ORDER BY d IS NULL;
+BIN(d)    BIN(b)    BIN(dt)    BIN(dtt)    BIN(tm)    CONV(d, 10, 16)    CONV(b, 10, 16)    CONV(dt, 10, 16)    CONV(dtt, 10, 16)    CONV(tm, 10, 16)
+1111    1    11111101000    11111101000    1100    F    1    7E8    7E8    C
+NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL
+DROP TABLE typed_bin_conv;
 create table t1(a int);
 insert into t1 values();
 select bin(a) from t1;

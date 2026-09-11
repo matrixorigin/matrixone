@@ -2649,9 +2649,20 @@ func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
 			Value: "15.5", SourceType: types.New(types.T_decimal64, 4, 1), HasSourceType: true,
 		},
 		plan2.ParamValue{Value: "binary", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+		plan2.ParamValue{Value: uint64(15)},
+		plan2.ParamValue{Value: float32(15.5)},
+		plan2.ParamValue{Value: float64(15.5)},
+		plan2.ParamValue{Value: types.Decimal64(15)},
+		plan2.ParamValue{Value: types.Decimal128{}},
+		plan2.ParamValue{Value: types.Decimal256{}},
+		plan2.ParamValue{Value: types.Datetime(0)},
+		plan2.ParamValue{Value: types.Timestamp(0)},
+		plan2.ParamValue{Value: types.Time(0)},
+		plan2.ParamValue{Value: types.MoYear(2024)},
+		plan2.ParamValue{Value: "json", SourceType: types.T_json.ToType(), HasSourceType: true},
 	}
 
-	applyPreparedConversionRuntimeTypes(values, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 99})
+	applyPreparedConversionRuntimeTypes(values, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99})
 
 	assertRuntimeType := func(position int, want types.T) {
 		param, ok := values[position].(plan2.ParamValue)
@@ -2673,6 +2684,18 @@ func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
 	require.Equal(t, int32(4), values[7].(plan2.ParamValue).RuntimeType.Width)
 	require.Equal(t, int32(1), values[7].(plan2.ParamValue).RuntimeType.Scale)
 	assertRuntimeType(8, types.T_varbinary)
+	assertRuntimeType(9, types.T_uint64)
+	assertRuntimeType(10, types.T_float32)
+	assertRuntimeType(11, types.T_float64)
+	assertRuntimeType(12, types.T_decimal64)
+	assertRuntimeType(13, types.T_decimal128)
+	assertRuntimeType(14, types.T_decimal256)
+	assertRuntimeType(15, types.T_datetime)
+	assertRuntimeType(16, types.T_timestamp)
+	assertRuntimeType(17, types.T_time)
+	assertRuntimeType(18, types.T_year)
+	// An unsupported source annotation falls back to the concrete value kind.
+	assertRuntimeType(19, types.T_text)
 }
 
 func TestPreparedBitCountNumericRuntimeTypesUseReprepareCategories(t *testing.T) {
