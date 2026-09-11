@@ -754,19 +754,20 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	kind, _ = b.decideJSONProbe(scan, idx)
 	require.Equal(t, jsonProbeSkip, kind)
 
-	// current read, coverage hook says covered -> STILL partial (self-completing): an async index
-	// always self-completes, so the covered verdict is ignored; buildTS is what matters.
+	// current read, caught up (covered) -> covered, NO tail. A tail here is unnecessary AND unsound:
+	// on a CREATE-INDEX-on-existing-data index build_ts sits at the pre-create schema version while S
+	// is post-create, so table_changes(build_ts, S] would span a schema change and error.
 	covers(true, types.BuildTS(100, 0), nil)
 	b, scan = newCase(true)
 	kind, _ = b.decideJSONProbe(scan, idx)
-	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, jsonProbeCovered, kind)
 
-	// snapshot read, coverage hook says covered -> STILL partial (self-completing), same as current.
+	// snapshot read, caught up as of S -> covered, no tail.
 	covers(true, types.BuildTS(100, 0), nil)
 	b, scan = newCase(true)
 	asSnapshot(scan)
 	kind, _ = b.decideJSONProbe(scan, idx)
-	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, jsonProbeCovered, kind)
 
 	// snapshot read, behind as of S -> partial (tail up to S), same as a current read
 	covers(false, types.BuildTS(100, 0), nil)

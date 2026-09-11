@@ -472,25 +472,33 @@ allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
 row written inside the maintenance lag satisfies the predicate but has no
 posting yet, so an unconditional probe would silently drop it.
 
-Because the probe **self-completes** (§10.3) — the operator unions a `table_changes`
-tail up to the read point, bound to the generation it actually searched (§10.4) — the
-result is correct whether the index is caught up or behind. So the per-query gate no
-longer decides *covered vs behind*; it decides **probe vs full scan**: it injects the
-probe when the index is usable and fails closed to a full scan otherwise. Usable means:
+The gate decides, per query, one of three outcomes:
 
-- **built** — `build_ts > 0` (an unbuilt index would make the tail a whole-history scan);
-- **no transaction-local write to the source** — the index and the tail see only
-  committed rows, so an uncommitted local write would be dropped by the probe; the
-  `SourceCommitTS` guard (§10.2) surfaces this and forces the full scan;
-- **`table_changes` can serve the table** — not partitioned/temporary, an explicit
-  non-hidden pk, no column colliding with its reserved metadata names.
+- **covered** (`build_ts >= bar`, the index is caught up): probe with **NO tail** — the
+  index already reflects every row the read sees. This includes the common
+  `CREATE INDEX`-on-existing-data case, whose synchronous initial build is caught up
+  immediately.
+- **behind** (`build_ts < bar`): probe that **self-completes** (§10.3) — the
+  `fulltext2_search` operator unions a `table_changes` tail up to the read point, bound
+  to the generation it actually searched (§10.4).
+- **skip**: fail closed to a full scan when the probe would be unsound or unusable —
+  unbuilt index (`build_ts == 0`); a transaction-local write to the source (the index and
+  tail see only committed rows, so an uncommitted write would be dropped — the
+  `SourceCommitTS` guard surfaces this); or `table_changes` cannot serve the table
+  (partitioned/temporary, no explicit non-hidden pk, reserved-name column collision).
 
-`CoversSnapshot` still computes liveness and the coverage bar, but the probe decision
-**ignores the covered verdict** (self-completion makes covered and behind identical);
-what it consumes is `build_ts` (usability + the EXPLAIN tail-SQL lower bound) and the
-transaction-local-write guard that `SourceCommitTS` fires. Liveness is read from
-`mo_catalog.mo_iscp_log` (`job_state`, `drop_at`); a dropped/paused index is still
-correct via the tail, so it no longer declines the probe.
+Running a tail on a **caught-up** index is not just wasteful, it is UNSOUND: `build_ts`
+then sits at the pre-`CREATE INDEX` schema version while the read snapshot is post-create,
+so `table_changes(build_ts, S]` would span a schema-version change and error
+("single source schema version…"). Only a **behind** index tails, and both its endpoints
+live in the same (post-create) schema version — an `ALTER` rebuilds the index to
+`build_ts >=` the `ALTER`, so a behind tail never spans one either.
+
+Runtime binding (§10.4) still matters for the **behind** case: the operator binds the tail
+to the generation it actually searched, not a plan-time value, so a stale cache reuse
+cannot leave a gap. `CoversSnapshot` supplies the covered verdict (liveness `&&`
+`build_ts >= bar`, read from `mo_catalog.mo_iscp_log`) plus `build_ts` and the
+transaction-local-write guard.
 
 Pieces:
 
@@ -535,11 +543,10 @@ algo; fulltext2/hnsw/cagra/ivfpq return the real value, ivfflat/brute-force retu
 
 ### 10.2 The bar
 
-`CoversSnapshot` computes `covered ⟺ live && build_ts >= bar`, but with self-completion
-the probe decision ignores that verdict (§10 intro): the bar is retained because
-computing it is how the **transaction-local-write guard** fires (it fails closed on an
-uncommitted write to the source), and it remains meaningful to any caller that still
-wants a true covered/behind answer. The bar is the read snapshot's coverage requirement:
+`CoversSnapshot` computes `covered ⟺ live && build_ts >= bar`. The probe decision (§10 intro)
+uses it directly: covered → no tail, behind → self-completing tail. Computing the bar is also
+how the **transaction-local-write guard** fires (it fails closed on an uncommitted write to
+the source). The bar is the read snapshot's coverage requirement:
 
 - **current read** — `bar = SourceCommitTS`: the greatest source DML commit the
   query CN observes at the read snapshot, computed from the base relation's

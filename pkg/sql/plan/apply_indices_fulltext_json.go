@@ -534,11 +534,12 @@ type jsonProbeKind int
 const (
 	// jsonProbeSkip: the index cannot be trusted here -- leave the full scan (fail closed).
 	jsonProbeSkip jsonProbeKind = iota
-	// jsonProbeCovered: a SYNCHRONOUS index (never behind) -- emit a mandatory probe with no tail.
+	// jsonProbeCovered: a synchronous index, OR an async index that is CAUGHT UP for the read --
+	// emit a mandatory probe with NO tail (the index already reflects every row the read sees).
 	jsonProbeCovered
-	// jsonProbePartial: an ASYNC index -- emit a mandatory probe the fulltext2_search operator
-	// SELF-COMPLETES, binding the generation it searched at runtime and unioning a table_changes tail
-	// up to the read snapshot. Covers both current and {snapshot=...} reads.
+	// jsonProbePartial: an async index that is BEHIND -- emit a mandatory probe the fulltext2_search
+	// operator SELF-COMPLETES, binding the generation it searched at runtime and unioning a
+	// table_changes tail up to the read snapshot. Covers both current and {snapshot=...} reads.
 	jsonProbePartial
 )
 
@@ -548,10 +549,10 @@ var coversSnapshotFn = indexplugin.CoversSnapshot
 
 // decideJSONProbe evaluates idx against scanNode's read and reports how a probe may use it, plus
 // (for jsonProbePartial) the plan-time build_ts -- the lower bound shown in the EXPLAIN tail SQL. A
-// synchronous index is never behind, so it probes with no tail. An async index always self-completes
-// (jsonProbePartial): the operator binds the generation it actually searched and unions a
-// table_changes tail up to the read point, so covered-vs-partial need not be decided here. Fails
-// closed to jsonProbeSkip on any uncertainty (unbuilt index, table_changes cannot serve the table,
+// synchronous index, and an async index that is CAUGHT UP (covered), probe with no tail. An async
+// index that is BEHIND self-completes (jsonProbePartial): the operator binds the generation it
+// actually searched and unions a table_changes tail up to the read point. Fails closed to
+// jsonProbeSkip on any uncertainty (unbuilt index, table_changes cannot serve the table,
 // transaction-local writes): a full scan is always correct, an unsound probe is not.
 func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.IndexDef) (jsonProbeKind, types.TS) {
 	algo := catalog.ToLower(idx.IndexAlgo)
@@ -634,18 +635,22 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 		IndexMetadataTable: metaTbl,
 		ScanSnapshotTS:     scanSnapshotTS,
 	}
-	// The `covered` verdict is intentionally ignored. With runtime tail binding the operator ALWAYS
-	// self-completes: whether the index was caught up (an empty tail the operator skips at runtime) or
-	// behind (the tail fills the gap), the answer is identical, so the plan need not decide
-	// covered-vs-partial. coversSnapshotFn is still the way to (a) read buildTS -- the plan-time lower
-	// bound shown in the EXPLAIN tail SQL -- and (b) fire the transaction-local-write guard inside
-	// SourceCommitTS: a txn with uncommitted writes to the source makes the probe unsound (the index
-	// and the tail see only committed rows), and that guard surfaces as an error here, forcing a full
-	// scan.
-	_, buildTS, err := coversSnapshotFn(ctx, algo, req)
+	// SourceCommitTS also fails closed on transaction-local writes, so this call doubles as the
+	// guard that keeps any probe from dropping uncommitted rows the index/tail cannot see.
+	covered, buildTS, err := coversSnapshotFn(ctx, algo, req)
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
 		return jsonProbeSkip, types.TS{}
+	}
+	// Caught up (build_ts >= bar): probe with NO tail. This is the common CREATE-INDEX-on-existing-data
+	// case -- the initial build reflects every existing row, so the index is covered immediately. A tail
+	// here is not only unnecessary, it is UNSOUND: build_ts sits at the pre-CREATE-INDEX schema version
+	// while the read snapshot is post-create, so table_changes(build_ts, S] would span a schema-version
+	// change and error out ("single source schema version..."). Only a BEHIND index self-completes with
+	// a runtime-bound tail (both endpoints then live in the same, post-create schema version, since an
+	// ALTER rebuilds the index to build_ts >= the ALTER).
+	if covered {
+		return jsonProbeCovered, buildTS
 	}
 	// An unbuilt / unreadable index (build_ts 0) would turn the tail table_changes(0, S] into a
 	// disguised full scan over the table's whole history -- decline to a real full scan instead.
