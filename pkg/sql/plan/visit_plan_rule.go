@@ -1308,7 +1308,7 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 		(!preparedArithmeticOperandNeedsRuntimeBound(originalArgs[0]) && !preparedArithmeticOperandNeedsRuntimeBound(originalArgs[1])) {
 		return nil, nil
 	}
-	unsigned := false
+	operandUnsigned := [2]bool{}
 	for i, arg := range args {
 		original := originalArgs[i]
 		if _, hasExplicitCast := findPreparedExplicitCast(original); hasExplicitCast {
@@ -1331,11 +1331,17 @@ func bindRuntimeUnsignedArithmetic(ctx context.Context, name string, originalArg
 			original = original.GetF().Args[0]
 			arg = arg.GetF().Args[0]
 		}
-		integer, operandUnsigned := runtimePreparedUnsignedIntegerOperand(original, arg)
+		integer, isUnsigned := runtimePreparedUnsignedIntegerOperand(original, arg)
 		if !integer {
 			return nil, nil
 		}
-		unsigned = unsigned || operandUnsigned
+		operandUnsigned[i] = isUnsigned
+	}
+	unsigned := operandUnsigned[0] || operandUnsigned[1]
+	if name == "%" {
+		// MOD keeps the signedness of its dividend. An unsigned divisor
+		// alone must not add a UINT64 boundary to a signed remainder.
+		unsigned = operandUnsigned[0]
 	}
 	if !unsigned {
 		return nil, nil

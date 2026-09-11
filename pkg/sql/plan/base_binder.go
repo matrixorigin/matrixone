@@ -6048,6 +6048,19 @@ func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []
 		return nil
 	}
 
+	// MOD keeps the signedness of its dividend.  Unlike the other integer
+	// arithmetic operators handled here, an unsigned divisor alone must not
+	// turn a signed remainder into UINT64 (for example, -3 % CAST(2 AS
+	// UNSIGNED) remains -1).  An unsigned dividend still gets the normal
+	// unsigned result boundary.
+	resultUnsigned := leftUnsigned || rightUnsigned
+	if name == "%" {
+		resultUnsigned = leftUnsigned
+	}
+	if !resultUnsigned {
+		return nil
+	}
+
 	resultType := types.T_uint64.ToType()
 	if name == "-" && b.noUnsignedSubtractionEnabled() {
 		resultType = types.T_int64.ToType()
@@ -6155,12 +6168,20 @@ func (b *baseBinder) integerArithmeticOperandDomain(astExpr tree.Expr, expr *Exp
 			// physical DECIMAL result.
 			leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, nil)
 			rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, nil)
-			return leftInteger && rightInteger, leftUnsigned || rightUnsigned
+			resultUnsigned := leftUnsigned || rightUnsigned
+			if binary.Op == tree.MOD {
+				resultUnsigned = leftUnsigned
+			}
+			return leftInteger && rightInteger, resultUnsigned
 		}
 		fn := expr.GetF()
 		leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, fn.Args[0])
 		rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, fn.Args[1])
-		return leftInteger && rightInteger, leftUnsigned || rightUnsigned
+		resultUnsigned := leftUnsigned || rightUnsigned
+		if binary.Op == tree.MOD {
+			resultUnsigned = leftUnsigned
+		}
+		return leftInteger && rightInteger, resultUnsigned
 	}
 
 	if expr == nil {

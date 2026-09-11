@@ -11383,6 +11383,17 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	// A view's expressions are bound under the SQL mode persisted with the
+	// view, not the invoker's current mode.  Parsing already uses this mode;
+	// mirror it for arithmetic binding and restore the outer builder state so
+	// nested views and the caller keep their own semantics.
+	savedNoUnsignedSubtraction := builder.noUnsignedSubtraction
+	builder.noUnsignedSubtraction = mysql.HasSQLMode(
+		parserSQLMode, mysql.SQLModeNoUnsignedSubtraction,
+	)
+	defer func() {
+		builder.noUnsignedSubtraction = savedNoUnsignedSubtraction
+	}()
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return

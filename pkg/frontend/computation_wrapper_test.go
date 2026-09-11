@@ -1114,6 +1114,20 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 			runtimeBoundOperator: "%",
 		},
 		{
+			name:                 "bare_modulo_signed_peer",
+			query:                "select (cast(? as unsigned) % ?) is not null",
+			peer:                 2,
+			peerSigned:           true,
+			control:              true,
+			runtimeBoundOperator: "%",
+		},
+		{
+			name:    "bare_unsigned_divisor_does_not_force_signed_modulo",
+			query:   "select (cast(-3 as signed) % ?) is not null",
+			peer:    2,
+			control: true,
+		},
+		{
 			name:                 "bare_integer_division_zero_peer",
 			query:                "select (cast(? as unsigned) div ?) is null",
 			peerSet:              true,
@@ -1160,17 +1174,22 @@ func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
 				binary.LittleEndian.PutUint64(packet[19:], maxUint64)
 				if tc.peer != 0 || tc.peerSet {
 					paramCount := strings.Count(tc.query, "?")
-					require.True(t, paramCount == 2 || paramCount == 3)
+					require.True(t, paramCount >= 1 && paramCount <= 3)
 					packet = make([]byte, 7+2*paramCount+8*paramCount)
 					packet[6] = 1
-					packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
-					packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
-					if !tc.peerSigned {
-						packet[10] = 0x80
-					}
 					valueOffset := 7 + 2*paramCount
-					binary.LittleEndian.PutUint64(packet[valueOffset:], maxUint64)
-					binary.LittleEndian.PutUint64(packet[valueOffset+8:], tc.peer)
+					if paramCount == 1 {
+						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						binary.LittleEndian.PutUint64(packet[valueOffset:], tc.peer)
+					} else {
+						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+						if !tc.peerSigned {
+							packet[10] = 0x80
+						}
+						binary.LittleEndian.PutUint64(packet[valueOffset:], maxUint64)
+						binary.LittleEndian.PutUint64(packet[valueOffset+8:], tc.peer)
+					}
 					if paramCount == 3 {
 						packet[11], packet[12] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
 						binary.LittleEndian.PutUint64(packet[valueOffset+16:], maxUint64)

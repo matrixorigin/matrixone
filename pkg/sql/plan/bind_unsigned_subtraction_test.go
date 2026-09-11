@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -216,6 +217,23 @@ func TestUnsignedIntegerSubtractionPreservesConstantFoldedNestedIntegerDomain(t 
 			}
 		}
 	}
+}
+
+func TestUnsignedIntegerModuloFoldedDomainDoesNotPolluteParent(t *testing.T) {
+	expr := unsignedSubtractionProjection(t, "", "select (3 % cast(2 as unsigned)) - 2", false)
+	require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal128FromInt64(-1), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0))
 }
 
 func TestUnsignedIntegerSubtractionTreatsYearAsUnsigned(t *testing.T) {
@@ -420,6 +438,58 @@ func TestUnsignedIntegerSubtractionExecution(t *testing.T) {
 	}
 }
 
+func TestUnsignedIntegerModuloPreservesDividendSignedness(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		// Negative numeric literals are represented as signed DECIMAL in the
+		// planner; the important invariant is that the unsigned divisor must not
+		// force the result into UINT64.
+		{name: "signed dividend with unsigned divisor", sql: "select -3 % cast(2 as unsigned)", want: types.T_decimal128},
+		{name: "unsigned dividend with signed divisor", sql: "select cast(3 as unsigned) % -2", want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := unsignedSubtractionProjection(t, "", tc.sql, false)
+			require.Equal(t, int32(tc.want), expr.Typ.Id)
+		})
+	}
+}
+
+func TestUnsignedIntegerModuloExecutionPreservesDividendSignedness(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		wantType types.T
+		wantInt  int64
+		wantUint uint64
+	}{
+		{name: "signed dividend with unsigned divisor", sql: "select -3 % cast(2 as unsigned)", wantType: types.T_decimal128, wantInt: -1},
+		{name: "unsigned dividend with signed divisor", sql: "select cast(3 as unsigned) % -2", wantType: types.T_uint64, wantUint: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := unsignedSubtractionProjection(t, "", tc.sql, false)
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			input := batch.New(nil)
+			input.SetRowCount(1)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantType, result.GetType().Oid)
+			if tc.wantType == types.T_decimal128 {
+				require.Equal(t, types.Decimal128FromInt64(tc.wantInt), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0))
+			} else {
+				require.Equal(t, tc.wantUint, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+		})
+	}
+}
+
 func TestSQLPrepareUnsignedSubtractionHonorsSQLMode(t *testing.T) {
 	for _, modeCase := range []struct {
 		name string
@@ -493,6 +563,26 @@ func TestSQLPrepareUnsignedArithmeticDefersSignedMarkerDomain(t *testing.T) {
 			// so its arithmetic node retains a per-node UINT64 boundary.
 			require.Equal(t, tc.wantCheck,
 				hasArithmeticResultCast(firstProjectionExpr(t, prepared), tc.op, types.T_uint64))
+		})
+	}
+}
+
+func TestSQLPrepareUnsignedModuloUsesDividendDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{name: "signed dividend", sql: "prepare modulo from 'select cast(? as signed) % cast(? as unsigned)'", want: types.T_decimal128},
+		{name: "unsigned dividend", sql: "prepare modulo from 'select cast(? as unsigned) % cast(? as signed)'", want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			prepared := logicPlan.GetDcl().GetPrepare().Plan
+			require.NotNil(t, prepared)
+			require.Equal(t, int32(tc.want), firstProjectionExpr(t, prepared).Typ.Id)
 		})
 	}
 }

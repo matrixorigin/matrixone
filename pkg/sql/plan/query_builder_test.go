@@ -36,6 +36,7 @@ import (
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -620,6 +621,34 @@ func TestBindViewUsesStoredSQLModeForANSIQuotes(t *testing.T) {
 	require.Equal(t, "a", projectExpr.GetCol().Name)
 }
 
+func TestBindViewUsesStoredNoUnsignedSubtractionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		callerMode string
+		storedMode string
+		want       types.T
+	}{
+		{name: "stored signed mode overrides default caller", storedMode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+		{name: "stored default overrides signed caller", callerMode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, nodeID := buildViewForSQLModeTest(t, "v_unsigned_sub", ViewData{
+				Stmt:            "create view v_unsigned_sub as select cast(0 as unsigned) - 1 as c",
+				DefaultDatabase: "db",
+				SQLMode:         &tc.storedMode,
+				SecurityType:    "DEFINER",
+			}, tc.callerMode)
+
+			expr := builder.qry.Nodes[nodeID].ProjectList[0]
+			require.Equal(t, int32(tc.want), expr.Typ.Id)
+			require.Equal(t,
+				mysql.HasSQLMode(tc.callerMode, mysql.SQLModeNoUnsignedSubtraction),
+				builder.noUnsignedSubtraction,
+				"view binding must restore the invoker SQL mode")
+		})
+	}
+}
+
 func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	builder, nodeID := buildViewForSQLModeTest(t, "v_legacy_pipe", ViewData{
 		Stmt:            "create view v_legacy_pipe as select a||b as c from t",
@@ -814,7 +843,7 @@ func buildViewsForLowerCaseTest(
 	return builder, nodeID
 }
 
-func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
+func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData, callerSQLMode ...string) (*QueryBuilder, int32) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -851,7 +880,17 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 	}
 
 	ctx := NewMockCompilerContext2(ctrl)
-	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	callerMode := ""
+	if len(callerSQLMode) > 0 {
+		callerMode = callerSQLMode[0]
+	}
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(name string, _ bool, _ bool) (interface{}, error) {
+			if name == "sql_mode" {
+				return callerMode, nil
+			}
+			return "", nil
+		}).AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
