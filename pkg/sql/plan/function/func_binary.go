@@ -3226,45 +3226,145 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 
 	// Handle different input types for N
 	// MySQL behavior:
-	// - For numeric types: always treat as base 10, regardless of from_base
-	// - For string types: parse according to from_base
+	// - For ordinary numeric types: render the value as text and parse its
+	//   leading digits according to from_base.
+	// - BIT/bit literals are the exception: MySQL reads their numeric value
+	//   directly and does not reparse it using from_base.
+	// - For string types: parse according to from_base.
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
 		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	case types.T_bool:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
+			func(v bool) int64 {
+				if v {
+					return 1
+				}
+				return 0
+			}, toBase, rs, length, selectList)
+	case types.T_bit:
+		return convUnsignedDirect(
+			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
+			toBase, rs, length, selectList)
+	case types.T_any:
+		// T_any is only the function-local representation of an untyped NULL
+		// or a marker before execute-time specialization. It must propagate
+		// NULL and never reach a fixed-width/string accessor.
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		// Numeric types are always treated as base 10
+		// Numeric values are first rendered in their decimal form, then their
+		// leading digits are parsed using from_base. This is the same prefix
+		// contract as string inputs; the typed vector only avoids formatting the
+		// value through a general-purpose string cast.
 		switch inputType.Oid {
 		case types.T_int8:
-			return convInt8Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_int16:
-			return convInt16Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_int32:
-			return convInt32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		default:
-			return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		// Numeric types are always treated as base 10
 		switch inputType.Oid {
 		case types.T_uint8:
-			return convUint8Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_uint16:
-			return convUint16Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_uint32:
-			return convUint32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		default:
-			return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		}
 	case types.T_float32, types.T_float64:
-		// Numeric types are always treated as base 10
+		// Floating values use MySQL's string/prefix conversion semantics.
 		if inputType.Oid == types.T_float32 {
-			return convFloat32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convFloatPrefix(
+				vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0]),
+				32, fromBase, toBase, rs, length, selectList)
 		}
-		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
+		return convFloatPrefix(
+			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0]),
+			64, fromBase, toBase, rs, length, selectList)
+	case types.T_decimal64:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
+			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_decimal128:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
+			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_decimal256:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
+			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_date:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
+			func(dst []byte, v types.Date) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_datetime:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
+			func(dst []byte, v types.Datetime) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
+			func(dst []byte, v types.Timestamp) []byte {
+				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_time:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
+			func(dst []byte, v types.Time) []byte {
+				return strconv.AppendInt(dst, v.Hour(), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_year:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
+			func(dst []byte, v types.MoYear) []byte {
+				return strconv.AppendInt(dst, v.ToInt64(), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	default:
-		// For other types, try to convert to string first
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
+		// doing so is the panic reported by #28461. Unsupported input types
+		// must fail at the function boundary instead.
+		return moerr.NewInvalidArg(proc.Ctx, "function conv", inputType.Oid)
 	}
 }
 
@@ -3287,7 +3387,7 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3311,21 +3411,392 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
-		if err != nil {
-			return err
-		}
-		if signed {
-			if err := rs.AppendBytes([]byte(formatSignedToBase(signedVal, toBase)), false); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedVal, toBase)), false); err != nil {
+		if err := appendConvPrefix(rs, nStr, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func convMappedInt64[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
+	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(formatSignedToBase(mapValue(value), toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendConvPrefix(
+	rs *vector.FunctionResult[types.Varlena], text []byte, fromBase, toBase int64,
+) error {
+	signedValue, unsignedValue, signed, err := parseBaseIntegerPrefix(text, fromBase)
+	if err != nil {
+		return err
+	}
+	if signed {
+		return rs.AppendBytes([]byte(formatSignedToBase(signedValue, toBase)), false)
+	}
+	return rs.AppendBytes([]byte(formatUnsignedToBase(unsignedValue, toBase)), false)
+}
+
+// convTemporalPrefix preserves CONV's string-prefix semantics for temporal
+// values. MySQL obtains a temporal value's textual form first (for example,
+// "2024-05-06" or "12:34:56") and parses the leading year/hour using
+// from_base. Only that leading numeric prefix is needed here, which avoids
+// formatting the remainder of every date/time value on the hot path.
+func convTemporalPrefix[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
+	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var prefix [32]byte
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Reuse one stack buffer per batch row. The temporal prefix is at most
+		// the signed hour/year representation and never needs heap storage.
+		text := appendPrefix(prefix[:0], value)
+		if err := appendConvPrefix(rs, text, fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convDecimalPrefix[T types.Decimal](
+	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
+	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// DECIMAL is numeric input to CONV. MySQL consumes the integer
+		// prefix (15.9 -> 15), while the existing decimal-to-integer cast
+		// helpers round; do not reuse those helpers here.
+		if err := appendConvPrefix(rs, []byte(formatValue(value)), fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convFloatPrefix[T types.Floats](
+	nParam vector.FunctionParameterWrapper[T], bitSize int, fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// MySQL's CONV first obtains the string representation of a floating
+		// value and then consumes the valid numeric prefix. In particular,
+		// 1e20 is parsed as the prefix "1", not as an integer conversion of
+		// the binary float. Keep the representation on the stack and share the
+		// same signed/unsigned parser as character and decimal inputs.
+		var buf [64]byte
+		text := appendMySQLNumericFloat(buf[:0], float64(value), bitSize)
+		if err := appendConvPrefix(rs, text, fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MySQL renders floating-point values with a fixed-point representation for a
+// wider exponent range than strconv's 'g' format. CONV and BIN consume the
+// integer prefix of that representation, so using Go's default boundary would
+// turn values such as 1000000 ("1e+06") into the prefix 1 instead of 1000000.
+//
+// This is the prefix-relevant part of MySQL's my_gcvt policy. A decimal point
+// position of -14 through 15 uses fixed notation when that representation fits
+// MySQL's type-specific output width; values outside that range remain
+// scientific unless the shortest representation has enough significant digits
+// to retain a fractional part beyond the 15-digit boundary.
+const (
+	mysqlFloatMaxDecimalPoint   = 15
+	mysqlFloat32MaxStringLength = 12 // FLT_DIG + 6
+	mysqlFloat64MaxStringLength = 22 // DBL_DIG + 7
+)
+
+func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
+	// my_gcvt uses FLT_DIG significant digits for FLOAT, while DOUBLE keeps
+	// the shortest round-trippable representation. Keep the rounded text as
+	// the source of any fixed-point rendering below; re-formatting the value
+	// with 'f' would put the discarded FLOAT digits back.
+	precision := -1
+	if bitSize == 32 {
+		precision = 6 // FLT_DIG
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'g', precision, bitSize)
+	maxLength := mysqlFloat64MaxStringLength
+	if bitSize == 32 {
+		maxLength = mysqlFloat32MaxStringLength
+	}
+	exponentPos := -1
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			exponentPos = i
+			break
+		}
+	}
+	if exponentPos < 0 {
+		// Go may choose fixed notation even when the complete representation
+		// exceeds my_gcvt's type-specific width. Re-render those rare values in
+		// scientific notation so CONV/BIN see the same integer prefix as MySQL.
+		if len(text) <= maxLength {
+			return append(dst[:0], text...)
+		}
+		return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+	}
+
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		// strconv only emits a valid exponent. Keep this defensive fallback
+		// total and preserve its original representation if that ever changes.
+		return text
+	}
+	decimalPoint := exponent + 1
+	significantDigits := 0
+	for _, ch := range text[:exponentPos] {
+		if ch >= '0' && ch <= '9' {
+			significantDigits++
+		}
+	}
+
+	if decimalPoint >= -mysqlFloatMaxDecimalPoint+1 &&
+		(decimalPoint <= mysqlFloatMaxDecimalPoint || significantDigits > decimalPoint) {
+		fixedLength := significantDigits
+		switch {
+		case decimalPoint <= 0:
+			fixedLength += 2 - decimalPoint // "0." plus leading zeroes
+		case decimalPoint < significantDigits:
+			fixedLength++ // decimal point between significant digits
+		default:
+			fixedLength = decimalPoint // trailing zeroes after the digits
+		}
+		if text[0] == '-' {
+			fixedLength++
+		}
+		if fixedLength > maxLength {
+			return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+		}
+		return appendMySQLFixedFloat(dst[:0], text[:exponentPos], exponent)
+	}
+	return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+}
+
+func appendMySQLFixedFloat(dst, mantissa []byte, exponent int) []byte {
+	var digits [64]byte
+	digitCount := 0
+	for _, ch := range mantissa {
+		if ch >= '0' && ch <= '9' {
+			digits[digitCount] = ch
+			digitCount++
+		}
+	}
+
+	if len(mantissa) > 0 && mantissa[0] == '-' {
+		dst = append(dst, '-')
+	}
+	decimalPoint := exponent + 1
+	switch {
+	case decimalPoint <= 0:
+		dst = append(dst, '0', '.')
+		for i := 0; i < -decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+		dst = append(dst, digits[:digitCount]...)
+	case decimalPoint < digitCount:
+		dst = append(dst, digits[:decimalPoint]...)
+		dst = append(dst, '.')
+		dst = append(dst, digits[decimalPoint:digitCount]...)
+	default:
+		dst = append(dst, digits[:digitCount]...)
+		for i := digitCount; i < decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+	}
+	return dst
+}
+
+func appendMySQLScientificFloat(dst, mantissa []byte, exponent int) []byte {
+	end := len(mantissa)
+	dot := -1
+	for i, ch := range mantissa {
+		if ch == '.' {
+			dot = i
+			break
+		}
+	}
+	if dot >= 0 {
+		for end > dot+1 && mantissa[end-1] == '0' {
+			end--
+		}
+		if end == dot+1 {
+			end--
+		}
+	}
+	dst = append(dst, mantissa[:end]...)
+	dst = append(dst, 'e')
+	// MySQL's e-format omits the plus sign and exponent zero padding.
+	return strconv.AppendInt(dst, int64(exponent), 10)
+}
+
+func appendMySQLScientificValue(dst []byte, value float64, bitSize, maxLength int) []byte {
+	precision := -1
+	if bitSize == 32 {
+		// 'e' precision counts digits after the decimal point.
+		precision = 5 // FLT_DIG - 1
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'e', precision, bitSize)
+	exponentPos := scientificFloatExponentPos(text)
+	if exponentPos < 0 {
+		return append(dst, text...)
+	}
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		return append(dst, text...)
+	}
+	var normalized [64]byte
+	text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+	if len(text) <= maxLength {
+		return append(dst, text...)
+	}
+
+	maxDigits := scientificFloatMantissaDigits(maxLength, value < 0, exponent)
+	for digits := maxDigits; digits > 0; digits-- {
+		text = strconv.AppendFloat(textBuf[:0], value, 'e', digits-1, bitSize)
+		exponentPos = scientificFloatExponentPos(text)
+		if exponentPos < 0 {
+			continue
+		}
+		exponent, ok = parseFloatExponent(text[exponentPos+1:])
+		if !ok {
+			continue
+		}
+		text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+		if len(text) <= maxLength {
+			return append(dst, text...)
+		}
+	}
+
+	return append(dst, text...)
+}
+
+func scientificFloatExponentPos(text []byte) int {
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			return i
+		}
+	}
+	return -1
+}
+
+func scientificFloatMantissaDigits(maxLength int, negative bool, exponent int) int {
+	exponentText := strconv.Itoa(exponent)
+	if exponentText[0] == '-' {
+		exponentText = exponentText[1:]
+	}
+	overhead := 1 + len(exponentText) // 'e' plus exponent digits
+	if exponent < 0 {
+		overhead++
+	}
+	if negative {
+		overhead++
+	}
+	available := maxLength - overhead
+	if available <= 1 {
+		return 1
+	}
+	// A mantissa with more than one significant digit needs one decimal
+	// point. The one-digit form remains available for the smallest width.
+	return available - 1
+}
+
+func parseFloatExponent(text []byte) (int, bool) {
+	if len(text) == 0 {
+		return 0, false
+	}
+
+	sign := 1
+	pos := 0
+	switch text[0] {
+	case '+':
+		pos++
+	case '-':
+		sign = -1
+		pos++
+	}
+	if pos == len(text) {
+		return 0, false
+	}
+
+	exponent := 0
+	for ; pos < len(text); pos++ {
+		ch := text[pos]
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		exponent = exponent*10 + int(ch-'0')
+	}
+	return sign * exponent, true
 }
 
 func formatSignedToBase(val int64, toBase int64) string {
@@ -3440,18 +3911,20 @@ func isConvWhitespace(ch byte) bool {
 	}
 }
 
-func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int8](nVec)
-
+func convSignedPrefix[T constraints.Signed](
+	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3459,26 +3932,38 @@ func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		// Keep the common decimal-source path allocation-free. Parsing the
+		// decimal text is required only when from_base changes the meaning of
+		// the numeric digits; +/-10 has the same result as the direct formatter.
+		if absInt64(fromBase) == 10 {
+			if err := rs.AppendBytes([]byte(formatSignedToBase(int64(value), toBase)), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		prefix := strconv.AppendInt(text[:0], int64(value), 10)
+		if err := appendConvPrefix(rs, prefix, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int16](nVec)
-
+func convUnsignedPrefix[T constraints.Unsigned](
+	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3486,26 +3971,49 @@ func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		// Preserve the old typed fast path for the overwhelmingly common
+		// decimal-source form. A negative from_base selects signed output and
+		// saturates values above INT64_MAX exactly as the bounded parser does.
+		if absInt64(fromBase) == 10 {
+			if fromBase < 0 {
+				uvalue := uint64(value)
+				if uvalue > uint64(math.MaxInt64) {
+					uvalue = uint64(math.MaxInt64)
+				}
+				if err := rs.AppendBytes([]byte(formatSignedToBase(int64(uvalue), toBase)), false); err != nil {
+					return err
+				}
+			} else if err := rs.AppendBytes([]byte(formatUnsignedToBase(uint64(value), toBase)), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		prefix := strconv.AppendUint(text[:0], uint64(value), 10)
+		if err := appendConvPrefix(rs, prefix, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int32](nVec)
-
+// convUnsignedDirect preserves MySQL's BIT/bit-literal contract. Unlike an
+// ordinary numeric value, a BIT value is already a numeric bit pattern; its
+// bits must not be reparsed using from_base. The value is formatted as an
+// unsigned bit pattern, including the existing signed-to_base behavior.
+func convUnsignedDirect[T constraints.Unsigned](
+	nParam vector.FunctionParameterWrapper[T], toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3513,199 +4021,7 @@ func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatSignedToBase(n, toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint8](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint16](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint32](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Convert uint64 to string in to_base
-		result := formatUnsignedToBase(n, toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convFloat32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[float32](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Convert float64 to int64 first (truncate), then to string in to_base
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		if err := rs.AppendBytes([]byte(formatUnsignedToBase(uint64(value), toBase)), false); err != nil {
 			return err
 		}
 	}
@@ -5817,9 +6133,9 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
-// setDecimalToBits implements the signed DECIMAL val_int conversion used by
-// MAKE_SET and EXPORT_SET: round half away from zero, then saturate to the int64 range.
-func setDecimalToBits(value types.Decimal128, scale int32) uint64 {
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
 	negative := value.Sign()
 	if negative {
 		value = value.Minus()
@@ -5961,7 +6277,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return setDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
 		}
 	case types.T_decimal128:
 		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
@@ -5971,7 +6287,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return setDecimalToBits(val, scale), false
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
@@ -6039,9 +6355,11 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	castTypes := make([]types.Type, len(inputs))
 
-	// First argument (bits) must be numeric. MySQL treats BOOLEAN as the
-	// integer values 0 and 1 for this argument.
-	isNumeric := inputs[0].Oid == types.T_bool || inputs[0].IsNumeric() || inputs[0].Oid == types.T_bit
+	// First argument (bits) must be numeric
+	// Check if it's a numeric type (integer, float, decimal, bit, or boolean)
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 ||
+		inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_decimal256 || inputs[0].Oid == types.T_bit ||
+		inputs[0].Oid == types.T_bool
 	if !isNumeric && inputs[0].Oid != types.T_any {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
 		if c == matchFailed {
@@ -6117,7 +6435,173 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+type exportSetInteger interface {
+	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64
+}
+
+func makeExportSetIntegerGetter[T exportSetInteger](vec *vector.Vector) func(uint64) (uint64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (uint64, bool) {
+		value, isNull := param.GetValue(i)
+		if isNull {
+			return 0, true
+		}
+		return uint64(value), false
+	}
+}
+
+func makeExportSetBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool, error), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool, error) { return 0, true, nil }, nil
+	}
+
+	integerGetter := func(get func(uint64) (uint64, bool)) func(uint64) (uint64, bool, error) {
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := get(i)
+			return value, isNull, nil
+		}
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return integerGetter(makeExportSetIntegerGetter[int8](vec)), nil
+	case types.T_int16:
+		return integerGetter(makeExportSetIntegerGetter[int16](vec)), nil
+	case types.T_int32:
+		return integerGetter(makeExportSetIntegerGetter[int32](vec)), nil
+	case types.T_int64:
+		return integerGetter(makeExportSetIntegerGetter[int64](vec)), nil
+	case types.T_uint8:
+		return integerGetter(makeExportSetIntegerGetter[uint8](vec)), nil
+	case types.T_uint16:
+		return integerGetter(makeExportSetIntegerGetter[uint16](vec)), nil
+	case types.T_uint32:
+		return integerGetter(makeExportSetIntegerGetter[uint32](vec)), nil
+	case types.T_uint64, types.T_bit:
+		return integerGetter(makeExportSetIntegerGetter[uint64](vec)), nil
+	case types.T_bool:
+		param := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true, nil
+			}
+			if value {
+				return 1, false, nil
+			}
+			return 0, false, nil
+		}, nil
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](vec)
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true, nil
+			}
+			bits, err := exportSetFloatToBits(float64(value))
+			return bits, false, err
+		}, nil
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true, nil
+			}
+			bits, err := exportSetFloatToBits(value)
+			return bits, false, err
+		}, nil
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(value)), scale), isNull, nil
+		}, nil
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			return makeSetDecimalToBits(value, scale), isNull, nil
+		}, nil
+	case types.T_decimal256:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool, error) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true, nil
+			}
+			bits, err := exportSetDecimal256ToBits(value, scale)
+			return bits, false, err
+		}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET bits type %s", vec.GetType().Oid)
+	}
+}
+
+func exportSetDecimal256ToBits(value types.Decimal256, scale int32) (uint64, error) {
+	rounded, err := decimalInt64Explicit(decimal256RoundedIntegerString(value, scale))
+	return uint64(rounded), err
+}
+
+// exportSetFloatToBits follows MySQL's approximate-number val_int conversion:
+// round to the nearest integer with ties to even, reject values outside signed
+// BIGINT, then inspect the signed bit pattern.
+func exportSetFloatToBits(value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, moerr.NewOutOfRangeNoCtxf(
+			"int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return uint64(int64(rounded)), nil
+}
+
+func makeExportSetNumberOfBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeExportSetIntegerGetter[int8](vec), nil
+	case types.T_int16:
+		return makeExportSetIntegerGetter[int16](vec), nil
+	case types.T_int32:
+		return makeExportSetIntegerGetter[int32](vec), nil
+	case types.T_int64:
+		return makeExportSetIntegerGetter[int64](vec), nil
+	case types.T_uint8:
+		return makeExportSetIntegerGetter[uint8](vec), nil
+	case types.T_uint16:
+		return makeExportSetIntegerGetter[uint16](vec), nil
+	case types.T_uint32:
+		return makeExportSetIntegerGetter[uint32](vec), nil
+	case types.T_uint64:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_bit:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET number_of_bits type %s", vec.GetType().Oid)
+	}
+}
+
+func normalizeExportSetNumberOfBits(value uint64) int64 {
+	if value > 64 {
+		return 64
+	}
+	return int64(value)
+}
+
 func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	if numberOfBits < 0 || numberOfBits > 64 {
+		return 0, false
+	}
+	if numberOfBits == 0 {
+		return 0, true
+	}
+
 	size := int64(0)
 	add := func(count int64, width int) bool {
 		if count == 0 || width == 0 {
@@ -6157,182 +6641,13 @@ func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byt
 	}
 }
 
-func exportSetDecimal256ToBits(value types.Decimal256, scale int32) (uint64, error) {
-	rounded, err := decimalInt64Explicit(decimal256RoundedIntegerString(value, scale))
-	return uint64(rounded), err
-}
-
-// exportSetFloatToBits follows MySQL's approximate-number val_int conversion:
-// round to the nearest integer with ties to even, reject values outside signed
-// BIGINT, then inspect the signed bit pattern.
-func exportSetFloatToBits(value float64) (uint64, error) {
-	rounded := math.RoundToEven(value)
-	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
-		return 0, moerr.NewOutOfRangeNoCtxf(
-			"int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
-	}
-	return uint64(int64(rounded)), nil
-}
-
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// First argument: bits (numeric) - handle different numeric types
-	bitsType := ivecs[0].GetType().Oid
-	var bitsUint uint64
-	var nullBits bool
-
-	// Create appropriate parameter wrapper based on type (once, outside loop)
-	var getBitsValue func(uint64) (uint64, bool)
-	var getBitsValueWithError func(uint64) (uint64, bool, error)
-	switch bitsType {
-	case types.T_int8:
-		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int16:
-		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int32:
-		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int64:
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint8:
-		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint16:
-		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint32:
-		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint64:
-		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return val, false
-		}
-	case types.T_bool:
-		param := vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			if val {
-				return 1, false
-			}
-			return 0, false
-		}
-	case types.T_float32:
-		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
-		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true, nil
-			}
-			bits, err := exportSetFloatToBits(float64(val))
-			return bits, false, err
-		}
-	case types.T_float64:
-		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true, nil
-			}
-			bits, err := exportSetFloatToBits(val)
-			return bits, false, err
-		}
-	case types.T_decimal64:
-		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
-		scale := ivecs[0].GetType().Scale
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return setDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
-		}
-	case types.T_decimal128:
-		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
-		scale := ivecs[0].GetType().Scale
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return setDecimalToBits(val, scale), false
-		}
-	case types.T_decimal256:
-		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
-		scale := ivecs[0].GetType().Scale
-		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true, nil
-			}
-			bits, err := exportSetDecimal256ToBits(val, scale)
-			return bits, false, err
-		}
-	default:
-		// Fallback to int64
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
+	getBitsValue, err := makeExportSetBitsGetter(ivecs[0])
+	if err != nil {
+		return err
 	}
 
 	// Second argument: on (string)
@@ -6348,11 +6663,14 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
 	}
 
-	// Optional fifth argument: number_of_bits (int64, default 64)
-	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	// Optional fifth argument: number_of_bits (integer, default 64)
+	var getNumberOfBits func(uint64) (uint64, bool)
 	numberOfBitsProvided := len(ivecs) > 4
 	if numberOfBitsProvided {
-		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+		getNumberOfBits, err = makeExportSetNumberOfBitsGetter(ivecs[4])
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -6364,14 +6682,9 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		}
 
 		// Extract bits value using the appropriate getter.
-		if getBitsValueWithError != nil {
-			var err error
-			bitsUint, nullBits, err = getBitsValueWithError(i)
-			if err != nil {
-				return err
-			}
-		} else {
-			bitsUint, nullBits = getBitsValue(i)
+		bitsUint, nullBits, err := getBitsValue(i)
+		if err != nil {
+			return err
 		}
 
 		if nullBits {
@@ -6390,32 +6703,36 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Get separator (default ',')
-		separator := ","
-		if separatorProvided && !ivecs[3].IsConstNull() {
-			sep, nullSep := separatorParam.GetStrValue(i)
-			if !nullSep {
-				separator = functionUtil.QuickBytesToStr(sep)
-			}
-		}
-
-		// Get number_of_bits (default 64, max 64)
-		numberOfBits := int64(64)
-		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
-			nBits, nullNBits := numberOfBitsParam.GetValue(i)
-			if !nullNBits {
-				if nBits < 1 {
-					numberOfBits = 1
-				} else if nBits > 64 {
-					numberOfBits = 64
-				} else {
-					numberOfBits = nBits
+		// Get separator (default ','). A supplied NULL is distinct from an
+		// omitted argument and makes the result NULL.
+		separator := functionUtil.QuickStrToBytes(",")
+		if separatorProvided {
+			var nullSep bool
+			separator, nullSep = separatorParam.GetStrValue(i)
+			if nullSep {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
 				}
+				continue
 			}
 		}
 
-		separatorBytes := functionUtil.QuickStrToBytes(separator)
-		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+		// MySQL treats number_of_bits as an unsigned value and clips it to 64.
+		// Converting signed values to uint64 before clipping preserves the
+		// established -1 => 64 behavior without narrowing uint64 inputs.
+		numberOfBits := int64(64)
+		if numberOfBitsProvided {
+			nBits, nullNBits := getNumberOfBits(i)
+			if nullNBits {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			numberOfBits = normalizeExportSetNumberOfBits(nBits)
+		}
+
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separator, numberOfBits,
 			maxStringFunctionResultLength(result))
 		if !ok {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6424,7 +6741,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
-			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			writeExportSetResult(dst, bitsUint, on, off, separator, numberOfBits)
 			return nil
 		}); err != nil {
 			return err
