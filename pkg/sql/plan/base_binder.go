@@ -4975,21 +4975,38 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 	// HEX/BIT literals are stored as raw bytes in a VARCHAR-shaped plan
-	// expression. BIN and CONV treat those literals as unsigned numeric values,
-	// while ordinary string and binary-string operands use the numeric-prefix
-	// path. Preserve that syntax distinction before overload resolution; once
-	// the literal is cast to a fixed-width numeric vector the execution path no
-	// longer has to infer its meaning from payload bytes (for example, 0xff must
-	// be 255, not zero). CONV uses BIT so its direct numeric exception is kept
-	// even when from_base is not 10.
+	// expression. BIN and CONV treat non-empty values up to eight bytes as
+	// unsigned numeric values, while ordinary string and binary-string operands
+	// use the numeric-prefix path. Preserve that syntax distinction before
+	// overload resolution; once the literal is cast to a fixed-width numeric
+	// vector the execution path no longer has to infer its meaning from payload
+	// bytes (for example, 0xff must be 255, not zero). CONV uses BIT so its
+	// direct numeric exception is kept even when from_base is not 10.
+	// MySQL returns NULL for an empty HEX/BIT value and zero for a value wider
+	// than its 64-bit numeric contract. Keep the empty value on the string path
+	// and materialize the wide case as zero; routing either through the binary
+	// cast would otherwise return an error or turn the empty value into 0.
 	if (name == "bin" || name == "conv") && len(args) > 0 && isBinaryNumericLiteral(args[0]) {
-		target := types.T_uint64.ToType()
-		if name == "conv" {
-			target = types.T_bit.ToType()
-		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
-		if err != nil {
-			return nil, err
+		literal := args[0].GetLit()
+		payloadLen := len(literal.GetSval())
+		switch {
+		case payloadLen == 0:
+			// Keep the raw empty literal on the string path so BIN/CONV return
+			// NULL instead of the numeric zero produced by a binary cast.
+		case payloadLen > 8:
+			// A raw HEX/BIT value wider than uint64 evaluates to zero for these
+			// functions in MySQL. The result is independent of the requested
+			// base, so a typed zero is sufficient and avoids a cast error.
+			args[0] = makePlan2Uint64ConstExprWithType(0)
+		default:
+			target := types.T_uint64.ToType()
+			if name == "conv" {
+				target = types.T_bit.ToType()
+			}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if isFindInSetName(name) {

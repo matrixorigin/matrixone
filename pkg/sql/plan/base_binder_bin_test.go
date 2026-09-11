@@ -94,3 +94,35 @@ func TestConvBinaryNumericLiteralsUseBitNumericPath(t *testing.T) {
 		})
 	}
 }
+
+func TestBinaryNumericLiteralWidthBoundaries(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bin", "conv"} {
+		t.Run(name, func(t *testing.T) {
+			argsFor := func(value string) []*Expr {
+				expr := makePlan2StringConstExprWithType(value, true)
+				expr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_HEX
+				if name == "conv" {
+					return []*Expr{
+						expr,
+						makePlan2Int64ConstExprWithType(2),
+						makePlan2Int64ConstExprWithType(10),
+					}
+				}
+				return []*Expr{expr}
+			}
+
+			t.Run("empty stays on string path for NULL semantics", func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, argsFor(""))
+				require.NoError(t, err)
+				require.Equal(t, types.T_char, makeTypeByPlan2Expr(bound.GetF().Args[0]).Oid)
+			})
+
+			t.Run("wide value is bounded to numeric zero", func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, argsFor(string(make([]byte, 9))))
+				require.NoError(t, err)
+				require.Equal(t, types.T_uint64, makeTypeByPlan2Expr(bound.GetF().Args[0]).Oid)
+			})
+		})
+	}
+}

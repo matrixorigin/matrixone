@@ -43,6 +43,11 @@ bin_true    bin_false
 SELECT conv(0b1111, 2, 10) AS conv_bit_value;
 conv_bit_value
 15
+SELECT BIN(X'') AS bin_empty_hex, CONV(X'', 2, 10) AS conv_empty_hex,
+       BIN(X'FFFFFFFFFFFFFFFFFF') AS bin_wide_hex,
+       CONV(X'FFFFFFFFFFFFFFFFFF', 16, 10) AS conv_wide_hex;
+bin_empty_hex    conv_empty_hex    bin_wide_hex    conv_wide_hex
+NULL    NULL    0    0
 SELECT bin(DATE '2024-05-06') AS bin_date, bin(CAST('2024-05-06 12:34:56' AS DATETIME)) AS bin_datetime, bin(CAST('12:34:56' AS TIME)) AS bin_time;
 bin_date    bin_datetime    bin_time
 11111101000    11111101000    1100
