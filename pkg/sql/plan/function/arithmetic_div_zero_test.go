@@ -868,6 +868,33 @@ func TestIntegerDivConstantVector(t *testing.T) {
 	}
 }
 
+func TestIntegerDivUnsignedDividendWithSignedDivisor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 10}, []bool{false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{-3, -3}, []bool{false, false}),
+	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), integerDivFn)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestIntegerDivUnsignedDividendWithDecimalDivisor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.New(types.T_decimal256, 76, 2)
+	divisor, err := types.ParseDecimal256("-3.00", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 10}, []bool{false, false}),
+		NewFunctionTestConstInput(typ, []types.Decimal256{divisor}, []bool{false}),
+	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), integerDivFn)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
 // TestDecimal128NegativeDivision tests negative Decimal128 DIV operations
 func TestDecimal128NegativeDivision(t *testing.T) {
 	proc := testutil.NewProcess(t)

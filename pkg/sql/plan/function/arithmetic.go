@@ -135,6 +135,48 @@ func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 }
 
+// integerDivUnsignedMixedTypes preserves the unsigned domain of the left
+// operand for the mixed DIV cases that can otherwise be coerced to a signed
+// decimal or floating-point type. The executor consumes these canonical types
+// so it can reject a negative quotient before it is represented as BIGINT.
+func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Type, bool) {
+	if !left.Oid.IsUnsignedInt() {
+		return types.Type{}, types.Type{}, false
+	}
+
+	switch {
+	case right.Oid.IsSignedInt():
+		return types.T_uint64.ToType(), types.T_int64.ToType(), true
+	case right.Oid.IsDecimal():
+		target := types.T_decimal256.ToType()
+		target.Scale = right.Scale
+		return types.T_uint64.ToType(), target, true
+	default:
+		return types.Type{}, types.Type{}, false
+	}
+}
+
+// integerDivExactTypes selects lossless physical domains for mixed integer
+// operands. DIV must not use the generic floating-point coercion table for
+// integer inputs because that can round BIGINT values before division.
+func integerDivExactTypes(left, right types.Type) (types.Type, types.Type, bool) {
+	switch {
+	case left.Oid.IsUnsignedInt() && right.Oid.IsUnsignedInt():
+		return types.T_uint64.ToType(), types.T_uint64.ToType(), true
+	case left.Oid.IsSignedInt() && right.Oid.IsSignedInt():
+		return types.T_int64.ToType(), types.T_int64.ToType(), true
+	case left.Oid.IsSignedInt() && right.Oid.IsUnsignedInt():
+		return types.T_decimal256.ToType(), types.T_decimal256.ToType(), true
+	default:
+		return types.Type{}, types.Type{}, false
+	}
+}
+
+func integerDivUnsignedMixedResolvedTypes(left, right types.Type) bool {
+	return left.Oid == types.T_uint64 &&
+		(right.Oid == types.T_int64 || right.Oid == types.T_decimal256)
+}
+
 func modOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
@@ -502,6 +544,13 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if integerDivUnsignedMixedResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
+		if parameters[1].GetType().Oid == types.T_int64 {
+			return integerDivUnsignedSigned(parameters, result, proc, length, selectList)
+		}
+		return integerDivUnsignedDecimal256(parameters, result, proc, length, selectList)
+	}
+
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -646,6 +695,133 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 				rss[i] = v1 / v2
 			}
+		}
+	}
+	return nil
+}
+
+func integerDivUnsignedSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetParamFromWrapper[uint64](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, parameters[1])
+	rss := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
+	rsNull := rs.GetResultVector().GetNulls()
+	done, _ := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	for i := uint64(0); i < uint64(length); i++ {
+		if rsNull.Contains(i) {
+			continue
+		}
+
+		idx1, idx2 := i, i
+		if c1 {
+			idx1 = 0
+		}
+		if c2 {
+			idx2 = 0
+		}
+		v1, null1 := p1.GetValue(idx1)
+		v2, null2 := p2.GetValue(idx2)
+		if null1 || null2 {
+			rsNull.Add(i)
+			continue
+		}
+		if v2 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
+			continue
+		}
+
+		if v2 > 0 {
+			quotient := v1 / uint64(v2)
+			if quotient > math.MaxInt64 {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+			rss[i] = int64(quotient)
+			continue
+		}
+
+		// A non-zero quotient is negative for an unsigned dividend and is
+		// outside DIV's unsigned result domain. Compute abs(MinInt64)
+		// without overflowing the signed divisor.
+		absDivisor := uint64(-(v2 + 1)) + 1
+		if v1/absDivisor != 0 {
+			return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		rss[i] = 0
+	}
+	return nil
+}
+
+func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetParamFromWrapper[uint64](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[types.Decimal256](rs, 1, parameters[1])
+	rss := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
+	rsNull := rs.GetResultVector().GetNulls()
+	done, _ := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
+
+	if parameters[0].IsConst() {
+		_, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+	}
+	if parameters[1].IsConst() {
+		_, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+	}
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+	}
+	if p2.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+	}
+
+	var v1 []types.Decimal256
+	if parameters[0].IsConst() {
+		value, _ := p1.GetValue(0)
+		v1 = []types.Decimal256{{B0_63: value}}
+	} else {
+		values := p1.UnSafeGetAllValue()
+		v1 = make([]types.Decimal256, len(values))
+		for i, value := range values {
+			v1[i] = types.Decimal256{B0_63: value}
+		}
+	}
+	v2 := p2.UnSafeGetAllValue()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	if err := d256IntDiv(v1, v2, rss, 0, parameters[1].GetType().Scale, rsNull, shouldError); err != nil {
+		return err
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if !rsNull.Contains(i) && rss[i] < 0 {
+			return moerr.NewOutOfRangeNoCtx("BIGINT", "")
 		}
 	}
 	return nil

@@ -286,7 +286,17 @@ func resolveNumericBinaryTypes(
 	var cast bool
 	var castLeft, castRight types.Type
 	switch op {
-	case numericOpDiv, numericOpIntegerDiv:
+	case numericOpIntegerDiv:
+		if integerDivOperatorSupports(left, right) {
+			// Keep same-domain operands in their original physical type.
+		} else if mixedLeft, mixedRight, mixed := integerDivUnsignedMixedTypes(left, right); mixed {
+			left, right = mixedLeft, mixedRight
+		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
+			left, right = exactLeft, exactRight
+		} else {
+			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		}
+	case numericOpDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
 	default:
 		cast, castLeft, castRight = fixedTypeCastRule1(left, right)
@@ -350,7 +360,7 @@ func numericOperatorSupports(op numericBinaryOp, left, right types.Type) bool {
 	case numericOpDiv:
 		return divOperatorSupports(left, right)
 	case numericOpIntegerDiv:
-		return integerDivOperatorSupports(left, right)
+		return integerDivOperatorSupports(left, right) || integerDivUnsignedMixedResolvedTypes(left, right)
 	case numericOpMod:
 		return modOperatorSupports(left, right)
 	default:
