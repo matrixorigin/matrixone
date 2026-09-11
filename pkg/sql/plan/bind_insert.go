@@ -4458,9 +4458,12 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 		if i < len(idxTableDefs) && idxTableDefs[i] != nil {
 			uniqueTableDef = idxTableDefs[i]
 		}
-		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
-		if err != nil {
-			return err
+		useV2 := false
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			useV2, err = tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+			if err != nil {
+				return err
+			}
 		}
 		// A v2 relation stores a complete framed key even for a single-part
 		// index, so it must have a physical lock-key projection.  The legacy
@@ -4554,9 +4557,12 @@ func (builder *QueryBuilder) hasMaterializedInsertUniqueLockKeyForRelations(
 		if i < len(idxTableDefs) && idxTableDefs[i] != nil {
 			uniqueTableDef = idxTableDefs[i]
 		}
-		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
-		if err != nil {
-			return false, err
+		useV2 := false
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			useV2, err = tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+			if err != nil {
+				return false, err
+			}
 		}
 		if materialize || useV2 {
 			return true, nil
