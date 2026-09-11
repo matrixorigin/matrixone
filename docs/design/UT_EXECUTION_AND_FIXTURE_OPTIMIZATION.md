@@ -185,3 +185,39 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 3. 本 revision：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after；后续继续逐组验证，不跨越不同 topology 或 global hook 合并。
 4. 后续 PR：清理慢测试的重复 setup、无契约等待和过大数据，逐项保留 oracle 证明。
 5. 后续 PR：静态 shard/runner 资源 A/B；只有证据支持时再考虑跨进程共享 cluster。
+
+### Compatible SQL fixture consolidation
+
+`pkg/tests/sqlintegration` owns the former DDL and transaction-executor tests.
+Both packages used the same canonical single-CN fixture, but separate Go test
+processes initialized it twice. Keeping these seven test functions in one
+package removes one complete startup per package invocation. Test names,
+assertions, data sizes, topology, race instrumentation, and the existing CDC
+external-MySQL CI skip are preserved. The embedded lane discovers the new
+package through its transitive dependency on `pkg/embed`; no explicit package
+allowlist or additional runner is required. Coverage continues to execute these
+tests through normal Go package discovery.
+
+Scenarios execute sequentially under the canonical fixture lock. Test-created
+databases are dropped through the CN's MySQL frontend with a fresh bounded
+context before the callback releases that lock. A failed test (including cleanup
+failure) closes the fixture before the next scenario. `TestMain` closes the
+successful fixture after all repetitions. Existing PITR and role assertions and
+cleanup remain in place. The `scenario-body` setup event separates callback and
+cleanup time from the first test's shared startup cost; it is nested timing,
+not an independent wall-time saving.
+
+Configuration compatibility limits consolidation: Arrow LOAD cases retain
+different gates, materialization settings, topologies and restart ownership;
+partition and shard suites retain different service/heartbeat configurations;
+upgrade tests retain catalog-mutation isolation. Sharing those merely because
+they use embedded clusters would change the test contract.
+
+The report installer reuses an executable only when Go build metadata matches
+the pinned module version and contains no replacement. Stale, unreadable or
+missing metadata takes the existing bounded installation/retry path. The CI
+builder also warms that version's module/build caches. Installation savings are
+conditional on a reusable binary or restored caches; refreshing the builder is
+required to gain its new cache contents. Neither optimization changes report
+retention or failure handling. CI critical-path savings must be measured on the
+PR; overlapping admission waits must never be added to the claimed saving.
