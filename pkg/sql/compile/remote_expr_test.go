@@ -411,6 +411,16 @@ func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	require.Less(t, len(data), 1024)
 }
 
+func TestRemoteWarningCollectorLegacyPayloadFallsBackTo64(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	for i := 0; i < remoteWarningRetentionLimit+1; i++ {
+		collector.AppendWarningDiagnostic(1292, "legacy")
+	}
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(remoteWarningRetentionLimit+1), total)
+	require.Len(t, retained, remoteWarningRetentionLimit)
+}
+
 func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 2}
 	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})

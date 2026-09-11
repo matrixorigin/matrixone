@@ -186,6 +186,13 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, zero.MaxErrorCount)
 		require.True(t, zero.MaxErrorCountSet)
+		max, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCount:    uint32(^uint16(0)),
+			MaxErrorCountSet: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(^uint16(0)), max.MaxErrorCount)
+		require.True(t, max.MaxErrorCountSet)
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
