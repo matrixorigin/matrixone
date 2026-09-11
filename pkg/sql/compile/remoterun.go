@@ -102,6 +102,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -129,6 +132,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateOctStringProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -2073,9 +2079,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.WidenedUnaryMinus &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion63) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
 		return moerr.NewNotSupportedNoCtx(
-			"widened integer unary minus requires MORPC protocol version 63",
+			"widened integer unary minus requires MORPC protocol version 64",
 		)
 	}
 	return nil
@@ -2351,6 +2357,18 @@ func binaryStringSemanticFunction(functionID int32) bool {
 	default:
 		return false
 	}
+}
+
+// Recheck at serialization: a scope compiled before a capability change must
+// never reach an older CN with the new meaning of CHECK_CONSTRAINT_ASSERT.
+func validateRemoteIgnoreCheckPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if !statementIgnoreEnabled(proc) ||
+		supportsRemoteIgnoreCheck(proc.GetService()) ||
+		!pipelineContainsFunction(p, isCheckConstraintFunction) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"INSERT IGNORE CHECK semantics require MORPC protocol version %d", defines.MORPCVersion63)
 }
 
 func validateRemoteBinaryStringPipelineProtocol(

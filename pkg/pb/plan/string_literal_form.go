@@ -193,7 +193,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. WidenedUnaryMinus requires MORPC v63. A struct makes compatibility
+// MORPC v59. WidenedUnaryMinus requires MORPC v64. A struct makes compatibility
 // call sites name every capability instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
@@ -247,8 +247,8 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 }
 
 // Unary minus historically reused the input's signed integer type. Starting
-// with v63, TINYINT/SMALLINT/INT operands produce BIGINT so their minimum value
-// can be negated exactly. A pre-v63 worker resolves the same overload ID to the
+// with v64, TINYINT/SMALLINT/INT operands produce BIGINT so their minimum value
+// can be negated exactly. A pre-v64 worker resolves the same overload ID to the
 // old narrow executor and panics when writing into the BIGINT result wrapper.
 func isWidenedUnaryMinus(function *Function, resultType int32) bool {
 	if function == nil || function.Func == nil || len(function.Args) != 1 || function.Args[0] == nil {
