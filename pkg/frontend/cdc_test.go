@@ -107,6 +107,30 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 	err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
 	require.NoError(t, err)
 	require.Empty(t, bh.executedSQLs)
+
+	t.Run("catalog query error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("catalog unavailable")
+		bh.sql2err[query("db", "broken")] = wantErr
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "broken"}}}}
+		require.ErrorIs(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts), wantErr)
+	})
+
+	t.Run("missing result is rejected", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "missing_result"}}}}
+		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+	})
+
+	t.Run("malformed count is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Data: [][]interface{}{{"not-a-count"}}}
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "malformed"}}}}
+		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+	})
 }
 
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
