@@ -59,7 +59,33 @@ type TypeDescriptor struct {
 }
 
 func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
-	d := TypeDescriptor{TypeID: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale, Charset: typ.Charset, OffsetWidth: 32}
+	// Planner types use scale=-1 as the sentinel for types whose SQL
+	// definition has no scale (for example INT and BINARY).  That sentinel is
+	// an internal planner representation and cannot cross the Python ABI:
+	// descriptors are canonical and use zero for every non-applicable field.
+	// Likewise, display widths on numeric types are not part of their value
+	// contract.  Normalize those fields here so SQL planner metadata and the
+	// persisted/Arrow descriptor have one stable representation.
+	width := typ.Width
+	scale := typ.Scale
+	switch typ.Oid {
+	case types.T_decimal64, types.T_decimal128:
+		if scale < 0 {
+			scale = 0
+		}
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		width = 0
+		if scale < 0 {
+			scale = 0
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64:
+		scale = 0
+	default:
+		width = 0
+		scale = 0
+	}
+	d := TypeDescriptor{TypeID: int32(typ.Oid), Width: width, Scale: scale, Charset: typ.Charset, OffsetWidth: 32}
 	switch typ.Oid {
 	case types.T_json:
 		d.JSONEncoding = "canonical_text"
@@ -139,8 +165,14 @@ func (d TypeDescriptor) Validate() error {
 	if d.JSONEncoding != "" && (oid != types.T_json || d.JSONEncoding != "canonical_text") {
 		return fmt.Errorf("TYPE_CONTRACT: unsupported JSON encoding")
 	}
+	if oid == types.T_json && d.JSONEncoding != "canonical_text" {
+		return fmt.Errorf("TYPE_CONTRACT: JSON descriptor must use canonical_text encoding")
+	}
 	if d.TemporalEncoding != "" && (oid != types.T_date && oid != types.T_datetime && oid != types.T_timestamp || d.TemporalEncoding != "sql_zero_struct") {
 		return fmt.Errorf("TYPE_CONTRACT: unsupported temporal encoding")
+	}
+	if (oid == types.T_date || oid == types.T_datetime || oid == types.T_timestamp) && d.TemporalEncoding != "sql_zero_struct" {
+		return fmt.Errorf("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
 	}
 
 	switch oid {
@@ -525,7 +557,11 @@ func appendInputValue(builder array.Builder, v *vector.Vector, typ types.Type, s
 			p := vector.GenerateFunctionStrParameter(v)
 			value, _ := p.GetStrValue(uint64(index))
 			if typ.Oid == types.T_json {
-				value = []byte(types.DecodeJson(value).String())
+				canonical, err := canonicalJSONInput(value)
+				if err != nil {
+					return err
+				}
+				value = canonical
 			}
 			b.Append(string(value))
 		}
@@ -567,6 +603,21 @@ func appendInputValue(builder array.Builder, v *vector.Vector, typ types.Type, s
 	}
 	return nil
 }
+
+// canonicalJSONInput converts MatrixOne's binary JSON rendering into the
+// compact UTF-8 text required by the Python ABI.  ByteJson.String is intended
+// for SQL display and includes object/array whitespace; passing it directly
+// would make a valid object fail the worker's canonical-text check even
+// though scalar JSON values happen to work.
+func canonicalJSONInput(value []byte) ([]byte, error) {
+	text := []byte(types.DecodeJson(value).String())
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, text); err != nil {
+		return nil, fmt.Errorf("TYPE_CONTRACT: invalid JSON input: %w", err)
+	}
+	return compact.Bytes(), nil
+}
+
 func appendTemporalInput(builder *array.StructBuilder, v *vector.Vector, typ types.Type, index int, null bool) error {
 	zero := false
 	var raw int64

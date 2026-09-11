@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -198,4 +199,28 @@ func TestServiceAddressAndHAKeeperDefaults(t *testing.T) {
 	require.Equal(t, defaultListenAddress, cfg.ListenAddress)
 	require.Equal(t, 3*time.Second, cfg.HAKeeper.HeatbeatTimeout.Duration)
 	require.Empty(t, cfg.QueryServiceConfig.Address.ServiceAddress)
+}
+
+func TestValidatePythonUdfClientContract(t *testing.T) {
+	service := "python-udf-config-" + t.Name()
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+
+	disabled := Config{UUID: service}
+	require.NoError(t, disabled.Validate())
+
+	requiresOptIn := Config{UUID: service}
+	requiresOptIn.PythonUdfClient.Enabled = true
+	require.ErrorContains(t, requiresOptIn.Validate(), "allow-unisolated")
+
+	requiresAddress := Config{UUID: service}
+	requiresAddress.PythonUdfClient.Enabled = true
+	requiresAddress.PythonUdfClient.AllowUnisolated = true
+	require.ErrorContains(t, requiresAddress.Validate(), "missing python udf address")
+
+	valid := Config{UUID: service}
+	valid.PythonUdfClient.Enabled = true
+	valid.PythonUdfClient.AllowUnisolated = true
+	valid.PythonUdfClient.ServerAddress = "127.0.0.1:50051"
+	require.NoError(t, valid.Validate())
 }

@@ -7,7 +7,9 @@ package python
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -182,12 +184,283 @@ func TestTypeDescriptorRejectsNonCanonicalDomain(t *testing.T) {
 	invalid := []TypeDescriptor{
 		{TypeID: int32(types.T_varchar), Width: -1, OffsetWidth: 32},
 		{TypeID: int32(types.T_int64), OffsetWidth: 64},
+		{TypeID: int32(types.T_int64)},
 		{TypeID: int32(types.T_decimal64), Width: 3, Scale: 4, OffsetWidth: 32},
+		{TypeID: int32(types.T_json), OffsetWidth: 32},
+		{TypeID: int32(types.T_date), OffsetWidth: 32},
 		{TypeID: int32(types.T_array_float32), Width: types.MaxArrayDimension + 1},
 	}
 	for _, descriptor := range invalid {
 		_, err := descriptor.Field("value")
 		require.Error(t, err, "%+v", descriptor)
+	}
+}
+
+func TestFloatDescriptorsRoundTripThroughArrowFieldContract(t *testing.T) {
+	for _, typ := range []types.T{types.T_float32, types.T_float64} {
+		descriptor, err := NewTypeDescriptor(typ.ToType())
+		require.NoError(t, err)
+		field, err := descriptor.Field("value")
+		require.NoError(t, err)
+		require.NoError(t, descriptor.ValidateField(field))
+		require.Equal(t, typ, types.T(descriptor.TypeID))
+	}
+}
+
+func TestNewTypeDescriptorNormalizesPlannerOnlySentinels(t *testing.T) {
+	integer := types.T_int32.ToTypeWithScale(-1)
+	integer.Width = 32
+	descriptor, err := NewTypeDescriptor(integer)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), descriptor.Width)
+	require.Equal(t, int32(0), descriptor.Scale)
+
+	binaryType := types.T_binary.ToTypeWithScale(-1)
+	binaryType.Width = 8
+	descriptor, err = NewTypeDescriptor(binaryType)
+	require.NoError(t, err)
+	require.Equal(t, int32(8), descriptor.Width)
+	require.Equal(t, int32(0), descriptor.Scale)
+
+	temporal := types.T_datetime.ToTypeWithScale(-1)
+	descriptor, err = NewTypeDescriptor(temporal)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), descriptor.Width)
+	require.Equal(t, int32(0), descriptor.Scale)
+}
+
+func TestBuildInputRecordCanonicalizesJSONText(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewVec(types.T_json.ToType())
+	defer input.Free(mp)
+	bj, err := types.ParseStringToByteJson(`{"a":1,"b":[true,null,"中"]}`)
+	require.NoError(t, err)
+	raw, err := bj.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(input, raw, false, mp))
+
+	record, _, err := BuildInputRecord([]*vector.Vector{input}, []types.Type{types.T_json.ToType()}, 1)
+	require.NoError(t, err)
+	defer record.Release()
+	values := record.Column(0).(*array.String)
+	require.Equal(t, `{"a":1,"b":[true,null,"中"]}`, values.Value(0))
+}
+
+func TestGoPythonTypeDescriptorFixtures(t *testing.T) {
+	data, err := os.ReadFile("testdata/type_descriptors.json")
+	require.NoError(t, err)
+	var fixtures []struct {
+		Name        string         `json:"name"`
+		Descriptor  TypeDescriptor `json:"descriptor"`
+		Fingerprint string         `json:"fingerprint"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.NotEmpty(t, fixtures)
+	for _, fixture := range fixtures {
+		require.NoError(t, fixture.Descriptor.Validate(), fixture.Name)
+		fingerprint, err := fixture.Descriptor.Fingerprint()
+		require.NoError(t, err, fixture.Name)
+		require.Equal(t, fixture.Fingerprint, fingerprint, fixture.Name)
+		field, err := fixture.Descriptor.Field("value")
+		require.NoError(t, err, fixture.Name)
+		require.NoError(t, fixture.Descriptor.ValidateField(field), fixture.Name)
+	}
+}
+
+func TestBuildInputRecordCoversEverySupportedType(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	jsonValue, err := types.ParseStringToByteJson(`{"a":1,"b":[true,null]}`)
+	require.NoError(t, err)
+	jsonBytes, err := jsonValue.Marshal()
+	require.NoError(t, err)
+
+	cases := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector) error
+	}{
+		{"bool", types.T_bool.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, true, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, false, true, mp)
+		}},
+		{"int8", types.T_int8.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, int8(-1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, int8(0), true, mp)
+		}},
+		{"int16", types.T_int16.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, int16(-1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, int16(0), true, mp)
+		}},
+		{"int32", types.T_int32.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, int32(-1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, int32(0), true, mp)
+		}},
+		{"int64", types.T_int64.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, int64(-1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, int64(0), true, mp)
+		}},
+		{"uint8", types.T_uint8.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, uint8(1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, uint8(0), true, mp)
+		}},
+		{"uint16", types.T_uint16.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, uint16(1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, uint16(0), true, mp)
+		}},
+		{"uint32", types.T_uint32.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, uint32(1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, uint32(0), true, mp)
+		}},
+		{"uint64", types.T_uint64.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, uint64(1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, uint64(0), true, mp)
+		}},
+		{"float32", types.T_float32.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, float32(1.25), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, float32(0), true, mp)
+		}},
+		{"float64", types.T_float64.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, float64(1.25), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, float64(0), true, mp)
+		}},
+		{"decimal64", types.New(types.T_decimal64, 18, 6), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Decimal64(123456), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Decimal64(0), true, mp)
+		}},
+		{"decimal128", types.New(types.T_decimal128, 38, 10), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Decimal128{B0_63: 123456}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Decimal128{}, true, mp)
+		}},
+		{"date", types.T_date.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Date(1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Date(0), true, mp)
+		}},
+		{"time", types.New(types.T_time, 0, 6), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Time(123456), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Time(0), true, mp)
+		}},
+		{"datetime", types.New(types.T_datetime, 0, 6), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Datetime(types.GetUnixEpochSecs()+1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Datetime(0), true, mp)
+		}},
+		{"timestamp", types.New(types.T_timestamp, 0, 6), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Timestamp(types.GetUnixEpochSecs()+1), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Timestamp(0), true, mp)
+		}},
+		{"char", types.New(types.T_char, 16, 0), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte("中"), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"varchar", types.New(types.T_varchar, 64, 0), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte("matrixone"), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"text", types.T_text.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte("matrixone"), false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"json", types.T_json.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, jsonBytes, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"binary", types.New(types.T_binary, 8, 0), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte{1, 2}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"varbinary", types.New(types.T_varbinary, 8, 0), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte{1, 2}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"blob", types.T_blob.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendBytes(v, []byte{1, 2}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendBytes(v, nil, true, mp)
+		}},
+		{"uuid", types.T_uuid.ToType(), func(v *vector.Vector) error {
+			if err := vector.AppendFixed(v, types.Uuid{1, 2, 3}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendFixed(v, types.Uuid{}, true, mp)
+		}},
+		{"vecf32", types.New(types.T_array_float32, 3, 0), func(v *vector.Vector) error {
+			if err := vector.AppendArray(v, []float32{1, 2, 3}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendArray[float32](v, nil, true, mp)
+		}},
+		{"vecf64", types.New(types.T_array_float64, 3, 0), func(v *vector.Vector) error {
+			if err := vector.AppendArray(v, []float64{1, 2, 3}, false, mp); err != nil {
+				return err
+			}
+			return vector.AppendArray[float64](v, nil, true, mp)
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(tc.typ)
+			require.NoError(t, tc.append(input))
+			record, _, err := BuildInputRecord([]*vector.Vector{input}, []types.Type{tc.typ}, 2)
+			require.NoError(t, err)
+			defer record.Release()
+			input.Free(mp)
+
+			descriptor, err := NewTypeDescriptor(tc.typ)
+			require.NoError(t, err)
+			require.NoError(t, descriptor.ValidateField(record.Schema().Field(0)))
+			require.Equal(t, int64(2), record.NumRows())
+			require.False(t, record.Column(0).IsNull(0))
+			require.True(t, record.Column(0).IsNull(1))
+		})
 	}
 }
 
