@@ -422,7 +422,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %left PIPE_CONCAT
-%right <str> '~' UNARY
+// HIGH_NOT shares the unary precedence used by the `!` production. The lexer
+// emits it only when HIGH_NOT_PRECEDENCE is active.
+%right <str> '~' UNARY HIGH_NOT
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
 %left TYPECAST
@@ -6231,7 +6233,26 @@ merge_when_clause:
             InsertValues: $12,
         }
     }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertColumns: $8,
+            InsertValues: $12,
+        }
+    }
 |   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertValues: $9,
+        }
+    }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
     {
         $$ = &tree.MergeClause{
             Matched: false,
@@ -10052,6 +10073,10 @@ not_exists_opt:
     {
         $$ = true
     }
+|   IF HIGH_NOT EXISTS
+    {
+        $$ = true
+    }
 
 internal_opt:
     {
@@ -12194,6 +12219,10 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeNull(false)
     }
+|   HIGH_NOT NULL
+    {
+        $$ = tree.NewAttributeNull(false)
+    }
 |   DEFAULT bit_expr
     {
         $$ = tree.NewAttributeDefault($2)
@@ -12326,6 +12355,10 @@ enforce:
         $$ = true
     }
 |   NOT ENFORCED
+    {
+        $$ = false
+    }
+|   HIGH_NOT ENFORCED
     {
         $$ = false
     }
@@ -12639,6 +12672,10 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   HIGH_NOT simple_expr %prec UNARY
+    {
+        $$ = tree.NewNotExpr($2)
     }
 |   '{'  ident expression '}'
     {   
@@ -14391,11 +14428,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotNullExpr($1)
     }
+|   boolean_primary IS HIGH_NOT NULL %prec IS
+    {
+        $$ = tree.NewIsNotNullExpr($1)
+    }
 |   boolean_primary IS UNKNOWN %prec IS
     {
         $$ = tree.NewIsUnknownExpr($1)
     }
 |   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT UNKNOWN %prec IS
     {
         $$ = tree.NewIsNotUnknownExpr($1)
     }
@@ -14407,11 +14452,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotTrueExpr($1)
     }
+|   boolean_primary IS HIGH_NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
 |   boolean_primary IS FALSE %prec IS
     {
         $$ = tree.NewIsFalseExpr($1)
     }
 |   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT FALSE %prec IS
     {
         $$ = tree.NewIsNotFalseExpr($1)
     }
@@ -14435,6 +14488,10 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
     }
+|   bit_expr HIGH_NOT IN col_tuple
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
+    }
 |   bit_expr MEMBER opt_of '(' simple_expr ')' %prec IN
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
@@ -14447,11 +14504,19 @@ predicate:
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
     }
+|   bit_expr HIGH_NOT LIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
+    }
 |   bit_expr ILIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.ILIKE, $1, $3, $4)
     }
 |   bit_expr NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
+    }
+|   bit_expr HIGH_NOT ILIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
     }
@@ -14463,11 +14528,19 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
     }
+|   bit_expr HIGH_NOT REGEXP bit_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
+    }
 |   bit_expr BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(false, $1, $3, $5)
     }
 |   bit_expr NOT BETWEEN bit_expr AND predicate
+    {
+        $$ = tree.NewRangeCond(true, $1, $4, $6)
+    }
+|   bit_expr HIGH_NOT BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }
