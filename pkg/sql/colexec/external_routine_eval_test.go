@@ -226,6 +226,23 @@ func TestExternalRoutineEvalRejectsMissingReturnDescriptor(t *testing.T) {
 	})
 }
 
+func TestExternalRoutineEvalRejectsUnsupportedTypeBeforeResultAllocation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	call := testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler)
+	call.ReturnType = planpb.Type{Id: int32(types.T_decimal256), Width: 76, Scale: 2}
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(proc.Mp())
+
+	require.NotPanics(t, func() {
+		_, err := newExternalRoutineEval(proc, call, []ExpressionExecutor{
+			&externalRoutineTestExecutor{vector: input},
+		}, nil)
+		require.ErrorContains(t, err, "typed Python return descriptor is unsupported")
+	})
+}
+
 func TestExternalRoutineEvalRejectsExecutionContextInPlan(t *testing.T) {
 	call := testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler)
 	call.Context = map[string]string{"current_user": "attacker"}
