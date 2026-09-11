@@ -152,7 +152,7 @@ func TestDetermineWindowPartitionAlgorithms(t *testing.T) {
 		require.False(t, selectWindowHashPartition(builder, window))
 		require.Equal(t, planpb.Node_PARTITION_ALGORITHM_SORT, builder.qry.Nodes[1].PartitionAlgorithm)
 
-		builder, window, _ = newBuilder(t)
+		builder, _, _ = newBuilder(t)
 		builder.qry.Nodes[0].Stats.Rowsize = 128
 		builder.aggSpillMem = 2 << 20
 		setAlgorithm(builder, "HASH")
