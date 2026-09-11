@@ -761,6 +761,30 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	require.Equal(t, types.T_bool, runtimeType.Oid)
 }
 
+func TestUnwrapImplicitPreparedParamCastRetainsParamSource(t *testing.T) {
+	ctx := context.Background()
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "3.33"},
+			Src:   source,
+		}},
+	}
+	targetType := types.T_int64.ToType()
+	cast, err := makePlan2CastExpr(ctx, literal, makePlan2Type(&targetType))
+	require.NoError(t, err)
+
+	rewritten, ok := unwrapImplicitPreparedParamCast(ctx, cast, true)
+	require.True(t, ok)
+	position, found := preparedRuntimeSourceParamPosition(rewritten)
+	require.True(t, found)
+	require.Equal(t, 0, position)
+}
+
 func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
 	params := []*planpb.Expr{
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -8}}}},
@@ -957,6 +981,83 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), round.Typ.Id)
 	require.NotNil(t, round.GetF().Args[0].GetF())
 	require.Equal(t, int32(types.T_int64), round.GetF().Args[0].Typ.Id)
+}
+
+func TestPreparedMathStringParametersRebindToNumericOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+		sql  string
+		fn   string
+		want types.T
+	}{
+		{name: "abs", sql: "prepare stmt_math_abs from 'select abs(?)'", fn: "abs", want: types.T_float64},
+		{name: "ceil", sql: "prepare stmt_math_ceil from 'select ceil(?)'", fn: "ceil", want: types.T_float64},
+		{name: "ceiling", sql: "prepare stmt_math_ceiling from 'select ceiling(?)'", fn: "ceiling", want: types.T_float64},
+		{name: "floor", sql: "prepare stmt_math_floor from 'select floor(?)'", fn: "floor", want: types.T_float64},
+		{name: "round", sql: "prepare stmt_math_round from 'select round(?)'", fn: "round", want: types.T_float64},
+		{name: "sign", sql: "prepare stmt_math_sign from 'select sign(?)'", fn: "sign", want: types.T_int64},
+		{name: "truncate", sql: "prepare stmt_math_truncate from 'select truncate(?)'", fn: "truncate", want: types.T_float64},
+		{name: "mod", sql: "prepare stmt_math_mod from 'select mod(?, 2)'", fn: "mod", want: types.T_float64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			preparedPlan := prepared.GetDcl().GetPrepare().Plan
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparedPlan))
+
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, []any{ParamValue{
+				Value:          "1.5tail",
+				RuntimeType:    types.T_varchar.ToType(),
+				HasRuntimeType: true,
+			}})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, test.fn)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(test.want), fn.Typ.Id)
+			// Character parameters are explicitly cast to DOUBLE so execution
+			// reuses the stable numeric overload and its warning/binary semantics.
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedNestedMathStringParameterRebindsToNumericOverload(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name        string
+		sql         string
+		fn          string
+		value       any
+		runtimeType types.Type
+		want        types.T
+	}{
+		{name: "abs plus string", sql: "prepare stmt_nested_abs from 'select abs(? + 0)'", fn: "abs", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "ceil plus string", sql: "prepare stmt_nested_ceil from 'select ceil(? + 0)'", fn: "ceil", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "floor plus string", sql: "prepare stmt_nested_floor from 'select floor(? + 0)'", fn: "floor", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "round plus string", sql: "prepare stmt_nested_round from 'select round(? + 0)'", fn: "round", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "sign plus string", sql: "prepare stmt_nested_sign from 'select sign(? + 0)'", fn: "sign", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_int64},
+		{name: "truncate plus string", sql: "prepare stmt_nested_truncate from 'select truncate(? + 0, 1)'", fn: "truncate", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "mod plus string", sql: "prepare stmt_nested_mod from 'select mod(? + 0, 2)'", fn: "mod", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "abs plus integer", sql: "prepare stmt_nested_abs_int from 'select abs(? + 0)'", fn: "abs", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+		{name: "round plus integer", sql: "prepare stmt_nested_round_int from 'select round(? + 0)'", fn: "round", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+		{name: "mod plus integer", sql: "prepare stmt_nested_mod_int from 'select mod(? + 0, 2)'", fn: "mod", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			preparedPlan := prepared.GetDcl().GetPrepare().Plan
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, []any{ParamValue{
+				Value:          test.value,
+				RuntimeType:    test.runtimeType,
+				HasRuntimeType: true,
+			}})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, test.fn)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(test.want), fn.Typ.Id)
+		})
+	}
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {

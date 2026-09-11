@@ -2901,11 +2901,22 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	markPreparedMathFallback := false
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		expr, err := b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		if err != nil {
+			return nil, err
+		}
+		if b.builder != nil && b.builder.isPrepareStatement {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				b.markPreparedNumericFallback(expr)
+			}
+		}
+		return expr, nil
 	}
 	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
 		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
@@ -2923,6 +2934,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	// ABS records this fallback so execution can rebind integer protocol values
 	// exactly, while SLEEP keeps the stable DOUBLE domain for the cached plan.
 	if b.builder != nil && b.builder.isPrepareStatement {
+		if targets, ok := preparedMathFunctionTargets(funcName, len(astExpr.Exprs)); ok {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				if b.numericParamType == nil {
+					return b.bindPreparedMathFuncExpr(funcName, astExpr.Exprs, depth, targets)
+				}
+				markPreparedMathFallback = true
+			}
+		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
@@ -2950,7 +2970,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && markPreparedMathFallback {
+		b.markPreparedNumericFallback(expr)
+	}
+	return expr, err
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -3004,6 +3028,15 @@ func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32
 	return false, nil
 }
 
+func hasDirectPreparedNumericParamExprs(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if _, ok := unwrapParenExpr(expr).(*tree.ParamExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
@@ -3031,6 +3064,57 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		return &target, true
 	}
 	return nil, false
+}
+
+// preparedMathFunctionTargets gives ambiguous prepared math arguments a
+// temporary domain that is broad enough to build a cached plan. The resulting
+// expression is rebound when EXECUTE supplies the actual parameter domain.
+func preparedMathFunctionTargets(name string, argCount int) ([]*Type, bool) {
+	floatType := types.T_float64.ToType()
+	integerType := types.T_int64.ToType()
+	floatTarget := makePlan2Type(&floatType)
+	integerTarget := makePlan2Type(&integerType)
+	switch strings.ToLower(name) {
+	case "ceil", "ceiling", "floor", "sign":
+		if argCount == 1 {
+			return []*Type{&floatTarget}, true
+		}
+	case "round", "truncate":
+		switch argCount {
+		case 1:
+			return []*Type{&floatTarget}, true
+		case 2:
+			return []*Type{&floatTarget, &integerTarget}, true
+		}
+	}
+	return nil, false
+}
+
+func (b *baseBinder) bindPreparedMathFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+	targets []*Type,
+) (*plan.Expr, error) {
+	args := make([]*plan.Expr, len(astArgs))
+	for i, arg := range astArgs {
+		bound, err := b.bindNumericExprWithContext(arg, depth, targets[i])
+		if err != nil {
+			return nil, err
+		}
+		args[i] = bound
+	}
+	expr, err := bindBoundFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// The marker belongs to the whole function, not its provisional casts. At
+	// EXECUTE this lets a VARCHAR parameter choose the dedicated string
+	// overload while integers and DECIMALs recover their native overload.
+	b.markPreparedNumericFallback(expr)
+	return expr, nil
 }
 
 func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {

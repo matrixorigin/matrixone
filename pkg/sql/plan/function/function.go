@@ -116,16 +116,15 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
-	fid, _ := DecodeOverloadID(overloadID)
-	return allSupportedFunctions[fid].isWindowOrder()
+	f, _, ok := lookupFunctionOverload(overloadID)
+	return ok && f.isWindowOrder()
 }
 
 func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
-	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	f, oIndex, ok := lookupFunctionOverload(overloadID)
+	if !ok {
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
-	f := allSupportedFunctions[fid]
 	if f.Overloads[oIndex].volatile {
 		return false, nil
 	}
@@ -133,27 +132,43 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 }
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
-	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	fn, oIndex, ok := lookupFunctionOverload(overloadID)
+	if !ok {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
-	return allSupportedFunctions[fid].Overloads[oIndex], nil
+	return fn.Overloads[oIndex], nil
 }
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
-	fid, _ := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	f, _, ok := lookupFunctionOverload(overloadID)
+	if !ok {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
-	return allSupportedFunctions[fid].layout, nil
+	return f.layout, nil
 }
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
-	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	fn, oIndex, ok := lookupFunctionOverload(overloadID)
+	if !ok {
 		return overload{}, false
 	}
-	return allSupportedFunctions[fid].Overloads[oIndex], true
+	return fn.Overloads[oIndex], true
+}
+
+// lookupFunctionOverload validates both halves of a serialized function
+// overload identity. Plans can arrive from an older or newer CN with an
+// unknown overload index; treating that as an invalid plan is safer than
+// indexing the local overload slice and panicking.
+func lookupFunctionOverload(overloadID int64) (FuncNew, int, bool) {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) {
+		return FuncNew{}, 0, false
+	}
+	f := allSupportedFunctions[fid]
+	if int(fid) != f.functionId || oIndex < 0 || int(oIndex) >= len(f.Overloads) {
+		return FuncNew{}, 0, false
+	}
+	return f, int(oIndex), true
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {

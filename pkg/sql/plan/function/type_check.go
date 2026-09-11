@@ -324,6 +324,77 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// mathStringTypeMatch routes every MySQL character input through the existing
+// DOUBLE overload.  The implicit cast is warning-aware and binary-aware, so
+// HEX/BIT literals retain their numeric byte semantics and malformed text
+// follows the same diagnostics as an ordinary string-to-DOUBLE cast.  Using
+// an existing numeric overload also avoids serializing new overload IDs that
+// older CNs cannot resolve during rolling upgrades.
+func mathStringTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 && len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	// Temporal values must retain the historical planner error instead of
+	// becoming a numeric-prefix conversion of their formatted year text.
+	switch inputs[0].Oid {
+	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+	}
+	if inputs[0].Oid.IsMySQLString() {
+		normalized := append([]types.Type(nil), inputs...)
+		normalized[0] = types.T_float64.ToType()
+		matched := fixedTypeMatchWithBoolNumericCast(overloads, normalized)
+		if matched.status == succeedMatched || matched.status == succeedWithCast {
+			finalTypes := append([]types.Type(nil), matched.finalType...)
+			if matched.status == succeedMatched {
+				finalTypes = make([]types.Type, len(inputs))
+				for i := range inputs {
+					finalTypes[i] = normalized[i]
+				}
+			}
+			finalTypes[0] = types.T_float64.ToType()
+			return newCheckResultWithCast(matched.idx, finalTypes)
+		}
+	}
+
+	return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+}
+
+// mathStringTypeMatchKeepBoolStringFallback preserves CEIL/FLOOR's existing
+// BOOL-to-VARCHAR overload while routing character arguments through the
+// stable DOUBLE cast path.
+func mathStringTypeMatchKeepBoolStringFallback(overloads []overload, inputs []types.Type) checkResult {
+	for _, input := range inputs {
+		if input.Oid == types.T_bool {
+			return fixedTypeMatch(overloads, inputs)
+		}
+	}
+	return mathStringTypeMatch(overloads, inputs)
+}
+
+// modTypeMatch gives character operands the DOUBLE conversion domain used by
+// MySQL math functions.  Keep the existing arithmetic matrix for native
+// numeric inputs so its integer, floating-point, and DECIMAL return contracts
+// remain unchanged.
+func modTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if inputs[0].Oid.IsMySQLString() || inputs[1].Oid.IsMySQLString() ||
+		inputs[0].Oid == types.T_any || inputs[1].Oid == types.T_any {
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
+	}
+	has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+	if has {
+		if modOperatorSupports(t1, t2) {
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+	} else if modOperatorSupports(inputs[0], inputs[1]) {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
 // OID/width/charset while applying the ordinary fixed matcher to control
 // arguments. Varlena string executors can consume every string family; casting

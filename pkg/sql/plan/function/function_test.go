@@ -30,6 +30,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFunctionLookupRejectsUnknownOverloadIndex(t *testing.T) {
+	ctx := context.Background()
+	invalidIDs := []int64{
+		encodeOverloadID(ABS, -1),
+		encodeOverloadID(ABS, int32(len(allSupportedFunctions[ABS].Overloads))),
+		encodeOverloadID(-1, 0),
+	}
+
+	for _, id := range invalidIDs {
+		t.Run(fmt.Sprintf("%d", id), func(t *testing.T) {
+			_, err := GetFunctionById(ctx, id)
+			require.Error(t, err)
+			_, ok := GetFunctionByIdWithoutError(id)
+			require.False(t, ok)
+			_, err = GetLayoutById(ctx, id)
+			require.Error(t, err)
+			_, err = GetFunctionIsZonemappableById(ctx, id)
+			require.Error(t, err)
+			require.False(t, GetFunctionIsWinOrderFunById(id))
+		})
+	}
+}
+
+func TestMathStringResolutionUsesExistingNonZonemappableOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"abs", "sign", "ceil", "floor", "round", "truncate"} {
+		for _, inputType := range []types.T{
+			types.T_char, types.T_varchar, types.T_text,
+			types.T_binary, types.T_varbinary, types.T_blob,
+		} {
+			t.Run(fmt.Sprintf("%s/%s", name, inputType.String()), func(t *testing.T) {
+				args := []types.Type{inputType.ToType()}
+				if name == "truncate" {
+					args = append(args, types.T_int64.ToType())
+				}
+				resolved, err := GetFunctionByName(ctx, name, args)
+				require.NoError(t, err)
+				fid, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
+				require.Equal(t, int32(resolved.fid), fid)
+				require.GreaterOrEqual(t, overloadIndex, int32(0))
+				require.Less(t, int(overloadIndex), len(allSupportedFunctions[fid].Overloads))
+				zonemappable, err := GetFunctionIsZonemappableById(ctx, resolved.GetEncodedOverloadID())
+				require.NoError(t, err)
+				require.False(t, zonemappable)
+			})
+		}
+	}
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool

@@ -90,6 +90,17 @@ func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func AbsStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isBinary := ivecs[0].GetIsBin()
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		value, err := parseMathStringToFloat(v, isBinary, proc)
+		if err != nil {
+			return 0, err
+		}
+		return momath.AbsSigned[float64](value)
+	}, selectList)
+}
+
 func absDecimal64(v types.Decimal64) types.Decimal64 {
 	if v.Sign() {
 		v = v.Minus()
@@ -159,6 +170,23 @@ func SignFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return -1
 		}
 		return 0
+	}, selectList)
+}
+
+func SignStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isBinary := ivecs[0].GetIsBin()
+	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
+		value, err := parseMathStringToFloat(v, isBinary, proc)
+		if err != nil {
+			return 0, err
+		}
+		if value > 0 {
+			return 1, nil
+		}
+		if value < 0 {
+			return -1, nil
+		}
+		return 0, nil
 	}, selectList)
 }
 

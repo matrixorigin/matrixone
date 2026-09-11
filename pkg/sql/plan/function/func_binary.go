@@ -188,6 +188,7 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 }
 
 func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
@@ -197,7 +198,7 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+		floatVal, err1 := parseMathStringToFloat(v, isBinary, proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -502,6 +503,7 @@ func FloorDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
@@ -511,11 +513,31 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+		floatVal, err1 := parseMathStringToFloat(v, isBinary, proc)
 		if err1 != nil {
 			return 0, err1
 		}
 		return floorFloat64(floatVal, digits), nil
+	}, selectList)
+}
+
+func generalStringMathMulti(funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	cb mathMultiFun[float64], selectList *FunctionSelectList) (err error) {
+	isBinary := ivecs[0].GetIsBin()
+	digits := int64(0)
+	if len(ivecs) > 1 {
+		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+		}
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
+	}
+
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		value, err := parseMathStringToFloat(v, isBinary, proc)
+		if err != nil {
+			return 0, err
+		}
+		return cb(value, digits), nil
 	}, selectList)
 }
 
@@ -616,6 +638,10 @@ func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
 }
 
+func RoundStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalStringMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
+}
+
 // TRUNCATE function implementations
 // TRUNCATE truncates a number to D decimal places without rounding
 func truncateUint64(x uint64, digits int64) uint64 {
@@ -684,6 +710,10 @@ func truncateFloat64(x float64, digits int64) float64 {
 
 func TruncateFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return generalMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
+}
+
+func TruncateStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalStringMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
 }
 
 func truncateDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {

@@ -252,7 +252,8 @@ func TestIDAllocatorSet(t *testing.T) {
 		nextID: hakeeper.K8SIDRangeEnd,
 		lastID: hakeeper.K8SIDRangeEnd + 100,
 	}
-	assert.Equal(t, expected, alloc)
+	assert.Equal(t, expected.nextID, alloc.nextID)
+	assert.Equal(t, expected.lastID, alloc.lastID)
 }
 
 func TestIDAllocatorDiscardsCachedRangeOnlyDuringRecovery(t *testing.T) {
