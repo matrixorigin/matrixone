@@ -429,6 +429,9 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
 	}
+	if err := validateUniqueKeyCodecAdmission(ctx.GetContext(), tableDef); err != nil {
+		return err
+	}
 
 	// External tables are not handled by the modern DML binder. Writable ones
 	// (WRITE_FILE_PATTERN) emit a classified sentinel: INSERT/LOAD can select
