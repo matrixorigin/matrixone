@@ -105,7 +105,7 @@ func gateReq(sourceCommit int64) coverage.Request {
 		CNUUID: "cn0", Txn: fakeTxn{}, TableID: 100,
 		IndexDef:           &plan.IndexDef{IndexName: "ftj"},
 		SourceCommitTS:     barFn(sourceCommit),
-		IndexStorageTable:  "ftj_index",
+		IndexStorageTable:  testIndexStorageTable,
 		IndexMetadataDB:    "db",
 		IndexMetadataTable: "ftj_meta",
 	}
