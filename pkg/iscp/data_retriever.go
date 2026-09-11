@@ -155,6 +155,14 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	return data
 }
 
+// GetToTS returns the iteration's upper bound, the same status.To that UpdateWatermark persists.
+func (r *DataRetrieverImpl) GetToTS() types.TS {
+	if r.status == nil {
+		return types.TS{}
+	}
+	return r.status.To
+}
+
 func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator) error {

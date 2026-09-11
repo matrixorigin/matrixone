@@ -2020,7 +2020,7 @@ func supportsGenericNumericFunctionContext(name string) bool {
 	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
 	// similar functions return numbers while their arguments belong to another
 	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
 		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
 		return true
 	default:
@@ -5177,7 +5177,8 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) {
+		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) &&
+			!isOctFunctionPlanExpr(args[0]) && !isOctFunctionPlanExpr(args[1]) {
 			name = "concat"
 		}
 		if err != nil {
@@ -5258,9 +5259,18 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
+		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) ||
+			(name == "oct" && args[0].Typ.Id == int32(types.T_decimal256)) {
+			target := types.T_float64
+			if name == "oct" {
+				// OCT reads the integer prefix of the decimal's exact text.
+				// Going through FLOAT64 loses digits above 2^53.
+				target = types.T_varchar
+			}
+			targetType := target.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-				Id:          int32(types.T_float64),
+				Id:          int32(target),
+				Width:       targetType.Width,
 				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
@@ -5477,6 +5487,20 @@ func bindFuncExprImplByPlanExpr(
 	case "pow":
 		name = "power"
 	}
+
+	// OCT returns VARCHAR for compatibility with MySQL, but its result is still
+	// a numeric string when consumed by arithmetic.  The generic string-plus
+	// compatibility rule above intentionally rewrites VARCHAR + VARCHAR to
+	// CONCAT, so direct OCT operands must enter the numeric operator lattice
+	// explicitly.  Keep this narrow: ordinary text expressions must retain the
+	// existing MatrixOne string-plus behavior.
+	if isOctNumericContextFunction(name) {
+		args, err = castOctFunctionArgsForNumericContext(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if name == "convert" {
 		if err := bindConvertUsingCharset(ctx, args); err != nil {
 			return nil, err
@@ -6033,6 +6057,38 @@ func isCollatedTextPlanType(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isOctFunctionPlanExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "oct")
+}
+
+func isOctNumericContextFunction(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "mod", "unary_minus":
+		return true
+	default:
+		return false
+	}
+}
+
+func castOctFunctionArgsForNumericContext(ctx context.Context, args []*plan.Expr) ([]*plan.Expr, error) {
+	floatType := types.T_float64.ToType()
+	for idx, arg := range args {
+		if !isOctFunctionPlanExpr(arg) {
+			continue
+		}
+		cast, err := appendCastBeforeExpr(ctx, arg, makePlan2Type(&floatType))
+		if err != nil {
+			return nil, err
+		}
+		args[idx] = cast
+	}
+	return args, nil
 }
 
 func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {

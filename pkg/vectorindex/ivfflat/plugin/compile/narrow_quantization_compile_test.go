@@ -446,8 +446,10 @@ func (f *fakeCachedIndex) Search(_ *sqlexec.SqlProcess, _ any, _ vectorindex.Run
 func (f *fakeCachedIndex) SearchFloat32(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ []int64, _ []float32) error {
 	return nil
 }
-func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error { return nil }
-func (f *fakeCachedIndex) Destroy()                         { f.destroyed.Store(true) }
+func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error  { return nil }
+func (f *fakeCachedIndex) Destroy()                          { f.destroyed.Store(true) }
+func (f *fakeCachedIndex) Preload(*sqlexec.SqlProcess) error { return nil }
+func (f *fakeCachedIndex) GetIndexSize() (int64, int64)      { return 0, 0 }
 
 // seedCache parks a fake index under the given cache key and returns it.
 func seedCache(key string) *fakeCachedIndex {
