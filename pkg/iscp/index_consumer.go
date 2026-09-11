@@ -296,6 +296,12 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
 			sync, err = w.NewSync(sqlproc)
+			if err == nil {
+				// The generations this sync writes reflect the data up to the iteration's
+				// upper bound, so that is their build_ts -- not this transaction's SnapshotTS,
+				// which is later and would overstate what was applied.
+				sync.SetBuildTS(r.GetToTS().Physical())
+			}
 			return err
 		})
 

@@ -249,6 +249,7 @@ func CombineReadFilterSearch(searches ...*ReadFilterSearch) *ReadFilterSearch {
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
+	ExactMembership    bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
 	CachedSearch       *ReadFilterSearch

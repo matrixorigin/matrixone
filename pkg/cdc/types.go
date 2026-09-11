@@ -336,10 +336,10 @@ func ValidateStableInitialSnapshotProtocol(
 }
 
 func ValidateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion int64) error {
-	if protocolVersion >= defines.MORPCVersion61 {
+	if protocolVersion >= defines.MORPCVersion63 {
 		return nil
 	}
-	return moerr.NewNotSupportedf(ctx, "lossless NoFull CDC starts require all CNs to support protocol version %d", defines.MORPCVersion61)
+	return moerr.NewNotSupportedf(ctx, "lossless NoFull CDC starts require all CNs to support protocol version %d", defines.MORPCVersion63)
 }
 
 func UsesLosslessNoFullStart(extraOpts string) bool {
