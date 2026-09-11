@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,6 +60,54 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
+	stub := gostub.Stub(&getPitrLengthAndUnit, func(context.Context, BackgroundExec, string, string, string) (int64, string, bool, error) {
+		return 24, "h", true, nil
+	})
+	defer stub.Reset()
+
+	query := func(db, table string) string {
+		return fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
+			quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
+			quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(db),
+			quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(table),
+			quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
+			quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
+	}
+	for _, tc := range []struct {
+		name      string
+		db, table string
+		count     uint64
+		wantErr   bool
+	}{
+		{name: "single primary key", db: "db", table: "with_pk", count: 1},
+		{name: "composite primary key marker", db: "db", table: "composite", count: 1},
+		{name: "fake primary key rejected", db: "db", table: "without_pk", count: 0, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Data: [][]interface{}{{tc.count}}}
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: tc.db, Table: tc.table}}}}
+			err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
+		{Source: cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All}},
+	}}
+	err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
+	require.NoError(t, err)
+	require.Empty(t, bh.executedSQLs)
+}
 
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
