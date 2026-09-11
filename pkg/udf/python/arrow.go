@@ -531,8 +531,20 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 		if typ.IsVarlen() {
 			fixedWidth = false
 		}
-		if inputs[i] == nil || inputs[i].Length() == 0 {
-			return nil, fmt.Errorf("input column %d is shorter than batch range", i)
+		if inputs[i] == nil {
+			return nil, fmt.Errorf("input column %d is missing", i)
+		}
+		actualType := inputs[i].GetType()
+		if actualType == nil {
+			return nil, fmt.Errorf("input column %d has no type", i)
+		}
+		if !actualType.Eq(typ) {
+			return nil, fmt.Errorf(
+				"input column %d type %s does not match the frozen argument type %s",
+				i,
+				actualType.DescString(),
+				typ.DescString(),
+			)
 		}
 	}
 	schema := arrow.NewSchema(fields, nil)
@@ -567,7 +579,7 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 		return nil, nil, fmt.Errorf("invalid Python UDF input shape")
 	}
 	for i, input := range e.inputs {
-		if !input.IsConst() && input.Length() < start+length {
+		if input.Length() == 0 || (!input.IsConst() && input.Length() < start+length) {
 			return nil, nil, fmt.Errorf("input column %d is shorter than batch range", i)
 		}
 	}
