@@ -119,6 +119,15 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return nil, err
+	}
+	if features.IntegerArithmeticDomains {
+		if err = validateIntegerDomainDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -2083,6 +2092,9 @@ func validateRemoteExpressionPipelineProtocol(
 		return moerr.NewNotSupportedNoCtx(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
+	}
+	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
+		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 65")
 	}
 	return nil
 }
