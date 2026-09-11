@@ -142,6 +142,10 @@ func (r *MockRetriever) Next() *ISCPData {
 	return d
 }
 
+// GetToTS: the mock carries no iteration, so generations built from it record an unknown
+// build_ts, the same as a direct non-ISCP caller.
+func (r *MockRetriever) GetToTS() types.TS { return types.TS{} }
+
 func (r *MockRetriever) UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	if r.updateWatermark != nil {
@@ -171,6 +175,8 @@ type blockingAfterFirstRetriever struct {
 	err     error
 	dtype   int8
 }
+
+func (r *blockingAfterFirstRetriever) GetToTS() types.TS { return types.TS{} }
 
 func (r *blockingAfterFirstRetriever) Next() *ISCPData {
 	if r.first != nil {

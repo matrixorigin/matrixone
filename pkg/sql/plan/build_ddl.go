@@ -2761,6 +2761,17 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
+		// ALTER TABLE ... COPY rebuilds the table from regenerated DDL, which cannot carry
+		// relkind. The replica must keep the original's kind rather than the one derived
+		// above from its (temporary) name, or a table whose kind is the only thing hiding it
+		// -- an index metadata table, a fulltext store -- becomes visible to every
+		// relkind-keyed filter after any ALTER. The caller supplies it via
+		// StatementOption.WithKeepRelKind; "" is a legitimate value, hence the presence flag.
+		if v := ctx.GetContext().Value(defines.RelKindKey{}); v != nil {
+			if keep, ok := v.(string); ok {
+				kind = keep
+			}
+		}
 		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{
@@ -2819,6 +2830,11 @@ func buildCreateTable(
 	}
 	if err := validatePersistedTableIdentifiers(ctx.GetContext(), createTable.TableDef); err != nil {
 		return nil, err
+	}
+	if !stmt.IsAsSelect {
+		if err := validateUniquePersistedTableColumns(ctx.GetContext(), createTable.TableDef); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -2940,6 +2956,32 @@ func validatePersistedTableIdentifiers(ctx context.Context, tableDef *plan.Table
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+
+	// Column lookup is case-insensitive even when lower_case_table_names is 0.
+	columnNames := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		name := col.GetOriginCaseName()
+		compareName := col.Name
+		if compareName == "" {
+			compareName = name
+		}
+		for _, existingName := range columnNames {
+			if strings.EqualFold(existingName, compareName) {
+				return moerr.NewErrDupFieldName(ctx, name)
+			}
+		}
+		columnNames = append(columnNames, compareName)
 	}
 	return nil
 }

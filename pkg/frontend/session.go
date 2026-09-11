@@ -1391,10 +1391,38 @@ func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasHighNotPrecedence() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasHighNotPrecedenceValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
+	if ses == nil {
+		return 0
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return 0
+	}
+	flags, ok := sqlModeParserFlagsValue(value)
+	if !ok {
+		return 0
+	}
+	return flags
+}
+
 // updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
-// the plan changes membership. Every token the planner reads at bind time
-// must be compared here: the cache is keyed by SQL text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
+// the plan or parser output changes membership. Every token the planner or
+// parser reads at bind time must be compared here: the cache is keyed by SQL
+// text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence bool, oldParserFlags mysql.SQLModeFlags, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1408,8 +1436,17 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSu
 	if !ok {
 		return
 	}
+	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
+	if !ok {
+		return
+	}
+	newParserFlags, ok := sqlModeParserFlagsValue(val)
+	if !ok {
+		return
+	}
 	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg {
+		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
+		oldParserFlags != newParserFlags {
 		ses.cleanCache()
 	}
 }
@@ -1428,6 +1465,7 @@ type errInfo struct {
 	levels        []string
 	maxCnt        int
 	totalWarnings uint64
+	warningBytes  int
 }
 
 func (e *errInfo) push(code uint16, msg string) {
@@ -1436,13 +1474,34 @@ func (e *errInfo) push(code uint16, msg string) {
 
 func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 	if !strings.EqualFold(level, "Error") {
-		e.totalWarnings++
+		e.addWarningCount(1)
 	}
 	e.pushStored(code, msg, level)
 }
 
 func (e *errInfo) pushStored(code uint16, msg, level string) {
-	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
+	dropOldest := e.maxCnt > 0 && len(e.codes) >= e.maxCnt
+	droppedWarningBytes := 0
+	if dropOldest && len(e.levels) > 0 && !strings.EqualFold(e.levels[0], "Error") {
+		droppedWarningBytes = len(e.msgs[0])
+	}
+	if !strings.EqualFold(level, "Error") {
+		remaining := process.WarningDiagnosticMaxBytes - (e.warningBytes - droppedWarningBytes)
+		if remaining <= 0 {
+			return
+		}
+		if remaining > process.WarningDiagnosticMaxMessageBytes {
+			remaining = process.WarningDiagnosticMaxMessageBytes
+		}
+		msg = process.BoundWarningMessage(msg, remaining)
+		if dropOldest {
+			e.warningBytes -= droppedWarningBytes
+		}
+		e.warningBytes += len(msg)
+	} else if dropOldest {
+		e.warningBytes -= droppedWarningBytes
+	}
+	if dropOldest {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
 		e.levels = e.levels[1:]
@@ -1452,9 +1511,28 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 	e.levels = append(e.levels, level)
 }
 
+func (e *errInfo) addWarningCount(delta uint64) {
+	if ^uint64(0)-e.totalWarnings < delta {
+		e.totalWarnings = ^uint64(0)
+	} else {
+		e.totalWarnings += delta
+	}
+}
+
+func (e *errInfo) appendWarningCount(total uint64) {
+	e.addWarningCount(total)
+}
+
 func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
-	e.totalWarnings += total
-	for i := 0; i < len(codes) && i < len(msgs); i++ {
+	e.addWarningCount(total)
+	limit := len(codes)
+	if len(msgs) < limit {
+		limit = len(msgs)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	for i := 0; i < limit; i++ {
 		e.pushStored(codes[i], msgs[i], "Warning")
 	}
 }
@@ -1464,6 +1542,7 @@ func (e *errInfo) reset() {
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
 	e.totalWarnings = 0
+	e.warningBytes = 0
 }
 
 func (e *errInfo) snapshot() errInfo {
@@ -1473,6 +1552,7 @@ func (e *errInfo) snapshot() errInfo {
 		levels:        append([]string(nil), e.levels...),
 		maxCnt:        e.maxCnt,
 		totalWarnings: e.totalWarnings,
+		warningBytes:  e.warningBytes,
 	}
 }
 
@@ -2206,6 +2286,20 @@ func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
 // warning storage.
 func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
 	ses.appendWarningDiagnostic(code, msg)
+}
+
+// AppendWarningCount adds warnings whose diagnostic records were omitted by
+// the bounded transport. Callers pass only the count not represented by
+// subsequent AppendWarningDiagnostic calls.
+func (ses *Session) AppendWarningCount(total uint64) {
+	if total == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningCount(total)
+	}
 }
 
 // AppendWarningBatch merges the total warning count from a remote fragment

@@ -279,6 +279,14 @@ func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	return result
 }
 
+// octalResultType matches MySQL's OCT metadata. OCT returns a character
+// representation rather than a numeric value; 65 is the stable declared
+// VARCHAR width used by MySQL for this function, including the
+// sign/two's-complement representation of a BIGINT.
+func octalResultType(_ []types.Type) types.Type {
+	return types.New(types.T_varchar, 65, 0)
+}
+
 func concatTextResultBound(parameters []types.Type, start int) stringResultBound {
 	if start < 0 || start > len(parameters) {
 		return unknownStringResultBound()

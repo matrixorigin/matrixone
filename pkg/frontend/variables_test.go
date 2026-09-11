@@ -416,3 +416,24 @@ func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
+
+// The index cache governor holds ONE cap per tenant, not one per index, and that is only sound
+// while the caps are global-scope. If either variable ever became session-settable, two sessions
+// of the same tenant could load indexes under different caps, the tenant's budget would no longer
+// be a single number over the sum of its entries, and the governor would have to capture the cap
+// per load instead -- see tenantCacheLimits and acctLimits in pkg/vectorindex/cache.
+//
+// So this is not a restatement of the definition: it is the tripwire on the assumption a
+// different package makes about it.
+func TestIndexCacheSizeVariablesStayGlobalScope(t *testing.T) {
+	for _, name := range []string{"max_index_cache_size", "max_gpu_index_cache_size"} {
+		def, ok := gSysVarsDefs[name]
+		assert.True(t, ok, "%s must exist: the governor reads it", name)
+		assert.Equal(t, ScopeGlobal, def.Scope,
+			"%s is global-scope by contract; making it session-settable requires the index cache "+
+				"governor to capture the cap per load", name)
+		assert.True(t, def.Dynamic,
+			"%s must stay dynamic: a cache budget an operator can only change by restarting "+
+				"every CN is not usable during the memory pressure that prompts the change", name)
+	}
+}

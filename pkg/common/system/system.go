@@ -93,6 +93,23 @@ func CgroupMemoryLimit() uint64 {
 	return normalizeCgroupLimit(limit)
 }
 
+// NormalizeMemoryCapacity maps a raw memory-capacity reading onto the value
+// used by the sizing callers. Zero means that no finite capacity was
+// discovered. In particular, cgroup v1 reports PAGE_COUNTER_MAX (and some
+// kernels report LONG_MAX) for an unlimited hierarchy; treating either as a
+// real capacity turns an automatic budget into an effectively infinite one.
+//
+// This is exported because callers that combine MemoryTotal with
+// CgroupMemoryLimit must apply the same normalization to both sources. A
+// physical host cannot have a finite memory capacity anywhere near this
+// sentinel, so values at or above it are unambiguously invalid for sizing.
+func NormalizeMemoryCapacity(limit uint64) uint64 {
+	if limit == 0 || limit >= cgroupV1Unlimited {
+		return 0
+	}
+	return limit
+}
+
 // normalizeCgroupLimit maps a raw cgroup limit onto "0 means no bound".
 //
 // The gosigar fallback above returns v1's unlimited sentinel verbatim -- its own
@@ -104,7 +121,7 @@ func normalizeCgroupLimit(limit int64) uint64 {
 	if limit <= 0 || uint64(limit) >= cgroupV1Unlimited {
 		return 0
 	}
-	return uint64(limit)
+	return NormalizeMemoryCapacity(uint64(limit))
 }
 
 func hierarchicalCgroupMemoryLimit(pid int) uint64 {
@@ -176,6 +193,64 @@ func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
 // readCgroupUint reads a single-value cgroup file. ok is false when the file is
 // missing, empty, or the literal "max" (cgroup v2's "unlimited"). A value of 0
 // is returned as ok -- it is a legitimate usage reading for an empty cgroup.
+// readCgroupStatKey reads one "<key> <value>" line out of a cgroup memory.stat.
+// Absent file, absent key or unparseable value all answer false, which leaves the
+// caller charging the full usage -- the conservative direction.
+func readCgroupStatKey(path, key string) (uint64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		field, value, found := strings.Cut(strings.TrimSpace(line), " ")
+		if !found || field != key {
+			continue
+		}
+		v, perr := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		if perr != nil {
+			return 0, false
+		}
+		return v, true
+	}
+	return 0, false
+}
+
+// cgroupStatPath locates memory.stat for a pid on the single-level fallback path,
+// trying cgroup v2 first and then v1's memory controller.
+// reclaimableCgroupCache reads the reclaimable page cache from a memory.stat, under whichever
+// key the cgroup version uses. v1 exposes BOTH a cgroup-local `inactive_file` and a
+// hierarchical `total_inactive_file`; the hierarchy walk asks for the hierarchical one
+// (minHierarchicalHeadroom), and reading the local key here instead reported less reclaimable
+// cache than that walk for the same host whenever the process's cgroup had children --
+// under-reporting available memory, which is the undercount this correction exists to remove.
+// v2 has no `total_` prefix, so the plain key is the fallback rather than the first choice.
+func reclaimableCgroupCache(statPath string) (uint64, bool) {
+	if v, ok := readCgroupStatKey(statPath, "total_inactive_file"); ok {
+		return v, true
+	}
+	return readCgroupStatKey(statPath, "inactive_file")
+}
+
+func cgroupStatPath(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] == "0" && parts[1] == "" {
+			return filepath.Join("/sys/fs/cgroup", parts[2], "memory.stat")
+		}
+		if strings.Contains(","+parts[1]+",", ",memory,") {
+			return filepath.Join("/sys/fs/cgroup/memory", parts[2], "memory.stat")
+		}
+	}
+	return ""
+}
+
 func readCgroupUint(path string) (uint64, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -229,7 +304,7 @@ func readCgroupLimit(path string) (uint64, bool) {
 // A level that publishes a limit but no readable usage makes the whole
 // measurement unavailable rather than being skipped -- skipping a governing
 // level is exactly the overstatement this exists to prevent.
-func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile string) (uint64, bool) {
+func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile, statFile, reclaimKey string) (uint64, bool) {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
 	var (
@@ -241,6 +316,28 @@ func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile string) (uint
 			usage, uok := readCgroupUint(filepath.Join(dir, usageFile))
 			if !uok {
 				return 0, false
+			}
+			// Cgroup usage counts page cache, and this function's whole contract is
+			// that reclaimable cache is AVAILABLE -- raw MemFree "drops to a few GiB
+			// the moment the cache warms up even when the kernel can reclaim hundreds
+			// of GiB". Charging it would reintroduce exactly that, and does so where
+			// it hurts most: right after a bulk load, which is when a build sizes
+			// itself. Reading 5.5 GB of CSV once collapsed this from ~15 GB to 3.8 GB
+			// on a host with 14.7 GB genuinely available, and shrank a 1M-row index
+			// into two sub-indexes by a 131 MB margin.
+			//
+			// Inactive file pages are the reclaimable part: the kernel drops them
+			// under pressure without evicting anything live, which is the same
+			// "without evicting live pages" this function promises. Active file pages
+			// are deliberately NOT added back -- they are in use, and counting them
+			// would overstate headroom in the direction that gets a cgroup OOM-killed.
+			// This is the working-set convention (usage - inactive_file).
+			if reclaimable, rok := readCgroupStatKey(filepath.Join(dir, statFile), reclaimKey); rok {
+				if reclaimable > usage {
+					usage = 0
+				} else {
+					usage -= reclaimable
+				}
 			}
 			var headroom uint64
 			if limit > usage {
@@ -309,13 +406,15 @@ func hierarchicalCgroupHeadroom(pid int) (uint64, bool) {
 		case "cgroup2":
 			if v2Path != "" {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
-					return minHierarchicalHeadroom(dir, mountPoint, "memory.max", "memory.current")
+					return minHierarchicalHeadroom(dir, mountPoint, "memory.max", "memory.current",
+						"memory.stat", "inactive_file")
 				}
 			}
 		case "cgroup":
 			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
-					return minHierarchicalHeadroom(dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes")
+					return minHierarchicalHeadroom(dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes",
+						"memory.stat", "total_inactive_file")
 				}
 			}
 		}
@@ -394,6 +493,11 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 		if err != nil {
 			logutil.Errorf("failed to get cgroup memory usage: %v", err)
 			return 0, false
+		}
+		// Same correction as the hierarchy walk: cgroup usage counts page cache and
+		// this function promises reclaimable cache is available.
+		if reclaimable, rok := reclaimableCgroupCache(cgroupStatPath(pid)); rok && uint64(used) > reclaimable {
+			used -= int64(reclaimable)
 		}
 		if uint64(used) >= limit {
 			// Measured, and genuinely exhausted. This is NOT the same as an
@@ -591,6 +695,23 @@ func shouldRefreshQuotaConfig() bool {
 	return now-last >= int64(quotaRefreshDebounceSeconds)*int64(time.Second)
 }
 
+func hostMemoryTotal() (uint64, bool) {
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get host memory stats: %v", err)
+		return 0, false
+	}
+	return mem.Total, true
+}
+
+func effectiveContainerMemoryTotal(limit int64, hostTotal uint64) uint64 {
+	if normalized := normalizeCgroupLimit(limit); normalized > 0 {
+		return normalized
+	}
+	return NormalizeMemoryCapacity(hostTotal)
+}
+
 // refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
 // Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
@@ -609,17 +730,30 @@ func refreshQuotaConfig() {
 		limit, err := cgroup.GetMemLimit(pid)
 		if err != nil {
 			logutil.Errorf("failed to get cgroup mem limit: %v", err)
+			if total, ok := hostMemoryTotal(); ok {
+				if normalized := NormalizeMemoryCapacity(total); normalized > 0 {
+					memoryTotal.Store(normalized)
+				}
+			}
 		} else {
-			memoryTotal.Store(uint64(limit))
+			if normalized := normalizeCgroupLimit(limit); normalized > 0 {
+				memoryTotal.Store(normalized)
+			} else {
+				// An unlimited cgroup is not a 9.2 EB machine. Keep the host
+				// capacity as the total so automatic consumers still have a
+				// finite sizing input; CgroupMemoryLimit independently remains
+				// zero and therefore does not impose a bound.
+				if total, ok := hostMemoryTotal(); ok {
+					if effective := effectiveContainerMemoryTotal(limit, total); effective > 0 {
+						memoryTotal.Store(effective)
+					}
+				}
+			}
 		}
 	} else {
 		cpuNum.Store(int32(runtime.NumCPU()))
-		s := gosigar.ConcreteSigar{}
-		mem, err := s.GetMem()
-		if err != nil {
-			logutil.Errorf("failed to get memory stats: %v", err)
-		} else {
-			memoryTotal.Store(mem.Total)
+		if total, ok := hostMemoryTotal(); ok {
+			memoryTotal.Store(total)
 		}
 	}
 }

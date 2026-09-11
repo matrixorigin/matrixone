@@ -6256,6 +6256,108 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		"a rejected aliased preflight must not leave a publishable proof")
 }
 
+func TestUnionOneMetadataTransitions(t *testing.T) {
+	for _, metadata := range []string{"ordinary", "source", "kind", "domain", "text_prefix"} {
+		t.Run(metadata, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_varchar.ToType())
+			destination := NewVec(types.T_varchar.ToType())
+			var changed, constant *Vector
+			t.Cleanup(func() {
+				source.Free(mp)
+				changed.Free(mp)
+				constant.Free(mp)
+				destination.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, AppendBytesList(source, [][]byte{
+				[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
+			}, []bool{false, true, false}, mp))
+			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+			nulls.Add(source.GetGrouping(), 1)
+			changed, err := source.Dup(mp)
+			require.NoError(t, err)
+			switch metadata {
+			case "source":
+				require.NoError(t, changed.SetStringSourceAtWithMP(1, types.StringSourceUserVariable, mp))
+			case "kind":
+				require.NoError(t, changed.SetPrepareParamKindsWithMP(
+					[]PrepareParamKind{PrepareParamInteger, PrepareParamNone, PrepareParamFloat}, mp))
+			case "domain":
+				require.NoError(t, changed.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+					types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringInherit,
+				}, mp))
+			case "text_prefix":
+				require.NoError(t, changed.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+			}
+			constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
+			require.NoError(t, err)
+			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
+			rows := []struct {
+				vec *Vector
+				row int
+			}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
+				{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
+			if metadata == "text_prefix" {
+				rows = rows[:3]
+				rows[0].vec, rows[0].row = changed, 0
+			}
+			for range 2 { // Reuse must not retain a previous mixed representation.
+				destination.ResetWithSameType()
+				for end, input := range rows {
+					require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
+					for row, expected := range rows[:end+1] {
+						isNull := expected.vec.IsNull(uint64(expected.row))
+						require.Equal(t, isNull, destination.IsNull(uint64(row)))
+						if !isNull {
+							require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
+						}
+						require.Equal(t, expected.vec.GetGrouping().Contains(uint64(expected.row)),
+							destination.GetGrouping().Contains(uint64(row)))
+						require.Equal(t, expected.vec.GetStringSourceAt(expected.row), destination.GetStringSourceAt(row))
+						require.Equal(t, expected.vec.GetPrepareParamKindAt(expected.row), destination.GetPrepareParamKindAt(row))
+						require.Equal(t, expected.vec.GetRuntimeStringDomainAt(expected.row), destination.GetRuntimeStringDomainAt(row))
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnionOneUniformMetadata(b *testing.B) {
+	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
+		for _, kind := range []PrepareParamKind{PrepareParamNone, PrepareParamInteger} {
+			b.Run(fmt.Sprintf("%s/kind=%d", oid, kind), func(b *testing.B) {
+				const rows = 1024
+				mp := mpool.MustNewZero()
+				source := NewVec(oid.ToType())
+				destination := NewVec(oid.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				if oid == types.T_int64 {
+					require.NoError(b, AppendFixedList(source, make([]int64, rows), nil, mp))
+				} else {
+					for range rows {
+						require.NoError(b, AppendBytes(source, []byte("ordinary column value"), false, mp))
+					}
+				}
+				require.NoError(b, source.SetStringSource(types.StringSourceLiteral))
+				source.SetPrepareParamKind(kind)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					for row := range rows {
+						if err := destination.UnionOne(source, int64(row), mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 	const rows = 16 * 1024
 	mp := mpool.MustNewZero()

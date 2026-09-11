@@ -626,7 +626,7 @@ create table string04 as select oct(col2), empty(col3), length(col1) from string
 show create table string04;
 [unknown result because it is related to issue#24436]
 select * from string04;
-➤ oct(col2)[3,38,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
+➤ oct(col2)[12,65,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
 2  ¦  0  ¦  17  𝄀
 1  ¦  0  ¦  17  𝄀
 0  ¦  null  ¦  27

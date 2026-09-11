@@ -19,6 +19,7 @@
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
 !optools/summarize_ut_setup.py
+!optools/summarize_ut_slow_cases.py
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel.py
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel_test.py
 !optools/mongodb_changed_files.py
@@ -130,3 +131,8 @@ test/esqltvf/reports/
 
 # kafka external table E2E reports (local artifacts)
 test/kafkaexttab/reports/
+
+# hnsw test byproducts: the usearch index files a test writes into the package
+# directory. The tracked copies live in pkg/vectorindex/hnsw/resources/.
+/pkg/vectorindex/hnsw[0-9].bin
+/pkg/vectorindex/hnsw/apple

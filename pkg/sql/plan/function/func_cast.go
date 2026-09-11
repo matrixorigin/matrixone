@@ -7239,12 +7239,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

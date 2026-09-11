@@ -2233,6 +2233,30 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 	conflictExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
+	keyNames := make([]string, 0, len(tableDef.Indexes)+1)
+	keyTypes := make([]*plan.Type, 0, len(tableDef.Indexes)+1)
+	keyTypeCounts := make([]int32, 0, len(tableDef.Indexes)+1)
+	appendKeyMetadata := func(parts []string) error {
+		if len(parts) == 0 {
+			return moerr.NewInternalError(builder.GetContext(),
+				"INSERT IGNORE unique-key metadata has no columns")
+		}
+		resolvedParts := make([]string, len(parts))
+		for i, part := range parts {
+			resolved := catalog.ResolveAlias(part)
+			pos, ok := tableDef.Name2ColIndex[resolved]
+			if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+				return moerr.NewInternalErrorf(builder.GetContext(),
+					"cannot resolve INSERT IGNORE unique-key column %q", part)
+			}
+			resolvedParts[i] = resolved
+			typ := tableDef.Cols[pos].Typ
+			keyTypes = append(keyTypes, &typ)
+		}
+		keyNames = append(keyNames, formatDedupColumnName(resolvedParts))
+		keyTypeCounts = append(keyTypeCounts, int32(len(parts)))
+		return nil
+	}
 
 	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		scanTag := builder.genNewBindTag()
@@ -2264,6 +2288,13 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			return 0, 0, nil, err
 		}
 		keyExprs = append(keyExprs, DeepCopyExpr(inputPK))
+		pkParts := tableDef.Pkey.Names
+		if len(pkParts) == 0 {
+			pkParts = []string{pkName}
+		}
+		if err := appendKeyMetadata(pkParts); err != nil {
+			return 0, 0, nil, err
+		}
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputPK, existingPK})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2307,6 +2338,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		idxKeyName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
 		inputKey := DeepCopyExpr(appendedUniqueProjs[idxKeyName])
 		keyExprs = append(keyExprs, DeepCopyExpr(inputKey))
+		if err := appendKeyMetadata(idxDef.Parts); err != nil {
+			return 0, 0, nil, err
+		}
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputKey, existingKey})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2383,6 +2417,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			KeyColumns:             keyColumns,
 			ConflictColumns:        conflictColumns,
 			OutputColumns:          int32(outputWidth),
+			KeyNames:               keyNames,
+			KeyTypes:               keyTypes,
+			KeyTypeCounts:          keyTypeCounts,
 		},
 	}
 	if autoIncrementReorder {
@@ -2416,6 +2453,13 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}
 	lastNodeID = builder.appendNode(arbiterNode, bindCtx)
 	return lastNodeID, outputTag, arbiterNode, nil
+}
+
+func formatDedupColumnName(parts []string) string {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, ",") + ")"
 }
 
 // collectGeneratedColumnDependents returns the set of columns that may change

@@ -1,88 +1,117 @@
 SELECT MAKE_SET(1 | 4, 'hello', 'nice', 'world') AS result1;
-result1
+➤ result1[12,16,0]  𝄀
 hello,world
 SELECT MAKE_SET(1 | 4, 'hello', 'nice', 'world') AS make_set_basic;
-make_set_basic
+➤ make_set_basic[12,16,0]  𝄀
 hello,world
 SELECT MAKE_SET(1, 'hello', 'nice', 'world') AS make_set_first;
-make_set_first
+➤ make_set_first[12,16,0]  𝄀
 hello
 SELECT MAKE_SET(2, 'hello', 'nice', 'world') AS make_set_second;
-make_set_second
+➤ make_set_second[12,16,0]  𝄀
 nice
 SELECT MAKE_SET(4, 'hello', 'nice', 'world') AS make_set_third;
-make_set_third
+➤ make_set_third[12,16,0]  𝄀
 world
 SELECT MAKE_SET(7, 'hello', 'nice', 'world') AS make_set_all;
-make_set_all
+➤ make_set_all[12,16,0]  𝄀
 hello,nice,world
 SELECT MAKE_SET(0, 'hello', 'nice', 'world') AS make_set_zero;
-make_set_zero
+➤ make_set_zero[12,16,0]  𝄀
 
 SELECT MAKE_SET(1 | 2, 'a', 'b', 'c') AS make_set_1_2;
-make_set_1_2
+➤ make_set_1_2[12,5,0]  𝄀
 a,b
 SELECT MAKE_SET(1 | 2 | 4, 'a', 'b', 'c') AS make_set_1_2_4;
-make_set_1_2_4
+➤ make_set_1_2_4[12,5,0]  𝄀
 a,b,c
 SELECT MAKE_SET(8, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h') AS make_set_eighth;
-make_set_eighth
+➤ make_set_eighth[12,15,0]  𝄀
 d
 SELECT MAKE_SET(1, 'single') AS make_set_single;
-make_set_single
+➤ make_set_single[12,6,0]  𝄀
 single
 SELECT MAKE_SET(0, 'single') AS make_set_single_zero;
-make_set_single_zero
+➤ make_set_single_zero[12,6,0]  𝄀
 
 SELECT MAKE_SET(1 | 4 | 16, 'a', 'b', 'c', 'd', 'e') AS make_set_many;
-make_set_many
+➤ make_set_many[12,9,0]  𝄀
 a,c,e
 SELECT MAKE_SET(NULL, 'hello', 'nice', 'world') AS make_set_null_bits;
-make_set_null_bits
+➤ make_set_null_bits[12,16,0]  𝄀
 null
 SELECT MAKE_SET(1, NULL, 'nice', 'world') AS make_set_null_str1;
-make_set_null_str1
+➤ make_set_null_str1[-1,16383,0]  𝄀
 
 SELECT MAKE_SET(2, 'hello', NULL, 'world') AS make_set_null_str2;
-make_set_null_str2
+➤ make_set_null_str2[-1,16383,0]  𝄀
 
 SELECT MAKE_SET(1 | 2, 'hello', NULL, 'world') AS make_set_null_str2_included;
-make_set_null_str2_included
+➤ make_set_null_str2_included[-1,16383,0]  𝄀
 hello
 SELECT MAKE_SET(CAST(5 AS INT), 'a', 'b', 'c') AS make_set_int;
-make_set_int
+➤ make_set_int[12,5,0]  𝄀
 a,c
 SELECT MAKE_SET(CAST(5 AS INT32), 'a', 'b', 'c') AS make_set_int32;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 31 near " INT32), 'a', 'b', 'c') AS make_set_int32;";
 SELECT MAKE_SET(CAST(5 AS BIGINT), 'a', 'b', 'c') AS make_set_bigint;
-make_set_bigint
+➤ make_set_bigint[12,5,0]  𝄀
 a,c
 CREATE TABLE t1(bits INT, s1 VARCHAR(10), s2 VARCHAR(10), s3 VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'a', 'b', 'c'), (5, 'x', 'y', 'z'), (7, '1', '2', '3');
 SELECT bits, MAKE_SET(bits, s1, s2, s3) AS result FROM t1;
-bits    result
-1    a
-5    x,z
-7    1,2,3
+➤ bits[4,32,0]  ¦  result[12,32,0]  𝄀
+1  ¦  a  𝄀
+5  ¦  x,z  𝄀
+7  ¦  1,2,3
 DROP TABLE t1;
 CREATE TABLE t1(bits INT, s1 VARCHAR(10), s2 VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'a', 'b'), (3, 'x', 'y'), (2, '1', '2');
 SELECT * FROM t1 WHERE MAKE_SET(bits, s1, s2) LIKE 'a%';
-bits    s1    s2
-1    a    b
+➤ bits[4,32,0]  ¦  s1[12,10,0]  ¦  s2[12,10,0]  𝄀
+1  ¦  a  ¦  b
 DROP TABLE t1;
 SELECT MAKE_SET(1, '') AS make_set_empty_str;
-make_set_empty_str
+➤ make_set_empty_str[12,536870911,0]  𝄀
 
 SELECT MAKE_SET(1 | 2, 'a', '') AS make_set_empty_str2;
-make_set_empty_str2
+➤ make_set_empty_str2[12,2,0]  𝄀
 a,
 SELECT MAKE_SET(1 | 2, '你好', '世界', '测试') AS make_set_unicode;
-make_set_unicode
+➤ make_set_unicode[12,8,0]  𝄀
 你好,世界
 SELECT MAKE_SET(255, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h') AS make_set_255;
-make_set_255
+➤ make_set_255[12,15,0]  𝄀
 a,b,c,d,e,f,g,h
 SELECT MAKE_SET(256, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i') AS make_set_256;
-make_set_256
+➤ make_set_256[12,17,0]  𝄀
 i
+SELECT MAKE_SET(CAST('1.4' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_below_half;
+➤ decimal_below_half[12,7,0]  𝄀
+a
+SELECT MAKE_SET(CAST('1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_half;
+➤ decimal_half[12,7,0]  𝄀
+b
+SELECT MAKE_SET(CAST('-1.5' AS DECIMAL(4,1)), 'a', 'b', 'c', 'd') AS decimal_negative_half;
+➤ decimal_negative_half[12,7,0]  𝄀
+b,c,d
+SELECT MAKE_SET(CAST('1.9999999999999999' AS DECIMAL(18,16)), 'a', 'b', 'c', 'd') AS decimal_precision_boundary;
+➤ decimal_precision_boundary[12,7,0]  𝄀
+b
+SELECT MAKE_SET(CAST('18446744073709551616' AS DECIMAL(38,0)), 'a', 'b', 'c', 'd') AS decimal_positive_overflow;
+➤ decimal_positive_overflow[12,7,0]  𝄀
+a,b,c,d
+SELECT MAKE_SET(0.90000000000000000000000000000000000000, 'a', 'b') AS decimal_scale38_positive;
+➤ decimal_scale38_positive[12,3,0]  𝄀
+a
+SELECT MAKE_SET(-0.90000000000000000000000000000000000000, 'a', 'b') AS decimal_scale38_negative;
+➤ decimal_scale38_negative[12,3,0]  𝄀
+a,b
+CREATE TABLE make_set_decimal_bits(d DECIMAL(38,1));
+INSERT INTO make_set_decimal_bits VALUES (1.4), (1.5), (-1.5);
+SELECT d, MAKE_SET(d, 'a', 'b', 'c', 'd') AS result FROM make_set_decimal_bits ORDER BY d;
+➤ d[3,38,1]  ¦  result[12,7,0]  𝄀
+-1.5  ¦  b,c,d  𝄀
+1.4  ¦  a  𝄀
+1.5  ¦  b
+DROP TABLE make_set_decimal_bits;

@@ -1628,6 +1628,13 @@ func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
 	backSes.upstream.AppendWarningDiagnostic(code, msg)
 }
 
+func (backSes *backSession) AppendWarningCount(total uint64) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningCount(total)
+}
+
 func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
 	if backSes == nil || backSes.upstream == nil {
 		return

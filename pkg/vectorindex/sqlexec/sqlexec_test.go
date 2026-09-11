@@ -68,6 +68,10 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	spy := &identityCapturingSQLExecutor{}
 	rt := moruntime.DefaultRuntime()
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	// DefaultRuntime IS the "" service's runtime, and this variable is what makes RunTxn work
+	// at all -- leaving it behind makes TestSqlTxnError, which asserts the panic its ABSENCE
+	// causes, pass alone and fail on the second -count iteration in the same process.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	subscriberCtx := defines.AttachAccountId(context.Background(), 7)
@@ -111,6 +115,10 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	spy := &identityCapturingSQLExecutor{}
 	rt := moruntime.DefaultRuntime()
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	// DefaultRuntime IS the "" service's runtime, and this variable is what makes RunTxn work
+	// at all -- leaving it behind makes TestSqlTxnError, which asserts the panic its ABSENCE
+	// causes, pass alone and fail on the second -count iteration in the same process.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	type contextKey struct{}
@@ -186,7 +194,11 @@ func TestSqlTxn(t *testing.T) {
 
 	uuid := ""
 	rt := moruntime.DefaultRuntime()
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, &MockSQLExecutor{})
+	exec := &MockSQLExecutor{}
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	// Removed again: TestSqlTxnError asserts the panic this variable's ABSENCE causes, so
+	// leaving it registered on the default runtime fails that test on the next -count pass.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()

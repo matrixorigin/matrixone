@@ -1502,6 +1502,7 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
 	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
 	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
+	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -1986,6 +1987,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
 			panic(err)
 		}
+		configExpr = normalizeAggregateConfigExpr(proc, configExpr)
 		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
 		if err != nil {
 			panic(err)
@@ -1999,6 +2001,30 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
 	}
 	return args, nil
+}
+
+// normalizeAggregateConfigExpr materializes a semantically constant function
+// expression as a literal before a scalar aggregate configuration consumes it.
+// Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
+// optimizer constant-fold pass.  Their expression executor can therefore
+// return a one-row flat vector for a constant cast, although the plan still
+// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// boundary does not depend on which planner path produced the expression.
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) *plan.Expr {
+	if expr == nil || expr.GetF() == nil {
+		return expr
+	}
+	folded, err := plan2.ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		plan2.DeepCopyExpr(expr),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return folded
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {

@@ -134,6 +134,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -388,6 +391,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	warningsSucceeded := false
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
+	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.
@@ -819,7 +826,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = false
 	}
-
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 		attemptScopes, attemptAnal, c.addr, false,
@@ -835,7 +841,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if isExplainPhyPlan {
 		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
 	}
-
 	warningsSucceeded = err == nil
 	return queryResult, err
 }

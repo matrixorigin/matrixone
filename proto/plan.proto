@@ -1499,6 +1499,12 @@ message PreInsertUkCtx {
   int32 auto_increment_generated_column = 13;
   int32 auto_increment_key_index = 14;
   int32 auto_increment_output_column = 15;
+  // User-facing metadata for diagnostics emitted by ordered INSERT IGNORE
+  // arbitration. key_names and key_type_counts are parallel to key_columns;
+  // key_types is the concatenation of the logical types for each key.
+  repeated string key_names = 16;
+  repeated Type key_types = 17;
+  repeated int32 key_type_counts = 18;
 }
 
 message PreInsertCtx {
