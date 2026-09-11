@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,14 +72,44 @@ type blockingBackendClient struct {
 	*mockBackendClient
 	appendStarted chan struct{}
 	release       chan struct{}
-	startOnce     sync.Once
+	startOnce     *sync.Once
+}
+
+type stopBarrierQueue struct {
+	sm.Queue
+	stopStarted chan struct{}
+	releaseStop chan struct{}
+	stopDone    chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+	doneOnce    sync.Once
+}
+
+func newStopBarrierQueue(queue sm.Queue) *stopBarrierQueue {
+	return &stopBarrierQueue{
+		Queue:       queue,
+		stopStarted: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+		stopDone:    make(chan struct{}),
+	}
+}
+
+func (q *stopBarrierQueue) Stop() {
+	q.startOnce.Do(func() { close(q.stopStarted) })
+	<-q.releaseStop
+	q.Queue.Stop()
+	q.doneOnce.Do(func() { close(q.stopDone) })
+}
+
+func (q *stopBarrierQueue) Release() {
+	q.releaseOnce.Do(func() { close(q.releaseStop) })
 }
 
 type deadlineBlockingBackendClient struct {
 	*mockBackendClient
 	appendStarted chan struct{}
 	release       chan struct{}
-	startOnce     sync.Once
+	startOnce     *sync.Once
 }
 
 func (c *deadlineBlockingBackendClient) Append(
@@ -103,31 +135,55 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	backend := NewMockBackend()
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
 	factory := func() (logservice.Client, error) {
 		return &blockingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			appendStarted:     started,
 			release:           release,
+			startOnce:         &startedOnce,
 		}, nil
 	}
 	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
 	d := NewLogServiceDriver(&cfg)
+	var releaseOnce sync.Once
+	releaseWorkers := func() { releaseOnce.Do(func() { close(release) }) }
+	var first, second *entry.Entry
+	var secondSubmitted, secondDone chan struct{}
+	t.Cleanup(func() {
+		releaseWorkers()
+		_ = d.Close()
+		if secondDone != nil {
+			select {
+			case <-secondDone:
+			case <-time.After(time.Second):
+			}
+		}
+		if first != nil {
+			first.Entry.Free()
+		}
+		if second != nil {
+			second.Entry.Free()
+		}
+	})
 	// Keep two clients available while constraining the append worker capacity
 	// to one, so the second accepted committer reaches the worker handoff while
 	// the first task is still running.
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
-	first := entry.MockEntryWithPayload([]byte("first"))
-	second := entry.MockEntryWithPayload([]byte("second"))
+	first = entry.MockEntryWithPayload([]byte("first"))
+	second = entry.MockEntryWithPayload([]byte("second"))
 	d.onCommitIntents(first)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("first append did not enter the production worker")
 	}
-	secondSubmitted := make(chan struct{})
+	secondSubmitted = make(chan struct{})
+	secondDone = make(chan struct{})
 	go func() {
+		defer close(secondDone)
 		d.onCommitIntents(second)
 		close(secondSubmitted)
 	}()
@@ -139,7 +195,7 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	default:
 	}
 
-	close(release)
+	releaseWorkers()
 	require.NoError(t, first.WaitDone())
 	require.NoError(t, second.WaitDone())
 	select {
@@ -153,26 +209,45 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 
 func TestSubmitCommitWaitsAfterCommitterCompletion(t *testing.T) {
 	service, ccfg := initTest(t)
-	defer service.Close()
+	t.Cleanup(func() { service.Close() })
 	cfg := NewConfig("", WithConfigOptClientConfig("", ccfg), WithConfigOptMaxClient(1))
 	d := NewLogServiceDriver(&cfg)
+	releaseWorkerC := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseWorker := func() { releaseOnce.Do(func() { close(releaseWorkerC) }) }
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
 	committer := getCommitter()
+	var submitDone chan error
+	var submitExited chan struct{}
+	t.Cleanup(func() {
+		releaseWorker()
+		_ = d.Close()
+		if submitExited != nil {
+			select {
+			case <-submitExited:
+			case <-time.After(time.Second):
+				t.Error("submit goroutine did not terminate during cleanup")
+				return
+			}
+		}
+		putCommitter(committer)
+	})
 	committer.startCommit()
 	donePublished := make(chan struct{})
-	releaseWorker := make(chan struct{})
 	require.NoError(t, d.workers.Submit(func() {
 		committer.finishCommit()
 		close(donePublished)
-		<-releaseWorker
+		<-releaseWorkerC
 	}))
 	<-donePublished
 
 	taskRan := make(chan struct{})
-	submitDone := make(chan error, 1)
+	submitDone = make(chan error, 1)
+	submitExited = make(chan struct{})
 	go func() {
+		defer close(submitExited)
 		submitDone <- d.submitCommit(func() { close(taskRan) })
 	}()
 	select {
@@ -181,53 +256,150 @@ func TestSubmitCommitWaitsAfterCommitterCompletion(t *testing.T) {
 	default:
 	}
 
-	close(releaseWorker)
+	releaseWorker()
 	require.NoError(t, <-submitDone)
 	select {
 	case <-taskRan:
 	case <-time.After(time.Second):
 		t.Fatal("submitted task did not run after worker handoff")
 	}
-	putCommitter(committer)
 	require.NoError(t, d.Close())
 }
 
 func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
+	const (
+		closeTimeout = 250 * time.Millisecond
+		workerBudget = 100 * time.Millisecond
+		closeSlack   = 100 * time.Millisecond
+	)
 	backend := NewMockBackend()
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
 	factory := func() (logservice.Client, error) {
 		return &deadlineBlockingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			appendStarted:     started,
 			release:           release,
+			startOnce:         &startedOnce,
 		}, nil
 	}
 	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
 	d := NewLogServiceDriver(&cfg)
-	d.closeTimeout = 50 * time.Millisecond
+	d.closeTimeout = closeTimeout
+	intakeQueue := newStopBarrierQueue(d.commitLoop)
+	d.commitLoop = intakeQueue
+	var releaseOnce sync.Once
+	releaseAppend := func() { releaseOnce.Do(func() { close(release) }) }
+	var remainingCleanupOnce sync.Once
+	cleanupRemaining := func() {
+		remainingCleanupOnce.Do(func() {
+			d.waitCommitLoop.Stop()
+			d.truncateQueue.Stop()
+			d.clientPool.Close()
+			d.cancel()
+			close(d.commitWaitQueue)
+			close(d.postCommitQueue)
+		})
+	}
+	var first, second *entry.Entry
+	var secondSubmitted chan struct{}
+	var firstDone chan error
+	var firstWaitDone chan struct{}
+	t.Cleanup(func() {
+		releaseAppend()
+		intakeQueue.Release()
+		if err := d.Close(); err != nil {
+			// Close may have returned at the shared deadline before the worker
+			// and wait loop finished. Release the blocker first, then clean up
+			// only after accepted work has drained.
+			deadline := time.NewTimer(time.Second)
+			timedOut := false
+			for d.pendingWait.Load() != 0 && !timedOut {
+				select {
+				case <-deadline.C:
+					timedOut = true
+				case <-time.After(time.Millisecond):
+				}
+			}
+			if !deadline.Stop() {
+				select {
+				case <-deadline.C:
+				default:
+				}
+			}
+			if d.pendingWait.Load() == 0 {
+				cleanupRemaining()
+			}
+		}
+		if secondSubmitted != nil {
+			select {
+			case <-secondSubmitted:
+			case <-time.After(time.Second):
+			}
+		}
+		if firstWaitDone != nil {
+			select {
+			case <-firstWaitDone:
+			case <-time.After(time.Second):
+			}
+		}
+		select {
+		case <-intakeQueue.stopDone:
+		case <-time.After(time.Second):
+		}
+		if d.pendingWait.Load() != 0 {
+			return
+		}
+		if first != nil {
+			first.Entry.Free()
+		}
+		if second != nil {
+			second.Entry.Free()
+		}
+	})
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
-	first := entry.MockEntryWithPayload([]byte("first"))
-	second := entry.MockEntryWithPayload([]byte("second"))
+	first = entry.MockEntryWithPayload([]byte("first"))
+	second = entry.MockEntryWithPayload([]byte("second"))
 	d.onCommitIntents(first)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("first append did not enter the production worker")
 	}
-	secondSubmitted := make(chan struct{})
+	secondSubmitted = make(chan struct{})
 	go func() {
 		d.onCommitIntents(second)
 		close(secondSubmitted)
 	}()
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
 
-	start := time.Now()
-	err := d.Close()
-	require.Error(t, err)
-	require.Less(t, time.Since(start), time.Second)
+	closeRequested := time.Now()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	select {
+	case <-intakeQueue.stopStarted:
+	case <-time.After(time.Second):
+		t.Fatal("close did not enter the intake-stop barrier")
+	}
+	closeDeadline := closeRequested.Add(closeTimeout)
+	releaseIntakeTimer := time.NewTimer(time.Until(closeDeadline.Add(-workerBudget)))
+	select {
+	case <-releaseIntakeTimer.C:
+		intakeQueue.Release()
+	case err := <-closeDone:
+		t.Fatalf("close returned before the intake barrier was released: %v", err)
+	}
+	closeGuard := time.NewTimer(time.Until(closeDeadline.Add(closeSlack)))
+	var err error
+	select {
+	case err = <-closeDone:
+		require.Error(t, err)
+	case <-closeGuard.C:
+		t.Fatal("close exceeded the shared intake and worker deadline")
+	}
 	select {
 	case <-secondSubmitted:
 	case <-time.After(time.Second):
@@ -235,26 +407,139 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	}
 	require.Error(t, second.WaitDone())
 
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- first.WaitDone() }()
+	firstDone = make(chan error, 1)
+	firstWaitDone = make(chan struct{})
+	go func() {
+		defer close(firstWaitDone)
+		firstDone <- first.WaitDone()
+	}()
 	select {
 	case <-firstDone:
 		t.Fatal("in-flight append acquired a synthetic terminal result")
 	default:
 	}
 
-	close(release)
+	releaseAppend()
 	require.NoError(t, <-firstDone)
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 
 	// A production caller fail-stops after the deadline error. The test keeps
 	// the process alive, so release the remaining internal loops explicitly.
-	d.waitCommitLoop.Stop()
-	d.truncateQueue.Stop()
-	d.clientPool.Close()
-	d.cancel()
-	close(d.commitWaitQueue)
-	close(d.postCommitQueue)
+	cleanupRemaining()
+}
+
+type countingBackendClient struct {
+	*mockBackendClient
+	appendCalls atomic.Int32
+}
+
+func (c *countingBackendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	c.appendCalls.Add(1)
+	return c.mockBackendClient.Append(ctx, record)
+}
+
+func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) {
+	backend := NewMockBackend()
+	errExpected := errors.New("pre-callback failed")
+	var client *countingBackendClient
+	factory := func() (logservice.Client, error) {
+		client = &countingBackendClient{mockBackendClient: newMockBackendClient(backend)}
+		return client, nil
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(1))
+	d := NewLogServiceDriver(&cfg)
+	failStop := make(chan error, 1)
+	failStopEntered := make(chan struct{})
+	releaseFailStop := make(chan struct{})
+	var failStopOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFailStop) }) }
+	var first, second *entry.Entry
+	var firstWaitDone, secondWaitDone chan struct{}
+	t.Cleanup(func() {
+		release()
+		_ = d.Close()
+		if firstWaitDone != nil {
+			select {
+			case <-firstWaitDone:
+			case <-time.After(time.Second):
+			}
+		}
+		if secondWaitDone != nil {
+			select {
+			case <-secondWaitDone:
+			case <-time.After(time.Second):
+			}
+		}
+		if first != nil {
+			first.Entry.Free()
+		}
+		if second != nil {
+			second.Entry.Free()
+		}
+	})
+	d.onAppendFailure = func(err error) {
+		failStopOnce.Do(func() { close(failStopEntered) })
+		failStop <- err
+		<-releaseFailStop
+	}
+
+	var callbacks atomic.Int32
+	first = entry.MockEntryWithPayload([]byte("first pre-callback"))
+	first.Entry.RegisterGroupWalPreCallbacks(func() error {
+		callbacks.Add(1)
+		return nil
+	})
+	second = entry.MockEntryWithPayload([]byte("second pre-callback"))
+	second.Entry.RegisterGroupWalPreCallbacks(func() error {
+		callbacks.Add(1)
+		return errExpected
+	})
+	firstWait := make(chan error, 1)
+	firstWaitDone = make(chan struct{})
+	go func() {
+		defer close(firstWaitDone)
+		firstWait <- first.WaitDone()
+	}()
+	secondWait := make(chan error, 1)
+	secondWaitDone = make(chan struct{})
+	go func() {
+		defer close(secondWaitDone)
+		secondWait <- second.WaitDone()
+	}()
+
+	// Invoke the production group-intent callback with two accepted entries so
+	// LogEntryWriter.Finish executes the pre-callbacks before BackendClient.Append.
+	d.onCommitIntents(first, second)
+	select {
+	case <-failStopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("append failure callback did not start")
+	}
+	require.ErrorIs(t, <-failStop, errExpected)
+	select {
+	case err := <-firstWait:
+		require.ErrorIs(t, err, errExpected)
+	case <-time.After(time.Second):
+		t.Fatal("first waiter was not notified before fail-stop release")
+	}
+	select {
+	case err := <-secondWait:
+		require.ErrorIs(t, err, errExpected)
+	case <-time.After(time.Second):
+		t.Fatal("second waiter was not notified before fail-stop release")
+	}
+	release()
+	require.Equal(t, int32(2), callbacks.Load())
+	require.Zero(t, client.appendCalls.Load())
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.Zero(t, d.getCommittedDSNWatermark())
+
+	// The wait loop may notify the same committer again during close; the
+	// writer's cleared ownership list must keep both terminal results stable.
+	require.NoError(t, d.Close())
+	require.ErrorIs(t, first.WaitDone(), errExpected)
+	require.ErrorIs(t, second.WaitDone(), errExpected)
 }
 
 type failingBackendClient struct {
