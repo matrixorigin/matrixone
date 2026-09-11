@@ -182,7 +182,8 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		wantErr string
 	}{
 		{name: "bit", typ: types.T_bit.ToType(), data: types.EncodeUint64(ptr(uint64(7))), want: "7"},
-		{name: "bool", typ: types.T_bool.ToType(), data: []byte{1}, want: "true"},
+		{name: "bool false", typ: types.T_bool.ToType(), data: []byte{0}, want: "0"},
+		{name: "bool true", typ: types.T_bool.ToType(), data: []byte{1}, want: "1"},
 		{name: "int8", typ: types.T_int8.ToType(), data: []byte{0xfe}, want: "-2"},
 		{name: "int16", typ: types.T_int16.ToType(), data: types.EncodeInt16(ptr(int16(-3))), want: "-3"},
 		{name: "int32", typ: types.T_int32.ToType(), data: types.EncodeInt32(ptr(int32(-4))), want: "-4"},

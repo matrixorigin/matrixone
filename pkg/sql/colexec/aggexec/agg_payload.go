@@ -168,7 +168,10 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	case types.T_bit, types.T_uint64:
 		return writeValue(*util.UnsafeFromBytes[uint64](data))
 	case types.T_bool:
-		return writeValue(*util.UnsafeFromBytes[bool](data))
+		if *util.UnsafeFromBytes[bool](data) {
+			return writeBytes([]byte("1"))
+		}
+		return writeBytes([]byte("0"))
 	case types.T_int8:
 		return writeValue(*util.UnsafeFromBytes[int8](data))
 	case types.T_int16:
