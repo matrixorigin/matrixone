@@ -45,8 +45,8 @@ import (
 const (
 	getSpecialTablesInfoFormat = "" +
 		"select " +
-		"	cast (count(distinct md.dat_id) as bigint), " +
-		"	cast (count(distinct mt.rel_id) as bigint) " +
+		"	cast(count(distinct md.dat_id) as bigint), " +
+		"	cast(count(distinct mt.rel_id) as bigint) " +
 		"from mo_catalog.mo_tables as mt, mo_catalog.mo_database as md " +
 		"where" +
 		"	mt.relkind in ('v','e','r','cluster') and " +
