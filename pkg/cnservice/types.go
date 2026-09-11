@@ -503,6 +503,9 @@ func (c *Config) Validate() error {
 	if err := c.Sirius.validate(); err != nil {
 		return err
 	}
+	if err := c.PythonUdfClient.Validate(); err != nil {
+		return err
+	}
 
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()

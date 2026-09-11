@@ -25,13 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/udf"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 )
 
 type cloneDatabaseSource struct {
@@ -680,17 +681,12 @@ func validateCloneUserDefinedFunctions(functions []userDefinedFunctionDefinition
 			)
 		}
 		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
-			var body function.PythonRoutineBody
-			if err := json.Unmarshal([]byte(definition.body), &body); err != nil ||
-				body.Handler == "" || body.Source == "" ||
-				(body.Mode != "SCALAR" && body.Mode != "VECTOR") ||
-				(body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull) ||
-				body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion ||
-				body.SDKVersion != udf.PythonSDKVersion {
+			if _, err := function.DecodePythonRoutineBody(definition.body); err != nil {
 				return moerr.NewNotSupportedNoCtxf(
-					"CREATE DATABASE CLONE with incomplete %s function %s is not supported",
+					"CREATE DATABASE CLONE with unsupported %s function %s is not supported: %v",
 					definition.lang,
 					definition.name,
+					err,
 				)
 			}
 		}
@@ -793,11 +789,35 @@ func restoreCloneDatabaseUserDefinedFunctions(
 	tenant *TenantInfo,
 	functions []userDefinedFunctionDefinition,
 	dbName string,
+	artifactFileServices ...fileservice.FileService,
 ) error {
-	for _, function := range functions {
-		function.dbName = dbName
+	var artifactStore *pythonudf.FileArtifactStore
+	if len(artifactFileServices) > 0 && artifactFileServices[0] != nil {
+		var err error
+		artifactStore, err = pythonudf.NewFileArtifactStore(
+			artifactFileServices[0],
+			pythonudf.DefaultMaxArtifactBytes,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	for _, definition := range functions {
+		definition.dbName = dbName
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			if artifactStore == nil {
+				return moerr.NewNotSupportedNoCtx("Python artifact store is required to clone a current Python routine")
+			}
+			body, err := function.DecodePythonRoutineBody(definition.body)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python clone source is invalid: %v", err)
+			}
+			if _, err := artifactStore.Publish(ctx, uint64(tenant.GetTenantID()), body.Handler, body.Source); err != nil {
+				return err
+			}
+		}
 		if err := persistUserDefinedFunction(
-			ctx, bh, tenant, tenant.GetDefaultRoleID(), function, nil,
+			ctx, bh, tenant, tenant.GetDefaultRoleID(), definition, nil,
 		); err != nil {
 			return err
 		}

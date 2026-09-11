@@ -2083,6 +2083,11 @@ func constantFoldWithPreparedExactSource(
 	if fn == nil || proc == nil {
 		return expr, nil
 	}
+	// Typed external routines are execute-time calls. Do not let statistics or
+	// binder-side folding execute or replace a captured FunctionRef/revision.
+	if fn.RoutineCall != nil {
+		return expr, nil
+	}
 
 	overloadID := fn.Func.GetObj()
 	functionID, _ := function.DecodeOverloadID(overloadID)

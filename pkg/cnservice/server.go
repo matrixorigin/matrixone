@@ -243,8 +243,12 @@ func NewService(
 	var udfServices []udf.Runtime
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.Enabled {
+		artifactStore, storeErr := python.NewFileArtifactStore(srv.fileService, python.DefaultMaxArtifactBytes)
+		if storeErr != nil {
+			panic(storeErr)
+		}
 		var pc *python.Gateway
-		pc, err = python.NewGateway(srv.cfg.PythonUdfClient)
+		pc, err = python.NewGatewayWithArtifactStore(srv.cfg.PythonUdfClient, artifactStore)
 		if err != nil {
 			panic(err)
 		}

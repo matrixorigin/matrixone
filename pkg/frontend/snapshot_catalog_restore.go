@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 )
 
 type systemCatalogRestorePolicy uint8
@@ -79,10 +83,27 @@ var systemCatalogPostRestoreHandlers = []systemCatalogPostRestoreHandler{
 
 const rolePrivilegeRestoreInsertBatchSize = 256
 
-const userDefinedFunctionCatalogColumns = `function_id, name, owner, args, arg_types, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+const userDefinedFunctionCatalogColumns = `function_id, active_revision, namespace_version, name, owner, args, arg_types, canonical_input_descriptor, return_descriptor, signature_key_schema_version, signature_fingerprint, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
 
-const userDefinedFunctionCatalogSourceColumns = `function_id, name, owner, args, ` +
-	catalog.UserDefinedFunctionArgumentTypesSQL + `, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+const userDefinedFunctionCatalogSourceColumns = `function_id, active_revision, namespace_version, name, owner, args, ` +
+	catalog.UserDefinedFunctionArgumentTypesSQL + `, canonical_input_descriptor, return_descriptor, signature_key_schema_version, signature_fingerprint, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+
+// userDefinedFunctionCatalogRevisionSourceColumns preserves immutable heads
+// from a snapshot that has the revision columns but predates the exact
+// descriptor identity fields. Python rows from such a snapshot remain
+// rejected by the current resolver because their identity metadata is absent;
+// ordinary SQL rows retain their historical catalog behavior.
+const userDefinedFunctionCatalogRevisionSourceColumns = `function_id, active_revision, namespace_version, name, owner, args, ` +
+	catalog.UserDefinedFunctionArgumentTypesSQL + `, '', '', 0, '', retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+
+// userDefinedFunctionCatalogLegacySourceColumns is used for snapshots whose
+// historical table predates immutable revision heads. Such rows remain
+// usable for existing SQL catalog behavior, while the new Python resolver
+// rejects the zero revision and requires an explicit CREATE/replace.
+const userDefinedFunctionCatalogLegacySourceColumns = `function_id, 0, 0, name, owner, args, ` +
+	catalog.UserDefinedFunctionArgumentTypesSQL + `, '', '', 0, '', retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+
+const functionRevisionCatalogColumns = `function_id, revision, namespace_version, name, args, arg_types, rettype, body, language, definition_schema_version, abi_contract, adapter_version, artifact_digest, environment_digest, sdk_version, null_policy, volatility, definition_fingerprint, created_time, security_type`
 
 // isCurrentSchemaUserDefinedFunctionCatalog identifies the catalog whose
 // schema is owned by the running binary. Restoring a historical CREATE TABLE
@@ -90,6 +111,14 @@ const userDefinedFunctionCatalogSourceColumns = `function_id, name, owner, args,
 // already complete.
 func isCurrentSchemaUserDefinedFunctionCatalog(tblInfo *tableInfo) bool {
 	return tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_user_defined_function"
+}
+
+// isCurrentFunctionRevisionCatalog identifies the immutable shared revision
+// catalog whose schema is owned by the running binary. A historical CREATE
+// TABLE must never replace it: SQL and Python resolvers need every contract
+// column to reject stale or partially restored definitions before execution.
+func isCurrentFunctionRevisionCatalog(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_function_revisions"
 }
 
 // restoreUserDefinedFunctionCatalogWithCurrentSchema restores historical UDF
@@ -103,6 +132,7 @@ func restoreUserDefinedFunctionCatalogWithCurrentSchema(
 	sourceSnapshot string,
 	sourceAccount uint32,
 	targetAccount uint32,
+	sourceCreateSQL string,
 ) error {
 	targetCtx := defines.AttachAccountId(ctx, targetAccount)
 	tableName := qualifiedTableName(moCatalog, "mo_user_defined_function")
@@ -113,11 +143,22 @@ func restoreUserDefinedFunctionCatalogWithCurrentSchema(
 		return err
 	}
 
+	sourceColumns := userDefinedFunctionCatalogLegacySourceColumns
+	lowerCreateSQL := strings.ToLower(sourceCreateSQL)
+	if strings.Contains(lowerCreateSQL, "active_revision") && strings.Contains(lowerCreateSQL, "namespace_version") {
+		sourceColumns = userDefinedFunctionCatalogRevisionSourceColumns
+		if strings.Contains(lowerCreateSQL, "canonical_input_descriptor") &&
+			strings.Contains(lowerCreateSQL, "return_descriptor") &&
+			strings.Contains(lowerCreateSQL, "signature_key_schema_version") &&
+			strings.Contains(lowerCreateSQL, "signature_fingerprint") {
+			sourceColumns = userDefinedFunctionCatalogSourceColumns
+		}
+	}
 	copySQL := fmt.Sprintf(
 		"insert into %s (%s) select %s from %s%s",
 		tableName,
 		userDefinedFunctionCatalogColumns,
-		userDefinedFunctionCatalogSourceColumns,
+		sourceColumns,
 		tableName,
 		sourceSnapshot,
 	)
@@ -125,6 +166,285 @@ func restoreUserDefinedFunctionCatalogWithCurrentSchema(
 		return bh.Exec(targetCtx, copySQL)
 	}
 	return bh.ExecRestore(targetCtx, copySQL, sourceAccount, targetAccount)
+}
+
+// validateRestoredFunctionRevisionCatalog validates the shared immutable
+// revision table. Each language owns a distinct typed implementation contract;
+// accepting a SQL row as Python (or vice versa) would make restore fail for a
+// valid mixed catalog or publish a row that the resolver cannot execute.
+func validateRestoredFunctionRevisionCatalog(
+	ctx context.Context,
+	bh BackgroundExec,
+	targetCtx context.Context,
+) error {
+	tableName := qualifiedTableName(moCatalog, "mo_function_revisions")
+	query := fmt.Sprintf(
+		"select %s from %s order by function_id, revision;",
+		functionRevisionCatalogColumns,
+		tableName,
+	)
+	rows, err := getStringColsList(targetCtx, bh, query, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python revision catalog cannot be validated: %w", err)
+	}
+	for rowIndex, row := range rows {
+		if len(row) != 20 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python revision row %d has %d columns", rowIndex, len(row))
+		}
+		functionID, err := strconv.ParseUint(row[0], 10, 64)
+		if err != nil || functionID == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python revision row %d has an invalid function identity", rowIndex)
+		}
+		revision, err := strconv.ParseUint(row[1], 10, 64)
+		if err != nil || revision == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d has an invalid revision", functionID)
+		}
+		namespace, err := strconv.ParseUint(row[2], 10, 64)
+		if err != nil || namespace == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d has an invalid namespace version", functionID)
+		}
+		definitionSchema, err := strconv.Atoi(row[9])
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored function %d revision %d has an invalid definition schema", functionID, revision)
+		}
+		if strings.EqualFold(row[8], udf.LanguageSQL) {
+			if err := validateRestoredSQLFunctionRevision(functionID, revision, row, definitionSchema); err != nil {
+				return err
+			}
+			continue
+		}
+		if !strings.EqualFold(row[8], udf.LanguagePython) ||
+			definitionSchema != udf.PythonDefinitionSchemaVersion ||
+			row[10] != udf.PythonABIContract ||
+			row[11] != udf.PythonAdapterVersion ||
+			row[14] != udf.PythonSDKVersion ||
+			!strings.EqualFold(row[16], "VOLATILE") ||
+			!strings.EqualFold(row[19], "INVOKER") {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored function %d revision %d has an unsupported execution contract", functionID, revision)
+		}
+
+		body, err := function.DecodePythonRoutineBody(row[7])
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d body is invalid: %w", functionID, revision, err)
+		}
+		if body.DefinitionSchemaVersion != definitionSchema ||
+			body.ABIContract != row[10] ||
+			body.AdapterVersion != row[11] ||
+			body.ArtifactDigest != row[12] ||
+			body.EnvironmentDigest != row[13] ||
+			body.SDKVersion != row[14] ||
+			body.NullPolicy != row[15] {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d metadata does not match its definition", functionID, revision)
+		}
+		fingerprint, err := function.PythonRoutineFingerprint(row[7])
+		if err != nil || row[17] == "" || row[17] != fingerprint {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d fingerprint mismatch", functionID, revision)
+		}
+		// `args` retains the shared logical names while `arg_types` in the
+		// current Python revision is the exact descriptor identity used for
+		// overload selection. Validate both representations independently;
+		// comparing arg_types with the logical OID list would reject every
+		// current Python revision after restore.
+		if _, err := userDefinedFunctionArgumentTypesFromJSON(row[4]); err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d arguments are invalid: %w", functionID, revision, err)
+		}
+		var args []*function.Arg
+		if err := json.Unmarshal([]byte(row[4]), &args); err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d arguments are invalid: %w", functionID, revision, err)
+		}
+		routine := &function.Udf{
+			Language:         udf.LanguagePython,
+			Args:             args,
+			RetType:          row[6],
+			PythonArgTypes:   append([]function.PythonTypeDescriptor(nil), body.ArgTypes...),
+			PythonReturnType: body.ReturnType,
+		}
+		if err := routine.ValidatePythonTypeContract(); err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d type contract mismatch: %w", functionID, revision, err)
+		}
+		if err := routine.ValidatePythonCatalogSignature(); err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d catalog signature mismatch: %w", functionID, revision, err)
+		}
+		expectedInput, _, _, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
+		if err != nil || row[5] != expectedInput {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d revision %d argument descriptor mismatch", functionID, revision)
+		}
+	}
+	return nil
+}
+
+func validateRestoredSQLFunctionRevision(functionID, revision uint64, row []string, definitionSchema int) error {
+	if definitionSchema != udf.SQLDefinitionSchemaVersion ||
+		row[10] != "" || row[11] != "" || row[12] != "" || row[13] != "" || row[14] != "" ||
+		row[15] != udf.NullCallHandler || !strings.EqualFold(row[16], "VOLATILE") ||
+		!strings.EqualFold(row[19], "DEFINER") {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d revision %d has an unsupported execution contract", functionID, revision)
+	}
+	logicalArgTypes, err := userDefinedFunctionArgumentTypesFromJSON(row[4])
+	if err != nil || logicalArgTypes != row[5] {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d revision %d argument metadata is invalid", functionID, revision)
+	}
+	fingerprint, err := function.SQLRoutineFingerprint(row[7], row[5], row[6])
+	if err != nil || row[17] == "" || row[17] != fingerprint {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d revision %d fingerprint mismatch", functionID, revision)
+	}
+	return nil
+}
+
+// validateRestoredFunctionCatalogHeads checks the other half of the shared
+// immutable publication. The revision validator proves each copied row is
+// self-consistent; this check proves that the active head points at that exact
+// row after restore.
+func validateRestoredFunctionCatalogHeads(
+	ctx context.Context,
+	bh BackgroundExec,
+	targetCtx context.Context,
+) error {
+	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
+		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
+		f.canonical_input_descriptor, f.return_descriptor,
+		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
+		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
+		lower(f.language), coalesce(r.definition_fingerprint, ''),
+		coalesce(r.security_type, ''), coalesce(f.security_type, '')
+		from mo_catalog.mo_user_defined_function f
+		left join mo_catalog.mo_function_revisions r
+			on r.function_id = f.function_id and r.revision = f.active_revision
+			and r.namespace_version = f.namespace_version
+		where lower(f.language) in ("python", "sql")
+		order by f.function_id;`
+	rows, err := getStringColsList(targetCtx, bh, query, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog heads cannot be validated: %w", err)
+	}
+	for rowIndex, row := range rows {
+		if len(row) != 16 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has %d columns", rowIndex, len(row))
+		}
+		functionID, err := strconv.ParseUint(row[0], 10, 64)
+		if err != nil || functionID == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has an invalid function identity", rowIndex)
+		}
+		activeRevision, err := strconv.ParseUint(row[1], 10, 64)
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid active revision: %v", functionID, err)
+		}
+		namespaceVersion, err := strconv.ParseUint(row[2], 10, 64)
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid namespace version: %v", functionID, err)
+		}
+		language := strings.ToLower(row[12])
+		if language == udf.LanguageSQL && activeRevision == 0 && namespaceVersion == 0 {
+			// Legacy SQL rows predate the shared revision table and retain their
+			// old execution path. A current SQL head is validated below.
+			continue
+		}
+		if activeRevision == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has no active immutable revision", language, functionID)
+		}
+		if namespaceVersion == 0 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has an invalid namespace version", language, functionID)
+		}
+		revision, err := strconv.ParseUint(row[3], 10, 64)
+		if err != nil || revision != activeRevision {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d active revision does not exist", language, functionID)
+		}
+		revisionNamespace, err := strconv.ParseUint(row[4], 10, 64)
+		if err != nil || revisionNamespace != namespaceVersion {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d head namespace does not match its revision", language, functionID)
+		}
+		if language == udf.LanguageSQL {
+			if row[10] == "" || row[11] == "" {
+				return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has incomplete active revision", functionID)
+			}
+			if !strings.EqualFold(row[14], "DEFINER") || !strings.EqualFold(row[15], "DEFINER") {
+				return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has inconsistent security contract", functionID)
+			}
+			expectedFingerprint, fingerprintErr := function.SQLRoutineFingerprint(row[11], row[9], row[10])
+			if fingerprintErr != nil || row[13] == "" || row[13] != expectedFingerprint {
+				return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d head fingerprint does not match its active revision", functionID)
+			}
+			continue
+		}
+		if language != udf.LanguagePython {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored function %d has unsupported language %q", functionID, row[12])
+		}
+		if row[5] == "" || row[6] == "" || row[7] == "" || row[8] == "" || row[9] == "" || row[10] == "" || row[11] == "" || row[13] == "" ||
+			!strings.EqualFold(row[14], "INVOKER") || !strings.EqualFold(row[15], "INVOKER") ||
+			!strings.EqualFold(row[14], row[15]) {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d has incomplete head identity", functionID)
+		}
+		body, err := function.DecodePythonRoutineBody(row[11])
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head body is invalid: %w", functionID, err)
+		}
+		input, output, signature, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head signature is invalid: %w", functionID, err)
+		}
+		bodyFingerprint, fingerprintErr := function.PythonRoutineFingerprint(row[11])
+		if fingerprintErr != nil || row[13] != bodyFingerprint ||
+			row[5] != input || row[6] != output || row[7] != strconv.Itoa(udf.PythonSignatureKeySchemaVersion) || row[8] != signature || row[9] != input {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head identity does not match its active revision", functionID)
+		}
+	}
+	return nil
+}
+
+// restoreFunctionRevisionCatalogWithCurrentSchema restores only a revision
+// table that already carries the current immutable shared contract. Older/demo
+// revision tables are intentionally left empty after the current table is
+// created. Their rows cannot be losslessly interpreted by the new resolver, and
+// the corresponding active head will be rejected until the function is
+// explicitly recreated with the current DDL.
+func restoreFunctionRevisionCatalogWithCurrentSchema(
+	ctx context.Context,
+	bh BackgroundExec,
+	sourceSnapshot string,
+	sourceAccount uint32,
+	targetAccount uint32,
+	sourceCreateSQL string,
+) error {
+	targetCtx := defines.AttachAccountId(ctx, targetAccount)
+	tableName := qualifiedTableName(moCatalog, "mo_function_revisions")
+	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, "mo_function_revisions")); err != nil {
+		return err
+	}
+	if err := bh.Exec(targetCtx, MoCatalogMoFunctionRevisionDDL); err != nil {
+		return err
+	}
+
+	// Requiring every current column makes the refusal stable for all older
+	// layouts. Checking the CREATE text also avoids querying a historical table
+	// with columns that only exist in the target schema.
+	lowerCreateSQL := strings.ToLower(sourceCreateSQL)
+	for _, column := range strings.Split(functionRevisionCatalogColumns, ", ") {
+		if !strings.Contains(lowerCreateSQL, strings.ToLower(column)) {
+			return nil
+		}
+	}
+
+	copySQL := fmt.Sprintf(
+		"insert into %s (%s) select %s from %s%s",
+		tableName,
+		functionRevisionCatalogColumns,
+		functionRevisionCatalogColumns,
+		tableName,
+		sourceSnapshot,
+	)
+	if sourceAccount == targetAccount {
+		if err := bh.Exec(targetCtx, copySQL); err != nil {
+			return err
+		}
+	} else if err := bh.ExecRestore(targetCtx, copySQL, sourceAccount, targetAccount); err != nil {
+		return err
+	}
+	// A current revision table is executable metadata. Validate the copied
+	// rows after the transport has completed so a backup/restore or cross
+	// account path cannot publish a row whose body, logical catalog columns,
+	// digest, or current ABI disagree. The resolver repeats this check at bind
+	// time; restore must fail early as well, before a bad head can be reused.
+	return validateRestoredFunctionRevisionCatalog(ctx, bh, targetCtx)
 }
 
 func restoreSystemCatalogsAfterObjects(
@@ -149,6 +469,83 @@ func restoreSystemCatalogsAfterObjects(
 	for _, entry := range systemCatalogPostRestoreHandlers {
 		if err := entry.handler(restoreCtx); err != nil {
 			return err
+		}
+	}
+	if bh == nil {
+		return nil
+	}
+	if err := validateRestoredFunctionCatalogHeads(
+		ctx,
+		bh,
+		defines.AttachAccountId(ctx, targetAccount),
+	); err != nil {
+		return err
+	}
+	return publishRestoredPythonArtifacts(
+		ctx,
+		sid,
+		bh,
+		defines.AttachAccountId(ctx, targetAccount),
+		targetAccount,
+	)
+}
+
+// publishRestoredPythonArtifacts rebuilds the account-scoped immutable
+// artifact objects after a catalog restore. Catalog rows and FileService
+// objects are separate persistence domains; copying only the revision table
+// would leave a syntactically valid head that cannot execute after restore.
+// This runs after all catalog identity/head checks, uses the exact restored
+// revision body, and publishes write-once objects before restore returns.
+func publishRestoredPythonArtifacts(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	targetCtx context.Context,
+	targetAccount uint32,
+) error {
+	rows, err := getStringColsList(
+		targetCtx,
+		bh,
+		"select language, artifact_digest, body from mo_catalog.mo_function_revisions order by function_id, revision;",
+		0, 1, 2,
+	)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python artifacts cannot be inspected: %w", err)
+	}
+	needStore := false
+	for rowIndex, row := range rows {
+		if len(row) != 3 {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored revision row %d has %d artifact columns", rowIndex, len(row))
+		}
+		if strings.EqualFold(row[0], udf.LanguagePython) {
+			needStore = true
+			break
+		}
+	}
+	if !needStore {
+		return nil
+	}
+	pu := getPuIfPresent(sid)
+	if pu == nil || pu.FileService == nil {
+		return moerr.NewNotSupportedNoCtx("Python artifact store is required to restore a current Python revision")
+	}
+	store, err := pythonudf.NewFileArtifactStore(pu.FileService, pythonudf.DefaultMaxArtifactBytes)
+	if err != nil {
+		return err
+	}
+	for rowIndex, row := range rows {
+		if !strings.EqualFold(row[0], udf.LanguagePython) {
+			continue
+		}
+		body, decodeErr := function.DecodePythonRoutineBody(row[2])
+		if decodeErr != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python artifact row %d is invalid: %w", rowIndex, decodeErr)
+		}
+		if body.ArtifactDigest != row[1] {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored Python artifact row %d digest does not match its revision", rowIndex)
+		}
+		if _, publishErr := store.Publish(ctx, uint64(targetAccount), body.Handler, body.Source); publishErr != nil {
+			return publishErr
 		}
 	}
 	return nil

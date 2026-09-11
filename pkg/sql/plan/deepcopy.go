@@ -858,6 +858,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
 		DetectSqls:          slices.Clone(qry.DetectSqls),
 		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		RoutineDependencies: make([]*plan.RoutinePlanDependency, len(qry.RoutineDependencies)),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
@@ -873,6 +874,11 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 					Table: DeepCopyObjectRef(hint.Table), IndexName: hint.IndexName,
 				}
 			}
+		}
+	}
+	for idx, dependency := range qry.RoutineDependencies {
+		if dependency != nil {
+			newQry.RoutineDependencies[idx] = proto.Clone(dependency).(*plan.RoutinePlanDependency)
 		}
 	}
 	return newQry
@@ -1262,6 +1268,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		for idx, arg := range item.F.Args {
 			newArgs[idx] = DeepCopyExpr(arg)
 		}
+		var routineCall *plan.RoutineCall
+		if item.F.RoutineCall != nil {
+			routineCall = proto.Clone(item.F.RoutineCall).(*plan.RoutineCall)
+		}
 		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
 				Func:               DeepCopyObjectRef(item.F.Func),
@@ -1269,6 +1279,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				AggConfig:          bytes.Clone(item.F.AggConfig),
 				AggConfigType:      item.F.AggConfigType,
 				SyntaxExplicitCast: item.F.SyntaxExplicitCast,
+				RoutineCall:        routineCall,
 			},
 		}
 

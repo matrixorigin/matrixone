@@ -23,3 +23,28 @@ func TestClientConfigRequiresExplicitUnisolatedOptIn(t *testing.T) {
 	config.RequestTimeout = time.Second
 	require.NoError(t, config.Validate())
 }
+
+func TestClientConfigRejectsUnboundedInvocationAdmission(t *testing.T) {
+	config := &ClientConfig{
+		Enabled:              true,
+		AllowUnisolated:      true,
+		ServerAddress:        "127.0.0.1:50051",
+		MaxActiveInvocations: -1,
+	}
+	require.ErrorContains(t, config.Validate(), "max active invocations")
+	config.MaxActiveInvocations = 1 << 20
+	require.NoError(t, config.Validate())
+	config.MaxActiveInvocations++
+	require.ErrorContains(t, config.Validate(), "max active invocations")
+}
+
+func TestClientConfigRejectsInvalidInvocationBudgets(t *testing.T) {
+	config := &ClientConfig{
+		Enabled: true, AllowUnisolated: true, ServerAddress: "127.0.0.1:50051",
+		MaxInvocationRows: -1,
+	}
+	require.ErrorContains(t, config.Validate(), "max invocation rows")
+	config.MaxInvocationRows = 1
+	config.MaxInvocationResultBytes = -1
+	require.ErrorContains(t, config.Validate(), "max invocation result bytes")
+}

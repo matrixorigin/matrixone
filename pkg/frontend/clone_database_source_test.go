@@ -48,6 +48,14 @@ type erroringBackgroundExec struct {
 	err error
 }
 
+func configureSQLFunctionIdentityLookup(bh *backgroundExecTest, functionID int64) {
+	bh.beforeExec = func(sql string) {
+		if strings.HasPrefix(sql, "select function_id from mo_catalog.mo_user_defined_function where name = ") {
+			bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{functionID, nil, nil}})
+		}
+	}
+}
+
 func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
 	if err := bt.backgroundExecTest.Exec(ctx, sql); err != nil {
 		return err
@@ -172,7 +180,7 @@ func TestUdfCatalogLookupUsesSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), accountID)
 	require.Equal(t,
-		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where name = "f_snapshot" and db = "source_db";`,
+		`select function_id, args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where name = "f_snapshot" and db = "source_db";`,
 		sql,
 	)
 
@@ -180,9 +188,23 @@ func TestUdfCatalogLookupUsesSnapshot(t *testing.T) {
 	_, err = defines.GetAccountId(queryCtx)
 	require.Error(t, err)
 	require.Equal(t,
-		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "f_live" and db = "live_db";`,
+		`select function_id, args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "f_live" and db = "live_db";`,
 		sql,
 	)
+}
+
+func TestPythonRevisionCatalogLookupUsesSameSnapshotForBothTables(t *testing.T) {
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 99}}
+	query := pythonRevisionCatalogSQL(snapshot, 41)
+	require.Contains(t, query, "from mo_catalog.mo_user_defined_function {MO_TS = 99} f")
+	require.Contains(t, query, "join mo_catalog.mo_function_revisions {MO_TS = 99} r")
+	require.Contains(t, query, "r.namespace_version = f.namespace_version")
+	require.Contains(t, query, "where f.function_id = 41;")
+
+	liveQuery := pythonRevisionCatalogSQL(nil, 41)
+	require.Contains(t, liveQuery, "from mo_catalog.mo_user_defined_function f")
+	require.Contains(t, liveQuery, "join mo_catalog.mo_function_revisions r")
+	require.Contains(t, liveQuery, "r.namespace_version = f.namespace_version")
 }
 
 func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) {
@@ -295,19 +317,26 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+	configureSQLFunctionIdentityLookup(bh, 1)
 	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
-	require.Len(t, bh.executedSQLs, 1)
-	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
-	require.Contains(t, bh.executedSQLs[0], "\"f_answer\",2")
-	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
-	require.Contains(t, bh.executedSQLs[0], "\"root1\"")
+	require.Len(t, bh.executedSQLs, 5)
+	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSQLs[0])
+	require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[1], "\"f_answer\",2")
+	require.Contains(t, bh.executedSQLs[1], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[1], "\"root1\"")
+	require.Contains(t, bh.executedSQLs[2], "select function_id from mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_function_revisions")
+	require.Contains(t, bh.executedSQLs[4], "update mo_catalog.mo_user_defined_function set active_revision")
 	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
 	// the behavior under test rather than coupling this regression to its style.
-	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
+	require.Contains(t, bh.executedSQLs[1], "PIPES_AS_CONCAT")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
 	failingBase := &backgroundExecTest{}
 	failingBase.init()
+	failingBase.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
 	wantErr := errors.New("function persistence failed")
 	failing := &erroringBackgroundExec{backgroundExecTest: failingBase, err: wantErr}
 	require.ErrorIs(t, restoreCloneDatabaseUserDefinedFunctions(ctx, failing, tenant, []userDefinedFunctionDefinition{function}, "target_db"), wantErr)

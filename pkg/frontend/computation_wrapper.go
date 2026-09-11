@@ -1430,6 +1430,11 @@ func initExecuteStmtParamWithResolverInSession(
 	currentDDLVersion := owner.getDDLVersion()
 	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
 		prepareStmt.ddlVersion != currentDDLVersion
+	routineChanged, routineErr := validateRoutinePlanDependencies(reqCtx, executionSes, executionPlan)
+	if routineErr != nil {
+		return nil, nil, nil, "", false, routineErr
+	}
+	change = change || routineChanged
 	var preparedMetadataTS timestamp.Timestamp
 	if catalogCache != nil {
 		preparedMetadataTS = catalogCache.GetPreparedMetadataTS()

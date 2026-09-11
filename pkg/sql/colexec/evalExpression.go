@@ -350,6 +350,29 @@ func newExpressionExecutorWithAllocation(
 		return executor, nil
 
 	case *plan.Expr_F:
+		if routineCall := t.F.GetRoutineCall(); routineCall != nil {
+			parameters := make([]ExpressionExecutor, len(t.F.Args))
+			for i := range parameters {
+				child, childErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
+				if childErr != nil {
+					for j := 0; j < i; j++ {
+						parameters[j].Free()
+					}
+					return nil, childErr
+				}
+				parameters[i] = child
+			}
+			external, externalErr := newExternalRoutineEval(proc, routineCall, parameters, selection)
+			if externalErr != nil {
+				for _, parameter := range parameters {
+					if parameter != nil {
+						parameter.Free()
+					}
+				}
+				return nil, externalErr
+			}
+			return external, nil
+		}
 		overloadID := t.F.GetFunc().GetObj()
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {
@@ -1417,15 +1440,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	}
 	for i, parameter := range expr.parameterResults {
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
-		// They must be passed through unchanged; only column and non-folded
-		// function results map one-to-one to the input batch rows.
-		rowAligned := false
-		switch executor := expr.parameterExecutor[i].(type) {
-		case *ColumnExpressionExecutor:
-			rowAligned = true
-		case *FunctionExpressionExecutor:
-			rowAligned = !executor.folded.canFold
-		}
+		// They must be passed through unchanged. ExternalRoutineEval is included
+		// in the row-aligned set because it owns selection compaction and scatters
+		// its result back to the caller's row domain before returning.
+		rowAligned := expressionExecutorIsRowAligned(expr.parameterExecutor[i])
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {
@@ -1533,6 +1551,29 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 	}
 	return result, nil
+}
+
+// expressionExecutorIsRowAligned reports whether Eval returns one physical
+// value for every input row, even when it was called with a partial selection.
+// ExternalRoutineEval owns selection itself and scatters its result back to
+// the original row domain. Treating it as a constant here would pass the
+// un-compacted vector to a surrounding expression and make a masked nested
+// call read values from the wrong rows.
+func expressionExecutorIsRowAligned(executor ExpressionExecutor) bool {
+	switch executor := executor.(type) {
+	case *ColumnExpressionExecutor:
+		return true
+	case *ExternalRoutineEval:
+		return true
+	case *FunctionExpressionExecutor:
+		return !executor.folded.canFold
+	case *memoExpressionExecutor:
+		return expressionExecutorIsRowAligned(executor.state.executor)
+	case *memoRootExpressionExecutor:
+		return expressionExecutorIsRowAligned(executor.executor)
+	default:
+		return false
+	}
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {

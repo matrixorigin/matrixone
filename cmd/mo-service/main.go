@@ -764,10 +764,27 @@ func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
+		workerDone := s.Done()
+		select {
+		case <-roleCtx.Done():
+			if err := s.Close(); err != nil {
+				closeErr = err
+				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
+			}
+		case <-workerDone:
+			// A worker exit while the role is still running leaves CN with a
+			// configured but unusable Python runtime. Surface it as a fatal
+			// service event so the existing lifecycle supervisor drains CN
+			// before the worker dependency and does not accept partial service
+			// availability. A zero exit is still unexpected here.
+			if roleCtx.Err() == nil {
+				workerErr := s.Err()
+				if workerErr == nil {
+					workerErr = errors.New("process exited without an error")
+				}
+				closeErr = fmt.Errorf("Python UDF worker exited unexpectedly: %w", workerErr)
+				serviceLifecycle.notifyFatal(closeErr)
+			}
 		}
 	})
 	if err != nil {

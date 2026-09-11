@@ -127,6 +127,17 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 			} else {
 				writeUint32(h, 0)
 			}
+			if v.F.RoutineCall == nil {
+				writeByte(h, 0)
+			} else {
+				writeByte(h, 1)
+				if b, err := v.F.RoutineCall.Marshal(); err == nil {
+					writeUint32(h, uint32(len(b)))
+					_, _ = h.Write(b)
+				} else {
+					writeUint32(h, 0)
+				}
+			}
 			for _, a := range v.F.Args {
 				hashExprInto(h, a)
 			}
@@ -337,6 +348,9 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		if !objectRefEqual(av.F.Func, bv.F.Func) {
 			return false
 		}
+		if !routineCallEqual(av.F.RoutineCall, bv.F.RoutineCall) {
+			return false
+		}
 		if len(av.F.Args) != len(bv.F.Args) {
 			return false
 		}
@@ -394,6 +408,21 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		}
 		return true
 	}
+}
+
+func routineCallEqual(a, b *plan.RoutineCall) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	ab, aerr := a.Marshal()
+	bb, berr := b.Marshal()
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return bytes.Equal(ab, bb)
 }
 
 func literalEqual(typ plan.Type, a, b *plan.Literal) bool {

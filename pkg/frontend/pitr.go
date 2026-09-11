@@ -1597,6 +1597,21 @@ func reCreateTableWithPitr(
 			fmt.Sprintf(" {MO_TS = %d}", ts),
 			accountID,
 			accountID,
+			tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", ts),
+			accountID,
+			accountID,
+			tblInfo.createSql,
 		)
 	}
 	if isSequence(tblInfo) {
