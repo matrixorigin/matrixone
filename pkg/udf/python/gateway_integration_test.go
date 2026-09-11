@@ -70,6 +70,36 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 	require.NoError(t, gateway.CheckLanguageReady(readyContext, udf.LanguagePython))
 	cancel()
 
+	t.Run("definition validation", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), "executed")
+		source := fmt.Sprintf(
+			"from pathlib import Path\nPath(%q).write_text('executed')\ndef add(ctx, value): return value\n",
+			marker,
+		)
+		valid := integrationInvocationForArgs(
+			ModeScalar, "add", source,
+			[]types.Type{types.T_int64.ToType()}, nil, 0,
+			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation", GroupID: "definition-validation-group", GroupEpoch: 1, InvocationID: "valid", LeaseEpoch: 1},
+		)
+		publishIntegrationArtifact(t, artifactStore, valid)
+		definition := routineDefinitionForIntegration(valid)
+		validationContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		require.NoError(t, gateway.ValidateDefinition(validationContext, definition))
+		cancel()
+		require.NoFileExists(t, marker, "definition validation executed top-level Python code")
+
+		invalid := integrationInvocationForArgs(
+			ModeScalar, "add", "def add(ctx, value) return value",
+			[]types.Type{types.T_int64.ToType()}, nil, 0,
+			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation-invalid", GroupID: "definition-validation-invalid-group", GroupEpoch: 1, InvocationID: "invalid", LeaseEpoch: 1},
+		)
+		publishIntegrationArtifact(t, artifactStore, invalid)
+		validationContext, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		err := gateway.ValidateDefinition(validationContext, routineDefinitionForIntegration(invalid))
+		cancel()
+		require.ErrorContains(t, err, "USER_CODE: Python syntax error")
+	})
+
 	t.Run("scalar", func(t *testing.T) {
 		input, mp := integrationInput(t, []int64{1, 2, 3})
 		defer func() {
@@ -627,5 +657,24 @@ func integrationInvocationForArgs(
 		},
 		Context: statementValues,
 		Tuple:   tuple,
+	}
+}
+
+func routineDefinitionForIntegration(invocation *udf.Invocation) *udf.RoutineDefinition {
+	return &udf.RoutineDefinition{
+		Language:                udf.LanguagePython,
+		AccountID:               invocation.FunctionRef.AccountID,
+		Handler:                 invocation.Handler,
+		Args:                    append([]types.Type(nil), invocation.Args...),
+		ReturnType:              invocation.ReturnType,
+		Mode:                    invocation.Mode,
+		NullPolicy:              invocation.NullPolicy,
+		ABIContract:             invocation.ABIContract,
+		AdapterVersion:          invocation.AdapterVersion,
+		SDKVersion:              invocation.SDKVersion,
+		DefinitionSchemaVersion: invocation.DefinitionSchemaVersion,
+		ArtifactDigest:          invocation.ArtifactDigest,
+		EnvironmentDigest:       invocation.EnvironmentDigest,
+		DefinitionFingerprint:   invocation.DefinitionFingerprint,
 	}
 }

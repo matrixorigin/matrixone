@@ -47,13 +47,18 @@ func BenchmarkEncodeInputBatchFixedWidthRebuildBaseline(b *testing.B) {
 		input.Free(mp)
 		mpool.DeleteMPool(mp)
 	}()
+	encoder, err := newInputBatchEncoder([]*vector.Vector{input}, []types.Type{types.T_int64.ToType()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = encoder.close() }()
 
 	b.ReportAllocs()
 	b.SetBytes(int64(rows))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		batch, err := encodeInputBatchRebuildBaseline(
-			[]*vector.Vector{input}, []types.Type{types.T_int64.ToType()},
+			encoder,
 			0, rows, DefaultMaxBatchBytes, rows,
 		)
 		if err != nil {
@@ -69,6 +74,37 @@ func BenchmarkEncodeInputBatchVariableWidth(b *testing.B) {
 	benchmarkEncodeInputBatch(b, types.New(types.T_varchar, 64, 0))
 }
 
+func BenchmarkEncodeInputBatchVariableWidthRebuildBaseline(b *testing.B) {
+	const rows = 8192
+	typ := types.New(types.T_varchar, 64, 0)
+	input, mp := benchmarkInputVector(b, typ, rows)
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+	encoder, err := newInputBatchEncoder([]*vector.Vector{input}, []types.Type{typ})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = encoder.close() }()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(rows))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch, err := encodeInputBatchRebuildBaseline(
+			encoder,
+			0, rows, DefaultMaxBatchBytes, rows,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if batch.Rows != rows || len(batch.Frames) != 2 {
+			b.Fatalf("unexpected encoded batch rows=%d frames=%d", batch.Rows, len(batch.Frames))
+		}
+	}
+}
+
 func benchmarkEncodeInputBatch(b *testing.B, typ types.Type) {
 	const rows = 8192
 	input, mp := benchmarkInputVector(b, typ, rows)
@@ -76,13 +112,18 @@ func benchmarkEncodeInputBatch(b *testing.B, typ types.Type) {
 		input.Free(mp)
 		mpool.DeleteMPool(mp)
 	}()
+	encoder, err := newInputBatchEncoder([]*vector.Vector{input}, []types.Type{typ})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = encoder.close() }()
 
 	b.ReportAllocs()
 	b.SetBytes(int64(rows))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		batch, err := encodeInputBatch(
-			[]*vector.Vector{input}, []types.Type{typ}, 0, rows,
+		batch, err := encodeInputBatchWithEncoder(
+			encoder, 0, rows,
 			DefaultMaxBatchBytes, rows,
 		)
 		if err != nil {
@@ -96,21 +137,22 @@ func benchmarkEncodeInputBatch(b *testing.B, typ types.Type) {
 
 // encodeInputBatchRebuildBaseline is a benchmark-only reference for the
 // pre-optimization path. It intentionally rebuilds the Arrow record for every
-// size probe, while production encodeInputBatch slices one fixed-width record.
+// size probe while sharing the reusable Flight writer with production. This
+// measures input record construction and probe avoidance without counting
+// repeated schema serialization as a second optimization.
 func encodeInputBatchRebuildBaseline(
-	inputs []*vector.Vector,
-	args []types.Type,
+	encoder *inputBatchEncoder,
 	start, remaining, maxBytes, maxRows int64,
 ) (encodedRecordBatch, error) {
 	if remaining > maxRows {
 		remaining = maxRows
 	}
 	tryEncode := func(rows int64) ([]ArrowFrame, error) {
-		record, _, err := BuildInputRecordRange(inputs, args, int(start), int(rows))
+		record, _, err := BuildInputRecordRange(encoder.inputs, encoder.args, int(start), int(rows))
 		if err != nil {
 			return nil, err
 		}
-		frames, encodeErr := EncodeRecordBatch(record, maxBytes)
+		frames, encodeErr := encoder.encode(record, maxBytes)
 		record.Release()
 		return frames, encodeErr
 	}
