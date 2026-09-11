@@ -1895,7 +1895,7 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion35
 }
 
-// Decimal SUM must use the pre-v63 state on every side of a distributed
+// Decimal SUM must use the pre-v64 state on every side of a distributed
 // aggregation while the cluster protocol is still mixed. Unlike the older
 // remote-only gates, this includes the coordinator's local MergeGroup: it may
 // consume a partial produced by an older CN.
@@ -1909,7 +1909,7 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion63
+	return !ok || !valid || version < defines.MORPCVersion64
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

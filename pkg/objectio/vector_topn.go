@@ -177,6 +177,9 @@ func (a *vectorTopAccumulator) consume(ctx context.Context, vec *vector.Vector, 
 		if localRow < 0 || localRow >= int64(vec.Length()) || nulls.Contains(uint64(localRow)) {
 			continue
 		}
+		if order.Stats != nil {
+			order.Stats.VectorRowsScored++
+		}
 		dist, err := a.distOf(vec.GetBytesAt(int(localRow)))
 		if err != nil {
 			return err
@@ -251,7 +254,11 @@ func TopNVector(ctx context.Context, selectRows []int64, vecCol *vector.Vector, 
 	if err = acc.consume(ctx, vecCol, 0, selectRows, 0); err != nil {
 		return nil, nil, err
 	}
-	return acc.finish()
+	rows, distances, err := acc.finish()
+	if err == nil {
+		recordVectorTopKOutput(orderByLimit, len(rows))
+	}
+	return rows, distances, err
 }
 
 // SearchCachedVectorTopN computes TopN while the caller-held IOEntry cache
@@ -267,5 +274,29 @@ func SearchCachedVectorTopN(
 		return nil, nil, err
 	}
 	defer source.Free(nil)
+	recordVectorChunk(orderByLimit, entry)
 	return TopNVector(ctx, selectRows, &source, orderByLimit)
+}
+
+func recordVectorTopKOutput(top *IndexReaderTopOp, rows int) {
+	if top == nil || top.Stats == nil || rows <= 0 {
+		return
+	}
+	top.Stats.TopKOutputRows += uint64(rows)
+}
+
+func recordVectorChunk(top *IndexReaderTopOp, entry fileservice.IOEntry) {
+	if top == nil || top.Stats == nil {
+		return
+	}
+	top.Stats.VectorChunksRead++
+	if entry.WasFromCache() {
+		top.Stats.VectorChunkCacheHits++
+	}
+	if entry.Size > 0 {
+		top.Stats.VectorCompressedBytes += uint64(entry.Size)
+	}
+	if entry.CachedData != nil && entry.CachedData.Size() > 0 {
+		top.Stats.VectorDecodedBytes += uint64(entry.CachedData.Size())
+	}
 }

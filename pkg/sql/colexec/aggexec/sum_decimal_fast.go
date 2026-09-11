@@ -119,7 +119,7 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	return &exec
 }
 
-// newSumDecimal64LegacyStateExec retains the pre-v63 two-vector partial state
+// newSumDecimal64LegacyStateExec retains the pre-v64 two-vector partial state
 // while exposing the widened result metadata selected by a new coordinator.
 // It is used only until every CN can read the Decimal256 SUM state.
 func newSumDecimal64LegacyStateExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {

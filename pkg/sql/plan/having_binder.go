@@ -382,14 +382,14 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
-		// Single-argument COUNT/SUM is rewritten into a GROUP BY later. That
+		// Single-argument COUNT/SUM/AVG is rewritten into a GROUP BY later. That
 		// path already carries a separate physical key and must retain the
 		// visible aggregate argument. The remaining DISTINCT aggregates hash
 		// their arguments directly (for example COUNT(DISTINCT a, b) and
 		// GROUP_CONCAT), so give those hash inputs the promoted-CHAR PAD SPACE
 		// canonical form locally.
 		canRewriteDistinctArgument :=
-			(funcName == "count" || funcName == "sum") &&
+			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
 				len(expr.GetF().Args) == 1 &&
 				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
 		if !canRewriteDistinctArgument {

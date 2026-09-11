@@ -5822,7 +5822,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 				continue
 			}
 			for _, expr := range node.FilterList {
-				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "coalesce" {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
 					found = true
 				}
 			}
@@ -5941,7 +5941,7 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 			continue
 		}
 		for _, expr := range node.FilterList {
-			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "coalesce")
+			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "_check_constraint_assert")
 		}
 	}
 	require.True(t, foundCheckFilter)
@@ -6314,7 +6314,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 					if exprContainsFunction(expr, checkFunc) {
 						hasCheck = true
 						checkNodeID = int32(nodeID)
-						if nodeType == plan.Node_FILTER && checkFunc == "coalesce" {
+						if nodeType == plan.Node_FILTER && checkFunc == "_check_constraint_assert" {
 							require.True(t, node.FilterIsBarrier,
 								"IGNORE CHECK must remain above the final-row producer")
 						}
@@ -6346,7 +6346,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	t.Run("insert ignore", func(t *testing.T) {
 		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
-		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
+		assertPlanShape(t, query, plan.Node_FILTER, "_check_constraint_assert")
 	})
 
 	t.Run("update", func(t *testing.T) {
@@ -6356,7 +6356,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	t.Run("update ignore", func(t *testing.T) {
 		query := build("UPDATE IGNORE emp SET deptno = 0")
-		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
+		assertPlanShape(t, query, plan.Node_FILTER, "_check_constraint_assert")
 	})
 
 	t.Run("joined update", func(t *testing.T) {
