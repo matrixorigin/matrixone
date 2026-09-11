@@ -92,6 +92,8 @@ type Merge struct {
 	// flow ctrl
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+
+	isRecordExisted func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error)
 }
 
 type MergeOption func(*Merge)
@@ -165,11 +167,12 @@ func NewMerge(
 ) (*Merge, error) {
 	var err error
 	m := &Merge{
-		service:      service,
-		pathBuilder:  table.NewAccountDatePathBuilder(),
-		MaxFileSize:  defaultMaxFileSize,
-		MaxMergeJobs: 1,
-		logger:       runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge),
+		service:         service,
+		pathBuilder:     table.NewAccountDatePathBuilder(),
+		MaxFileSize:     defaultMaxFileSize,
+		MaxMergeJobs:    1,
+		logger:          runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge),
+		isRecordExisted: db_holder.IsRecordExisted,
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
@@ -378,8 +381,11 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			}
 
 			// Check if the first record already exists in the database
-			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
+			existed, err = m.isRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
 			if err != nil {
+				if err == db_holder.ErrIncompatibleStatementInfoRecord {
+					return m.discardIncompatibleFile(ctx, fp, err)
+				}
 				v2.TraceETLMergeExistFailedCounter.Inc()
 				m.logger.Error("error checking if the first record exists",
 					logutil.TableField(m.table.GetIdentify()),
@@ -472,6 +478,22 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 	)
 
 	return err
+}
+
+// discardIncompatibleFile removes a CSV that cannot be loaded by the current
+// table schema. Keeping it would make every merge interval retry the same
+// permanent parse failure and prevent subsequent files from being merged.
+func (m *Merge) discardIncompatibleFile(ctx context.Context, fp *FileMeta, cause error) error {
+	m.logger.Warn("discard incompatible ETL file",
+		logutil.TableField(m.table.GetIdentify()),
+		logutil.PathField(fp.FilePath),
+		logutil.ErrorField(cause),
+	)
+	if err := m.fs.Delete(ctx, fp.FilePath); err != nil {
+		v2.TraceETLMergeDeleteFailedCounter.Inc()
+		return err
+	}
+	return nil
 }
 
 func SubStringPrefixLimit(str string, length int) string {
