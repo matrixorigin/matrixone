@@ -330,6 +330,42 @@ func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
 	require.Equal(t, "second", session.warnings[1].msg)
 }
 
+func TestRemoteTerminalWarningsStayWithCapturedAttemptSink(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	oldSink := &remoteWarningCollector{}
+	newSink := &remoteWarningCollector{}
+	proc.Session = &remoteWarningSession{}
+	proc.WarningSink = oldSink
+	sender := &messageSenderOnClient{proc: proc, warningSink: oldSink}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 1,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: 1062, Message: "duplicate"},
+		},
+	})
+	require.NoError(t, err)
+
+	// A retry replaces the process's current sink, but the old remote sender
+	// must continue to target the sink captured for its original attempt.
+	proc.WarningSink = newSink
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	total, records := oldSink.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, records, 1)
+	newTotal, newRecords := newSink.SnapshotWarnings()
+	require.Zero(t, newTotal)
+	require.Empty(t, newRecords)
+
+	// Once the failed attempt is sealed, a late terminal is rejected by the
+	// captured collector rather than falling through to Session.
+	oldSink.closeWarnings(false)
+	late := &messageSenderOnClient{warningSink: oldSink}
+	require.NoError(t, late.dealRemoteTerminal(data))
+	total, records = oldSink.SnapshotWarnings()
+	require.Equal(t, uint64(0), total)
+	require.Empty(t, records)
+}
+
 func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 3}
 	for i := 0; i < 1000; i++ {
@@ -358,6 +394,40 @@ func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	require.Len(t, retained, 2)
 	require.Equal(t, uint16(1), retained[0].Code)
 	require.Equal(t, uint16(2), retained[1].Code)
+}
+
+func TestRemoteWarningCollectorSaturatesCount(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningBatch(^uint64(0)-1, nil, nil)
+	collector.AppendWarningBatch(2, nil, nil)
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, ^uint64(0), total)
+	require.Empty(t, retained)
+}
+
+func TestRemoteWarningCollectorBoundsMessageBytes(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningDiagnostic(1292, strings.Repeat("界", process.WarningDiagnosticMaxMessageBytes*2))
+	_, retained := collector.SnapshotWarnings()
+	require.Len(t, retained, 1)
+	require.LessOrEqual(t, len(retained[0].Message), process.WarningDiagnosticMaxMessageBytes)
+	require.Contains(t, retained[0].Message, "truncated")
+}
+
+func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, retained, 1)
+	collector.AppendWarningDiagnostic(1292, "next")
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
+	collector.AppendWarningBatch(0, []uint16{1292}, []string{"ignored"})
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
 }
 
 func TestScopeContainsVarExpr(t *testing.T) {
