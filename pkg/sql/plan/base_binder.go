@@ -4975,13 +4975,18 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 	// HEX/BIT literals are stored as raw bytes in a VARCHAR-shaped plan
-	// expression. BIN treats those literals as unsigned numeric values, while
-	// ordinary string and binary-string operands use the numeric-prefix path.
-	// Preserve that syntax distinction before overload resolution; once the
-	// literal is cast to UINT64 the execution vector no longer has to infer its
-	// meaning from payload bytes (for example, 0xff must be 255, not zero).
-	if name == "bin" && len(args) == 1 && isBinaryNumericLiteral(args[0]) {
+	// expression. BIN and CONV treat those literals as unsigned numeric values,
+	// while ordinary string and binary-string operands use the numeric-prefix
+	// path. Preserve that syntax distinction before overload resolution; once
+	// the literal is cast to a fixed-width numeric vector the execution path no
+	// longer has to infer its meaning from payload bytes (for example, 0xff must
+	// be 255, not zero). CONV uses BIT so its direct numeric exception is kept
+	// even when from_base is not 10.
+	if (name == "bin" || name == "conv") && len(args) > 0 && isBinaryNumericLiteral(args[0]) {
 		target := types.T_uint64.ToType()
+		if name == "conv" {
+			target = types.T_bit.ToType()
+		}
 		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
 		if err != nil {
 			return nil, err

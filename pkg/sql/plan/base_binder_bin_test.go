@@ -68,3 +68,29 @@ func TestBinStringOperandsKeepPrefixPath(t *testing.T) {
 		})
 	}
 }
+
+func TestConvBinaryNumericLiteralsUseBitNumericPath(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		value string
+		form  plan.StringLiteralForm
+	}{
+		{name: "hex", value: string([]byte{0x0f}), form: plan.StringLiteralForm_STRING_LITERAL_HEX},
+		{name: "bit", value: string([]byte{0x0f}), form: plan.StringLiteralForm_STRING_LITERAL_BIT},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := makePlan2StringConstExprWithType(tc.value, true)
+			expr.GetLit().LiteralForm = tc.form
+			fromBase := makePlan2Int64ConstExprWithType(2)
+			toBase := makePlan2Int64ConstExprWithType(10)
+			bound, err := BindFuncExprImplByPlanExpr(ctx, "conv", []*Expr{expr, fromBase, toBase})
+			require.NoError(t, err)
+			fn := bound.GetF()
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 3)
+			require.Equal(t, types.T_bit, makeTypeByPlan2Expr(fn.Args[0]).Oid)
+		})
+	}
+}
