@@ -642,7 +642,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Seal before cancellation: a late terminal RPC must not leak diagnostics.
 		warnings.discard()
 		c.fatalLog(retryTimes, err)
-		if !c.canRetry(err) {
+		if runC.alterCopyCoordinating || !c.canRetry(err) {
 			// runOnce may return after a local or coordinator branch fails while a
 			// remote branch is still unwinding. Quiesce every producer before the
 			// attempt-owned sink releases its file and reservations; a generation
@@ -680,6 +680,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
+		// Admission is an entry decision for this logical statement, not a
+		// property of one physical Compile generation.  A retry can be the first
+		// generation that reaches ALTER COPY, so carry its decision back to the
+		// root before the next generation is built.  Only the boolean decision is
+		// transferred; prepared relations, task descriptions and phase state are
+		// never reused across a retry.
+		c.inheritCopyAlterAdmission(runC)
 		c.onLoadUniqueIndexPromotionRetry(defChanged || forcePreMode)
 		if forcePreMode {
 			// NOTE: This in-place modification of the AST will persist if the statement
@@ -1119,6 +1126,17 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 	return wait()
 }
 
+// inheritCopyAlterAdmission carries only the entry-policy decision from a
+// retry generation back to the request root. The next generation may reuse
+// this decision, but never the prepared relation or publication state.
+func (c *Compile) inheritCopyAlterAdmission(runC *Compile) {
+	if c == nil || runC == nil || runC == c || !runC.copyAlterAdmissionSet {
+		return
+	}
+	c.copyAlterAdmissionSet = true
+	c.copyAlterAdmitted = runC.copyAlterAdmitted
+}
+
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
@@ -1135,6 +1153,10 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
 	runC.inheritTemporaryDDLPolicy(c)
+	runC.copyAlterInternalExecutor = c.copyAlterInternalExecutor
+	runC.copyAlterExecutorOwner = c.copyAlterExecutorOwner
+	runC.copyAlterAdmissionSet = c.copyAlterAdmissionSet
+	runC.copyAlterAdmitted = c.copyAlterAdmitted
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
 	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)

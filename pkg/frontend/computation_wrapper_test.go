@@ -4541,6 +4541,94 @@ func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
 	require.Empty(t, clone.CreateTable.Table.SchemaName)
 }
 
+func TestRebuildPreparePlanRestoresAlterRemapPolicy(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 110)
+	defer prepareStmt.Close()
+	const sql = "alter table src.t add primary key(id)"
+	prepareStmt.PrepareStmt.Free()
+	stmts, err := mysql.Parse(execCtx.reqCtx, sql, 1)
+	require.NoError(t, err)
+	prepareStmt.PrepareStmt = stmts[0]
+	prepareStmt.Sql = sql
+	prepareStmt.remapDb = map[string]string{"src": "dst"}
+	prepareStmt.lowerCaseTableNames = 1
+
+	_, err = rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			prepared := stmt.(*tree.PrepareStmt).Stmt.(*tree.AlterTable)
+			require.Equal(t, tree.Identifier("dst"), prepared.Table.SchemaName)
+			return &plan2.Plan{}, nil
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestResetForTxnRetryKeepsBinaryPreparedPlan(t *testing.T) {
+	_, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1")
+	defer prepareStmt.Close()
+
+	cw.preparedStmt = prepareStmt
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	execCtx.input.isBinaryProtExecute = true
+	prepareStmt.defaultDatabase = "prepare_db"
+	cw.SetRemapDb(map[string]string{"src": "prepared_db"})
+	cw.paramVals = []any{int64(7)}
+
+	require.NoError(t, cw.resetForTxnRetry(execCtx, prepareStmt.Sql))
+	require.Same(t, preparedPlan, cw.plan,
+		"binary retry must enter prepared initialization before ordinary planning")
+	require.Same(t, prepareStmt.PrepareStmt, cw.stmt)
+	require.True(t, cw.stmtBorrowed)
+	require.Equal(t, []any{int64(7)}, cw.ParamVals(), "binary retry must retain bound parameters")
+}
+
+func TestResetForTxnRetryRejectsInvalidState(t *testing.T) {
+	t.Run("binary owner missing", func(t *testing.T) {
+		_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 111)
+		defer prepareStmt.Close()
+		cw.preparedStmt = nil
+		require.ErrorContains(t, cw.resetForTxnRetry(execCtx, "select 1"), "missing prepared COPY ALTER owner")
+	})
+
+	t.Run("binary logical plan missing", func(t *testing.T) {
+		_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 112)
+		defer prepareStmt.Close()
+		cw.preparedStmt = prepareStmt
+		prepareStmt.PreparePlan = nil
+		require.ErrorContains(t, cw.resetForTxnRetry(execCtx, "select 1"), "has no logical plan")
+	})
+
+	t.Run("ordinary parse error", func(t *testing.T) {
+		_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 113)
+		defer prepareStmt.Close()
+		execCtx.input.isBinaryProtExecute = false
+		require.Error(t, cw.resetForTxnRetry(execCtx, "alter table"))
+	})
+
+	t.Run("ordinary multiple statements", func(t *testing.T) {
+		_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 114)
+		defer prepareStmt.Close()
+		execCtx.input.isBinaryProtExecute = false
+		require.ErrorContains(t,
+			cw.resetForTxnRetry(execCtx, "select 1; select 2"),
+			"must contain one statement")
+	})
+
+	t.Run("ordinary statement clears logical plan", func(t *testing.T) {
+		_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 115)
+		defer prepareStmt.Close()
+		execCtx.input.isBinaryProtExecute = false
+		cw.plan = prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
+		require.NoError(t, cw.resetForTxnRetry(execCtx, "select 1"))
+		require.Nil(t, cw.plan)
+		require.False(t, cw.stmtBorrowed)
+		cw.Free()
+	})
+}
+
 func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	const preparedSQL = "create view v as select 1"
 	const executeSQL = "execute prepared_view"

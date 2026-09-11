@@ -9992,6 +9992,63 @@ func TestFreshPreparedCloneStatement(t *testing.T) {
 	require.Empty(t, preparedCloneSQL(&tree.Select{}, "prepare_db"))
 }
 
+func TestFreshPreparedAlterStatementRestoresRemapPolicy(t *testing.T) {
+	ctx := context.Background()
+	const sql = "alter table src.t add primary key(id)"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	prepareStmt := &PrepareStmt{
+		Sql:                 sql,
+		PrepareStmt:         stmts[0],
+		remapDb:             map[string]string{"src": "dst"},
+		lowerCaseTableNames: 1,
+	}
+	defer prepareStmt.Close()
+
+	cloned, owned, err := freshPreparedCloneStatement(ctx, prepareStmt)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer cloned.Free()
+
+	formatted := tree.String(cloned, dialect.MYSQL)
+	require.Contains(t, formatted, "dst.t")
+	require.NotContains(t, formatted, "src.t")
+}
+
+func TestFreshPreparedAlterStatementRejectsInvalidRebuild(t *testing.T) {
+	tests := []struct {
+		name  string
+		sql   string
+		remap map[string]string
+		want  string
+	}{
+		{name: "parse error", sql: "alter table", want: ""},
+		{name: "multiple statements", sql: "alter table t add primary key(id); select 1", want: "exactly one"},
+		{name: "wrong statement kind", sql: "select 1", want: "exactly one"},
+		{name: "invalid remap policy", sql: "alter table src.t add primary key(id)", remap: map[string]string{"src": "bad-name"}, want: "valid identifiers"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := mysql.Parse(context.Background(), "alter table t add primary key(id)", 1)
+			require.NoError(t, err)
+			prepareStmt := &PrepareStmt{
+				Sql:                 tc.sql,
+				PrepareStmt:         stmts[0],
+				remapDb:             tc.remap,
+				lowerCaseTableNames: 1,
+			}
+			defer prepareStmt.Close()
+			_, owned, err := freshPreparedCloneStatement(context.Background(), prepareStmt)
+			require.False(t, owned)
+			require.Error(t, err)
+			if tc.want != "" {
+				require.Contains(t, err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

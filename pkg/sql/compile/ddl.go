@@ -1504,6 +1504,14 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		dbName = qry.GetDatabase()
 	}
 	aliasName := qry.GetTableDef().GetName()
+	if scope := c.copyAlterCreateScope; scope != nil {
+		op := c.proc.GetTxnOperator()
+		if op == nil || !scope.AllowsCopyAlterCreate(op.Txn().ID, dbName, aliasName) {
+			return moerr.NewInternalError(c.proc.Ctx, "invalid COPY ALTER preparation scope")
+		}
+		c.copyAlterPrepare = true
+		defer func() { c.copyAlterPrepare = false }()
+	}
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
 	if isTemp {
@@ -2127,23 +2135,28 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return err
 		}
 
-		// create iscp jobs for index async update
-		ct, err := GetConstraintDef(c.proc.Ctx, newRelation)
-		if err != nil {
-			return err
-		}
-		for _, constraint := range ct.Cts {
-			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				tableID := newRelation.GetTableID(c.proc.Ctx)
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
-				if err != nil {
-					return err
-				}
+		// create iscp/idxcron jobs for an externally visible table. An ALTER
+		// COPY preparation creates a private relation that is renamed only after
+		// publication; registering its jobs here would briefly publish a task
+		// against the temporary name and then require a compensating delete.
+		if !c.copyAlterPrepare {
+			ct, err := GetConstraintDef(c.proc.Ctx, newRelation)
+			if err != nil {
+				return err
+			}
+			for _, constraint := range ct.Cts {
+				if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
+					tableID := newRelation.GetTableID(c.proc.Ctx)
+					err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
+					if err != nil {
+						return err
+					}
 
-				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
-				if err != nil {
-					return err
+					// register index update for IVFFLAT
+					err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -2219,7 +2232,7 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		// completed. Keep the alias registered in the session.
 		rollbackTempAlias = false
 	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+	if !isTemp && !c.ignorePublish && !c.copyAlterPrepare && c.proc.Base.IsFrontend {
 		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
 			return err
 		}
@@ -4221,7 +4234,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 	}
-	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+	if !isTemp && !c.ignorePublish && !c.copyAlterPrepare && c.proc.Base.IsFrontend {
 		if err = c.enqueueViewsAfterRelationRemoval(
 			dbName, tblName, droppedDatabaseID, droppedRelationID, droppedLogicalID); err != nil {
 			return err

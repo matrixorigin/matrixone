@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -170,14 +171,14 @@ func (s *sqlExecutor) Exec(
 
 		return exec.Exec(sql, opts.StatementOption())
 	} else {
-		err := s.ExecTxn(
+		err := s.execTxn(
 			ctx,
 			func(exec executor.TxnExecutor) error {
 				v, err := exec.Exec(sql, opts.StatementOption())
 				res = v
 				return err
 			},
-			opts.WithSQL(sql))
+			opts.WithSQL(sql), !opts.HasExistsTxn())
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -190,25 +191,48 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
+	return s.execTxn(ctx, execFunc, opts, false)
+}
+
+// Only Exec's single SQL closure can be replayed. Arbitrary ExecTxn callbacks
+// may have nontransactional side effects or multiple statements.
+func (s *sqlExecutor) execTxn(ctx context.Context, execFunc func(executor.TxnExecutor) error, opts executor.Options, ownsSingleSQL bool) error {
 	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
-	exec, err := newTxnExecutor(ctx, s, opts)
-	if err != nil {
-		return err
+	const maxAlterCopyPublicationAttempts = 2
+	for attempt := 0; attempt < maxAlterCopyPublicationAttempts; attempt++ {
+		exec, err := newTxnExecutor(ctx, s, opts)
+		if err != nil {
+			return err
+		}
+		exec.copyAlterOwner = ownsSingleSQL && !exec.opts.ExistsTxn()
+		err = execFunc(exec)
+		if err != nil {
+			// Only an auto-commit transaction created by this executor may be
+			// restarted. Explicit callers retain their existing transaction
+			// protocol, and every non-marker error follows the old rollback path.
+			if attempt == 0 && exec.copyAlterOwner && ctx.Err() == nil &&
+				isAlterCopyPublicationRetry(err, exec.Txn().Txn().ID) {
+				if rollbackErr := exec.opts.Txn().Rollback(exec.ctx); rollbackErr == nil {
+					continue
+				} else {
+					err = errors.Join(err, rollbackErr)
+					return err
+				}
+			}
+			logutil.Error("internal sql executor error",
+				zap.Error(err),
+				zap.String("sql", commonutil.Abbreviate(opts.SQL(), 500)),
+				zap.String("txn", exec.Txn().Txn().DebugString()),
+			)
+			return UnwrapAlterCopyPublicationRetry(exec.rollback(err))
+		}
+		if err = exec.commit(); err != nil {
+			return err
+		}
+		return s.maybeWaitCommittedLogApplied(exec.ctx, exec.opts)
 	}
-	err = execFunc(exec)
-	if err != nil {
-		logutil.Error("internal sql executor error",
-			zap.Error(err),
-			zap.String("sql", commonutil.Abbreviate(opts.SQL(), 500)),
-			zap.String("txn", exec.Txn().Txn().DebugString()),
-		)
-		return exec.rollback(err)
-	}
-	if err = exec.commit(); err != nil {
-		return err
-	}
-	return s.maybeWaitCommittedLogApplied(exec.ctx, exec.opts)
+	return moerr.NewInternalErrorNoCtx("COPY ALTER publication retry exhausted")
 }
 
 func (s *sqlExecutor) maybeWaitCommittedLogApplied(
@@ -285,10 +309,11 @@ func (s *sqlExecutor) adjustOptions(
 }
 
 type txnExecutor struct {
-	s        *sqlExecutor
-	ctx      context.Context
-	opts     executor.Options
-	database string
+	s              *sqlExecutor
+	ctx            context.Context
+	opts           executor.Options
+	database       string
+	copyAlterOwner bool
 }
 
 func (exec *txnExecutor) newCompile(
@@ -548,6 +573,9 @@ func (exec *txnExecutor) Exec(
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()
+	c.copyAlterCreateScope = statementOption.CopyAlterPrepare()
+	c.copyAlterInternalExecutor = true
+	c.copyAlterExecutorOwner = exec.copyAlterOwner
 
 	defer c.Release()
 

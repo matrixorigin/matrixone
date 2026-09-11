@@ -71,6 +71,9 @@ type Hooks struct{}
 // tokenize → Segment → persist). Step-4 first cut: whole-table read + one base
 // segment; CDC-async incremental maintenance follows.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	// Gate CREATE FULLTEXT2 INDEX behind experimental_fulltext2_index. Frontend-only:
 	// re-checking here (in addition to the framework gate in pkg/sql/compile/util.go
 	// via ExperimentalFlag()) catches a flag toggled off since the original CREATE;
@@ -100,6 +103,12 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 				return err
 			}
 		}
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	origTable := ctx.OriginalTableDef()
@@ -107,6 +116,22 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	// CCPR: index data syncs via CCPR on a publication-subscribed table.
 	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(origTable) {
 		return nil
+	}
+	if prepare {
+		// Initial population remains synchronous even though incremental
+		// maintenance uses CDC. Publish only the task after the final rename.
+		return buildFromSource(ctx, storeDef, metaDef, origTable, db)
+	}
+	if publish {
+		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexFullText2Algo.ToString())
+		if err := ctx.DropIndexCdcTask(origTable, db, origTable.Name, storeDef.IndexName); err != nil {
+			return err
+		}
+		if err := ctx.CreateIndexCdcTask(db, origTable.Name, origTable.TblId, storeDef.IndexName,
+			sinkerType, true, "", origTable); err != nil {
+			return err
+		}
+		return registerFulltext2Idxcron(ctx, storeDef, db, origTable)
 	}
 
 	// Fresh CREATE has no prior tail; build the base + register CDC.

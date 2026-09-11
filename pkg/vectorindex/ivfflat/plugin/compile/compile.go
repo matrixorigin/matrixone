@@ -164,6 +164,9 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 // through IdxcronMetadata below for downstream consumers.
 func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] ivfflat runCreateOrReindex: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
@@ -191,6 +194,12 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 				return err
 			}
 		}
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	originalTableDef := ctx.OriginalTableDef()
@@ -207,6 +216,28 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	if err != nil {
 		return err
 	}
+	if publish {
+		if async {
+			state, ok := ctx.(compileplugin.AlterCopyIndexRows)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("missing COPY ALTER index preparation")
+			}
+			rows, ok := state.GetAlterCopyIndexRows(metaDef.IndexName)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("missing COPY ALTER source cardinality")
+			}
+			// Generate the existing asynchronous initialization with final table
+			// identities and the prepared cardinality. This branch only registers
+			// the task; centroid construction remains in its original async path.
+			if err = ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
+				rows, metaDef.IndexTableName, false); err != nil {
+				return err
+			}
+		}
+		// Synchronous IVF-FLAT has already been physically built during
+		// preparation; only its scheduled maintenance row is published here.
+		return registerIdxcronUpdate(ctx, metaDef, qryDatabase, originalTableDef)
+	}
 
 	// Drop every cached generation of this index table, not just ":0" — the
 	// search key is "<indexTable>:<version>" with the version read from the meta
@@ -218,6 +249,13 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	totalCnt, err := indexColCount(ctx, metaDef, qryDatabase, originalTableDef)
 	if err != nil {
 		return err
+	}
+	if prepare && async {
+		state, ok := ctx.(compileplugin.AlterCopyIndexRows)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("missing COPY ALTER index preparation")
+		}
+		state.SetAlterCopyIndexRows(metaDef.IndexName, totalCnt)
 	}
 
 	// 4.a populate meta table
@@ -261,6 +299,9 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	}
 
 	// 4.e register auto index update (reindex)
+	if prepare {
+		return nil
+	}
 	return registerIdxcronUpdate(ctx, metaDef, qryDatabase, originalTableDef)
 }
 
@@ -409,6 +450,9 @@ func ivfIndexCentroidsTable(
 	indexName := indexDef.IndexName
 
 	if async {
+		if compileplugin.IsAlterCopyPrepare(ctx) {
+			return nil
+		}
 		if forceSync {
 			// background reindex: build synchronously inside the txn so
 			// the new centroids land before subsequent steps; the CDC

@@ -313,6 +313,10 @@ type PrepareStmt struct {
 	proc            *process.Process
 	remapDb         map[string]string
 	defaultDatabase string
+	// lowerCaseTableNames freezes the parser comparison mode used when the
+	// prepared AST was materialized.  A later plan rebuild must apply the
+	// saved remap policy with the same identifier rules as PREPARE.
+	lowerCaseTableNames int64
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}

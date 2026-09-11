@@ -103,6 +103,9 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] cagra handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	// Gate the experimental flag check on frontend context only. The
 	// flag was enforced at the original CREATE INDEX time; re-entry
 	// from background (idxcron ALTER REINDEX, ProcessInitSQL) must
@@ -138,6 +141,12 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 				return err
 			}
 		}
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	// Skip index data population for CCPR tables when this is a CCPR task
@@ -147,8 +156,39 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
 		return nil
 	}
-
 	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
+
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if prepare && async {
+		// An explicitly asynchronous CAGRA index is initialized by the CDC
+		// task after publication. Synchronous CAGRA builds continue below so
+		// the physical work stays outside the publication gate.
+		return nil
+	}
+
+	buildSqls, err := genBuildSQL(ctx, indexDefs)
+	if err != nil {
+		return err
+	}
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
+	indexName := metaDef.IndexName
+	if publish {
+		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		initSQL := strings.Join(buildSqls, ";")
+		if !async {
+			initSQL = ""
+		}
+		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, !async, initSQL, originalTableDef); err != nil {
+			return err
+		}
+		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
+	}
 
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
 	if err != nil {
@@ -159,13 +199,17 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			return err
 		}
 	}
-
-	buildSqls, err := genBuildSQL(ctx, indexDefs)
-	if err != nil {
-		return err
+	if prepare && indexBuild {
+		// COPY ALTER explicitly requested the synchronous physical build.
+		// The child relation is still uncommitted, so leave task registration
+		// to the publication phase after the relation has its final identity.
+		for _, sql := range buildSqls {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
-	indexName := metaDef.IndexName
 
 	if forceSync {
 		// Background reindex: build cagra_create synchronously inside

@@ -72,3 +72,16 @@ func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
 }
+
+func TestStatementOptionCopyAlterPrepareIsPrivate(t *testing.T) {
+	base := StatementOption{}
+	require.Nil(t, base.CopyAlterPrepare())
+	scope := &testCopyAlterScope{}
+	prepared := base.WithCopyAlterPrepare(scope)
+	require.Same(t, scope, prepared.CopyAlterPrepare())
+	require.Nil(t, base.CopyAlterPrepare(), "the builder must not mutate the caller's option")
+}
+
+type testCopyAlterScope struct{}
+
+func (*testCopyAlterScope) AllowsCopyAlterCreate([]byte, string, string) bool { return false }
