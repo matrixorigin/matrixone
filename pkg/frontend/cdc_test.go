@@ -88,7 +88,7 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
-			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Data: [][]interface{}{{tc.count}}}
+			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{tc.count}}}
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: tc.db, Table: tc.table}}}}
 			err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
 			if tc.wantErr {
@@ -127,7 +127,7 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 	t.Run("malformed count is returned", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Data: [][]interface{}{{"not-a-count"}}}
+		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{"not-a-count"}}}
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "malformed"}}}}
 		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
 	})
