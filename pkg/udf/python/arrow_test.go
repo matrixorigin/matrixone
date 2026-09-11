@@ -240,6 +240,28 @@ func TestInputBatchWireEncoderRecoversAfterOversizeCandidate(t *testing.T) {
 	require.Len(t, frames, 2)
 }
 
+func TestInputBatchWireEncoderCloseIsIdempotent(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	field, err := descriptor.Field("arg_0")
+	require.NoError(t, err)
+	schema := arrow.NewSchema([]arrow.Field{field}, nil)
+	builder := array.NewInt64Builder(memory.NewGoAllocator())
+	builder.AppendValues([]int64{1}, nil)
+	values := builder.NewInt64Array()
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+	values.Release()
+	defer record.Release()
+
+	encoder := &inputBatchWireEncoder{schema: schema}
+	_, err = encoder.encode(record, DefaultMaxBatchBytes)
+	require.NoError(t, err)
+	require.NoError(t, encoder.close())
+	require.NoError(t, encoder.close())
+	_, err = encoder.encode(record, DefaultMaxBatchBytes)
+	require.ErrorContains(t, err, "invalid Arrow record batch encoder")
+}
+
 func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
 	allocator := memory.NewGoAllocator()
 	stringBuilder := array.NewStringBuilder(allocator)
