@@ -56,6 +56,22 @@ function install_go_ut_analysis() {
     local max_attempts=${1:-3}
     local delay_seconds=${2:-5}
 
+    # Persistent runners may already have this exact tool. Inspect build
+    # metadata without executing an unknown/stale binary; replacements are not
+    # the pinned release. Missing or unreadable metadata falls back to install.
+    local installed_tool
+    local build_info
+    if installed_tool=$(command -v go-ut-analysis) &&
+       [[ -f "${installed_tool}" && -x "${installed_tool}" ]] &&
+       build_info=$(go version -m "${installed_tool}" 2>/dev/null) &&
+       printf '%s\n' "${build_info}" | awk -v version="${GO_UT_ANALYSIS_VERSION}" '
+           $1 == "mod" && $2 == "github.com/matrixorigin/go-ut-analysis" && $3 == version { pinned = 1 }
+           $1 == "=>" { replaced = 1 }
+           END { exit !(pinned && !replaced) }
+       '; then
+        return 0
+    fi
+
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
 }
