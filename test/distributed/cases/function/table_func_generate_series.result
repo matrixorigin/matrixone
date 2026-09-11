@@ -28,6 +28,14 @@ select * from generate_series(1, 5, -1) g;
 result
 select * from generate_series(5, 1, 1) g;
 result
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(0, 480002, 2) g;
+count(*)	count(distinct result)	min(result)	max(result)	sum(mod(result, 2) <> 0)
+240002	240002	0	480002	0
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(480002, 0, -2) g;
+count(*)	count(distinct result)	min(result)	max(result)	sum(mod(result, 2) <> 0)
+240002	240002	0	480002	0
 select * from generate_series(2147483646, 2147483647,5) g;
 result
 2147483646

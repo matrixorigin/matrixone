@@ -6,6 +6,12 @@ select * from generate_series(5, 1, -2) g;
 select * from generate_series(1, 5, 0) g;
 select * from generate_series(1, 5, -1) g;
 select * from generate_series(5, 1, 1) g;
+
+# Parallel partitions must preserve the original sequence grid.
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(0, 480002, 2) g;
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(480002, 0, -2) g;
 select * from generate_series(2147483646, 2147483647,5) g;
 select * from generate_series(-2147483645, -2147483648,-2) g;
 
