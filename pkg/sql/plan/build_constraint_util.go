@@ -2297,7 +2297,7 @@ func buildValueScan(
 			}
 			if rowAlias != nil {
 				if _, ok := colToIdx[expr.Names[0].ColName()]; !ok {
-					return moerr.NewBadFieldErrorf(builder.GetContext(),
+					return nil, moerr.NewBadFieldErrorf(builder.GetContext(),
 						"invalid input: column '%s' does not exist", expr.Names[0].ColNameOrigin())
 				}
 				for _, offset := range collectParamExprOffsets(expr.Expr) {
