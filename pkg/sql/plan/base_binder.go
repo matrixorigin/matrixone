@@ -6009,22 +6009,37 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 
 	switch name {
 	case "ceil", "ceiling", "floor":
-		if len(args) != 1 {
+		digits := int64(0)
+		if len(args) == 2 {
+			literal := args[1].GetLit()
+			if literal == nil || literal.Isnull {
+				return
+			}
+			value, ok := literal.GetValue().(*plan.Literal_I64Val)
+			if !ok {
+				return
+			}
+			digits = value.I64Val
+		} else if len(args) != 1 {
 			return
 		}
-		precision := integerDigits
-		if input.Scale > 0 {
-			precision++ // a fractional value can carry into a new integer digit
+
+		// Keep the decimal physical type so a plan produced by an upgraded CN
+		// remains executable by older CNs during a rolling upgrade.  Only the
+		// precision and scale metadata may be refined here.
+		if digits >= int64(input.Scale) {
+			return
 		}
+		resultScale := int32(0)
+		if digits > 0 {
+			resultScale = int32(digits)
+		}
+		precision := integerDigits + resultScale + 1 // reserve a carry digit
 		if precision < 1 {
 			precision = 1
 		}
-		if precision <= 19 {
-			*returnType = types.T_int64.ToType()
-			return
-		}
 		returnType.Width = precision
-		returnType.Scale = 0
+		returnType.Scale = resultScale
 
 	case "round", "truncate":
 		digits := int64(0)

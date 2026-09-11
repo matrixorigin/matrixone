@@ -333,76 +333,40 @@ func TestCeil(t *testing.T) {
 	}
 }
 
-func TestCeilFloorDecimalCanReturnBigInt(t *testing.T) {
+func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	nulls := []bool{false, false}
-	negative := int64(-123456789)
-	decimal128Type := types.New(types.T_decimal128, 38, 20)
-	decimal128Positive, err := types.ParseDecimal128("12345.6789", decimal128Type.Width, decimal128Type.Scale)
-	require.NoError(t, err)
-	decimal128Negative, err := types.ParseDecimal128("-12345.6789", decimal128Type.Width, decimal128Type.Scale)
-	require.NoError(t, err)
-	decimal256Type := types.New(types.T_decimal256, 50, 38)
-	decimal256Positive, err := types.ParseDecimal256("12345.6789", decimal256Type.Width, decimal256Type.Scale)
-	require.NoError(t, err)
-	decimal256Negative, err := types.ParseDecimal256("-12345.6789", decimal256Type.Width, decimal256Type.Scale)
-	require.NoError(t, err)
-
-	inputs := []struct {
-		name   string
-		typ    types.Type
-		values any
-	}{
-		{
-			name:   "decimal64",
-			typ:    types.New(types.T_decimal64, 10, 4),
-			values: []types.Decimal64{123456789, types.Decimal64(negative)},
-		},
-		{
-			name:   "decimal128",
-			typ:    decimal128Type,
-			values: []types.Decimal128{decimal128Positive, decimal128Negative},
-		},
-		{
-			name:   "decimal256",
-			typ:    decimal256Type,
-			values: []types.Decimal256{decimal256Positive, decimal256Negative},
-		},
+	decimalType := types.New(types.T_decimal128, 19, 0)
+	values := make([]types.Decimal128, 0, 6)
+	for _, value := range []string{
+		"9223372036854775807",
+		"9223372036854775808",
+		"-9223372036854775808",
+		"-9223372036854775809",
+		"9999999999999999999",
+		"-9999999999999999999",
+	} {
+		decimal, err := types.ParseDecimal128(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
 	}
+	nulls := make([]bool, len(values))
 
 	functions := []struct {
 		name string
 		fn   fEvalFn
-		want []int64
 	}{
-		{name: "ceil", fn: CeilDecimal64, want: []int64{12346, -12345}},
-		{name: "floor", fn: FloorDecimal64, want: []int64{12345, -12346}},
+		{name: "ceil", fn: CeilDecimal128},
+		{name: "floor", fn: FloorDecimal128},
 	}
-	for _, input := range inputs {
-		for _, function := range functions {
-			switch input.typ.Oid {
-			case types.T_decimal128:
-				if function.name == "ceil" {
-					function.fn = CeilDecimal128
-				} else {
-					function.fn = FloorDecimal128
-				}
-			case types.T_decimal256:
-				if function.name == "ceil" {
-					function.fn = CeilDecimal256
-				} else {
-					function.fn = FloorDecimal256
-				}
-			}
-			t.Run(input.name+"/"+function.name, func(t *testing.T) {
-				testCase := NewFunctionTestCase(proc,
-					[]FunctionTestInput{NewFunctionTestInput(input.typ, input.values, nulls)},
-					NewFunctionTestResult(types.T_int64.ToType(), false, function.want, nulls),
-					function.fn)
-				succeeded, info := testCase.Run()
-				require.True(t, succeeded, info)
-			})
-		}
+	for _, function := range functions {
+		t.Run(function.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(decimalType, values, nulls)},
+				NewFunctionTestResult(decimalType, false, values, nulls),
+				function.fn)
+			succeeded, info := testCase.Run()
+			require.True(t, succeeded, info)
+		})
 	}
 }
 

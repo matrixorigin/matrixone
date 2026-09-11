@@ -289,11 +289,6 @@ func ceilDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool)
 
 func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal64, int64](ivecs, result, proc, length, func(x types.Decimal64) int64 {
-			return int64(ceilDecimal64(x, 0, scale, true))
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
@@ -308,11 +303,6 @@ func CeilDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal128, int64](ivecs, result, proc, length, func(x types.Decimal128) int64 {
-			return int64(ceilDecimal128(x, 0, scale, true).B0_63)
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
@@ -337,11 +327,6 @@ func ceilDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool)
 
 func CeilDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal256, int64](ivecs, result, proc, length, func(x types.Decimal256) int64 {
-			return int64(ceilDecimal256(x, 0, scale, true).B0_63)
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-65 {
@@ -463,11 +448,6 @@ func floorDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool
 
 func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal64, int64](ivecs, result, proc, length, func(x types.Decimal64) int64 {
-			return int64(floorDecimal64(x, 0, scale, true))
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-18 {
@@ -483,11 +463,6 @@ func FloorDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal128, int64](ivecs, result, proc, length, func(x types.Decimal128) int64 {
-			return int64(floorDecimal128(x, 0, scale, true).B0_63)
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-38 {
@@ -513,11 +488,6 @@ func floorDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool
 
 func FloorDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
-	if len(ivecs) == 1 && result.GetResultVector().GetType().Oid == types.T_int64 {
-		return opUnaryFixedToFixed[types.Decimal256, int64](ivecs, result, proc, length, func(x types.Decimal256) int64 {
-			return int64(floorDecimal256(x, 0, scale, true).B0_63)
-		}, selectList)
-	}
 	if len(ivecs) > 1 {
 		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
 		if len(digit) > 0 && int32(digit[0]) <= scale-65 {
