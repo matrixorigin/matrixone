@@ -1937,7 +1937,15 @@ func isExactMaterializedViewCreateSQL(sql string) bool {
 }
 
 func IsMaterializedViewStateTableDef(def *plan.TableDef) bool {
-	return def != nil && (mvdefinition.PropertyValue(def, mvdefinition.OwnerProperty) != "" || mvdefinition.IsStateName(def.Name))
+	// The reserved name is only a CREATE/RENAME admission rule. Once a
+	// relation has been resolved from the catalog, ownership metadata is the
+	// only reliable identity: older releases allowed ordinary user tables to
+	// use this prefix.
+	if def == nil {
+		return false
+	}
+	_, err := mvdefinition.StateOwner(def)
+	return err == nil
 }
 
 func CanWriteMaterializedViewHiddenColumns(ctx context.Context, def *plan.TableDef) bool {

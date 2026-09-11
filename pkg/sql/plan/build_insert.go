@@ -54,9 +54,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	internalMVState := strings.HasPrefix(strings.ToLower(tblName), "__mo_mv_state_") ||
-		strings.HasPrefix(strings.ToLower(t.GetName()), "__mo_mv_state_")
-	if internalMVState && !mvdefinition.CanWrite(ctx.GetContext(), t) {
+	if IsMaterializedViewStateTableDef(t) && !mvdefinition.CanWrite(ctx.GetContext(), t) {
 		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view internal state")
 	}
 	qualifierDB := string(stmt.TargetDatabaseName)
@@ -86,7 +84,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef) || internalMVState) && !mvdefinition.CanWrite(ctx.GetContext(), tableDef) {
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && !mvdefinition.CanWrite(ctx.GetContext(), tableDef) {
 		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view")
 	}
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])

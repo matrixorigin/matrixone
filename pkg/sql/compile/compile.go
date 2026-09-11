@@ -7739,7 +7739,7 @@ func supportsMultiSourceISCP(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion57
+	return ok && protocolVersion >= defines.MORPCVersion64
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {

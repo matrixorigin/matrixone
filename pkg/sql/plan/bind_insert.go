@@ -67,8 +67,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		targetDB = builder.compCtx.DefaultDatabase()
 	}
 	tableDef := dmlCtx.tableDefs[0]
-	internalMVState := strings.HasPrefix(strings.ToLower(targetTable), "__mo_mv_state_")
-	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef) || internalMVState) &&
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) &&
 		!mvdefinition.CanWrite(builder.GetContext(), tableDef) {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into materialized view")
 	}

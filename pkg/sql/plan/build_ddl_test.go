@@ -1476,8 +1476,16 @@ func TestIsMaterializedViewTableDefUsesCatalogIdentity(t *testing.T) {
 	}))
 }
 
-func TestIsMaterializedViewStateTableDefUsesReservedIdentity(t *testing.T) {
-	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "__mo_mv_state_0123456789abcdef"}))
+func TestIsMaterializedViewStateTableDefUsesCatalogOwner(t *testing.T) {
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "__mo_mv_state_0123456789abcdef"}))
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name:      "__mo_mv_state_0123456789abcdef",
+		TableType: catalog.SystemIndexRel,
+		TblId:     101,
+		Props: []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+			Format: 1, AccountID: 0, TargetID: 100, Generation: 1, StateID: 101,
+		})}},
+	}))
 	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{
 		Name: "state", Createsql: "create table state (a int) comment = 'matrixone materialized view state'",
 	}))
@@ -1508,8 +1516,13 @@ func TestInsertRejectsMaterializedViewStateReservedTarget(t *testing.T) {
 	name := "__mo_mv_state_0123456789abcdef"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424242}
 	mock.ctxt.tables[name] = &plan.TableDef{
-		Name: name,
-		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+		Name:      name,
+		TableType: catalog.SystemIndexRel,
+		TblId:     424242,
+		Cols:      []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+		Props: []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+			Format: 1, AccountID: 0, TargetID: 424241, Generation: 1, StateID: 424242,
+		})}},
 	}
 	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
 	require.ErrorContains(t, err, "materialized view internal state")
