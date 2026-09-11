@@ -177,17 +177,16 @@ func searchedBuildTS(ctx context.Context, req coverage.Request) int64 {
 		}
 		return maxDurableBuildTS(ctx, req, metaTxn)
 	}
-	// Current read: derive the generation via the shared memo (GetMaxTS) so this planning call and the
-	// fulltext2_search operator that later executes bind the SAME generation -- the loaded entry's
-	// build_ts when warm, else one compute-once durable MAX shared with a concurrent in-flight load.
-	// That closes the window where the plan measured a newer durable generation than execution reused.
-	buildTS, _, _, err := veccache.Cache.GetMaxTS(req.IndexStorageTable, func() (int64, error) {
-		return maxDurableBuildTS(ctx, req, req.Txn), nil
-	})
-	if err != nil {
-		return 0
+	// Current read: the loaded generation's build_ts when the cache is warm, else the durable
+	// MAX(build_ts) a fresh load would see. This is a plan-time usability signal (index built,
+	// and the lower bound shown in the EXPLAIN tail SQL); it does NOT bind execution -- the
+	// fulltext2_search operator binds the generation it actually searched at runtime and completes
+	// the (searched, snapshot] gap with a table_changes tail, so a stale/newer read here cannot
+	// drop rows.
+	if buildTS, ok := veccache.Cache.GetBuildTS(req.IndexStorageTable); ok {
+		return buildTS
 	}
-	return buildTS
+	return maxDurableBuildTS(ctx, req, req.Txn)
 }
 
 // indexJobLive reports whether the index has a live ISCP maintenance job: at least one

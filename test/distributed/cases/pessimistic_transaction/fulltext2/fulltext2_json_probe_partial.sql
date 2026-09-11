@@ -1,9 +1,10 @@
 -- #27926/#27941: a CURRENT-read json_extract probe against a BEHIND fulltext2 index must return
--- the correct rows by completing the index (bulk) arm with a table_changes tail over
--- (build_ts, snapshot], NOT by declining to a full scan. Which plan runs (covered probe / partial
--- union / table scan) depends on how far the async index has built, but the RESULT is identical, so
--- this asserts RESULTS -- no plan assertion, no wall-clock. The base scan re-checks every WHERE
--- conjunct on current values, so a stale index arm can never leak an updated or deleted row.
+-- the correct rows by SELF-COMPLETING -- the fulltext2_search operator unions a table_changes tail
+-- over (searched generation, snapshot] internally -- NOT by declining to a full scan. Which path
+-- runs (empty tail when caught up / non-empty tail when behind / table scan when unusable) depends
+-- on how far the async index has built, but the RESULT is identical, so this asserts RESULTS -- no
+-- plan assertion, no wall-clock. The base scan re-checks every WHERE conjunct on current values, so
+-- a stale index arm can never leak an updated or deleted row.
 set experimental_fulltext2_index = 1;
 drop database if exists ft2_json_partial;
 create database ft2_json_partial;

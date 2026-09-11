@@ -106,20 +106,25 @@ func TestBuildFulltext2SearchCfg(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, cfg, "__store")
 
-	// JSONProbeMode carries the pinned generation build_ts (recordJSONProbeMaxTs stash, keyed by the
-	// scan node id) into the config as max_ts, so execution pins the generation coverage measured.
-	b.jsonProbeMaxTs = map[int32]int64{node.NodeId: 424242}
+	// JSONProbeMode with a recorded self-completing probe (jsonProbeTail keyed by the scan node id)
+	// flips probe_tail on and carries the source table + pk the operator needs to run its
+	// table_changes tail.
+	b.jsonProbeTail = map[int32]jsonProbeTailInfo{node.NodeId: {
+		whereSQL:   "json_extract_string(`j`, '$.foo') = 'needle'",
+		displaySQL: "SELECT `id` FROM table_changes(...)",
+	}}
 	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, fulltext2engine.JSONProbeMode)
 	require.NoError(t, err)
 	var mm map[string]any
 	require.NoError(t, json.Unmarshal([]byte(cfg), &mm))
-	require.Equal(t, float64(424242), mm["max_ts"])
+	require.Equal(t, true, mm["probe_tail"])
+	require.Equal(t, "json_extract_string(`j`, '$.foo') = 'needle'", mm["probe_tail_where"])
 
-	// MATCH mode → no max_ts even with a stash present (whole current index).
+	// MATCH mode → no probe_tail even with a stash present (whole current index, no tail).
 	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, int64(tree.FULLTEXT_NL))
 	require.NoError(t, err)
 	var matchCfg map[string]any
 	require.NoError(t, json.Unmarshal([]byte(cfg), &matchCfg))
-	_, hasMaxTs := matchCfg["max_ts"]
-	require.False(t, hasMaxTs)
+	_, hasProbeTail := matchCfg["probe_tail"]
+	require.False(t, hasProbeTail)
 }

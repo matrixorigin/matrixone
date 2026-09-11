@@ -19,11 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
@@ -92,6 +94,7 @@ func jsonExtractProbeFromExpr(expr *plan.Expr) (jsonProbe, bool) {
 type jsonComparison struct {
 	col      int32
 	tag      string
+	path     string // the raw json path ('$.foo'), for rebuilding the predicate on the tail
 	isString bool
 	op       string
 	lit      *plan.Literal
@@ -122,7 +125,7 @@ func jsonExtractComparison(expr *plan.Expr) (jsonComparison, bool) {
 		}
 	}
 
-	col, tag, isString, ok := jsonExtractTarget(extract)
+	col, tag, path, isString, ok := jsonExtractTarget(extract)
 	if !ok {
 		return jsonComparison{}, false
 	}
@@ -130,7 +133,7 @@ func jsonExtractComparison(expr *plan.Expr) (jsonComparison, bool) {
 	if lit == nil {
 		return jsonComparison{}, false
 	}
-	return jsonComparison{col: col, tag: tag, isString: isString, op: op, lit: lit}, true
+	return jsonComparison{col: col, tag: tag, path: path, isString: isString, op: op, lit: lit}, true
 }
 
 // jsonEqualProbe builds the equality probe.
@@ -218,37 +221,37 @@ func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isStrin
 }
 
 // jsonExtractTarget matches json_extract_string|json_extract_float64(col, 'path')
-// and returns the column position, the path's trailing TAG, and whether the
-// extract is the string flavour.
-func jsonExtractTarget(expr *plan.Expr) (col int32, tag string, isString, ok bool) {
+// and returns the column position, the path's trailing TAG, the raw path literal, and
+// whether the extract is the string flavour.
+func jsonExtractTarget(expr *plan.Expr) (col int32, tag, path string, isString, ok bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 {
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
 	switch fn.Func.ObjName {
 	case "json_extract_string":
 		isString = true
 	case "json_extract_float64":
 	default:
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
 	c := fn.Args[0].GetCol()
 	if c == nil {
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
 	lit := fn.Args[1].GetLit()
 	if lit == nil {
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
 	s, isSval := lit.Value.(*plan.Literal_Sval)
 	if !isSval {
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
 	tag, ok = jsonPathTag(s.Sval)
 	if !ok {
-		return 0, "", false, false
+		return 0, "", "", false, false
 	}
-	return c.ColPos, tag, isString, true
+	return c.ColPos, tag, s.Sval, isString, true
 }
 
 // jsonPathTag returns the trailing object KEY of a literal JSON path, using the
@@ -347,47 +350,143 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if match == nil {
 			continue
 		}
-		// A behind index (partial) still injects the bulk probe here; the freshness gap is
-		// filled with a table_changes tail when applyJoinFullTextIndices builds the join. The
-		// json comparison f stays in FilterList so the base scan re-checks it on current values.
+		// An async index (partial) self-completes: record the tail's json predicate + the reconstructed
+		// tail SQL. buildFulltext2SearchCfg carries the predicate so the operator's table_changes tail
+		// filters the gap to actual matches (evaluated directly on the changed rows, no index), and the
+		// join splice publishes the SQL on the node's Stats.Sql for EXPLAIN. The operator binds the
+		// generation it actually searched at runtime and unions the tail internally, so no UNION arm is
+		// planned. The json comparison also stays in FilterList so the base scan re-checks it on current
+		// values (the tail is only a superset).
 		if kind == jsonProbePartial {
-			builder.recordJSONPartialProbe(scanNode, f, buildTS)
-		}
-		// Record the generation this probe was planned against (covered AND partial) so
-		// buildFulltext2SearchCfg carries it into the fulltext2_search config and execution pins the
-		// SAME generation -- for covered too, since covered has no tail to recover a stale reuse.
-		// Only for a current read (buildTS != 0 tracks the current generation); a snapshot probe binds
-		// the immutable snapshot entry and is not pinned here.
-		if scanNode.ScanSnapshot == nil && !buildTS.IsEmpty() {
-			builder.recordJSONProbeMaxTs(scanNode, buildTS)
+			builder.recordJSONProbeTail(scanNode, c, buildTS)
 		}
 		scanNode.FilterList = append(scanNode.FilterList, match)
 		return
 	}
 }
 
-// jsonPartialProbe is the tail-construction input recorded for a behind-index json probe.
-type jsonPartialProbe struct {
-	buildTS  types.TS   // the searched generation's build_ts: exclusive lower bound of the tail
-	jsonPred *plan.Expr // the json_extract comparison, pushed onto table_changes to shrink the tail
+// jsonProbeTailInfo is what a self-completing json probe carries to the operator and to EXPLAIN.
+type jsonProbeTailInfo struct {
+	// whereSQL is the json predicate rebuilt against the tail's columns
+	// (json_extract_string(`col`, '$.path') <op> <lit>), appended to the executable table_changes
+	// query so the tail returns only matching gap rows. Empty ⇒ push nothing (tail is all gap inserts;
+	// the base scan still re-checks, so correctness holds regardless).
+	whereSQL string
+	// displaySQL is the full reconstructed tail query shown in EXPLAIN (Verbose) via Stats.Sql, so the
+	// internally-run tail is visible. Its from bound is the PLAN-TIME build_ts; the operator runs from
+	// the generation it actually searched at runtime, differing only within the sub-second reuse window.
+	displaySQL string
 }
 
-// recordJSONPartialProbe marks scanNode's json probe as partial so the join builder fills the gap.
-func (builder *QueryBuilder) recordJSONPartialProbe(scanNode *plan.Node, jsonPred *plan.Expr, buildTS types.TS) {
-	if builder.jsonPartialProbes == nil {
-		builder.jsonPartialProbes = make(map[int32]jsonPartialProbe)
+// recordJSONProbeTail marks scanNode's json probe as self-completing and records the tail's predicate
+// SQL and its display SQL, keyed by node id. Presence tells buildFulltext2SearchCfg to set
+// TableConfig.ProbeTail.
+func (builder *QueryBuilder) recordJSONProbeTail(scanNode *plan.Node, c jsonComparison, buildTS types.TS) {
+	if builder.jsonProbeTail == nil {
+		builder.jsonProbeTail = make(map[int32]jsonProbeTailInfo)
 	}
-	builder.jsonPartialProbes[scanNode.NodeId] = jsonPartialProbe{buildTS: buildTS, jsonPred: DeepCopyExpr(jsonPred)}
+	where := ""
+	if colName := jsonProbeColName(scanNode, c.col); colName != "" {
+		where, _ = jsonComparisonSQL(c, colName) // best-effort; "" leaves the tail unfiltered (still correct)
+	}
+	// The EXPLAIN display SQL is shown ONLY when the index is behind the read as of planning
+	// (buildTS < readTS) -- i.e. when the tail is expected to actually run. A caught-up index
+	// self-completes with an EMPTY tail the operator skips at runtime, so surfacing a table_changes
+	// query that will not execute would mislead. ProbeTail + whereSQL are recorded regardless, so a
+	// runtime that turns out behind still runs (and filters) the tail; only the display is gated.
+	display := ""
+	if readTS, ok := builder.jsonProbeReadTS(scanNode); ok && buildTS.LT(&readTS) {
+		display = builder.jsonProbeTailSQL(scanNode, buildTS, where)
+	}
+	builder.jsonProbeTail[scanNode.NodeId] = jsonProbeTailInfo{whereSQL: where, displaySQL: display}
 }
 
-// recordJSONProbeMaxTs records the generation build_ts a json probe was planned against, so
-// buildFulltext2SearchCfg pins execution to it via TableConfig.MaxTs. Recorded for covered and
-// partial alike (current read only).
-func (builder *QueryBuilder) recordJSONProbeMaxTs(scanNode *plan.Node, buildTS types.TS) {
-	if builder.jsonProbeMaxTs == nil {
-		builder.jsonProbeMaxTs = make(map[int32]int64)
+// jsonProbeReadTS is the read point a json probe measures against: the snapshot TS for a
+// {snapshot=...}/AS OF read, else the current txn snapshot. Second return is false when there is no
+// process/txn to ask (unit contexts).
+func (builder *QueryBuilder) jsonProbeReadTS(scanNode *plan.Node) (types.TS, bool) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return types.TS{}, false
 	}
-	builder.jsonProbeMaxTs[scanNode.NodeId] = buildTS.Physical()
+	txn := proc.GetTxnOperator()
+	if txn == nil {
+		return types.TS{}, false
+	}
+	snap := txn.SnapshotTS()
+	if ets := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot); ets != nil {
+		snap = *ets
+	}
+	return types.TimestampToTS(snap), true
+}
+
+func jsonProbeColName(scanNode *plan.Node, col int32) string {
+	if scanNode.TableDef == nil || col < 0 || int(col) >= len(scanNode.TableDef.Cols) {
+		return ""
+	}
+	return scanNode.TableDef.Cols[col].Name
+}
+
+// jsonComparisonSQL rebuilds the json_extract comparison as SQL text over the source column by NAME,
+// so it can filter table_changes (which exposes the source columns by name) directly -- no index. It
+// is the SAME predicate the base scan re-checks, so pushing it only shrinks the tail. Returns false
+// when the literal has no SQL rendering (the caller then leaves the tail unfiltered).
+func jsonComparisonSQL(c jsonComparison, colName string) (string, bool) {
+	fn := "json_extract_float64"
+	if c.isString {
+		fn = "json_extract_string"
+	}
+	val, ok := jsonLiteralToSQL(c.lit)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%s(%s, %s) %s %s", fn, sqlquote.Ident(colName), sqlquote.String(c.path), c.op, val), true
+}
+
+// jsonLiteralToSQL renders the comparison's constant as a SQL literal. Only the literal kinds
+// jsonExtractComparison accepts (string for json_extract_string; the numeric kinds litAsFloat reads)
+// are handled; anything else returns false.
+func jsonLiteralToSQL(lit *plan.Literal) (string, bool) {
+	switch v := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		return sqlquote.String(v.Sval), true
+	case *plan.Literal_I64Val:
+		return strconv.FormatInt(v.I64Val, 10), true
+	case *plan.Literal_U64Val:
+		return strconv.FormatUint(v.U64Val, 10), true
+	case *plan.Literal_Fval:
+		return strconv.FormatFloat(float64(v.Fval), 'g', -1, 64), true
+	case *plan.Literal_Dval:
+		return strconv.FormatFloat(v.Dval, 'g', -1, 64), true
+	}
+	return "", false
+}
+
+// jsonProbeTailSQL reconstructs, for display, the table_changes gap query the fulltext2_search
+// operator runs to self-complete an async json probe: the inserts committed after the searched
+// generation up to the read snapshot, filtered by whereSQL, projected to the pk the join binds. The
+// executable form (with the runtime bound) is built by the operator; this is what EXPLAIN shows so
+// the internally-run tail is not a black box.
+func (builder *QueryBuilder) jsonProbeTailSQL(scanNode *plan.Node, buildTS types.TS, whereSQL string) string {
+	db, tbl, pk := "", "", ""
+	if scanNode.ObjRef != nil {
+		db, tbl = scanNode.ObjRef.SchemaName, scanNode.ObjRef.ObjName
+	}
+	if scanNode.TableDef != nil && scanNode.TableDef.Pkey != nil {
+		pk = scanNode.TableDef.Pkey.PkeyColName
+	}
+	toStr := "<snapshot>"
+	if readTS, ok := builder.jsonProbeReadTS(scanNode); ok {
+		toStr = fmt.Sprintf("%d-%d", readTS.Physical(), readTS.Logical())
+	}
+	fromStr := fmt.Sprintf("%d-%d", buildTS.Physical(), buildTS.Logical())
+	const tc = "mo_tc" // alias so table_changes' reserved metadata columns bind (matches the operator)
+	sql := fmt.Sprintf("SELECT %s.`%s` FROM table_changes('%s', '%s', '%s', '%s') AS %s WHERE %s.%s = 'insert'",
+		tc, pk, db, tbl, fromStr, toStr, tc, tc, catalog.TableChangesAttrChangeType)
+	if whereSQL != "" {
+		sql += " AND (" + whereSQL + ")"
+	}
+	return sql
 }
 
 // PreparedPlanDependsOnIndexCoverage reports whether a prepared plan carries an injected
@@ -430,10 +529,11 @@ type jsonProbeKind int
 const (
 	// jsonProbeSkip: the index cannot be trusted here -- leave the full scan (fail closed).
 	jsonProbeSkip jsonProbeKind = iota
-	// jsonProbeCovered: the index is current for the read -- emit a mandatory probe.
+	// jsonProbeCovered: a SYNCHRONOUS index (never behind) -- emit a mandatory probe with no tail.
 	jsonProbeCovered
-	// jsonProbePartial: a current read whose index is behind -- complete the bulk probe with a
-	// table_changes tail from the returned build_ts. json_extract only; snapshots never partial.
+	// jsonProbePartial: an ASYNC index -- emit a mandatory probe the fulltext2_search operator
+	// SELF-COMPLETES, binding the generation it searched at runtime and unioning a table_changes tail
+	// up to the read snapshot. Covers both current and {snapshot=...} reads.
 	jsonProbePartial
 )
 
@@ -442,14 +542,12 @@ const (
 var coversSnapshotFn = indexplugin.CoversSnapshot
 
 // decideJSONProbe evaluates idx against scanNode's read and reports how a probe may use it, plus
-// (for jsonProbePartial) the build_ts the searched generation reached -- the lower bound of the
-// table_changes tail that fills the freshness gap. A synchronous index always covers. An async index
-// is asked, measuring build_ts and the coverage bar at the same read point (current, or the snapshot
-// for a historical read): if covered it probes, else -- current OR historical -- it is completed with
-// a tail up to that read point. Fails closed to jsonProbeSkip on any uncertainty: a full scan is
-// always correct, an unsound probe is not.
-//
-// No cost gate guards the partial path: the tail is emitted whenever the index is behind.
+// (for jsonProbePartial) the plan-time build_ts -- the lower bound shown in the EXPLAIN tail SQL. A
+// synchronous index is never behind, so it probes with no tail. An async index always self-completes
+// (jsonProbePartial): the operator binds the generation it actually searched and unions a
+// table_changes tail up to the read point, so covered-vs-partial need not be decided here. Fails
+// closed to jsonProbeSkip on any uncertainty (unbuilt index, table_changes cannot serve the table,
+// transaction-local writes): a full scan is always correct, an unsound probe is not.
 func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.IndexDef) (jsonProbeKind, types.TS) {
 	algo := catalog.ToLower(idx.IndexAlgo)
 	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
@@ -531,210 +629,37 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 		IndexMetadataTable: metaTbl,
 		ScanSnapshotTS:     scanSnapshotTS,
 	}
-	covered, buildTS, err := coversSnapshotFn(ctx, algo, req)
+	// The `covered` verdict is intentionally ignored. With runtime tail binding the operator ALWAYS
+	// self-completes: whether the index was caught up (an empty tail the operator skips at runtime) or
+	// behind (the tail fills the gap), the answer is identical, so the plan need not decide
+	// covered-vs-partial. coversSnapshotFn is still the way to (a) read buildTS -- the plan-time lower
+	// bound shown in the EXPLAIN tail SQL -- and (b) fire the transaction-local-write guard inside
+	// SourceCommitTS: a txn with uncommitted writes to the source makes the probe unsound (the index
+	// and the tail see only committed rows), and that guard surfaces as an error here, forcing a full
+	// scan.
+	_, buildTS, err := coversSnapshotFn(ctx, algo, req)
 	if err != nil {
 		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
 		return jsonProbeSkip, types.TS{}
 	}
-	if covered {
-		// Return build_ts so the caller can pin execution to this exact generation. Covered has no
-		// tail, so binding matters most: a probe reusing an older generation would drop rows silently.
-		return jsonProbeCovered, buildTS
-	}
-	// Not covered: complete the behind index with a table_changes tail from build_ts up to the read
-	// point (now for a current read, S for a snapshot). Both paths are identical.
+	// An unbuilt / unreadable index (build_ts 0) would turn the tail table_changes(0, S] into a
+	// disguised full scan over the table's whole history -- decline to a real full scan instead.
 	if buildTS.IsEmpty() {
 		return jsonProbeSkip, types.TS{}
 	}
-	// The tail is table_changes over the gap. If that TVF cannot serve this table (partitioned,
-	// temporary, no explicit pk, or a column colliding with its reserved metadata names), a partial
-	// plan is impossible -- decline to a full scan rather than emit an incomplete bulk-only probe.
+	// The operator completes the gap with a table_changes tail. If that TVF cannot serve this table
+	// (partitioned, temporary, no explicit pk, or a column colliding with its reserved metadata
+	// names), self-completion is impossible -- decline to a full scan.
 	if validateTableChangesSource(scanNode.ObjRef, scanNode.TableDef) != nil {
 		return jsonProbeSkip, types.TS{}
 	}
 	// table_changes emits only non-hidden source columns, so a composite (or otherwise hidden)
-	// primary key -- whose pk column it drops -- cannot anchor the tail's pk projection. Decline to a
-	// full scan rather than promise a partial plan buildJSONProbeTail cannot build.
+	// primary key -- whose pk column it drops -- cannot anchor the tail's pk projection. Decline.
 	pkPos, ok := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	if !ok || int(pkPos) >= len(scanNode.TableDef.Cols) || scanNode.TableDef.Cols[pkPos].Hidden {
 		return jsonProbeSkip, types.TS{}
 	}
-	// The tail spans (build_ts, readTS]. If build_ts has already reached the read point (a rare
-	// bar/snapshot skew on a current read; for a snapshot the covered branch handles build_ts>=S), the
-	// window is empty and table_changes would reject from >= to, so full-scan.
-	readTS := types.TimestampToTS(txn.SnapshotTS())
-	if scanSnapshotTS != nil {
-		readTS = types.TimestampToTS(*scanSnapshotTS)
-	}
-	if !buildTS.LT(&readTS) {
-		return jsonProbeSkip, types.TS{}
-	}
 	return jsonProbePartial, buildTS
-}
-
-// buildJSONProbeTail builds the freshness-gap arm of a behind-index json probe: table_changes over
-// (buildTS, snapshot] restricted to inserts matching the json predicate, projected to (pk, score) so
-// it unions cleanly with the fulltext2_search bulk arm. It returns the project node id, or false if
-// the tail cannot be built. The base scan re-checks every WHERE conjunct on current values, so this
-// arm need only be a SUPERSET of the gap matches; pushing json_pred here just shrinks it.
-func (builder *QueryBuilder) buildJSONProbeTail(ctx *BindContext, scanNode *plan.Node, p jsonPartialProbe, pkType plan.Type) (int32, bool) {
-	proc := builder.compCtx.GetProcess()
-	if proc == nil || scanNode.ObjRef == nil || scanNode.TableDef.Pkey == nil {
-		return 0, false
-	}
-	txn := proc.GetTxnOperator()
-	if txn == nil {
-		return 0, false
-	}
-	// from is EXCLUSIVE in table_changes (it advances by one), and buildTS is the last commit the
-	// index reflects, so (buildTS, to] is exactly the gap. to is the READ point: the snapshot TS for a
-	// {snapshot=...}/AS OF read, else the current txn snapshot -- the same point the base scan and the
-	// bulk arm read at, so the tail spans no more than the read sees.
-	snap := txn.SnapshotTS()
-	if scanSnapshotTS := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(scanNode.ScanSnapshot); scanSnapshotTS != nil {
-		snap = *scanSnapshotTS
-	}
-	fromStr := fmt.Sprintf("%d-%d", p.buildTS.Physical(), p.buildTS.Logical())
-	toStr := fmt.Sprintf("%d-%d", snap.PhysicalTime, snap.LogicalTime)
-	exprs := []*plan.Expr{
-		makePlan2StringConstExprWithType(scanNode.ObjRef.SchemaName),
-		makePlan2StringConstExprWithType(scanNode.ObjRef.ObjName),
-		makePlan2StringConstExprWithType(fromStr),
-		makePlan2StringConstExprWithType(toStr),
-	}
-	tcID, err := builder.buildTableChanges(nil, ctx, exprs, nil)
-	if err != nil {
-		logutil.Debugf("json partial probe: table_changes build failed for %s: %v", scanNode.ObjRef.ObjName, err)
-		return 0, false
-	}
-	tcNode := builder.qry.Nodes[tcID]
-	tcTag := tcNode.BindingTags[0]
-
-	// Locate the pk column (by name) in the table_changes output, which carries all non-hidden
-	// source columns after the four change-metadata columns.
-	pkPos := int32(-1)
-	for i, cd := range tcNode.TableDef.Cols {
-		if cd.Name == scanNode.TableDef.Pkey.PkeyColName {
-			pkPos = int32(i)
-			break
-		}
-	}
-	if pkPos < 0 {
-		return 0, false
-	}
-
-	// FILTER: change_type = 'insert' (the current state of a gap row; an update is delete+insert,
-	// so the insert row carries the new values) AND the json predicate rebased onto these columns.
-	changeType := &plan.Expr{
-		Typ:  tcNode.TableDef.Cols[0].Typ,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tcTag, ColPos: 0}},
-	}
-	insertOnly, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=",
-		[]*plan.Expr{changeType, makePlan2StringConstExprWithType("insert")})
-	if err != nil {
-		return 0, false
-	}
-	filters := []*plan.Expr{insertOnly}
-	if jp := builder.rebaseToTableChanges(p.jsonPred, scanNode, tcNode, tcTag); jp != nil {
-		filters = append(filters, jp)
-	}
-	filterID := builder.appendNode(&plan.Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{tcID},
-		FilterList: filters,
-	}, ctx)
-
-	// PROJECT (pk, 0::float32) to mirror the fulltext2_search (doc_id, score) layout so the two
-	// arms union. The placeholder score is dropped by the group-by dedup above the union.
-	projTag := builder.genNewBindTag()
-	projID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_PROJECT,
-		Children: []int32{filterID},
-		ProjectList: []*plan.Expr{
-			{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tcTag, ColPos: pkPos}}},
-			{Typ: plan.Type{Id: int32(types.T_float32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 0}}}},
-		},
-		BindingTags: []int32{projTag},
-	}, ctx)
-	return projID, true
-}
-
-// rebaseToTableChanges rewrites, in place, every base-scan ColRef in expr to the matching
-// table_changes output column (by name), so a WHERE predicate can be evaluated on the tail. It
-// returns nil (do not push) if any referenced column is absent from the table_changes output --
-// the base scan still re-checks it, so the tail is merely a larger superset.
-func (builder *QueryBuilder) rebaseToTableChanges(expr *plan.Expr, scanNode, tcNode *plan.Node, tcTag int32) *plan.Expr {
-	scanTag := scanNode.BindingTags[0]
-	pushable := true
-	var walk func(e *plan.Expr)
-	walk = func(e *plan.Expr) {
-		if e == nil || !pushable {
-			return
-		}
-		switch impl := e.Expr.(type) {
-		case *plan.Expr_Col:
-			if impl.Col.RelPos != scanTag {
-				return
-			}
-			name := impl.Col.Name
-			if name == "" && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(scanNode.TableDef.Cols) {
-				name = scanNode.TableDef.Cols[impl.Col.ColPos].Name
-			}
-			newPos := int32(-1)
-			for i, cd := range tcNode.TableDef.Cols {
-				if cd.Name == name {
-					newPos = int32(i)
-					break
-				}
-			}
-			if newPos < 0 {
-				pushable = false
-				return
-			}
-			impl.Col.RelPos = tcTag
-			impl.Col.ColPos = newPos
-		case *plan.Expr_F:
-			for _, a := range impl.F.Args {
-				walk(a)
-			}
-		case *plan.Expr_List:
-			for _, s := range impl.List.List {
-				walk(s)
-			}
-		}
-	}
-	walk(expr)
-	if !pushable {
-		return nil
-	}
-	return expr
-}
-
-// unionFtWithTail builds UNION ALL(ft bulk arm, tail arm) on the (pk, score) layout, returning the
-// union node id and a pk reference through it. Both children expose col 0 = pk, col 1 = score; the
-// union projects them referencing the left (ft) tag, and the executor maps the right arm
-// positionally. A group-by dedup above the union then collapses duplicate pks (a row inserted
-// <= buildTS and updated in the gap appears in both arms, and the probe repeats a doc per term).
-func (builder *QueryBuilder) unionFtWithTail(ctx *BindContext, ftID, ftTag, tailID int32, pkType plan.Type) (int32, *plan.Expr) {
-	ftNode := builder.qry.Nodes[ftID]
-	tailNode := builder.qry.Nodes[tailID]
-	unionTag := builder.genNewBindTag()
-	unionID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_UNION_ALL,
-		Children: []int32{ftID, tailID},
-		ProjectList: []*plan.Expr{
-			{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 0}}},
-			{
-				Typ:  setOperationOutputType(plan.Node_UNION_ALL, ftNode.TableDef.Cols[1].Typ, tailNode.ProjectList[1].Typ),
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 1}},
-			},
-		},
-		BindingTags: []int32{unionTag},
-	}, ctx)
-	return unionID, &plan.Expr{
-		Typ:  pkType,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: unionTag, ColPos: 0}},
-	}
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose
@@ -867,10 +792,9 @@ func (builder *QueryBuilder) dedupFulltextDocIDs(ctx *BindContext, ftNodeID int3
 	if builder.jsonProbeFtNodes == nil {
 		builder.jsonProbeFtNodes = make(map[int32]bool)
 	}
-	// Record the immediate child, not the group: on the covered path that is the fulltext2_search
-	// SCAN (the id the score-sort/runtime-filter passes hold in ret_filter_node_ids); on the partial
-	// path the caller passes the UNION and separately marks the scan id at the splice. Either way the
-	// stream feeding this group is a probe.
+	// Record the immediate child, the fulltext2_search SCAN (the id the score-sort/runtime-filter
+	// passes hold in ret_filter_node_ids). A self-completing async probe emits its table_changes tail
+	// INSIDE that same scan node (no separate UNION arm), so the child is always the scan.
 	builder.jsonProbeFtNodes[ftNodeID] = true
 
 	return nodeID, &plan.Expr{

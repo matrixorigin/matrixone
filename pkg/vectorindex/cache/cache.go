@@ -612,6 +612,12 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if !s.extendForSearch() {
 		return nil, nil, errIndexDestroyed
 	}
+	// Publish the generation being searched to the caller UNDER this lock, atomic with the search,
+	// so a follow-up bounded to it (the fulltext2 json-probe tail) cannot bind a newer generation a
+	// concurrent evict+reload publishes after this returns. See RuntimeConfig.SearchedBuildTS.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
 
@@ -645,13 +651,16 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	if !s.extendForSearch() {
 		return errIndexDestroyed
 	}
+	// See Search: publish the searched generation under this lock for a bounded follow-up.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
 
 // implementation of VectorIndexCache
 type VectorIndexCache struct {
 	IndexMap       sync.Map
-	maxTSMemo      sync.Map // indexTable -> *maxTSMemoEntry; see GetMaxTS
 	TickerInterval time.Duration
 	ticker         *time.Ticker
 	done           chan bool

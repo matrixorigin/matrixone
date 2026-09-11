@@ -472,13 +472,25 @@ allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
 row written inside the maintenance lag satisfies the predicate but has no
 posting yet, so an unconditional probe would silently drop it.
 
-The optimizer therefore asks, per query, whether the index **generation a probe
-would actually search** reaches the read, and injects the probe only on a
-definite yes. The check has two independent conditions, both fail closed:
+Because the probe **self-completes** (§10.3) — the operator unions a `table_changes`
+tail up to the read point, bound to the generation it actually searched (§10.4) — the
+result is correct whether the index is caught up or behind. So the per-query gate no
+longer decides *covered vs behind*; it decides **probe vs full scan**: it injects the
+probe when the index is usable and fails closed to a full scan otherwise. Usable means:
 
-- **liveness** — a live ISCP maintenance job exists (running/completed, not
-  dropped), read from `mo_catalog.mo_iscp_log` (`job_state`, `drop_at`);
-- **coverage** — `build_ts >= bar` (§10.1, §10.2).
+- **built** — `build_ts > 0` (an unbuilt index would make the tail a whole-history scan);
+- **no transaction-local write to the source** — the index and the tail see only
+  committed rows, so an uncommitted local write would be dropped by the probe; the
+  `SourceCommitTS` guard (§10.2) surfaces this and forces the full scan;
+- **`table_changes` can serve the table** — not partitioned/temporary, an explicit
+  non-hidden pk, no column colliding with its reserved metadata names.
+
+`CoversSnapshot` still computes liveness and the coverage bar, but the probe decision
+**ignores the covered verdict** (self-completion makes covered and behind identical);
+what it consumes is `build_ts` (usability + the EXPLAIN tail-SQL lower bound) and the
+transaction-local-write guard that `SourceCommitTS` fires. Liveness is read from
+`mo_catalog.mo_iscp_log` (`job_state`, `drop_at`); a dropped/paused index is still
+correct via the tail, so it no longer declines the probe.
 
 Pieces:
 
@@ -523,8 +535,11 @@ algo; fulltext2/hnsw/cagra/ivfpq return the real value, ivfflat/brute-force retu
 
 ### 10.2 The bar
 
-`covered ⟺ live && build_ts >= bar`, where the bar is the read snapshot's coverage
-requirement:
+`CoversSnapshot` computes `covered ⟺ live && build_ts >= bar`, but with self-completion
+the probe decision ignores that verdict (§10 intro): the bar is retained because
+computing it is how the **transaction-local-write guard** fires (it fails closed on an
+uncommitted write to the source), and it remains meaningful to any caller that still
+wants a true covered/behind answer. The bar is the read snapshot's coverage requirement:
 
 - **current read** — `bar = SourceCommitTS`: the greatest source DML commit the
   query CN observes at the read snapshot, computed from the base relation's
@@ -546,84 +561,70 @@ requirement:
 The original json_extract predicate is retained and re-evaluated on every row the
 probe returns.
 
-### 10.3 Partial coverage: bulk probe + gap tail (json_extract only)
+### 10.3 Self-completing probe: bulk + gap tail (json_extract only)
 
-When a read is not covered (`build_ts < bar`) the gate completes the behind index
-instead of declining to a full table scan — for BOTH current and historical reads,
-measured at the read point (`now`, or the snapshot `S`). The optimizer keeps the
-index for the bulk and scans only the gap — a UNION of two pk sources feeding the
-base fetch:
+An async index reflects the source only up to the generation the operator searches, so
+the `fulltext2_search` operator **self-completes**: after the bulk search it runs the
+gap query itself and emits the recovered pks alongside the bulk. There is no separate
+UNION arm in the plan — one node produces both:
 
-- **bulk** — the `fulltext2_search` probe (rows the generation reflects, `<= build_ts`);
-- **tail** — `table_changes(t, build_ts, S]` filtered by the same json_extract
-  predicate (the rows the index has not yet absorbed), projected to `(pk, score)`.
+- **bulk** — the rows the searched generation reflects (`<= build_ts`), matched through
+  the index;
+- **tail** — `table_changes(db, t, build_ts, S] WHERE change_type='insert' AND
+  <json_extract predicate>`, projected to the pk, emitted as `(doc_id=pk, score=0)`. `S`
+  is the read point (`now`, or the snapshot for a historical read). The tail rows are not
+  in the index (that is the whole point of the gap), so the json predicate is evaluated
+  **directly on the changed rows, no index** — the same predicate the base scan uses,
+  rebuilt against the source columns table_changes exposes. Pushing it only shrinks the
+  candidate set; the base scan re-checks regardless, so if the predicate cannot be
+  rendered the tail is left unfiltered (a wider superset, still correct).
 
-`base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail pks)`. The UNION is `UNION ALL` plus a
-group-by dedup, both required: bulk and tail overlap when a row is updated inside the
-gap (old value in the index, new value in the tail), and a probe repeats a pk per
-matched term. Deletes inside the gap need no handling: the base fetch is at the read
-point, so MVCC drops a pk deleted after `build_ts`. This is **json_extract only** —
-`MATCH … AGAINST` keeps search semantics and never uses it.
+`base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail pks)`. The group-by dedup (`AGG`) is
+still required: bulk and tail overlap when a row is updated inside the gap (old value in
+the index, new insert row in the tail), and a probe repeats a pk per matched term.
+Deletes inside the gap need no handling: the tail is insert-only and the base fetch is
+at the read point, so MVCC drops a pk deleted after `build_ts`. This is **json_extract
+only** — `MATCH … AGAINST` keeps search semantics and never self-completes.
 
 There is **no cost gate**. The base table carries large per-row content (avoiding the
 bulk-load of that content is the whole reason to use the index), so even a large tail
-costs no more than the full scan it replaces; a gate would risk declining a plan that
-is always at least as cheap. `table_changes` refuses to span a schema-version change,
-so a DDL inside the gap forces the full scan — an ALTER rebuilds the index with
-`build_ts >=` the ALTER, so in practice the tail never spans it. The construction
-lives in the json-probe rewrite (`decideJSONProbe` / `recordJSONPartialProbe`),
-reusing the existing probe rewrite for the bulk arm and the `table_changes` builder
-for the tail arm, so the shared `fulltext2_search` TVF and the `MATCH` path are
-untouched.
+costs no more than the full scan it replaces. `table_changes` refuses to span a
+schema-version change, so a DDL inside the gap forces the full scan — an ALTER rebuilds
+the index with `build_ts >=` the ALTER, so in practice the tail never spans it. The tail
+SQL runs through the internal SQL executor **inside the TVF** (`pkg/sql/colexec/table_function`),
+never inside `pkg/fulltext2`. The decision lives in `decideJSONProbe`
+(`recordJSONProbeTail`); `buildFulltext2SearchCfg` flips `TableConfig.ProbeTail` and
+carries the source table + pk the operator needs.
 
-### 10.4 Generation binding: plan and execution must search the same generation
+### 10.4 Generation binding: the tail is bound to the generation actually searched
 
-The covered/partial verdict and the tail's lower bound are decided at PLAN time, but
-the generation the operator actually searches is chosen at EXECUTION. If the two
-differ, a covered probe (no tail) or a partial tail bounded above the searched
-generation drops rows. The classic hole: an index is mid-load of an old generation
-`W0`; a row commits and CDC publishes `W1`; a second query plans, reads durable `W1`,
-declares *covered*, then executes against the still-loading `W0` — and the row is gone.
+The generation the operator searches is chosen at EXECUTION (a warm cache may reuse a
+slightly older generation than the planner measured). If the tail's lower bound were
+fixed at plan time, a query that reused an older generation could bound its tail *above*
+what it searched and drop the rows in between. The classic hole: an index is mid-load of
+an old generation `W0`; a row commits and CDC publishes `W1`; a second query plans against
+durable `W1` but executes against the still-loading `W0` — with a plan-time bound the row
+in `(W0, W1]` is lost.
 
-So the plan-time `build_ts` and the execution generation are tied to one value,
-`GetMaxTS(indexTable)` (`pkg/vectorindex/cache`), consulted identically by the
-coverage gate and carried to the operator:
+So the tail's lower bound is **not** a plan-time value. The operator reads
+`newsearch.BuildTS()` — the `build_ts` of the generation this search *actually* reached —
+*after* the bulk search, and runs `table_changes(BuildTS(), S]`. Whatever generation the
+cache handed it (fresh, reused, or cross-CN stale), the tail begins exactly where that
+generation ends, so no row is dropped and no plan-time/execution disagreement is possible.
+A generation already caught up to `S` yields an empty window, which the operator skips.
+Snapshot reads work identically: `BuildTS()` is the as-of-snapshot generation's bound and
+`S` is the snapshot TS, so the tail is `(that generation, S]`.
 
-- **tier 1 — warm cache** (`GetBuildTS`): the loaded entry's `build_ts`, i.e. exactly
-  the generation execution will reuse;
-- **tier 2 — memo**: a concurrent cold caller is building an *older* generation than
-  this caller's own snapshot could load; return that (smaller) shared value, since it
-  is the generation execution will actually reuse;
-- **tier 3 — SQL** `MAX(build_ts)`: this caller's own durable as of its transaction.
+Because the tail is now internal to the operator rather than a visible plan node, the
+planner publishes the reconstructed tail SQL on the scan node's `Stats.Sql`
+(`jsonProbeTail`), which `EXPLAIN (VERBOSE)` renders as `Sql: SELECT … FROM
+table_changes(…) WHERE change_type = 'insert'` — the same mechanism classic fulltext uses
+to show its index-scan SQL. So the internally-run tail is visible in the plan, not a black
+box; the displayed lower bound is the plan-time `build_ts` (the runtime bound differs only
+within the sub-second window a stale reuse opens).
 
-The result is always **`min(shared memo, own durable)`** — the clamp is the load-bearing
-rule. `own` is computed on every cold call (the memo is a *cap-from-below*, not a
-compute-skip) precisely so a memo seeded by a concurrent *newer*-snapshot query can
-never hand this caller a generation its own snapshot cannot load: without the clamp,
-an older-snapshot query would inherit a `build_ts` above what it can reach, mark itself
-covered, then search an older generation and drop rows. The memo is removed once the
-load publishes (tier 1 takes over).
-
-The planner records that `build_ts` (`recordJSONProbeMaxTs`, covered and partial
-alike) and `buildFulltext2SearchCfg` carries it in the search config as
-`TableConfig.MaxTs`. The operator reads `MaxTs` — it does **not** re-derive it (a
-fresh read at execution could diverge from the plan under a concurrent load/eviction)
-— and tags the loaded entry's `build_ts` with it, so a stale/in-flight generation is
-never silently substituted for the one the plan approved. `MaxTs == 0` is ordinary
-`MATCH`, which loads the whole current index.
-
-Snapshot reads are exempt: they key by `SnapshotKey` and load the immutable
-as-of-snapshot generation, so their coverage and execution already agree.
-
-Remaining limitation (accepted, same class as the cross-CN eventual-consistency
-won't-fix): the clamp bounds `MaxTs` at what a query's *own* snapshot can load, but the
-tail bound is still fixed at plan time, so a query that *reuses* a shared entry whose
-generation is older than that bound — a generation loaded by an even-older-snapshot
-query in the cold window — can still bound its tail above what it searched. This needs
-concurrent probes at different snapshots with DML landing in the microsecond gap, on an
-index already lagging by seconds, and self-corrects once the entry warms. Fully closing
-it requires binding the tail's lower bound to the generation the operator actually
-searched (runtime tail binding), scoped separately.
+This closes the microsecond reuse race the plan-time-bound design left open, with no UNION
+arm and no cross-layer generation carrier.
 
 ## 11. Range probes
 

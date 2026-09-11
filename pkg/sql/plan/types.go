@@ -494,17 +494,14 @@ type QueryBuilder struct {
 	// they sit under a GROUP BY that does not re-expose the scan's columns.
 	jsonProbeFtNodes map[int32]bool
 
-	// jsonPartialProbes records, per base-scan node id, that a json_extract probe runs against a
-	// BEHIND index on a current read: applyJoinFullTextIndices must fill the freshness gap by
-	// unioning the index (bulk) arm with a table_changes tail over (buildTS, snapshot]. Set by
-	// addJSONFulltextProbes, consumed at the join splice.
-	jsonPartialProbes map[int32]jsonPartialProbe
-
-	// jsonProbeMaxTs records, per base-scan node id, the generation build_ts a json_extract probe
-	// was planned against (covered AND partial). buildFulltext2SearchCfg carries it into the
-	// fulltext2_search config (TableConfig.MaxTs) so execution pins the SAME generation coverage
-	// measured -- current read only; a {snapshot=...} probe is not recorded here. 0/absent ⇒ MATCH.
-	jsonProbeMaxTs map[int32]int64
+	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
+	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
+	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
+	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by
+	// addJSONFulltextProbes, consumed at the join splice (Stats.Sql) and by buildFulltext2SearchCfg
+	// (which flips TableConfig.ProbeTail). Presence ⇒ self-complete; absent ⇒ MATCH / synchronous.
+	jsonProbeTail map[int32]jsonProbeTailInfo
 
 	aggSpillMem int64
 

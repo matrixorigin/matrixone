@@ -80,11 +80,17 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
-	// MaxTs pins the generation a mandatory json probe must load and search: build_ts <= MaxTs.
-	// The planner computes it ONCE (coverage's GetMaxTS) and carries it here, so plan and execution
-	// bind the same generation and the table_changes tail (bounded at the same value) leaves no gap;
-	// the TVF must not re-derive it. 0 = ordinary MATCH, which loads the whole current index.
-	MaxTs int64 `json:"max_ts,omitempty"`
+	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2_search operator must
+	// self-complete: after searching the bulk index it binds the generation it actually searched
+	// (BuildTS) and emits a table_changes(searched, snapshot] tail so no row committed after the
+	// index's generation is dropped. Set by the planner for an async json probe (current or
+	// snapshot). false = ordinary MATCH / a synchronous covered probe, which needs no tail.
+	ProbeTail bool `json:"probe_tail,omitempty"`
+	// ProbeTailWhere is the json predicate, rebuilt against the source columns
+	// (json_extract_string(`col`, '$.path') <op> <lit>), that the ProbeTail tail appends to its
+	// table_changes query so only matching gap rows are returned -- evaluated directly on the changed
+	// rows, no index. Empty ⇒ the tail is unfiltered (the base scan re-checks, so still correct).
+	ProbeTailWhere string `json:"probe_tail_where,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can

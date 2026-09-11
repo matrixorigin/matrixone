@@ -125,13 +125,24 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	if incCols := indexDefIncludedColumnsBestEffort(idxdef); len(incCols) > 0 {
 		cfgMap["include_columns"] = incCols
 	}
-	// Pin the generation for a mandatory json probe: carry the build_ts coverage measured
-	// (recordJSONProbeMaxTs) so execution loads and searches exactly that generation, and its
-	// table_changes tail (bounded at the same value) leaves no gap. Current-read probe only; a MATCH
-	// or a snapshot probe records nothing here, so max_ts stays 0 (whole current index).
+	// A mandatory json probe against an async index self-completes: the operator unions a
+	// table_changes(searched, snapshot] tail internally, so carry the source table + pk it needs to
+	// run that tail and flip probe_tail. jsonProbeTail is set (by addJSONFulltextProbes) only for an
+	// async probe; a synchronous covered probe records nothing, so probe_tail stays off (whole
+	// current index, no tail).
 	if mode == fulltext2engine.JSONProbeMode {
-		if maxTs, ok := builder.jsonProbeMaxTs[scanNode.NodeId]; ok && maxTs > 0 {
-			cfgMap["max_ts"] = maxTs
+		if info, ok := builder.jsonProbeTail[scanNode.NodeId]; ok {
+			cfgMap["probe_tail"] = true
+			cfgMap["src"] = scanNode.ObjRef.ObjName
+			if scanNode.TableDef.Pkey != nil {
+				cfgMap["pkey"] = scanNode.TableDef.Pkey.PkeyColName
+			}
+			// The json predicate, rebuilt against the tail's columns, so the operator's table_changes
+			// tail returns only matching gap rows (evaluated directly, no index). Empty ⇒ unfiltered
+			// tail (the base scan still re-checks, so this only widens the superset).
+			if info.whereSQL != "" {
+				cfgMap["probe_tail_where"] = info.whereSQL
+			}
 		}
 	}
 	cfgBytes, err := json.Marshal(cfgMap)

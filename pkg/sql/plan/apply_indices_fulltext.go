@@ -651,27 +651,20 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// where a repeated pk multiplies base-table rows. Group by the doc id to
 		// collapse them — the aggregate already spills and is already tested.
 		if mode == fulltext2.JSONProbeMode {
-			// A behind index only reflects commits up to its build_ts. Fill the gap by unioning the
-			// bulk (index) arm with a table_changes tail over (build_ts, snapshot]; the group-by
-			// dedup below then collapses pks the two arms share. The base scan re-checks the json
-			// predicate on current values, so the stale index arm cannot leak an updated row.
-			if p, isPartial := builder.jsonPartialProbes[scanNode.NodeId]; isPartial {
-				tailID, ok := builder.buildJSONProbeTail(ctx, scanNode, p, pkType)
-				if !ok {
-					// The index is behind, so the bulk arm alone would silently drop rows committed
-					// after build_ts. Eligibility was checked in decideJSONProbe, so a failure here is
-					// unexpected -- fail closed rather than return an incomplete bulk-only result.
-					return -1, nil, nil, nil, moerr.NewInternalError(builder.GetContext(),
-						"fulltext2 json partial probe: table_changes tail could not be built")
+			// An async index only reflects commits up to the generation the operator searches. The
+			// operator SELF-COMPLETES: it unions a table_changes tail over (searched, snapshot]
+			// internally (there is no UNION arm here), binding the lower bound to the generation it
+			// actually searched at runtime; the group-by dedup below collapses pks the bulk and tail
+			// share, and the base scan re-checks the json predicate on current values. Publish the
+			// reconstructed tail SQL on the scan node's Stats.Sql so EXPLAIN (Verbose) shows it -- the
+			// internally-run tail is visible, not a black box.
+			// displaySQL is empty when the index was caught up as of planning (the tail is expected
+			// not to run); only surface the tail SQL in EXPLAIN when it is expected to execute.
+			if info, ok := builder.jsonProbeTail[scanNode.NodeId]; ok && info.displaySQL != "" {
+				if curr_ftnode.Stats == nil {
+					curr_ftnode.Stats = &plan.Stats{}
 				}
-				ftScanID := curr_ftnode_id
-				curr_ftnode_id, curr_ftnode_pkcol = builder.unionFtWithTail(ctx, ftScanID, curr_ftnode_tag, tailID, pkType)
-				// The score-sort/runtime-filter passes key their probe skip on the scan id held in
-				// ret_filter_node_ids/served (set above, pre-union), so keep it marked.
-				if builder.jsonProbeFtNodes == nil {
-					builder.jsonProbeFtNodes = make(map[int32]bool)
-				}
-				builder.jsonProbeFtNodes[ftScanID] = true
+				curr_ftnode.Stats.Sql = info.displaySQL
 			}
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
