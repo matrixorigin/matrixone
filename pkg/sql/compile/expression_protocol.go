@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,9 +52,23 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 		if worker.Id == "" || proc.GetQueryClient() == nil {
 			return false, nil
 		}
-		addr, err := getCNQueryAddress(ctx, proc.GetService(), worker.Id)
+		cluster, err := clusterservice.GetMOClusterWithContext(ctx, proc.GetService())
 		if err != nil {
 			return false, parent.Err()
+		}
+		var addr string
+		err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(ctx, cluster,
+			clusterservice.NewServiceIDSelector(worker.Id), func(cn metadata.CNService) bool {
+				if cn.PipelineServiceAddress == worker.Addr {
+					addr = cn.QueryAddress
+				}
+				return false
+			})
+		if err != nil {
+			return false, parent.Err()
+		}
+		if addr == "" {
+			return false, nil
 		}
 		client := proc.GetQueryClient()
 		req := client.NewRequest(querypb.CmdMethod_GetProtocolVersion)

@@ -51,7 +51,7 @@ func expressionProtocolTestCompile(t *testing.T) (*Compile, *expressionVersionCl
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
-	cluster := &schedulerTestCluster{cns: []metadata.CNService{{ServiceID: "old-worker", QueryAddress: "worker:9000"}}}
+	cluster := &schedulerTestCluster{cns: []metadata.CNService{{ServiceID: "old-worker", QueryAddress: "worker:9000", PipelineServiceAddress: "remote:6001"}}}
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	t.Cleanup(func() {
@@ -73,6 +73,10 @@ func TestExpressionProtocolUnknownAndCanceledWorkers(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, supported)
 	c.proc.Base.QueryClient = client
+	client.version = defines.MORPCVersion65
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "stale:6001"}}, defines.MORPCVersion65)
+	require.NoError(t, err)
+	require.False(t, supported, "a new query endpoint cannot validate a stale pipeline address")
 	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{}}, defines.MORPCVersion65)
 	require.NoError(t, err)
 	require.False(t, supported)
