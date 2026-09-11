@@ -452,6 +452,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
 		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1327,6 +1328,12 @@ func boolToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return boolToFloat(source, rs, length, selectList)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return boolToFloat(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return boolToYear(source, rs, length, selectList)
@@ -2613,11 +2620,17 @@ func strTypeToOthers(proc *process.Process,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
 	ctx := proc.Ctx
+	fromType := source.GetType()
 	strictStringWidth := mode.strictStringWidth()
 	explicit := mode == castModeExplicit
+	// Comparison casts are also used by numeric bitwise operands and selected
+	// MySQL string-function numeric arguments. Only these textual-to-numeric
+	// branches consume a decimal prefix; ordinary casts, explicit CAST, and
+	// assignment modes retain their established conversion contracts. Binary
+	// string families remain byte payloads.
+	numericPrefix := mode == castModeComparison &&
+		(fromType.Oid == types.T_char || fromType.Oid == types.T_varchar || fromType.Oid == types.T_text)
 	assignmentCast := mode == castModeStrictStringWidth
-
-	fromType := source.GetType()
 	// Geometry is stored as bare WKB. Casting to a textual type must render
 	// WKT (like ST_AsText); the generic string-copy path below would otherwise
 	// emit the raw, unreadable WKB bytes. Casts to binary/varbinary/blob (raw
@@ -2673,28 +2686,28 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit, numericPrefix)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit, numericPrefix)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit, numericPrefix)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit, numericPrefix)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit, numericPrefix)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit, numericPrefix)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit, numericPrefix)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit, numericPrefix)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
@@ -3551,10 +3564,14 @@ func boolToStr(
 func boolToInteger[T constraints.Integer](
 	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	var dft T
-	for i = 0; i < l; i++ {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -3570,6 +3587,35 @@ func boolToInteger[T constraints.Integer](
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func boolToFloat[T constraints.Float](
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	var dft T
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if v {
+			if err := to.Append(1, false); err != nil {
+				return err
+			}
+		} else if err := to.Append(dft, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -4613,7 +4659,7 @@ func mysqlTimeOutOfRangeForCast(
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
 				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
@@ -4650,7 +4696,7 @@ func mysqlInvalidTimeForCast(
 		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
 		}
@@ -6514,7 +6560,12 @@ func strToSignedWithProc[T constraints.Signed](
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				var r int64
 				var err error
-				if len(explicit) > 0 && explicit[0] {
+				var integerPrefix string
+				var integerHasPrefix, integerOutOfRange bool
+				if len(explicit) > 1 && explicit[1] {
+					r, integerPrefix, integerHasPrefix, integerOutOfRange, err =
+						parseSignedNumericPrefixCastString(s, bitSize)
+				} else if len(explicit) > 0 && explicit[0] {
 					r, err = parseSignedExplicitCastString(s, bitSize)
 				} else {
 					r, err = parseSignedCastString(s, bitSize)
@@ -6527,7 +6578,11 @@ func strToSignedWithProc[T constraints.Signed](
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
-				appendNumericCoercionWarning(proc, s)
+				if len(explicit) > 1 && explicit[1] {
+					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
+				} else {
+					appendNumericCoercionWarning(proc, s)
+				}
 				result = T(r)
 			}
 			if err := to.Append(result, false); err != nil {
@@ -6712,7 +6767,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	if proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6720,6 +6775,38 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	appender.AppendWarningDiagnostic(
 		moerr.ER_TRUNCATED_WRONG_VALUE,
 		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+	)
+}
+
+// appendIntegerNumericCoercionWarning reports diagnostics for an implicit
+// string-to-integer conversion. Integer conversion consumes only the leading
+// decimal integer, so decimal/exponent suffixes and non-numeric text retain an
+// INTEGER truncation warning while a complete in-range integer does not.
+func appendIntegerNumericCoercionWarning(
+	proc *process.Process, value, prefix string, hasPrefix, outOfRange bool,
+) {
+	trimmed := trimASCIISpace(value)
+	if trimmed == "" || proc == nil {
+		return
+	}
+	session := proc.GetWarningSink()
+	appender, ok := session.(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	if outOfRange {
+		appender.AppendWarningDiagnostic(
+			moerr.ER_TRUNCATED_WRONG_VALUE,
+			fmt.Sprintf("Truncated incorrect INTEGER value: '%-.128s'", trimmed),
+		)
+		return
+	}
+	if hasPrefix && prefix == trimmed {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect INTEGER value: '%-.128s'", trimmed),
 	)
 }
 
@@ -6924,6 +7011,50 @@ func explicitIntegerCastInput(s string) string {
 	return leadingDecimalIntegerPrefix(s)
 }
 
+func parseSignedNumericPrefixCastString(s string, bitSize int) (int64, string, bool, bool, error) {
+	prefix := leadingDecimalIntegerPrefix(s)
+	if prefix == "" {
+		return 0, prefix, false, false, nil
+	}
+	_, strictErr := parseSignedCastString(prefix, bitSize)
+	outOfRange := numericIntegerPrefixOutOfRange(prefix, bitSize, strictErr, true)
+	value, err := parseSignedExplicitCastString(prefix, bitSize)
+	return value, prefix, true, outOfRange, err
+}
+
+func parseUnsignedNumericPrefixCastString(s string, bitSize int) (uint64, string, bool, bool, error) {
+	prefix := leadingDecimalIntegerPrefix(s)
+	if prefix == "" {
+		return 0, prefix, false, false, nil
+	}
+	_, strictErr := parseUnsignedCastString(prefix, bitSize)
+	outOfRange := numericIntegerPrefixOutOfRange(prefix, bitSize, strictErr, false)
+	value, err := parseUnsignedExplicitCastString(prefix, bitSize)
+	return value, prefix, true, outOfRange, err
+}
+
+func numericIntegerPrefixOutOfRange(prefix string, bitSize int, strictErr error, signedTarget bool) bool {
+	if bitSize != 64 {
+		return errors.Is(strictErr, strconv.ErrRange)
+	}
+	// MySQL's string integer conversion accepts the complete unsigned 64-bit
+	// magnitude before applying the target's signedness. Values above that
+	// magnitude are the actual range errors; 2^63 itself is a valid bit
+	// pattern for the signed result and must not produce a warning here.
+	token, err := parseCastNumericToken(prefix)
+	if err != nil {
+		return false
+	}
+	value, err := strconv.ParseUint(token.digits, token.base, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		return true
+	}
+	if signedTarget && token.negative {
+		return value > uint64(1)<<63
+	}
+	return false
+}
+
 func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 	parseInput := explicitIntegerCastInput(s)
 	value, err := parseSignedCastString(parseInput, bitSize)
@@ -7025,6 +7156,8 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			}
 		} else {
 			var res *string
+			var integerPrefix string
+			var integerHasPrefix, integerOutOfRange bool
 			if isBinary {
 				s := hex.EncodeToString(v)
 				res = &s
@@ -7032,7 +7165,10 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s
-				if len(explicit) > 0 && explicit[0] {
+				if len(explicit) > 1 && explicit[1] {
+					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =
+						parseUnsignedNumericPrefixCastString(s, bitSize)
+				} else if len(explicit) > 0 && explicit[0] {
 					val, tErr = parseUnsignedExplicitCastString(s, bitSize)
 				} else {
 					val, tErr = parseUnsignedCastString(s, bitSize)
@@ -7045,7 +7181,11 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
 			if !isBinary {
-				appendNumericCoercionWarning(proc, *res)
+				if len(explicit) > 1 && explicit[1] {
+					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
+				} else {
+					appendNumericCoercionWarning(proc, *res)
+				}
 			}
 			if err := to.Append(T(val), false); err != nil {
 				return err
@@ -7099,12 +7239,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

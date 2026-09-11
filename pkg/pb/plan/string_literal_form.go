@@ -171,6 +171,15 @@ func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
 	return features.MixedJSONBooleanEquality, err
 }
 
+// RequiresMORPCVersion59NumericFormatArguments reports whether an owner
+// contains FORMAT with a physical numeric first argument. The v59 fence is
+// needed even when the function keeps overload IDs 0/1: those IDs were
+// historically string-only on older receivers.
+func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.FormatNumericArguments, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -183,18 +192,21 @@ const (
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
-// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
-// call sites name every capability instead of relying on positional booleans.
+// MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
+// MORPC v59. A struct makes compatibility call sites name every capability
+// instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
+	FormatNumericArguments   bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
-		features.MixedJSONBooleanEquality
+		features.MixedJSONBooleanEquality ||
+		features.FormatNumericArguments
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -216,10 +228,53 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
 			}
+			formatNumericArguments, err := isNumericFormatFunction(fn)
+			if err != nil {
+				return err
+			}
+			if formatNumericArguments {
+				features.FormatNumericArguments = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+// FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric
+// execution path. A pre-v59 receiver still interprets those vectors as
+// Varlena and can panic while decoding the first argument, so this physical
+// argument contract must be fenced at the remote pipeline boundary.
+func isNumericFormatFunction(function *Function) (bool, error) {
+	if function == nil || function.Func == nil || len(function.Args) < 2 {
+		return false, nil
+	}
+	const formatFunctionID int32 = 262
+	functionID := int32(function.Func.Obj >> 32)
+	if functionID != formatFunctionID && !strings.EqualFold(function.Func.GetObjName(), "format") {
+		return false, nil
+	}
+	if function.Args[0] == nil {
+		return false, moerr.NewInvalidInputNoCtx("FORMAT is missing its first argument")
+	}
+	return isPlanNumericType(function.Args[0].Typ.Id), nil
+}
+
+// isPlanNumericType mirrors container/types.Type.IsNumeric without importing
+// that package (container/types itself depends on pb/plan). The IDs are part
+// of the plan wire contract and include BIT, integer, floating-point and
+// decimal families.
+func isPlanNumericType(id int32) bool {
+	switch id {
+	case 11, // BIT
+		20, 21, 22, 23, // signed integers
+		25, 26, 27, 28, // unsigned integers
+		30, 31, // floating point
+		32, 33, 34: // decimals
+		return true
+	default:
+		return false
+	}
 }
 
 func isMixedJSONBooleanEquality(function *Function) bool {

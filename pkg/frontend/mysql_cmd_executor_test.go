@@ -1008,8 +1008,12 @@ func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	execCtx.persistentDropTableTargets = tree.TableNames{
 		tree.NewTableName(tree.Identifier("next"), tree.ObjectNamePrefix{}, nil),
 	}
+	execCtx.effectiveTxnStatement = &tree.TruncateTable{}
+	execCtx.implicitCommitBefore = true
 	execCtx.beginStatementGeneration(&UserInput{})
 	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.effectiveTxnStatement)
+	require.False(t, execCtx.implicitCommitBefore)
 	require.Nil(t, execCtx.persistentDropTableTargets)
 }
 
@@ -4929,6 +4933,8 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
@@ -4971,6 +4977,15 @@ func Test_statement_type(t *testing.T) {
 				activeTxnAtStart:      true,
 			},
 		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.TruncateTable{},
+			txnOpt: FeTxnOption{
+				implicitCommitBefore: true,
+			},
+		}), convey.ShouldBeTrue)
+		txnOpt := FeTxnOption{implicitCommitBefore: true}
+		txnOpt.Close()
+		convey.So(txnOpt.implicitCommitBefore, convey.ShouldBeFalse)
 		mixedSet := &tree.SetVar{Assignments: []*tree.VarAssignmentExpr{
 			{
 				System:   true,
@@ -5060,6 +5075,24 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 				require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
 			})
 		}
+	}
+}
+
+func TestPrepareDataBranchCanExecuteInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+
+	for _, stmt := range []tree.Statement{
+		tree.NewPrepareStmt("merge", &tree.DataBranchMerge{}),
+		tree.NewPrepareStmt("pick", &tree.DataBranchPick{}),
+		tree.NewPrepareString("merge_sql", "data branch merge src into dst when conflict accept"),
+		tree.NewPrepareString("pick_sql", "data branch pick src into dst keys(?) when conflict accept"),
+	} {
+		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, allowed)
 	}
 }
 
@@ -8493,6 +8526,83 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
 
+	for _, tt := range []struct {
+		name       string
+		sql        string
+		want       any
+		paramCount int
+	}{
+		{
+			name: "data branch create table",
+			sql:  "data branch create table branch from base",
+			want: &tree.DataBranchCreateTable{},
+		},
+		{
+			name: "data branch create database",
+			sql:  "data branch create database branch_db from base_db",
+			want: &tree.DataBranchCreateDatabase{},
+		},
+		{
+			name: "data branch diff",
+			sql:  "data branch diff branch against base output count",
+			want: &tree.DataBranchDiff{},
+		},
+		{
+			name: "data branch merge",
+			sql:  "data branch merge branch into base when conflict accept",
+			want: &tree.DataBranchMerge{},
+		},
+		{
+			name:       "data branch pick parameter",
+			sql:        "data branch pick branch into base keys(?) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name:       "data branch pick composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 2,
+		},
+		{
+			name:       "data branch pick composite mixed literal parameter",
+			sql:        "data branch pick branch into base keys((1, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name:       "data branch pick multiple composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?), (?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 4,
+		},
+		{
+			name: "data branch delete table",
+			sql:  "data branch delete table branch",
+			want: &tree.DataBranchDeleteTable{},
+		},
+		{
+			name: "data branch delete database",
+			sql:  "data branch delete database branch_db",
+			want: &tree.DataBranchDeleteDatabase{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tt.sql),
+			})
+			require.NoError(t, err)
+			require.Nil(t, resp)
+
+			stmtName := getPrepareStmtName(ses.GetLastStmtId())
+			prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+			require.NoError(t, err)
+			require.IsType(t, tt.want, prepared.PrepareStmt)
+			require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), tt.paramCount)
+		})
+	}
+
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{"review27190.t": "delete from review27190.t"}
 	resp, err = ExecRequest(ses, execCtx, &Request{
@@ -9888,4 +9998,28 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.SrcTable.ExplicitSchema)
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
+}
+
+func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare gc_floor from select /*+ SET_VAR(query_max_workers=1) */ group_concat('abcdef')"
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	runTestHandle("prepared GROUP_CONCAT floor without physical compile", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(1024)))
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Nil(t, prepared.compile, "explicit placement must exercise uncached prepare")
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(5)))
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
+		return nil
+	})
 }

@@ -626,7 +626,7 @@ create table string04 as select oct(col2), empty(col3), length(col1) from string
 show create table string04;
 [unknown result because it is related to issue#24436]
 select * from string04;
-➤ oct(col2)[3,38,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
+➤ oct(col2)[12,65,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
 2  ¦  0  ¦  17  𝄀
 1  ¦  0  ¦  17  𝄀
 0  ¦  null  ¦  27
@@ -675,7 +675,7 @@ create table string08 as select hex(col2) from string01;
 show create table string08;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string08  ¦  CREATE TABLE `string08` (
-  `hex(col2)` varchar(65535) DEFAULT NULL
+  `hex(col2)` varchar(8) DEFAULT NULL
 )
 select * from string08;
 ➤ hex(col2)[12,-1,0]  𝄀
@@ -705,7 +705,7 @@ create table string11 as select bin(col1) from string10;
 show create table string11;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string11  ¦  CREATE TABLE `string11` (
-  `bin(col1)` varchar(65535) DEFAULT NULL
+  `bin(col1)` varchar(65) DEFAULT NULL
 )
 select * from string11;
 ➤ bin(col1)[12,-1,0]  𝄀

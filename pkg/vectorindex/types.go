@@ -15,11 +15,15 @@
 package vectorindex
 
 import (
+	"encoding/binary"
+	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
+	"hash/crc32"
 )
 
 // QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
@@ -68,6 +72,49 @@ const (
 // "active id" coordination problem entirely — search reads it once at Load
 // time alongside the real sub-index models.
 const CdcTailId = "cdc_tail"
+
+// MaxMetadataInsertTuples bounds the metadata rows per INSERT statement. A tail flush writes one
+// row per chunk, so a large flush would otherwise build one statement out of hundreds of tuples.
+const MaxMetadataInsertTuples = 500
+
+// TailFrameMetaId names the metadata row describing ONE tail frame, keyed by the chunk id the
+// frame starts at. That key is what lets the row be referred back to its bytes: chunk ids are
+// assigned contiguously in frame order, so a frame owns
+// [startChunkId, startChunkId+ceil(filesize/MaxChunkSize)) and any chunk belongs to the row with
+// the greatest start id at or below it.
+func TailFrameMetaId(startChunkId int64) string {
+	return fmt.Sprintf("%s:%d", CdcTailId, startChunkId)
+}
+
+// TailFrameMetaPrefix matches every tail frame row and nothing else: base/sub-index ids are
+// "<index table>:<ts>:<n>" or ":<n>:<n>:<n>", so they cannot begin with this.
+const TailFrameMetaPrefix = CdcTailId + ":"
+
+// TailFrameSQL and NotTailFrameSQL are the two predicates a metadata query needs: the tail
+// frames, and their complement, the bases.
+//
+// The metadata table holds two kinds of row: one per base/sub-index, and one per CDC tail frame.
+// A reader that forgets this loads a tail frame AS a base, or folds the tail's bytes into the
+// base totals.
+//
+// The test is prefix_eq, NOT `LIKE 'cdc_tail:%'`. `_` is LIKE's single-character wildcard, so
+// that pattern also matches `cdcXtail:...` for any X -- and this predicate is the load-bearing
+// boundary between "base generation" and "tail frame": a row on the wrong side is excluded from
+// LoadMetadata (a sub-index that never loads), kept by DeleteAllBasesSqls, and deleted by
+// DeleteTailSqls. Today's generated ids cannot collide, but the classification must not rest on
+// that, and escaping the wildcard would put the answer at the mercy of how one more layer
+// handles a backslash.
+//
+// prefix_eq is bytes.HasPrefix (pkg/sql/plan/function/func_prefix.go): no pattern to interpret,
+// and the planner recognizes it as a range predicate, so unlike a substring() comparison it can
+// still be served by a prefix scan on index_id.
+func TailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
+}
+
+func NotTailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("NOT prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
+}
 
 type DistributionMode uint16
 
@@ -319,6 +366,10 @@ type RuntimeConfig struct {
 	SearchRoundLimit uint
 	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
+	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
+	IvfPrepareRouteOnly bool
+	// IvfRoutePrepared distinguishes an empty prepared route from an uninitialized cursor.
+	IvfRoutePrepared bool
 }
 
 type IvfIncludeResult struct {
@@ -480,4 +531,32 @@ func SimulateDevices(devices []int, n int64) []int {
 	sim := make([]int, n)
 	// all zeros -> every logical rank maps to physical device 0
 	return sim
+}
+
+// CdcChunkSetChecksum renders the checksum recorded on a CDC tail frame's metadata row.
+//
+// A flush spans as many chunks as its records need and the row describes all of them, so:
+//
+//	one chunk  -- that chunk's own CRC32, the value in its footer
+//	several    -- the CRC32 over their CRC32s in chunk order, which changes if any chunk's
+//	              content changes, if one goes missing, or if they come back reordered
+//	none       -- empty
+//
+// Plain hex, no algorithm tag. A reader reaches this column through the row's index_id -- the
+// tail rows are keyed cdc_tail:<n> and readMetadata selects by exact id -- so it already knows
+// which kind of row it holds, and how many chunks the frame has, which is what selects between
+// the two rules above. (The base sub-index rows carry an MD5 here; at 32 hex against 8 there is
+// nothing to confuse even by eye.)
+func CdcChunkSetChecksum(sums []uint32) string {
+	switch len(sums) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("%08x", sums[0])
+	}
+	buf := make([]byte, 4*len(sums))
+	for i, s := range sums {
+		binary.LittleEndian.PutUint32(buf[i*4:], s)
+	}
+	return fmt.Sprintf("%08x", crc32.ChecksumIEEE(buf))
 }

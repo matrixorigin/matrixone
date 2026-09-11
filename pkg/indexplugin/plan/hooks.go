@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // CompilerContext is re-exported so plugin schema builders can consult
@@ -46,6 +47,10 @@ import (
 // boundary.
 type CompilerContext interface {
 	GetContext() context.Context
+	// GetProcess reaches the service runtime, which carries the deployment's
+	// rollout gate (moruntime.MOProtocolVersion). Satisfied by
+	// pkg/sql/plan.CompilerContext, which already exposes it.
+	GetProcess() *process.Process
 	// ResolveVariable forwards to the session's system-variable resolver so
 	// plan-time plugin code (e.g. CreateIndexDef capturing build-time session
 	// vars like kmeans_train_percent) can read session/system variables.
@@ -77,8 +82,10 @@ type VectorSortContext struct {
 
 	// ProviderNodeID and VecArgExpr are populated only when the ORDER
 	// BY reaches the scan through a JOIN (today only HNSW consumes them).
-	ProviderNodeID int32
-	VecArgExpr     *plan.Expr
+	ProviderNodeID   int32
+	VecArgExpr       *plan.Expr
+	MembershipNodeID int32
+	HasMembership    bool
 }
 
 // MultiTableIndexRef is the plugin-facing view of plan.MultiTableIndex.

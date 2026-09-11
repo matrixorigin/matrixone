@@ -69,7 +69,7 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 		legacyBaseTable bool
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
-		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV46UpgradeDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL, legacyBaseTable: true},
 	}
@@ -175,7 +175,7 @@ func TestInformationSchemaTenantUpgradeCheckFunc(t *testing.T) {
 		ddl  string
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
-		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsV46UpgradeDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 	}

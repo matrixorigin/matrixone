@@ -356,18 +356,20 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	}
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
 
-func TestInitExecuteStmtParamPreservesStringDomainsPerUserVariable(t *testing.T) {
+func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 102, "select ?, ?")
 	defer prepareStmt.Close()
 
 	require.NoError(t, ses.setUserDefinedVarWithType(
-		"binary_param", "AB\x00\x00", "", false, plan.Type{Id: int32(types.T_varbinary)}))
+		"binary_param", "AB\x00\x00", "", false,
+		plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}))
 	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
 	require.NoError(t, err)
@@ -375,12 +377,6 @@ func TestInitExecuteStmtParamPreservesStringDomainsPerUserVariable(t *testing.T)
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("text_param", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
-	isBinaryString, err := ses.txnCompileCtx.ResolveVariableBinaryString("binary_param", false, false)
-	require.NoError(t, err)
-	require.True(t, isBinaryString)
-	isBinaryString, err = ses.txnCompileCtx.ResolveVariableBinaryString("text_param", false, false)
-	require.NoError(t, err)
-	require.False(t, isBinaryString)
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("system_var", true, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
@@ -409,17 +405,20 @@ func TestInitExecuteStmtParamPreservesStringDomainsPerUserVariable(t *testing.T)
 	require.NoError(t, err)
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
+		"static binary type must not be flattened into a runtime override")
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
-		Value: "AB\x00\x00", IsBin: false, IsBinaryString: true, EnableNumericPrefix: true,
-		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+		Value: "AB\x00\x00", IsBin: false, EnableNumericPrefix: true,
+		SourceType: types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetBinary), HasSourceType: true,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{
 		Value: "text", IsBin: false, EnableNumericPrefix: true,
 	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
+	require.Equal(t, types.RuntimeStringBinary, params.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringInherit, params.GetRuntimeStringDomainAt(1))
 	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(1))
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
@@ -437,7 +436,6 @@ func TestInitExecuteStmtParamPreservesStringDomainsPerUserVariable(t *testing.T)
 	require.Zero(t, current.Length())
 	require.Nil(t, current.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0), "binary-string metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
 }
@@ -532,6 +530,65 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, result.Length())
 			require.Equal(t, "plain", result.GetStringAt(0))
+			require.False(t, result.GetIsBinaryStringAt(0))
+
+			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, cachedPlan, after, "execute-time rebinding must not mutate the cached plan")
+		})
+	}
+}
+
+func TestCOMStmtJsonQuoteRebindExecutesWithWireStringDomain(t *testing.T) {
+	const query = "select json_quote(?)"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 123, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+
+	cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		wantBinary bool
+		wantErr    bool
+	}{
+		{name: "text rebind", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+		{name: "binary rebind", mysqlType: defines.MYSQL_TYPE_LONG_BLOB, wantBinary: true, wantErr: true},
+		{name: "text rebind after binary", mysqlType: defines.MYSQL_TYPE_VAR_STRING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx, cw.proc, prepareStmt,
+				buildStringExecutePacket(proto, tc.mysqlType, "plain"), 0))
+
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+
+			queryPlan := runtimePlan.GetQuery()
+			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
+			require.Len(t, projects, 1)
+			executor, err := colexec.NewExpressionExecutor(cw.proc, projects[0])
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.EmptyForConstFoldBatch
+			result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Length())
+			require.Equal(t, `"plain"`, result.GetStringAt(0))
 			require.False(t, result.GetIsBinaryStringAt(0))
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
@@ -1251,10 +1308,15 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 				if valueIndex < len(test.prefix) {
 					enableNumericPrefix = test.prefix[valueIndex]
 				}
-				wantParamVals = append(wantParamVals, plan2.ParamValue{
-					Value: value, IsBinaryString: binaryProtocolPrepareParamIsBinaryString(mysqlType),
-					IsBinaryProtocol: true, EnableNumericPrefix: enableNumericPrefix,
-				})
+				expectedParam := plan2.ParamValue{
+					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: enableNumericPrefix,
+				}
+				if mysqlType == defines.MYSQL_TYPE_BLOB {
+					expectedParam.IsBinaryString = true
+					expectedParam.RuntimeType = types.T_blob.ToType()
+					expectedParam.HasRuntimeType = true
+				}
+				wantParamVals = append(wantParamVals, expectedParam)
 			}
 
 			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
@@ -1402,6 +1464,120 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id,
 		"the direct VAR_STRING result must retain TEXT metadata")
+}
+
+func TestSQLPreparedBooleanDirectResultKeepsTextWithNumericSibling(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		paramCount  int
+		directIndex int
+		numeric     []int
+	}{
+		{name: "direct_before_numeric", sql: "select ?, round(?)", paramCount: 2, directIndex: 0, numeric: []int{1}},
+		{name: "direct_after_numeric", sql: "select round(?), ?", paramCount: 2, directIndex: 1, numeric: []int{0}},
+		{name: "direct_between_numeric", sql: "select round(?), ?, sign(?)", paramCount: 3, directIndex: 1, numeric: []int{0, 2}},
+	}
+	for testIndex, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(215+testIndex), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			execCtx.input.isBinaryProtExecute = false
+			cw.binaryPrepare = false
+			execPlan := &plan.Execute{Name: prepareStmt.Name, Args: make([]*plan.Expr, test.paramCount)}
+			for i := range execPlan.Args {
+				execPlan.Args[i] = &plan.Expr{Expr: &plan.Expr_V{V: &plan.VarRef{
+					Name: fmt.Sprintf("bool_param_%d", i),
+				}}}
+			}
+			cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			originalQuery := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+			originalRoot := originalQuery.Nodes[originalQuery.Steps[len(originalQuery.Steps)-1]]
+			require.Len(t, prepareStmt.directResultParamPositions, 1)
+			require.Equal(t, int32(test.directIndex), prepareStmt.directResultParamPositions[0])
+			originalDirectType := originalRoot.ProjectList[test.directIndex].Typ
+
+			type execution struct {
+				value    any
+				wantText string
+				wantNum  int64
+			}
+			for index, execution := range []execution{
+				{value: true, wantText: "true", wantNum: 1},
+				{value: false, wantText: "false"},
+				{value: true, wantText: "true", wantNum: 1},
+			} {
+				t.Run(fmt.Sprintf("execution-%d", index), func(t *testing.T) {
+					for i := range execPlan.Args {
+						require.NoError(t, ses.SetUserDefinedVar(
+							fmt.Sprintf("bool_param_%d", i), execution.value, ""))
+					}
+					_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+						execCtx, ses, cw, execPlan, "")
+					require.NoError(t, err)
+					if owned && executionStmt != nil {
+						defer executionStmt.Free()
+					}
+
+					query := runtimePlan.GetQuery()
+					root := query.Nodes[query.Steps[len(query.Steps)-1]]
+					require.Len(t, root.ProjectList, test.paramCount)
+					require.Equal(t, originalDirectType, root.ProjectList[test.directIndex].Typ,
+						"an independent numeric sibling must not change a direct SQL result")
+					for _, numericIndex := range test.numeric {
+						require.True(t, types.T(root.ProjectList[numericIndex].Typ.Id).IsInteger(),
+							"numeric consumer %d must use an integer overload", numericIndex)
+					}
+
+					evaluate := func(expr *plan.Expr) (*vector.Vector, colexec.ExpressionExecutor, *batch.Batch) {
+						t.Helper()
+						executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
+						require.NoError(t, err)
+						input := batch.New(nil)
+						input.SetRowCount(1)
+						result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+						require.NoError(t, err)
+						return result, executor, input
+					}
+					direct, directExecutor, directInput := evaluate(root.ProjectList[test.directIndex])
+					t.Cleanup(func() {
+						direct.Free(cw.proc.Mp())
+						directExecutor.Free()
+						directInput.Clean(cw.proc.Mp())
+					})
+					require.True(t, direct.GetType().Oid.IsMySQLString())
+					require.False(t, direct.GetNulls().Contains(0))
+					require.Equal(t, execution.wantText, direct.GetStringAt(0))
+					for _, numericIndex := range test.numeric {
+						numeric, numericExecutor, numericInput := evaluate(root.ProjectList[numericIndex])
+						t.Cleanup(func() {
+							numeric.Free(cw.proc.Mp())
+							numericExecutor.Free()
+							numericInput.Clean(cw.proc.Mp())
+						})
+						require.True(t, numeric.GetType().Oid.IsInteger())
+						require.False(t, numeric.GetNulls().Contains(0))
+						switch numeric.GetType().Oid {
+						case types.T_uint64:
+							require.Equal(t, uint64(execution.wantNum), vector.GetFixedAtNoTypeCheck[uint64](numeric, 0))
+						case types.T_int64:
+							require.Equal(t, execution.wantNum, vector.GetFixedAtNoTypeCheck[int64](numeric, 0))
+						default:
+							require.Failf(t, "unexpected numeric result type", "%s", numeric.GetType().Oid)
+						}
+					}
+					after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+					require.NoError(t, err)
+					require.Equal(t, cachedPlan, after, "SQL EXECUTE must not mutate the cached plan")
+				})
+			}
+		})
+	}
 }
 
 func TestInitExecuteStmtParamDirectNumericPreservesTextSibling(t *testing.T) {
@@ -3460,6 +3636,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
 		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
 		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary),
 	}
@@ -3477,6 +3654,10 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		{
 			Typ:  binaryTextType,
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_bool"}},
 		},
 	}
 	params, paramVals, _, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
@@ -3499,6 +3680,13 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
+	boolParam := paramVals[3].(plan2.ParamValue)
+	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
+	require.Equal(t, vector.PrepareParamBoolean, boolParam.PrepareParamKind)
+	require.True(t, boolParam.HasSourceType)
+	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
+	require.False(t, boolParam.HasRuntimeType,
+		"SQL EXECUTE keeps a bare direct parameter's text result domain")
 }
 
 // A nil cached compile means the statement was rejected for prepare-time
@@ -4909,4 +5097,169 @@ func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+}
+
+func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 122, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamNone})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	runtimeTypes := binaryProtocolRuntimeParamTypes(paramTypes, params)
+	require.Equal(t, []types.Type{types.T_blob.ToType()}, runtimeTypes)
+	values, err := preparedParamValues(cw.proc, paramTypes)
+	require.NoError(t, err)
+	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryProtocol:    true,
+		RuntimeType:         types.T_blob.ToType(),
+		HasRuntimeType:      true,
+		EnableNumericPrefix: true,
+	}}, values)
+	require.Equal(t, []int32{0}, preparedDirectResultRuntimePositions(values, []int32{0}))
+}
+
+func TestInitExecuteStmtParamSpecializesDirectTypedNullBlob(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 223, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.compile = compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+
+	installNullBlob := func(setPacketType bool) {
+		cw.proc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
+		if setPacketType {
+			prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+		}
+	}
+	resultType := func(queryPlan *plan.Plan) plan.Type {
+		query := queryPlan.GetQuery()
+		return query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0].Typ
+	}
+
+	installNullBlob(true)
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, ordinaryPlan, runtimePlan)
+	require.Equal(t, int32(types.T_blob), resultType(runtimePlan).Id)
+	require.True(t, cw.runtimeDirectResultSpecialization)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	installNullBlob(false)
+	retComp, reusedPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, reusedPlan)
+	require.Equal(t, int32(types.T_blob), resultType(reusedPlan).Id)
+}
+
+func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 120, "select char_length(?), char_length(?)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_BLOB), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, _, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned {
+		executionStmt.Free()
+	}
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(1))
+}
+
+func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 121, "select left(?, 1) as binary_left")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned {
+		executionStmt.Free()
+	}
+	require.NotSame(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, runtimePlan)
+	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_blob), root.ProjectList[0].Typ.Id)
+	require.Equal(t, uint32(types.CharsetBinary), root.ProjectList[0].Typ.Charset)
+
+	executor, err := colexec.NewExpressionExecutor(cw.proc, root.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	value, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xe4}, value.GetBytesAt(0))
+	require.True(t, value.GetIsBinaryStringAt(0))
+}
+
+func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 123)
+	defer prepareStmt.Close()
+	binaryType := plan.Type{
+		Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary),
+	}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		"text_override", "你", "", false, binaryType, vector.PrepareParamNone,
+		false, types.RuntimeStringText))
+
+	domain, err := ses.txnCompileCtx.ResolveVariableStringDomain("text_override", false, false)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, domain)
+	params, values, _, binary, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+		Typ: binaryType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_override"}},
+	}}, nil)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Equal(t, types.RuntimeStringText, params.GetRuntimeStringDomainAt(0))
+	require.Equal(t, []bool{false}, binary)
+	param := values[0].(plan2.ParamValue)
+	require.Equal(t, types.RuntimeStringText, param.RuntimeStringDomain)
+	require.Equal(t, types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), param.SourceType)
 }

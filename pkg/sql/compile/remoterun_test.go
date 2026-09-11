@@ -1426,6 +1426,34 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}}},
 		}
 	}
+	makeFormatExpr := func(firstType types.Type, withLocale bool) *planpb.Expr {
+		args := []*planpb.Expr{{
+			Typ:  planpb.Type{Id: int32(firstType.Oid), Width: firstType.Width, Scale: firstType.Scale},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}, {
+			Typ:  planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+		}}
+		if withLocale {
+			args = append(args, &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+			})
+		}
+		inputTypes := make([]types.Type, len(args))
+		for i := range args {
+			inputTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		resolved, err := planfunction.GetFunctionByName(context.Background(), "format", inputTypes)
+		require.NoError(t, err)
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "format"},
+				Args: args,
+			}},
+		}
+	}
 	t.Run("instruction expression owner", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{
 			InstructionList: []*pipeline.Instruction{{
@@ -1453,6 +1481,64 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("typed FORMAT sender and receiver boundary", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			firstType  types.Type
+			withLocale bool
+		}{
+			{name: "exact two args", firstType: types.T_decimal64.ToType()},
+			{name: "approximate two args", firstType: types.T_float64.ToType()},
+			{name: "exact three args", firstType: types.T_int64.ToType(), withLocale: true},
+			{name: "approximate three args", firstType: types.T_float32.ToType(), withLocale: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				expr := makeFormatExpr(test.firstType, test.withLocale)
+				remotePipeline := &pipeline.Pipeline{
+					InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+				}
+				scope := makeScope(expr)
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+
+				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				require.NoError(t, err)
+				decoded, err := decodeScope(encoded, proc, true, nil)
+				require.NoError(t, err)
+				decoded.release()
+
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				_, err = decodeScope(encoded, proc, true, nil)
+				require.ErrorContains(t, err,
+					"typed numeric FORMAT arguments require MORPC protocol version 59")
+			})
+		}
+	})
+
+	t.Run("typed FORMAT rejects nil first argument", func(t *testing.T) {
+		badExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(262) << 32, ObjName: "format"},
+				Args: []*planpb.Expr{nil, {Typ: planpb.Type{Id: int32(types.T_varchar)}}},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+		err := validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{badExpr}}},
+		})
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
 	})
 
 	tests := []struct {
@@ -1737,7 +1823,7 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
 		}
 	})
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
@@ -1756,6 +1842,94 @@ func TestGroupingSetRemoteProtocolValidationRecursesAndIgnoresLegacyGrouping(t *
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
 	require.NoError(t, validateRemoteGroupingSetPipelineProtocol(proc, nested))
+}
+
+func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+		}
+	})
+
+	scope := &Scope{Proc: proc, RootOp: external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				ArrowExecutionScope:       pipeline.ArrowExecutionScope_ArrowLoadData,
+				ArrowDistributedExecution: true,
+			},
+			ExParam: external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+		},
+	)}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion56)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 57")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 57")
+}
+
+func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	identities := []*pipeline.ArrowObjectIdentity{{
+		FileIndex: 1, VersionId: "version-7", Etag: "etag-7", Size: 8192,
+		LastModifiedUnixNano: 1234,
+	}}
+	shards := []*pipeline.ArrowRecordBatchShard{{
+		FileIndex: 1, RecordBatchStart: 2, RecordBatchEnd: 5,
+		RequiredDictionaryBlockIndices: []int32{0, 3},
+		EstimatedRows:                  100, EstimatedWireBytes: 4096,
+	}}
+	fingerprint := []byte("01234567890123456789012345678901")
+	op := external.NewArgument().WithEs(&external.ExternalParam{
+		ExParamConst: external.ExParamConst{
+			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
+			ArrowForceMaterialize:      true,
+			ArrowDistributedExecution:  true,
+			ArrowObjectIdentities:      identities,
+			ArrowRecordBatchShards:     shards,
+			ArrowSchemaFingerprint:     fingerprint,
+			ArrowConversionPlanVersion: arrowConversionPlanVersion,
+			FileList:                   []string{"s3://bucket/part.arrow"},
+			FileSize:                   []int64{8192},
+			FileOffsetTotal:            []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+		},
+		ExParam: external.ExParam{Fileparam: &external.ExFileparam{}, Filter: &external.FilterParam{}},
+	})
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, instruction.ExternalScan.ArrowExecutionScope)
+	require.True(t, instruction.ExternalScan.ArrowForceMaterialize)
+	require.True(t, instruction.ExternalScan.ArrowDistributedExecution)
+	require.Equal(t, identities, instruction.ExternalScan.ArrowObjectIdentities)
+	require.Equal(t, shards, instruction.ExternalScan.ArrowRecordBatchShards)
+	require.Equal(t, fingerprint, instruction.ExternalScan.ArrowSchemaFingerprint)
+	require.Equal(t, arrowConversionPlanVersion, instruction.ExternalScan.ArrowConversionPlanVersion)
+
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	wireInstruction := new(pipeline.Instruction)
+	require.NoError(t, wireInstruction.Unmarshal(wire))
+
+	restored, err := convertToVmOperator(wireInstruction, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, pipeline.ArrowExecutionScope_ArrowLoadData, restoredExternal.Es.ArrowExecutionScope)
+	require.True(t, restoredExternal.Es.ArrowForceMaterialize)
+	require.True(t, restoredExternal.Es.ArrowDistributedExecution)
+	require.Equal(t, identities, restoredExternal.Es.ArrowObjectIdentities)
+	require.Equal(t, shards, restoredExternal.Es.ArrowRecordBatchShards)
+	require.Equal(t, fingerprint, restoredExternal.Es.ArrowSchemaFingerprint)
+	require.Equal(t, arrowConversionPlanVersion, restoredExternal.Es.ArrowConversionPlanVersion)
 }
 
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
@@ -2253,7 +2427,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
 		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
-			{Tag: 9, UseMembershipFilter: true},
+			{Tag: 9, UseMembershipFilter: true, MustApply: true},
 		}
 		op.IndexReaderParam = &planpb.IndexReaderParam{
 			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),

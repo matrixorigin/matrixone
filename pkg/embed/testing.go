@@ -48,6 +48,21 @@ type testReporter interface {
 	Fatalf(format string, args ...any)
 }
 
+// testLogger is optional so the shared fixture helpers remain usable with the
+// small reporters used by unit tests. *testing.T implements it, which lets
+// integration-test output explain where fixture setup time was spent without
+// coupling the lifecycle code to testing.T.
+type testLogger interface {
+	Logf(format string, args ...any)
+}
+
+func logTestSetup(t testReporter, format string, args ...any) {
+	t.Helper()
+	if logger, ok := t.(testLogger); ok {
+		logger.Logf(format, args...)
+	}
+}
+
 func (c *SharedTestCluster) Run(
 	t testReporter,
 	init func() (Cluster, error),
@@ -61,14 +76,34 @@ func (c *SharedTestCluster) Run(
 		return
 	}
 
+	initialized := false
+	initStarted := time.Now()
 	c.once.Do(func() {
+		initialized = true
 		c.cluster, c.err = init()
 		if c.err == nil && c.cluster == nil {
 			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
 		}
 	})
+	if initialized {
+		status := "ready"
+		if c.err != nil {
+			status = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
+			time.Since(initStarted), status)
+	}
 	if c.err != nil && c.cluster != nil {
+		cleanupStarted := time.Now()
 		cleanupErr := c.cluster.Close()
+		cleanupStatus := "ready"
+		if cleanupErr != nil {
+			cleanupStatus = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
+			time.Since(cleanupStarted), cleanupStatus)
 		if cleanupErr == nil {
 			c.cluster = nil
 		} else {
@@ -100,6 +135,31 @@ func (c *SharedTestCluster) Close() error {
 	return nil
 }
 
+// CloseIfActive releases an initialized shared fixture and resets a successful
+// release for a later test invocation. It is useful for a test package that
+// combines a short shared-cluster suite with later scenarios that need their
+// own topology. Callers must invoke it only after Run has returned; Run holds
+// the same mutex while the scenario body is executing.
+func (c *SharedTestCluster) CloseIfActive() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cluster == nil {
+		return nil
+	}
+	if err := c.cluster.Close(); err != nil {
+		// A failed close leaves ownership with this state, but prevents a later
+		// scenario from observing a partially closed fixture. A subsequent
+		// CloseIfActive call can retry the underlying cleanup.
+		c.closed = true
+		return err
+	}
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = false
+	return nil
+}
+
 func init() {
 	stats.SkipPanicONDuplicate.Store(true)
 }
@@ -110,6 +170,20 @@ func init() {
 // is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
+	// Keep every embedded UT cluster on the short test-only readiness cadence.
+	// Shared base clusters already use this callback, but dedicated scenarios
+	// commonly provide their own pre-start adjustment and would otherwise fall
+	// back to the production one-second polling intervals. Apply the cadence
+	// first so an explicit scenario-specific value can still override it.
+	opts = append(opts, func(c *cluster) {
+		preStart := c.options.preStart
+		c.options.preStart = func(svc ServiceOperator) {
+			adjustClusterStartupRetryIntervals(svc)
+			if preStart != nil {
+				preStart(svc)
+			}
+		}
+	})
 	c, err := NewCluster(opts...)
 	if err != nil {
 		return cleanupClusterOnError(c, err)
@@ -132,18 +206,32 @@ const (
 	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
 )
 
-func startBasicCluster(cnCount int) (Cluster, error) {
+func startBasicCluster(
+	cnCount int,
+	trace func(phase string, duration time.Duration, err error),
+) (Cluster, error) {
+	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
 		WithPreStart(adjustBasicClusterService),
 	)
+	if trace != nil {
+		trace("cluster-start", time.Since(started), err)
+	}
 	if err != nil {
 		return c, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), basicClusterTaskServiceReadyTimeout)
 	defer cancel()
+	readyStarted := time.Now()
 	if err := waitBasicClusterTaskServices(ctx, c, cnCount); err != nil {
+		if trace != nil {
+			trace("task-services-ready", time.Since(readyStarted), err)
+		}
 		return cleanupClusterOnError(c, err)
+	}
+	if trace != nil {
+		trace("task-services-ready", time.Since(readyStarted), nil)
 	}
 	return c, nil
 }
@@ -238,6 +326,18 @@ func waitTaskServiceReady(
 	}
 }
 
+func basicClusterSetupTracer(t testReporter, cnCount int) func(string, time.Duration, error) {
+	return func(phase string, duration time.Duration, err error) {
+		status := "ready"
+		if err != nil {
+			status = "error"
+		}
+		logTestSetup(t,
+			"MO_UT_SETUP fixture=shared-cluster phase=%s cn_count=%d duration=%s status=%s",
+			phase, cnCount, duration, status)
+	}
+}
+
 // RunBaseClusterTests starting an integration test for a 1 log, 1tn, 2cn base cluster is very slow
 // due to the amount of time it takes to start a cluster (10-20s) when there are a very large number
 // of test cases. So for some special cases that don't need to be restarted, a basicCluster can be
@@ -248,7 +348,7 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(basicClusterCNCount)
+		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
 	}, func(c Cluster) {
 		fn(c)
 	})
@@ -264,8 +364,18 @@ func RunSingleCNBaseClusterTests(
 ) {
 	t.Helper()
 	singleCNClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(1)
+		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
 	}, func(c Cluster) {
 		fn(c)
 	})
+}
+
+// CloseSingleCNBaseClusterTests releases the process-local one-CN fixture if
+// it was initialized. A successful release leaves the fixture reusable for a
+// later test invocation, which keeps -count and shuffled test order valid. It
+// is a lifecycle boundary for packages that mix the canonical shared one-CN
+// suite with specialized clusters; unused fixtures are left reusable so a
+// later shared test still initializes normally.
+func CloseSingleCNBaseClusterTests() error {
+	return singleCNClusterState.CloseIfActive()
 }

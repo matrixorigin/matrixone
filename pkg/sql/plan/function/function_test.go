@@ -1151,6 +1151,12 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	for _, name := range []string{
+		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
+		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
+	} {
+		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
+	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
@@ -1195,8 +1201,16 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "invalid IPv4 address", fid: INET_ATON, argCount: 1},
+		{name: "invalid binary IP length", fid: INET6_NTOA, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid conversion base", fid: CONV, argCount: 3},
+		{name: "invalid SHA2 variant", fid: SHA2, argCount: 2},
+		{name: "AES encryption failure", fid: AES_ENCRYPT, argCount: 2},
+		{name: "AES decryption failure", fid: AES_DECRYPT, argCount: 2},
+		{name: "compression failure", fid: COMPRESS, argCount: 1},
+		{name: "decompression failure", fid: UNCOMPRESS, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
 		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
 		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},
@@ -1209,6 +1223,27 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			}
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
+	}
+}
+
+func TestOctNullability(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {
+		t.Run(typ.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(t.Context(), "oct", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			arg := &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			want := typ == types.T_int64 || typ == types.T_float64 || typ == types.T_time || typ == types.T_bit
+			require.Equal(t, want, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+			arg.Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+		})
+	}
+	for id := int32(0); id < OctStringOverloadStart; id++ {
+		op, err := GetFunctionById(t.Context(), EncodeOverloadID(OCT, id))
+		require.NoError(t, err)
+		arg := &plan.Expr{Typ: plan.Type{Id: int32(op.args[0]), NotNullable: true}}
+		require.True(t, DeduceNotNullable(EncodeOverloadID(OCT, id), []*plan.Expr{arg}))
 	}
 }
 

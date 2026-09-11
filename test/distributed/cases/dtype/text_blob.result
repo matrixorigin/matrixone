@@ -85,9 +85,19 @@ select count(t1),max(t2),min(t3) from text_01;
 count(t1)    max(t2)    min(t3)
 5    7834    20
 select bin(t3) from text_01;
-Data truncation: data out of range: data type uint8, value '983'
+bin(t3)
+null
+1111010111
+0
+0
+10100
 select space(t3) from text_01;
-invalid argument cast to uint64, bad value 中文
+➤ space(t3)[12,65535,0]  𝄀
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         𝄀
+  𝄀
+  𝄀
+                      𝄀
+null
 select * from text_01 where t3 is null or length (t1)  >3;
 t1    t2    t3
 中文123abcd        null
@@ -178,7 +188,7 @@ length(b1)    length(b2)    length(b3)
 8    null    null
 select substring(b3,5),substr(b2,-3,2) from blob_01;
 substring(b3, 5)    substr(b2, -3, 2)
-3432234234     
+3432234234     æ
 -01-01    co
 null    null
 select count(b1) from blob_01;

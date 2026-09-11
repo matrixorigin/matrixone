@@ -30,6 +30,7 @@ import (
 // A cluster restore replaces cluster-wide catalog tables. Keep this regression
 // in the isolated package so a failed restore cannot poison shared issue tests.
 func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {

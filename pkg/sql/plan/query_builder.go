@@ -3793,6 +3793,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		var fusedScalarAggs bool
+		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
+		if fusedScalarAggs {
+			colRefCnt = make(map[[2]int32]int)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -3833,6 +3839,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
+		rootID = builder.removeImpliedSemiJoins(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -12672,6 +12679,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	if ctx.bindingTree != nil {
+		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
+		ctx.bindingTree.rightJoinUsingStar = joinType == plan.Node_RIGHT &&
+			(hasUsingClause || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT)
 	}
 
 	node := &plan.Node{

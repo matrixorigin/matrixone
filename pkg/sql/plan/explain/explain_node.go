@@ -332,6 +332,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				buf.WriteString(" [")
 				buf.WriteString(spec.DistanceFunction)
 				buf.WriteString("]")
+				if work := spec.ScanWork; work != nil {
+					fmt.Fprintf(buf, " [Estimated Scan Rows: %.0f, Blocks: %d, Vector Bytes/Row: %.0f, Objects: %d, Planned DOP: %d]",
+						work.Rows, work.Blocks, work.VectorBytesPerRow, work.Objects, ndesc.Node.Stats.GetDop())
+				}
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")

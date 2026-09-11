@@ -3148,6 +3148,9 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 		setNodeDOP(p, node.Children[1], dop)
 	}
 	if node.Stats != nil {
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+			dop = min(dop, vectorScanDOP(dop, node.VectorIndexScan, p.IsPrepare))
+		}
 		node.Stats.Dop = dop
 	}
 }
@@ -3157,6 +3160,13 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	node := qry.Nodes[rootID]
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
+	}
+	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		if node.Stats == nil {
+			node.Stats = DefaultStats()
+		}
+		node.Stats.Dop = vectorScanDOP(ncpu, node.VectorIndexScan, p.IsPrepare)
+		return
 	}
 
 	if node.NodeType == plan.Node_AGG && RequiresSingleStageDistinctAgg(node) {

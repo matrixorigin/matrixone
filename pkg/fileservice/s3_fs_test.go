@@ -173,6 +173,19 @@ func TestObjectCopyCapabilityFallbacks(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIsS3BackedFileServiceResolvesWrappers(t *testing.T) {
+	s3 := &S3FS{name: "archive"}
+	local := dummyFileService{name: "local"}
+	services, err := NewFileServices("local", local, s3)
+	require.NoError(t, err)
+
+	require.True(t, IsS3BackedFileService(services, "archive:input.arrow"))
+	require.True(t, IsS3BackedFileService(SubPath(s3, "tenant"), "input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "local:input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "missing:input.arrow"))
+	require.False(t, IsS3BackedFileService(nil, "archive:input.arrow"))
+}
+
 func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
 	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
 		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",
@@ -2400,10 +2413,20 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	require.True(t, fs.diskCache.isUpdating(diskPath))
 
 	unblock()
-	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	// Flush waits for the async finalizer to publish the cache file.  Keep a
+	// generous bounded deadline here: the finalizer is deliberately blocked
+	// above, and a loaded CI worker may need more than one scheduler quantum
+	// after it is released.  The test still fails fast on a genuinely stuck
+	// finalizer while avoiding a false timeout caused by CI contention.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	fs.FlushCache(flushCtx)
 	require.NoError(t, flushCtx.Err())
+	require.Eventually(t, func() bool {
+		return !fs.diskCache.isUpdating(diskPath)
+	}, diskCacheLifecycleTestTimeout, time.Millisecond,
+		"async range finalizer did not release its update reservation")
+	require.FileExists(t, diskPath)
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {

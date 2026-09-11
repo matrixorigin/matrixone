@@ -26,27 +26,24 @@ import (
 )
 
 func Test_TxnExecutorExec(t *testing.T) {
-	c, err := embed.StartTestCluster(embed.WithCNCount(1))
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
-	require.NoError(t, err)
-
-	svc, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	exec := testutils.GetSQLExecutor(svc)
-	require.NotNil(t, exec)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-
-	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		_, err = txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
+	// Reuse the single-CN fixture used by TestPreparedParams; this case only reads the catalog.
+	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+		svc, err := c.GetCNService(0)
 		require.NoError(t, err)
-		return nil
-	}, executor.Options{}.WithWaitCommittedLogApplied())
-	require.NoError(t, err)
+
+		exec := testutils.GetSQLExecutor(svc)
+		require.NotNil(t, exec)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		defer cancel()
+
+		err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			_, err = txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
+			require.NoError(t, err)
+			return nil
+		}, executor.Options{}.WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+	})
 }
 
 func TestPreparedParams(t *testing.T) {

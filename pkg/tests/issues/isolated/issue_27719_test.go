@@ -26,11 +26,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -52,6 +54,62 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	cn1Port := cn1.GetServiceConfig().CN.Frontend.Port
 	cn2Port := cn2.GetServiceConfig().CN.Frontend.Port
+
+	// HAKeeper owns cron scheduling; CNs execute the resulting tasks. Observe
+	// this cluster's single logservice rather than assuming CN-local cron caches.
+	var schedulerIDs []string
+	cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+		if service.ServiceType() == metadata.ServiceType_LOG {
+			schedulerIDs = append(schedulerIDs, service.ServiceID())
+		}
+		return true
+	})
+	require.Len(t, schedulerIDs, 1)
+	var refreshMu sync.Mutex
+	refreshedTasks := make(map[string][]uint64)
+	catchUps := make(map[string]map[uint64]int)
+	restoreRefreshHook := taskservice.SetSQLTaskRefreshHookForTest(func(serviceID string, ids []uint64) {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		refreshedTasks[serviceID] = ids
+	}, func(serviceID string, taskID uint64, started bool) {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		if catchUps[serviceID] == nil {
+			catchUps[serviceID] = make(map[uint64]int)
+		}
+		if started {
+			catchUps[serviceID][taskID]++
+		} else {
+			catchUps[serviceID][taskID]--
+		}
+	})
+	defer restoreRefreshHook()
+	schedulersHaveTasks := func(taskIDs []uint64, want bool) bool {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		for _, serviceID := range schedulerIDs {
+			ids, observed := refreshedTasks[serviceID]
+			if !observed {
+				return false
+			}
+			for _, id := range taskIDs {
+				if !want && catchUps[serviceID][id] != 0 {
+					return false
+				}
+				found := false
+				for _, current := range ids {
+					if current == id {
+						found = true
+					}
+				}
+				if found != want {
+					return false
+				}
+			}
+		}
+		return true
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -119,6 +177,10 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 			fmt.Sprintf("sql-task:%d", repeatingTaskID)) > 0
 	}, 20*time.Second, 100*time.Millisecond, "repeating task was not scheduled")
 
+	// Prove the stale-cache precondition before dropping the account.
+	require.Eventually(t, func() bool { return schedulersHaveTasks([]uint64{repeatingTaskID}, true) },
+		20*time.Second, 20*time.Millisecond, "HAKeeper scheduler must cache the repeating task")
+
 	runningDone := make(chan error, 1)
 	go func() {
 		_, executeErr := tenantDB.ExecContext(ctx, "execute task running_task")
@@ -153,9 +215,12 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 
 	requireIssue27719AccountTaskResidue(t, ctx, sysDB, accountID, taskIDs, 0)
 
-	// Every CN refreshes its SQL-task cache independently. Wait beyond the
-	// fetch interval and prove stale cron jobs cannot recreate async work.
-	time.Sleep(12 * time.Second)
+	// A successful reconciliation removes the cached cron and joins its running
+	// callbacks. Also join the observed stopper-managed catch-up executions.
+	// Wait for both boundaries in the HAKeeper scheduler before checking durable
+	// residue, rather than sleeping through an assumed number of refreshes.
+	require.Eventually(t, func() bool { return schedulersHaveTasks(taskIDs, false) },
+		20*time.Second, 20*time.Millisecond, "HAKeeper scheduler must remove and drain the deleted tasks")
 	requireIssue27719AccountTaskResidue(t, ctx, sysDB, accountID, taskIDs, 0)
 	require.NoError(t, tenantDB.Close())
 	require.NoError(t, tenantRoot.Close())
