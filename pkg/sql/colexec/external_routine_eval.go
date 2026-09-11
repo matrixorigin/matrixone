@@ -182,8 +182,12 @@ func (e *ExternalRoutineEval) Eval(proc *process.Process, batches []*batch.Batch
 		}
 		return e.result.GetResultVector(), nil
 	}
-	if selectList != nil && len(selectList) < rowCount {
-		return nil, fmt.Errorf("external routine selection is shorter than the input batch")
+	if selectList != nil && len(selectList) != rowCount {
+		return nil, fmt.Errorf(
+			"external routine selection has %d rows, expected %d",
+			len(selectList),
+			rowCount,
+		)
 	}
 
 	for i, parameter := range e.parameterExecutor {

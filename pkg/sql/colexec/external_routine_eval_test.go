@@ -147,6 +147,25 @@ func TestExternalRoutineEvalOwnsSelectionAndStrictNullGuard(t *testing.T) {
 	require.Equal(t, "alice", runtime.invocation.Context["current_user"])
 }
 
+func TestExternalRoutineEvalRejectsSelectionWithWrongRowDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
+	inputBatch := batch.NewWithSize(0)
+	inputBatch.SetRowCount(1)
+	evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler), []ExpressionExecutor{
+		&externalRoutineTestExecutor{vector: input},
+	}, nil)
+	require.NoError(t, err)
+	defer evaluator.Free()
+
+	_, err = evaluator.Eval(proc, []*batch.Batch{inputBatch}, []bool{true, false})
+	require.ErrorContains(t, err, "selection has 2 rows, expected 1")
+}
+
 func TestNewExpressionExecutorDispatchesTypedRoutineCall(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
