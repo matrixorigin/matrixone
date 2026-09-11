@@ -60,7 +60,7 @@ func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
 	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{
 		Database: "db", Table: cdc.CDCPitrGranularity_All,
 	}}}}
-	err := c.checkPitrGranularity(ctx, pts)
+	err := c.checkPitrGranularity(ctx, pts, "")
 	require.Error(t, err)
 	require.Len(t, exec.sqls, 1)
 	require.Contains(t, exec.sqls[0], "mo_tables")
