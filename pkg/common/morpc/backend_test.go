@@ -2455,14 +2455,25 @@ func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
 	rb, err := NewRemoteBackend(
 		testAddr,
 		newTestCodec(),
 		WithBackendMetrics(newMetrics("")),
+		WithBackendLogger(zap.New(core)),
 		WithBackendConnectTimeout(time.Millisecond*200),
 	)
-	assert.Error(t, err)
-	assert.Nil(t, rb)
+	require.Error(t, err)
+	require.Nil(t, rb)
+
+	var terminalLogs []observer.LoggedEntry
+	for _, entry := range logs.All() {
+		if entry.Message == "connect to remote failed" {
+			terminalLogs = append(terminalLogs, entry)
+		}
+	}
+	require.Len(t, terminalLogs, 1)
+	require.Equal(t, err.Error(), terminalLogs[0].ContextMap()["error"])
 }
 
 func TestInactiveAfterCannotConnect(t *testing.T) {
