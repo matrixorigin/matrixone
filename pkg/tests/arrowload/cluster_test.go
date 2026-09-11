@@ -75,10 +75,12 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 		}))
 	}
 	c, err := embed.StartTestCluster(clusterOptions...)
+	if c != nil {
+		t.Cleanup(func() {
+			require.NoError(t, c.Close())
+		})
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, c.Close())
-	})
 	return c
 }
 
