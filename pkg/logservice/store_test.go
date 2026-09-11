@@ -500,14 +500,21 @@ func TestTickerForTaskSchedule(t *testing.T) {
 	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
 
 		tickerCxt, tickerCancel := context.WithCancel(context.Background())
-		defer tickerCancel()
+		tickerDone := make(chan struct{})
+		defer func() {
+			tickerCancel()
+			<-tickerDone
+		}()
 
 		//do task schedule background
-		go store.tickerForTaskSchedule(
-			tickerCxt,
-			time.Millisecond*10,
-			store.getCheckerStateFromLeader,
-		)
+		go func() {
+			defer close(tickerDone)
+			store.tickerForTaskSchedule(
+				tickerCxt,
+				time.Millisecond*10,
+				store.getCheckerStateFromLeader,
+			)
+		}()
 
 		// making hakeeper state proceeds to running before test task schedule
 		proceedHAKeeperToRunning(t, store)
@@ -543,7 +550,10 @@ func TestTickerForTaskSchedule(t *testing.T) {
 
 	}
 
-	runHakeeperTaskServiceTest(t, fn)
+	// Bootstrap is driven explicitly below. Keep the production HAKeeper
+	// worker disabled so it cannot concurrently advance the same state machine
+	// and ID allocator while this test is preparing the task-scheduling state.
+	runHakeeperTaskServiceTestWithWorkers(t, 5*time.Second, false, fn)
 }
 
 func TestStoreCloseWaitsForTaskScheduleTicker(t *testing.T) {
