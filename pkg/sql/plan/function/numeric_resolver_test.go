@@ -404,7 +404,7 @@ func TestResolveNumericBinaryTypesByName(t *testing.T) {
 		{name: "+", wantResult: types.T_int64, wantOK: true},
 		{name: "-", wantResult: types.T_int64, wantOK: true},
 		{name: "*", wantResult: types.T_int64, wantOK: true},
-		{name: "/", wantResult: types.T_float64, wantOK: true},
+		{name: "/", wantResult: types.T_decimal128, wantOK: true},
 		{name: "DIV", wantResult: types.T_int64, wantOK: true},
 		{name: "%", wantResult: types.T_int64, wantOK: true},
 		{name: "MOD", wantResult: types.T_int64, wantOK: true},

@@ -12,7 +12,9 @@ insert into integer_values values
     (3, 10, 3);
 
 select id, a / b from integer_values order by id;
-select id from integer_values where a / b = cast(a as decimal(23,4)) / cast(b as decimal(23,4)) order by id;
+select id from integer_values
+where a / b = cast(cast(a as decimal(23,4)) / cast(b as decimal(23,4)) as decimal(23,4))
+order by id;
 
 prepare exact_integer_division_stmt from 'select a / ? from integer_values where id = ?';
 set @exact_divisor = 1;

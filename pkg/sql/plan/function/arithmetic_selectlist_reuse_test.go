@@ -376,14 +376,20 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 }
 
 func TestIntegerSlashResolverMatrix(t *testing.T) {
-	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()} {
-		t.Run(typ.Oid.String(), func(t *testing.T) {
-			got, err := GetFunctionByName(context.Background(), "/", []types.Type{typ, typ})
+	for _, test := range []struct {
+		typ  types.Type
+		want types.Type
+	}{
+		{typ: types.T_int64.ToType(), want: types.New(types.T_decimal128, 23, 4)},
+		{typ: types.T_uint64.ToType(), want: types.New(types.T_decimal128, 24, 4)},
+	} {
+		t.Run(test.typ.Oid.String(), func(t *testing.T) {
+			got, err := GetFunctionByName(context.Background(), "/", []types.Type{test.typ, test.typ})
 			require.NoError(t, err)
 			targets, needCast := got.ShouldDoImplicitTypeCast()
 			require.True(t, needCast)
 			require.Len(t, targets, 2)
-			require.Equal(t, got.GetReturnType(), resolvedReturnType(t, DIV, targets))
+			require.Equal(t, test.want, got.GetReturnType())
 		})
 	}
 }

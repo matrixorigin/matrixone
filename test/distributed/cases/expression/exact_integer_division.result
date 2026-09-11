@@ -11,7 +11,9 @@ id    a / b
 1    9007199254740993.0000
 2    9223372036854775807.0000
 3    3.3333
-select id from integer_values where a / b = cast(a as decimal(23,4)) / cast(b as decimal(23,4)) order by id;
+select id from integer_values
+where a / b = cast(cast(a as decimal(23,4)) / cast(b as decimal(23,4)) as decimal(23,4))
+order by id;
 id
 1
 2
@@ -35,5 +37,5 @@ where table_schema = 'exact_integer_division_28580'
 and table_name = 'exact_integer_division_ctas'
 and column_name = 'quotient';
 column_type
-decimal(23,4)
+DECIMAL(23,4)
 drop database exact_integer_division_28580;

@@ -628,6 +628,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal64: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -640,6 +641,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal128: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -652,6 +654,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
+		types.T_bool,
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -2299,6 +2302,9 @@ func decimal64ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2379,6 +2385,9 @@ func decimal128ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2471,6 +2480,9 @@ func decimal256ToOthersWithContext(
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -3490,14 +3502,15 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	return nil
 }
 
-func numericToBool[T constraints.Integer | constraints.Float](
+func numericToBool[T constraints.Integer | constraints.Float | types.Decimal128 | types.Decimal256](
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[bool], length int, selectList *FunctionSelectList) error {
+	var zero T
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
-		err := to.Append(v != 0, null)
+		err := to.Append(v != zero, null)
 		if err != nil {
 			return err
 		}

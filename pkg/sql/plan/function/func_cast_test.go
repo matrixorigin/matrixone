@@ -64,6 +64,45 @@ func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
 	}
 }
 
+func TestDecimalToBoolUsesZeroTruthiness(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	nulls := []bool{false, false, true}
+	for _, test := range []struct {
+		name   string
+		typ    types.Type
+		values any
+	}{
+		{
+			name: "decimal64", typ: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal64{0, 1, 0},
+		},
+		{
+			name: "decimal128", typ: types.New(types.T_decimal128, 38, 0),
+			values: []types.Decimal128{{}, {B0_63: 1}, {}},
+		},
+		{
+			name: "decimal256", typ: types.New(types.T_decimal256, 65, 0),
+			values: []types.Decimal256{{}, {B0_63: 1}, {}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cast := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, test.values, nulls),
+					NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+				},
+				NewFunctionTestResult(
+					types.T_bool.ToType(), false,
+					[]bool{false, true, false}, nulls),
+				NewCast,
+			)
+			succeeded, message := cast.Run()
+			require.True(t, succeeded, message)
+		})
+	}
+}
+
 func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().MatrixOneNativeMode = true
