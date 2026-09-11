@@ -381,6 +381,14 @@ type flightFrameCollector struct {
 	total    int64
 }
 
+func (c *flightFrameCollector) reset(maxBytes, retainedBytes int64) {
+	// Do not reuse the frame slice backing array. A successful candidate can be
+	// retained by the size search while the next candidate is encoded.
+	c.frames = nil
+	c.maxBytes = maxBytes
+	c.total = retainedBytes
+}
+
 func (c *flightFrameCollector) Send(data *flight.FlightData) error {
 	if data == nil || len(data.DataHeader) == 0 {
 		return fmt.Errorf("invalid Arrow Flight frame")
@@ -398,43 +406,251 @@ func (c *flightFrameCollector) Send(data *flight.FlightData) error {
 	return nil
 }
 
+// inputBatchWireEncoder keeps one Arrow IPC writer alive for an invocation.
+// The writer emits the schema once; later candidates and batches only encode a
+// record message. The cached schema is still counted in every candidate's
+// limit, because MaxBatchBytes describes the complete Flight payload that the
+// receiver would have to admit for that batch.
+type inputBatchWireEncoder struct {
+	schema      *arrow.Schema
+	collector   *flightFrameCollector
+	writer      *flight.Writer
+	schemaFrame ArrowFrame
+	schemaBytes int64
+	schemaReady bool
+	closed      bool
+}
+
+func (e *inputBatchWireEncoder) encode(record arrow.RecordBatch, maxBytes int64) ([]ArrowFrame, error) {
+	if e == nil || e.closed || record == nil || maxBytes <= 0 {
+		return nil, fmt.Errorf("invalid Arrow record batch encoder")
+	}
+	if e.schema == nil || !record.Schema().Equal(e.schema) {
+		return nil, fmt.Errorf("Arrow record batch schema does not match the invocation schema")
+	}
+	if e.writer == nil {
+		e.collector = &flightFrameCollector{}
+		e.writer = flight.NewRecordWriter(
+			e.collector,
+			ipc.WithSchema(e.schema),
+			ipc.WithAllocator(memory.NewGoAllocator()),
+		)
+	}
+	writerHadSchema := e.schemaReady
+	e.collector.reset(maxBytes, e.schemaBytes)
+	if err := e.writer.Write(record); err != nil {
+		e.captureSchema()
+		return nil, fmt.Errorf("encode Arrow record batch: %w", err)
+	}
+	e.captureSchema()
+	if writerHadSchema {
+		if len(e.collector.frames) != 1 {
+			return nil, fmt.Errorf("Arrow writer did not emit one record frame")
+		}
+		return []ArrowFrame{e.schemaFrame, e.collector.frames[0]}, nil
+	}
+	if len(e.collector.frames) != 2 || !e.schemaReady {
+		return nil, fmt.Errorf("Arrow stream did not contain schema and record batch")
+	}
+	return append([]ArrowFrame(nil), e.collector.frames...), nil
+}
+
+func (e *inputBatchWireEncoder) captureSchema() {
+	if e == nil || e.schemaReady || e.collector == nil || len(e.collector.frames) == 0 {
+		return
+	}
+	frame := e.collector.frames[0]
+	e.schemaFrame = ArrowFrame{
+		Header: append([]byte(nil), frame.Header...),
+		Body:   append([]byte(nil), frame.Body...),
+	}
+	e.schemaBytes = int64(len(e.schemaFrame.Header) + len(e.schemaFrame.Body))
+	e.schemaReady = true
+}
+
+func (e *inputBatchWireEncoder) close() error {
+	if e == nil || e.closed {
+		return nil
+	}
+	e.closed = true
+	if e.writer == nil {
+		return nil
+	}
+	if err := e.writer.Close(); err != nil {
+		return fmt.Errorf("close Arrow record batch encoder: %w", err)
+	}
+	return nil
+}
+
 func BuildInputRecord(inputs []*vector.Vector, args []types.Type, length int) (arrow.RecordBatch, *arrow.Schema, error) {
 	return BuildInputRecordRange(inputs, args, 0, length)
 }
 
 func BuildInputRecordRange(inputs []*vector.Vector, args []types.Type, start, length int) (arrow.RecordBatch, *arrow.Schema, error) {
-	if start < 0 || length <= 0 || len(inputs) != len(args) {
-		return nil, nil, fmt.Errorf("invalid Python UDF input shape")
+	encoder, err := newInputBatchEncoder(inputs, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	return encoder.build(start, length)
+}
+
+// inputBatchEncoder owns the immutable descriptor/schema portion of the
+// Gateway input boundary for one invocation.  Building it once avoids
+// re-creating TypeDescriptor, Field metadata, and the Arrow Schema for every
+// physical batch and every size probe.  The record builder and encoded bytes
+// remain per batch, so the encoder does not retain input or output buffers.
+type inputBatchEncoder struct {
+	inputs      []*vector.Vector
+	args        []types.Type
+	descriptors []TypeDescriptor
+	schema      *arrow.Schema
+	fixedWidth  bool
+	wire        *inputBatchWireEncoder
+}
+
+func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBatchEncoder, error) {
+	if len(inputs) != len(args) {
+		return nil, fmt.Errorf("invalid Python UDF input shape")
 	}
 	fields := make([]arrow.Field, len(args))
+	descriptors := make([]TypeDescriptor, len(args))
+	fixedWidth := true
 	for i, typ := range args {
 		descriptor, err := NewTypeDescriptor(typ)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
+		descriptors[i] = descriptor
 		fields[i], err = descriptor.Field(fmt.Sprintf("arg_%d", i))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		if inputs[i] == nil || inputs[i].Length() == 0 || (!inputs[i].IsConst() && inputs[i].Length() < start+length) {
-			return nil, nil, fmt.Errorf("input column %d is shorter than batch range", i)
+		if typ.IsVarlen() {
+			fixedWidth = false
+		}
+		if inputs[i] == nil || inputs[i].Length() == 0 {
+			return nil, fmt.Errorf("input column %d is shorter than batch range", i)
 		}
 	}
 	schema := arrow.NewSchema(fields, nil)
-	if len(fields) == 0 {
-		return array.NewRecordBatch(schema, nil, int64(length)), schema, nil
+	return &inputBatchEncoder{
+		inputs:      inputs,
+		args:        args,
+		descriptors: descriptors,
+		schema:      schema,
+		fixedWidth:  fixedWidth,
+	}, nil
+}
+
+func (e *inputBatchEncoder) encode(record arrow.RecordBatch, maxBytes int64) ([]ArrowFrame, error) {
+	if e == nil {
+		return nil, fmt.Errorf("invalid Python UDF input encoder")
 	}
-	builder := array.NewRecordBuilder(memory.NewGoAllocator(), schema)
+	if e.wire == nil {
+		e.wire = &inputBatchWireEncoder{schema: e.schema}
+	}
+	return e.wire.encode(record, maxBytes)
+}
+
+func (e *inputBatchEncoder) close() error {
+	if e == nil || e.wire == nil {
+		return nil
+	}
+	return e.wire.close()
+}
+
+func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.Schema, error) {
+	if e == nil || start < 0 || length <= 0 {
+		return nil, nil, fmt.Errorf("invalid Python UDF input shape")
+	}
+	for i, input := range e.inputs {
+		if !input.IsConst() && input.Length() < start+length {
+			return nil, nil, fmt.Errorf("input column %d is shorter than batch range", i)
+		}
+	}
+	if len(e.args) == 0 {
+		return array.NewRecordBatch(e.schema, nil, int64(length)), e.schema, nil
+	}
+	builder := array.NewRecordBuilder(memory.NewGoAllocator(), e.schema)
 	defer builder.Release()
-	for column, typ := range args {
+	for column, typ := range e.args {
 		for row := 0; row < length; row++ {
-			if err := appendInputValue(builder.Field(column), inputs[column], typ, start, row); err != nil {
+			if err := appendInputValue(builder.Field(column), e.inputs[column], typ, start, row); err != nil {
 				return nil, nil, fmt.Errorf("input column %d row %d: %w", column, row, err)
 			}
 		}
 	}
-	return builder.NewRecordBatch(), schema, nil
+	return builder.NewRecordBatch(), e.schema, nil
 }
+
+// canBuildFullBatch cheaply decides whether a variable-width full candidate
+// is worth materializing.  It uses the source values already owned by the
+// SQL vector and a deliberately inflated bound.  If the bound is not clearly
+// below the wire limit, the bounded probe path is retained so a very wide
+// input cannot create an oversized temporary Arrow record just to discover
+// that it does not fit.
+func (e *inputBatchEncoder) canBuildFullBatch(start, length, maxBytes int64) bool {
+	if e == nil || e.fixedWidth || length <= 0 || maxBytes <= 0 {
+		return false
+	}
+	const safetyNumerator = int64(2)
+	const safetyDenominator = int64(1)
+	const perColumnOverhead = int64(4096)
+	const perRowOverhead = int64(16)
+	const maxEstimate = int64(^uint64(0) >> 1)
+	add := func(total, value int64) int64 {
+		if value < 0 || total > maxEstimate-value {
+			return maxEstimate
+		}
+		return total + value
+	}
+	multiply := func(left, right int64) int64 {
+		if left < 0 || right < 0 || (left != 0 && right > maxEstimate/left) {
+			return maxEstimate
+		}
+		return left * right
+	}
+	estimate := int64(128)
+	for column, typ := range e.args {
+		if !typ.IsVarlen() {
+			return false
+		}
+		descriptor := e.descriptors[column]
+		offsetWidth := int64(descriptor.OffsetWidth)
+		if offsetWidth == 0 {
+			offsetWidth = 32
+		}
+		offsetWidth /= 8
+		if offsetWidth != 4 && offsetWidth != 8 {
+			return false
+		}
+		estimate = add(estimate, perColumnOverhead)
+		estimate = add(estimate, multiply(add(length, 1), offsetWidth))
+		estimate = add(estimate, add(length, 7)/8)
+		parameter := vector.GenerateFunctionStrParameter(e.inputs[column])
+		for row := int64(0); row < length; row++ {
+			index := sourceRow(e.inputs[column], int(start), int(row))
+			if e.inputs[column].IsNull(uint64(index)) {
+				continue
+			}
+			value, _ := parameter.GetStrValue(uint64(index))
+			valueBytes := int64(len(value))
+			// JSON canonicalization can add escaping and separators. The
+			// factor is intentionally conservative; a bound that is not
+			// clearly safe falls back to the ordinary bounded probes.
+			if typ.Oid == types.T_json {
+				valueBytes = add(valueBytes, valueBytes)
+			}
+			estimate = add(estimate, valueBytes)
+			estimate = add(estimate, perRowOverhead)
+		}
+	}
+	if estimate > maxEstimate/safetyNumerator {
+		return false
+	}
+	return estimate*safetyNumerator <= maxBytes*safetyDenominator
+}
+
 func sourceRow(v *vector.Vector, start, row int) int {
 	if v.IsConst() {
 		return 0
