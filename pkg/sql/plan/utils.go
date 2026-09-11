@@ -3633,6 +3633,176 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+func markPreparedExportSetLineage(plan0 *Plan) {
+	query := plan0.GetQuery()
+	if query == nil {
+		return
+	}
+	var visit func(*plan.Expr, int32)
+	visit = func(expr *plan.Expr, ownerNodeID int32) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "export_set") && len(fn.Args) > 0 {
+				positions := make(map[int32]struct{})
+				collectPreparedExportSetSources(query, fn.Args[0], ownerNodeID, positions,
+					make(map[directResultTraceKey]struct{}), make(map[int32]struct{}))
+			}
+			for _, arg := range fn.Args {
+				visit(arg, ownerNodeID)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item, ownerNodeID)
+			}
+		}
+	}
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			visit(expr, int32(nodeID))
+		}
+	}
+}
+
+func collectPreparedExportSetSources(
+	query *plan.Query,
+	expr *plan.Expr,
+	ownerNodeID int32,
+	positions map[int32]struct{},
+	seenColumns map[directResultTraceKey]struct{},
+	seenSubqueries map[int32]struct{},
+) (int32, int32, bool) {
+	if expr == nil {
+		return 0, 0, false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[param.Pos] = struct{}{}
+		metadata := ensurePreparedNumericMetadata(expr)
+		metadata.Fallback = true
+		metadata.ParamPos = param.Pos
+		return ownerNodeID, -1, true
+	}
+	var sourceNodeID, sourceColPos int32
+	found := false
+	remember := func(nodeID, colPos int32, ok bool) {
+		if ok && !found {
+			sourceNodeID, sourceColPos, found = nodeID, colPos, true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+			(fn.GetSyntaxExplicitCast() || expr.Typ.Id != int32(types.T_int64)) {
+			return 0, 0, false
+		}
+		for _, arg := range fn.Args {
+			nodeID, colPos, ok := collectPreparedExportSetSources(
+				query, arg, ownerNodeID, positions, seenColumns, seenSubqueries)
+			remember(nodeID, colPos, ok)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			nodeID, colPos, ok := collectPreparedExportSetSources(
+				query, item, ownerNodeID, positions, seenColumns, seenSubqueries)
+			remember(nodeID, colPos, ok)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+		if _, seen := seenSubqueries[sub.NodeId]; !seen {
+			seenSubqueries[sub.NodeId] = struct{}{}
+			nodeID, colPos, ok := collectPreparedExportSetSourceColumn(
+				query, sub.NodeId, 0, positions, seenColumns, seenSubqueries)
+			remember(nodeID, colPos, ok)
+		}
+	}
+	if col := expr.GetCol(); col != nil && ownerNodeID >= 0 && int(ownerNodeID) < len(query.Nodes) {
+		node := query.Nodes[ownerNodeID]
+		if node != nil {
+			childNodeID := int32(-1)
+			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+				childNodeID = node.Children[col.RelPos]
+			} else if len(node.Children) == 1 {
+				childNodeID = node.Children[0]
+			}
+			if childNodeID >= 0 {
+				nodeID, colPos, ok := collectPreparedExportSetSourceColumn(
+					query, childNodeID, col.ColPos, positions, seenColumns, seenSubqueries)
+				remember(nodeID, colPos, ok)
+			}
+		}
+	}
+	if found && sourceColPos >= 0 {
+		metadata := ensurePreparedNumericMetadata(expr)
+		metadata.FallbackSource = true
+		metadata.FallbackSourceNodeId = sourceNodeID
+		metadata.FallbackSourceColPos = sourceColPos
+		metadata.ParamPos = minimumPreparedPosition(positions)
+	}
+	return sourceNodeID, sourceColPos, found
+}
+
+func collectPreparedExportSetSourceColumn(
+	query *plan.Query,
+	nodeID, colPos int32,
+	positions map[int32]struct{},
+	seenColumns map[directResultTraceKey]struct{},
+	seenSubqueries map[int32]struct{},
+) (int32, int32, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return 0, 0, false
+	}
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if _, seen := seenColumns[key]; seen {
+		return 0, 0, false
+	}
+	seenColumns[key] = struct{}{}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return 0, 0, false
+	}
+	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+		localPositions := make(map[int32]struct{})
+		sourceNodeID, sourceColPos, found := collectPreparedExportSetSources(
+			query, node.ProjectList[colPos], nodeID, localPositions, seenColumns, seenSubqueries)
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if found || len(localPositions) > 0 {
+			resolvedNodeID, resolvedColPos := nodeID, colPos
+			if sourceColPos >= 0 {
+				resolvedNodeID, resolvedColPos = sourceNodeID, sourceColPos
+			}
+			metadata := ensurePreparedNumericMetadata(node.ProjectList[colPos])
+			metadata.Fallback = true
+			metadata.ParamPos = minimumPreparedPosition(localPositions)
+			metadata.FallbackSource = true
+			metadata.FallbackSourceNodeId = resolvedNodeID
+			metadata.FallbackSourceColPos = resolvedColPos
+			return resolvedNodeID, resolvedColPos, true
+		}
+	}
+	if len(node.Children) == 1 {
+		return collectPreparedExportSetSourceColumn(
+			query, node.Children[0], colPos, positions, seenColumns, seenSubqueries)
+	}
+	return 0, 0, false
+}
+
+func minimumPreparedPosition(positions map[int32]struct{}) int32 {
+	minimum := int32(-1)
+	for position := range positions {
+		if minimum < 0 || position < minimum {
+			minimum = position
+		}
+	}
+	return minimum
+}
+
 // PreparedPlanNeedsRuntimeSpecialization reports whether a binary prepared
 // execution can change a result-column domain or an overloaded expression.
 // Most prepared DML only needs the current parameter values.  Avoid copying
@@ -3658,6 +3828,7 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 	if scanPlan.GetQuery() == nil {
 		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
 	}
+	markPreparedExportSetLineage(scanPlan)
 
 	rule := &preparedRuntimeSpecializationScanRule{
 		// A bare SELECT parameter keeps the cached result domain unless the
@@ -4080,7 +4251,8 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 		for argIndex, arg := range exprImpl.F.Args {
 			if preparedFunctionArgUsesSQLExecuteNumericSource(
 				expr, name, argIndex, len(exprImpl.F.Args)) {
-				if _, ok := preparedResultParamPosition(arg, name); ok {
+				if _, ok := preparedResultParamPosition(arg, name); ok ||
+					(name == "export_set" && preparedExprHasFallbackSource(arg)) {
 					rule.needs = true
 					return
 				}
@@ -4159,6 +4331,33 @@ func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex i
 // owned by the comparison from one already constrained by a prepare-time
 // cast. Composite-key predicates may wrap several such casts in a serial()
 // helper, so inspect the complete expression rather than only its root.
+func preparedExprHasFallbackSource(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata.GetFallbackSource() && metadata.GetParamPos() >= 0 {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedExprHasFallbackSource(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprHasFallbackSource(item) {
+				return true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedExprHasFallbackSource(sub.Child)
+	}
+	return false
+}
+
 func preparedExprHasUnboundParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -6167,6 +6366,7 @@ func replaceParamValsWithSelection(
 		}
 	}
 
+	markPreparedExportSetLineage(plan0)
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
@@ -6273,6 +6473,14 @@ func replaceParamValsWithSelection(
 		visitPlan := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
 		err = visitPlan.Visit(ctx)
 		if err != nil {
+			return false, err
+		}
+		// VisitPlan rewrites consumers before some scalar-subquery producer
+		// projections. Once all parameters have their execute-time domains, make
+		// one narrow bottom-up refresh pass so ColRef-based numeric expressions
+		// are rebound from those finalized source types.
+		refreshRule := &preparedNumericSourceRefreshRule{reset: paramRule}
+		if err = NewVisitPlan(plan0, []VisitPlanRule{refreshRule}).Visit(ctx); err != nil {
 			return false, err
 		}
 	}

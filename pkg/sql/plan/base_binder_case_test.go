@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -1139,20 +1140,73 @@ func TestPreparedExportSetInputScalarSubqueryUsesExecuteNumericSourceType(t *tes
 		"execute-time specialization must not mutate the cached plan")
 }
 
-func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
+func TestPreparedExportSetTracesNestedScalarSources(t *testing.T) {
+	decimalType := types.New(types.T_decimal64, 4, 1)
 	for _, sql := range []string{
-		`prepare stmt_export_set from "select export_set(cast((select ?) as double), 'Y', 'N', '', 4)"`,
-		`prepare stmt_export_set from "select export_set((select cast(? as double) from nation limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select x from (select ? as x) d limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select x from (select ? as x) d join nation on true limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((with d as (select ? as x) select x from d limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? from nation limit 1) + 0, 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ?) + (select ?), 'Y', 'N', '', 4)"`,
 	} {
 		prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
 		require.NoError(t, err)
 		queryPlan := prepared.GetDcl().GetPrepare().Plan
 		require.NotNil(t, queryPlan)
-		expr := findPlanFunctionExpr(queryPlan, "export_set")
-		require.NotNil(t, expr)
-		_, provisional := preparedResultParamPosition(expr.GetF().Args[0], "export_set")
-		require.False(t, provisional, expr.String())
-		require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
+		require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+		cachedPlan := queryPlan.String()
+		paramCount := strings.Count(sql, "?")
+		for _, test := range []struct {
+			name     string
+			param    ParamValue
+			wantType func(types.T) bool
+		}{
+			{
+				name: "decimal", param: ParamValue{Value: "2.5", SourceType: decimalType, HasSourceType: true},
+				wantType: func(typ types.T) bool { return typ.IsDecimal() },
+			},
+			{
+				name: "double", param: ParamValue{Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true},
+				wantType: func(typ types.T) bool { return typ == types.T_float64 },
+			},
+			{
+				name: "boolean", param: ParamValue{Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true},
+				wantType: func(typ types.T) bool { return typ == types.T_int64 || typ == types.T_bool },
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				params := make([]any, paramCount)
+				for i := range params {
+					params[i] = test.param
+				}
+				filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, params)
+				require.NoError(t, err)
+				expr := findPlanFunctionExpr(filled, "export_set")
+				require.NotNil(t, expr)
+				require.True(t, test.wantType(types.T(expr.GetF().Args[0].Typ.Id)), expr.String())
+			})
+		}
+		require.Equal(t, cachedPlan, queryPlan.String(),
+			"execute-time specialization must not mutate the cached plan")
+	}
+}
+
+func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
+	for _, sql := range []string{
+		`prepare stmt_export_set from "select export_set(cast((select ?) as double), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select cast(? as double) from nation limit 1), 'Y', 'N', '', 4)"`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+			queryPlan := prepared.GetDcl().GetPrepare().Plan
+			require.NotNil(t, queryPlan)
+			expr := findPlanFunctionExpr(queryPlan, "export_set")
+			require.NotNil(t, expr)
+			_, provisional := preparedResultParamPosition(expr.GetF().Args[0], "export_set")
+			require.False(t, provisional, expr.String())
+			require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+		})
 	}
 }
 
