@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -3047,6 +3048,96 @@ func TestDetermineShuffleTypeFallsBackWhenRangeStatsAreAbsent(t *testing.T) {
 	node := &plan.Node{NodeType: plan.Node_PROJECT, Stats: DefaultStats()}
 	determineShuffleType(&plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"}, node, builder)
 	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+}
+
+func TestDetermineShuffleTypeRejectsStringRangeForAggregate(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 10_000_000
+	stats.NdvMap["url"] = 3_000_000
+	stats.MinValMap["url"] = 1
+	stats.MaxValMap["url"] = 2
+	stats.ShuffleRangeMap["url"] = &pbstats.ShuffleRange{
+		IsStrType: true,
+		Overlap:   0.1,
+		Uniform:   0.1,
+		Result:    []float64{1, 2, 3},
+	}
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			Name: "url",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_AGG,
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{ShuffleColIdx: 0}},
+	}
+
+	determineShuffleType(&plan.ColRef{RelPos: 0, ColPos: 0}, node, builder)
+
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+	require.Nil(t, node.Stats.HashmapStats.Ranges)
+}
+
+func TestDetermineShuffleTypeDoesNotReuseStringRangeForAggregate(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 10_000_000
+	stats.NdvMap["url"] = 3_000_000
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			Name: "url",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+	child := &plan.Node{
+		NodeType:    plan.Node_AGG,
+		BindingTags: []int32{10},
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+			ShuffleType:   plan.ShuffleType_Range,
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_AGG,
+		Children: []int32{0},
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{ShuffleColIdx: 0}},
+	}
+	builder.qry = &plan.Query{Nodes: []*plan.Node{child, node}}
+
+	determineShuffleType(&plan.ColRef{RelPos: 10, ColPos: 0}, node, builder)
+
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+	require.Equal(t, plan.ShuffleMethod_Normal, node.Stats.HashmapStats.ShuffleMethod)
+	require.Nil(t, node.Stats.HashmapStats.Ranges)
 }
 
 func TestShuffleByZonemap(t *testing.T) {
