@@ -45,6 +45,157 @@ type BlockTopNRead struct {
 	released      bool
 }
 
+// ReadBlockBySearchAndTopN keeps exact storage-filter columns pinned while it
+// scores their selected vector rows and copies only winner output columns.
+// selectRows borrows the filter vectors for the duration of the callback and
+// must return sorted physical block offsets. Output destinations retain
+// ownership of any successfully copied prefix when an error is returned.
+func ReadBlockBySearchAndTopN(
+	ctx context.Context,
+	filterColumns []uint16,
+	filterTypes []types.Type,
+	outputColumns []uint16,
+	outputTypes []types.Type,
+	outputDestinations []*vector.Vector,
+	topColumn uint16,
+	topType types.Type,
+	selectRows func([]vector.Vector) ([]int64, error),
+	topReader *IndexReaderTopOp,
+	fs fileservice.FileService,
+	location Location,
+	mp *mpool.MPool,
+	policy fileservice.Policy,
+) (rows []int64, distances []float64, fromCache bool, err error) {
+	if len(filterColumns) == 0 || len(filterColumns) != len(filterTypes) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("invalid exact-filter columns for block topn")
+	}
+	if len(outputColumns) != len(outputTypes) || len(outputColumns) != len(outputDestinations) {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("invalid exact-filter output columns for block topn")
+	}
+	if selectRows == nil || topReader == nil || mp == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil exact-filter block topn input")
+	}
+	if topColumn >= SEQNUM_UPPER || !topType.Oid.IsArrayRelate() || topReader.Typ != topType.Oid ||
+		topReader.OrderedLimit || topReader.Desc {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("unsupported exact-filter vector topn input")
+	}
+	for i, column := range filterColumns {
+		if column >= SEQNUM_UPPER || column == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+				"invalid exact-filter column %d for vector column %d", column, topColumn,
+			)
+		}
+		if slices.Contains(filterColumns[:i], column) {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf("duplicate exact-filter column %d", column)
+		}
+	}
+	for i, column := range outputColumns {
+		if outputDestinations[i] == nil || column >= SEQNUM_UPPER || column == topColumn {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf("invalid exact-filter output column %d", column)
+		}
+		if slices.Contains(outputColumns[:i], column) {
+			return nil, nil, false, moerr.NewInvalidInputNoCtxf("duplicate exact-filter output column %d", column)
+		}
+	}
+
+	meta, err := FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	dataMeta := meta.MustGetMeta(SchemaData)
+	name := location.Name().UnsafeString()
+	block := location.ID()
+	filterRead, err := ReadOneBlock(
+		ctx, &dataMeta, name, block, filterColumns, filterTypes, mp, fs, policy, ShareScopedDecodedColumn,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer filterRead.Release()
+	fromCache = len(filterRead.Entries) > 0
+	filterVectors := make([]vector.Vector, len(filterColumns))
+	defer func() {
+		for i := range filterVectors {
+			filterVectors[i].Free(nil)
+		}
+	}()
+	for i := range filterColumns {
+		fromCache = fromCache && filterRead.Entries[i].WasFromCache()
+		if err = MustVectorToCached(&filterVectors[i], filterRead.Entries[i].CachedData); err != nil {
+			return nil, nil, false, err
+		}
+	}
+
+	selectedRows, err := selectRows(filterVectors)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if selectedRows == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("exact-filter block topn returned nil rows")
+	}
+	previous := int64(-1)
+	rowCount := filterVectors[0].Length()
+	for _, row := range selectedRows {
+		if row < 0 || row >= int64(rowCount) || row <= previous {
+			return nil, nil, false, moerr.NewInvalidInputNoCtx(
+				"exact-filter block topn rows must be sorted, unique, and in range",
+			)
+		}
+		previous = row
+	}
+	if len(selectedRows) == 0 {
+		return []int64{}, []float64{}, fromCache, nil
+	}
+	rows, distances, topFromCache, err := readColumnTopNWithMeta(
+		ctx, &dataMeta, name, block, topColumn, topType, selectedRows, topReader, mp, fs, policy,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	fromCache = fromCache && topFromCache
+
+	missingColumns := make([]uint16, 0, len(outputColumns))
+	missingTypes := make([]types.Type, 0, len(outputColumns))
+	missingDestinations := make([]*vector.Vector, 0, len(outputColumns))
+	for i, column := range outputColumns {
+		if filterPosition := slices.Index(filterColumns, column); filterPosition >= 0 {
+			if filterTypes[filterPosition] != outputTypes[i] {
+				return nil, nil, false, moerr.NewInvalidInputNoCtxf(
+					"exact-filter output column %d has inconsistent types", column,
+				)
+			}
+			if err = CopyCachedVectorRows(
+				outputDestinations[i], filterRead.Entries[filterPosition].CachedData, rows, mp,
+			); err != nil {
+				return nil, nil, false, err
+			}
+			continue
+		}
+		missingColumns = append(missingColumns, column)
+		missingTypes = append(missingTypes, outputTypes[i])
+		missingDestinations = append(missingDestinations, outputDestinations[i])
+	}
+	if len(missingColumns) == 0 {
+		return rows, distances, fromCache, nil
+	}
+	outputRead, readErr := ReadOneBlock(
+		ctx, &dataMeta, name, block, missingColumns, missingTypes, mp, fs, policy, ShareScopedDecodedColumn,
+	)
+	if readErr != nil {
+		return nil, nil, false, readErr
+	}
+	defer outputRead.Release()
+	for i := range missingColumns {
+		fromCache = fromCache && outputRead.Entries[i].WasFromCache()
+		if err = CopyCachedVectorRows(
+			missingDestinations[i], outputRead.Entries[i].CachedData, rows, mp,
+		); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	return rows, distances, fromCache, nil
+}
+
 func (r *BlockTopNRead) Entry(position int) fileservice.IOEntry { return r.block.Entries[position] }
 func (r *BlockTopNRead) FromCache() bool                        { return r.fromCache }
 

@@ -1,0 +1,66 @@
+drop account if exists acc_idx_var;
+create account acc_idx_var admin_name 'admin' identified by '123456';
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+set max_index_cache_size = 1048576;
+internal error: the system variable is global
+set session max_index_cache_size = 1048576;
+internal error: the system variable is global
+set @@session.max_index_cache_size = 1048576;
+internal error: the system variable is global
+set max_gpu_index_cache_size = 1048576;
+internal error: the system variable is global
+set session max_gpu_index_cache_size = 1048576;
+internal error: the system variable is global
+set @@session.max_gpu_index_cache_size = 1048576;
+internal error: the system variable is global
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+set global max_index_cache_size = 1099511627776;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+1099511627776
+show global variables like 'max_index_cache_size';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+max_index_cache_size  ¦  1099511627776
+set global max_gpu_index_cache_size = 549755813888;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+549755813888
+show global variables like 'max_gpu_index_cache_size';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+max_gpu_index_cache_size  ¦  549755813888
+set global max_index_cache_size = 2199023255552;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+2199023255552
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+549755813888
+set global max_index_cache_size = 0;
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+set global max_gpu_index_cache_size = 0;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+set global max_index_cache_size = -1;
+internal error: convert to the system variable int type failed
+set global max_gpu_index_cache_size = -1;
+internal error: convert to the system variable int type failed
+select @@global.max_index_cache_size;
+➤ @@global.max_index_cache_size[-1,16383,0]  𝄀
+0
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+drop account if exists acc_idx_var;

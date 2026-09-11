@@ -1,9 +1,8 @@
 # #23684 Arrow LOAD implementation delivery decision
 
-**Status:** implemented with a fail-closed default. This is a versioned
-technical decision for the implementation delivery; it is not an approval to
-enable Arrow LOAD in a production deployment. Independent rollout and owner
-approvals remain pending as recorded in
+**Status:** implemented with a default-on policy. This is a versioned technical
+decision for the implementation delivery; operational provider, aggregate-
+admission, and owner approvals remain pending as recorded in
 [`23684_arrow_load_release_readiness.md`](23684_arrow_load_release_readiness.md).
 
 ## Decision
@@ -18,24 +17,24 @@ implementation plus the minimal reusable safety substrate it requires:
   worker-side admission before I/O; and
 - an additive, MORPC v57-gated remote pipeline representation.
 
-This scope does not authorize a deployment to turn on the feature. The shipped
-configuration defaults `enabled`, `s3-enabled`, and `distributed-enabled` to
-`false`; a CN without an explicit setting rejects the corresponding Arrow LOAD
-before I/O. Every participating worker rechecks its own setting, so a
-coordinator's more-permissive or stale configuration cannot grant remote work.
-Keeping the implementation present but unreachable by default lets normal
-release integration validate its contracts without silently broadening a
-deployment's data-plane surface.
+The shipped configuration defaults `enabled`, `s3-enabled`, and
+`distributed-enabled` to `true`; explicit `false` values are deployment kill
+switches for the corresponding surface. Every participating worker rechecks
+its own setting, so a coordinator's more-permissive or stale configuration
+cannot grant work after a worker-side rollback. Operational provider,
+aggregate-admission, mixed-version, and owner gates remain separate acceptance
+work; they do not change the default-on product contract.
 
 ## Independent implementation approval record
 
-The independent approval for this mergeable, fail-closed implementation is
-recorded in [PR review #5127791633](https://github.com/matrixorigin/matrixone/pull/28145#pullrequestreview-5127791633), submitted against exact revision
+The independent approval for the original mergeable, fail-closed implementation
+substrate is recorded in [PR review #5127791633](https://github.com/matrixorigin/matrixone/pull/28145#pullrequestreview-5127791633), submitted against exact revision
 `53af58d64c2e1d928445cd8104511346a5a156a3`. Its decision is `APPROVED` for
-merging the fail-closed implementation, while expressly retaining provider,
-aggregate-admission, mixed-version, and rollout-owner gates. This record does
-not claim approval to enable a deployment: those separately deferred decisions
-remain governed by the readiness matrix below.
+merging that substrate, while expressly retaining provider, aggregate-admission,
+mixed-version, and rollout-owner gates. This record predates the default-on
+policy tracked by issue #28517 and does not claim approval for that policy or
+for a deployment: the separately deferred decisions remain governed by the
+readiness matrix below.
 
 ## Contract preserved by this decision
 
@@ -56,22 +55,20 @@ ownership boundaries are in
 
 ## Deferred, separately approved rollout decisions
 
-The following are not implied by this implementation decision and remain
-blocked until their named evidence and owner decisions are recorded:
+The following operational decisions remain pending until their named evidence
+and owner decisions are recorded:
 
-1. enabling local Arrow LOAD for a deployment;
-2. enabling S3/stage or distributed execution, which additionally requires a
-   cross-worker aggregate admission/range-pressure design and real-provider
-   evidence;
-3. enabling remote execution during an upgrade, which requires exact-release
+1. accepting the cross-worker aggregate admission/range-pressure design and
+   real-provider evidence for the default-on S3/stage and distributed paths;
+2. accepting remote execution during an upgrade, which requires exact-release
    mixed-version validation and an explicit supported order; and
-4. deployment A/B, security/release, and SQL/execution/resource/FileService/
+3. deployment A/B, security/release, and SQL/execution/resource/FileService/
    storage owner acceptance.
 
-These separations are intentional: an operator can always retain the
-conservative rollback by leaving the gates unset, or stop new admissions by
-turning them off on every CN. `force-materialize=true` remains a diagnostic
-rollback for borrowed backing without changing SQL semantics.
+These separations are intentional: an operator can retain a conservative
+rollback by setting the gates to `false` on every CN, or stop new admissions by
+turning off `enabled`. `force-materialize=true` remains a diagnostic rollback
+for borrowed backing without changing SQL semantics.
 
 ## Acceptance evidence
 
@@ -83,6 +80,6 @@ File/Stream and multi-CN paths, rollback, and cancellation. The release
 readiness record carries the remaining evidence matrix rather than presenting
 it as complete.
 
-Any future change that makes one of the gates default-on, broadens the shared
+Any future change that makes one of the gates default-off, broadens the shared
 substrate to a new transport or ABI, or changes the remote compatibility
 contract requires a new decision revision and its own acceptance evidence.

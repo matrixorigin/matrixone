@@ -346,6 +346,26 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 	require.Equal(t, uint16(100), info.warningCount())
 }
 
+func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningCount(^uint64(0))
+	ses.AppendWarningCount(1)
+	ses.AppendWarningDiagnostic(1, strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2))
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, ^uint64(0), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+	require.LessOrEqual(t, len(info.msgs[0]), process.WarningDiagnosticMaxMessageBytes)
+}
+
+func TestAppendWarningBatchDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+}
+
 func TestHandleSetTransaction(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
