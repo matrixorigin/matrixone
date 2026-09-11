@@ -66,25 +66,25 @@ func TestHexProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 				Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{TableDef: tc.table}},
 			}}}
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 			require.NoError(t, validateHexMySQLNumericProtocol(proc, pn))
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
 			c := &Compile{proc: proc, pn: pn}
-			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 64")
+			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 65")
 			_, err := c.Run(0)
-			require.ErrorContains(t, err, "protocol version 64")
+			require.ErrorContains(t, err, "protocol version 65")
 		})
 	}
 
-	for _, version := range []any{defines.MORPCVersion63, int64(62), nil, "63"} {
+	for _, version := range []any{defines.MORPCVersion64, defines.MORPCVersion63, int64(62), nil, "64"} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateHexMySQLNumericProtocol(proc, expr), "protocol version 64")
+		require.ErrorContains(t, validateHexMySQLNumericProtocol(proc, expr), "protocol version 65")
 		require.NoError(t, validateHexMySQLNumericProtocol(
 			proc, hexCompatibilityExpr(5, plan2.MakePlan2Float64ConstExprWithType(15.5))))
 		require.NoError(t, validateHexMySQLNumericProtocol(proc, plan2.MakePlan2Int64ConstExprWithType(12)))
 	}
-	require.ErrorContains(t, validateHexMySQLNumericProtocol(nil, expr), "protocol version 64")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	require.ErrorContains(t, validateHexMySQLNumericProtocol(nil, expr), "protocol version 65")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 	require.Zero(t, testing.AllocsPerRun(100, func() {
 		require.NoError(t, validateHexMySQLNumericProtocol(proc, expr))
 	}))
@@ -94,7 +94,7 @@ func TestHexProtocolLatestVersionDoesNotWalkPlan(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 
 	nodes := make([]*plan.Node, 100)
 	for i := range nodes {
@@ -114,9 +114,10 @@ func legacyHexCast(arg *plan.Expr, target types.Type, explicit bool) *plan.Expr 
 	if explicit {
 		overload = 1
 	}
+	targetExpr := &plan.Expr{Typ: plan2.MakePlan2Type(&target), Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 	return &plan.Expr{Typ: plan2.MakePlan2Type(&target), Expr: &plan.Expr_F{F: &plan.Function{
 		Func:               &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, overload), ObjName: "cast"},
-		Args:               []*plan.Expr{arg},
+		Args:               []*plan.Expr{arg, targetExpr},
 		SyntaxExplicitCast: explicit,
 	}}}
 }
@@ -135,7 +136,7 @@ func tableHexExpressions(table *plan.TableDef) []*plan.Expr {
 	}
 }
 
-func TestHexMigratesLegacyPersistedExpressionsAtVersion64(t *testing.T) {
+func TestHexMigratesLegacyPersistedExpressionsAtVersion65(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -169,16 +170,19 @@ func TestHexMigratesLegacyPersistedExpressionsAtVersion64(t *testing.T) {
 	require.NoError(t, err)
 	serializedCatalog := new(plan.TableDef)
 	require.NoError(t, serializedCatalog.Unmarshal(wire))
+	require.Len(t, serializedCatalog.Checks[0].Check.GetF().GetArgs()[0].GetF().GetArgs(), 2)
 	executionTable := plan2.DeepCopyTableDef(serializedCatalog, true)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
-	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
-	for _, expr := range tableHexExpressions(executionTable) {
-		require.Equal(t, int32(5), hexExprOverload(expr))
+	for _, version := range []int64{defines.MORPCVersion63, defines.MORPCVersion64} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
+		for _, expr := range tableHexExpressions(executionTable) {
+			require.Equal(t, int32(5), hexExprOverload(expr))
+		}
+		require.Equal(t, "10", executionTable.Cols[3].Default.Expr.GetLit().GetSval())
 	}
-	require.Equal(t, "10", executionTable.Cols[3].Default.Expr.GetLit().GetSval())
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
 	for _, expr := range tableHexExpressions(executionTable) {
 		require.Equal(t, int32(9), hexExprOverload(expr))
@@ -226,6 +230,34 @@ func TestHexMigratesLegacyPersistedExpressionsAtVersion64(t *testing.T) {
 			require.Equal(t, tc.want, hexExprOverload(table.Checks[0].Check))
 		})
 	}
+
+	varcharType := types.New(types.T_varchar, 16, 0)
+	implicitBool := hexCompatibilityExpr(0, legacyHexCast(
+		plan2.MakePlan2BoolConstExprWithType(true), varcharType, false))
+	explicitBoolCast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		plan2.MakePlan2BoolConstExprWithType(true),
+		{Typ: plan2.MakePlan2Type(&varcharType), Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+	})
+	require.NoError(t, err)
+	_, explicitBoolCastOverload := function.DecodeOverloadID(explicitBoolCast.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(0), explicitBoolCastOverload)
+	explicitBoolCast.GetF().SyntaxExplicitCast = true
+	explicitBool := hexCompatibilityExpr(0, explicitBoolCast)
+	boolTable := &plan.TableDef{Checks: []*plan.CheckDef{{Check: implicitBool}, {Check: explicitBool}}}
+	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, boolTable))
+	require.Equal(t, int32(2), hexExprOverload(implicitBool))
+	require.Equal(t, types.T_int64, types.T(implicitBool.GetF().GetArgs()[0].Typ.Id))
+	require.Len(t, implicitBool.GetF().GetArgs()[0].GetF().GetArgs(), 2)
+	require.Equal(t, int32(0), hexExprOverload(explicitBool))
+
+	for i, want := range []string{"1", "31"} {
+		executor, err := colexec.NewExpressionExecutor(proc, boolTable.Checks[i].Check)
+		require.NoError(t, err)
+		out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, want, string(out.GetBytesAt(0)))
+		executor.Free()
+	}
 }
 
 func TestHexProtocolVersionChangeKeepsCompiledGenerationConsistent(t *testing.T) {
@@ -237,14 +269,14 @@ func TestHexProtocolVersionChangeKeepsCompiledGenerationConsistent(t *testing.T)
 	logicalPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
 		FilterList: []*plan.Expr{logicalExpr},
 	}}}}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
 	require.NoError(t, validateHexMySQLNumericProtocol(proc, logicalPlan))
 	compiled := constructRestrict(logicalPlan.GetQuery().GetNodes()[0], plan2.DeepCopyExprList(
 		logicalPlan.GetQuery().GetNodes()[0].GetFilterList()))
 
 	// Run validates the cached logical plan again after the negotiated version
 	// changes. It must not mutate that plan after operators own deep copies.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 	require.NoError(t, validateHexMySQLNumericProtocol(proc, logicalPlan))
 	require.Equal(t, int32(5), hexExprOverload(logicalExpr))
 	require.Equal(t, int32(5), hexExprOverload(compiled.FilterExprs[0]))
@@ -270,7 +302,7 @@ func TestHexRemoteProtocolSenderAndReceiver(t *testing.T) {
 		}
 		scope := &Scope{Proc: proc, RootOp: project}
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
 		legacyData, sendErr := encodeRemoteScope(scope, proc)
 		_, localEncodeErr := encodeScope(scope)
 		if id < function.HexMySQLNumericOverloadStart {
@@ -280,18 +312,18 @@ func TestHexRemoteProtocolSenderAndReceiver(t *testing.T) {
 			require.NoError(t, receiveErr)
 			require.NotNil(t, decoded)
 		} else {
-			require.ErrorContains(t, sendErr, "protocol version 64")
-			require.ErrorContains(t, localEncodeErr, "protocol version 64")
+			require.ErrorContains(t, sendErr, "protocol version 65")
+			require.ErrorContains(t, localEncodeErr, "protocol version 65")
 		}
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 		data, err := encodeRemoteScope(scope, proc)
 		require.NoError(t, err)
 		decoded, err := decodeScope(data, proc, true, nil)
 		require.NoError(t, err)
 		require.NotNil(t, decoded)
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
 		_, receiveErr := decodeScope(data, proc, true, nil)
 		child := new(pipeline.Pipeline)
 		require.NoError(t, child.Unmarshal(data))
@@ -300,8 +332,8 @@ func TestHexRemoteProtocolSenderAndReceiver(t *testing.T) {
 			require.NoError(t, receiveErr)
 			require.NoError(t, childErr)
 		} else {
-			require.ErrorContains(t, receiveErr, "protocol version 64")
-			require.ErrorContains(t, childErr, "protocol version 64")
+			require.ErrorContains(t, receiveErr, "protocol version 65")
+			require.ErrorContains(t, childErr, "protocol version 65")
 		}
 	}
 }

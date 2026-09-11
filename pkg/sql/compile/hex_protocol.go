@@ -32,7 +32,7 @@ func validateHexMySQLNumericProtocol(proc *process.Process, value any) error {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			v, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := v.(int64)
-			if ok && valid && version >= defines.MORPCVersion64 {
+			if ok && valid && version >= defines.MORPCVersion65 {
 				return nil
 			}
 		}
@@ -44,5 +44,5 @@ func validateHexMySQLNumericProtocol(proc *process.Process, value any) error {
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"MySQL numeric HEX semantics require all CNs to support MORPC protocol version %d",
-		defines.MORPCVersion64)
+		defines.MORPCVersion65)
 }

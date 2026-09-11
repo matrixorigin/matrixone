@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// HexMySQLNumericOverloadStart separates the pre-MORPCVersion64 HEX
+	// HexMySQLNumericOverloadStart separates the pre-MORPCVersion65 HEX
 	// identities from corrected numeric identities. Keep IDs 0..7 and their
 	// executors stable for plans compiled by older versions.
 	HexMySQLNumericOverloadStart = 8
@@ -31,7 +31,7 @@ const (
 )
 
 // MigrateLegacyHexOverload upgrades one persisted HEX expression after every CN
-// supports MORPCVersion64. Callers supply an execution-owned TableDef copy;
+// supports MORPCVersion65. Callers supply an execution-owned TableDef copy;
 // catalog protobufs remain unchanged.
 func MigrateLegacyHexOverload(expr *plan.Expr) {
 	fn := expr.GetF()
@@ -39,7 +39,7 @@ func MigrateLegacyHexOverload(expr *plan.Expr) {
 		return
 	}
 	functionID, overloadID := DecodeOverloadID(fn.Func.Obj)
-	if functionID != HEX || (overloadID != 4 && overloadID != 5) {
+	if functionID != HEX {
 		return
 	}
 
@@ -47,21 +47,45 @@ func MigrateLegacyHexOverload(expr *plan.Expr) {
 	if arg == nil {
 		return
 	}
-	if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && len(cast.Args) == 1 {
+	cast := arg.GetF()
+	if cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && len(cast.Args) >= 1 {
 		_, castOverload := DecodeOverloadID(cast.Func.Obj)
-		if castOverload != 0 || cast.SyntaxExplicitCast {
-			if overloadID == 4 {
-				fn.Func.Obj = EncodeOverloadID(HEX, HexExplicitFloat32Overload)
+		explicit := castOverload != 0 || cast.SyntaxExplicitCast
+		source := cast.Args[0]
+		if overloadID == 0 && !explicit && source != nil && types.T(source.Typ.Id) == types.T_bool &&
+			types.T(arg.Typ.Id).IsMySQLString() {
+			targetType := plan.Type{Id: int32(types.T_int64)}
+			target := &plan.Expr{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			if len(cast.Args) == 1 {
+				cast.Args = append(cast.Args, target)
 			} else {
-				fn.Func.Obj = EncodeOverloadID(HEX, HexExplicitFloat64Overload)
+				cast.Args[1] = target
+				cast.Args = cast.Args[:2]
 			}
+			arg.Typ = targetType
+			fn.Func.Obj = EncodeOverloadID(HEX, 2)
 			return
 		}
-		if decimalOverload, ok := hexDecimalOverload(types.T(cast.Args[0].Typ.Id)); ok {
-			fn.Args[0] = cast.Args[0]
-			fn.Func.Obj = EncodeOverloadID(HEX, decimalOverload)
-			return
+		if overloadID == 4 || overloadID == 5 {
+			if explicit {
+				if overloadID == 4 {
+					fn.Func.Obj = EncodeOverloadID(HEX, HexExplicitFloat32Overload)
+				} else {
+					fn.Func.Obj = EncodeOverloadID(HEX, HexExplicitFloat64Overload)
+				}
+				return
+			}
+			if source != nil {
+				if decimalOverload, ok := hexDecimalOverload(types.T(source.Typ.Id)); ok {
+					fn.Args[0] = source
+					fn.Func.Obj = EncodeOverloadID(HEX, decimalOverload)
+					return
+				}
+			}
 		}
+	}
+	if overloadID != 4 && overloadID != 5 {
+		return
 	}
 	if decimalOverload, ok := hexDecimalOverload(types.T(arg.Typ.Id)); ok {
 		fn.Func.Obj = EncodeOverloadID(HEX, decimalOverload)

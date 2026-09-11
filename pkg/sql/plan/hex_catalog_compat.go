@@ -74,7 +74,7 @@ func supportsHexMySQLNumericProtocol(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion64
+	return ok && valid && version >= defines.MORPCVersion65
 }
 
 func rebuildFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
