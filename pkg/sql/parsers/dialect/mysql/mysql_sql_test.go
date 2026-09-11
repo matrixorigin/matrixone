@@ -2472,7 +2472,7 @@ var (
 			input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 		}, {
 			input:  "select extract(year from l_shipdate) as l_year from t",
-			output: "select extract(year, l_shipdate) as l_year from t",
+			output: "select extract(year from l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
 			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
@@ -5766,13 +5766,60 @@ func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	createStmt, ok := stmt.(*tree.CreateSQLTask)
 	require.True(t, ok)
 	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour from current_timestamp())")
 	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
 
 	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
 	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "extract(hour from current_timestamp())")
 	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		sql      string
+		contains []string
+		rejects  []string
+		opts     []tree.FmtCtxOption
+	}{
+		{
+			name:     "nested timestampadd",
+			sql:      "select timestampadd(microsecond, 1, timestampadd(hour, 2, ts)) from t",
+			contains: []string{"timestampadd(microsecond, 1, timestampadd(hour, 2, ts))"},
+			rejects:  []string{"'microsecond'", "'hour'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "extract from timestampadd",
+			sql:      "select extract(microsecond from timestampadd(second, 3, ts)) from t",
+			contains: []string{"extract(microsecond from timestampadd(second, 3, ts))"},
+			rejects:  []string{"extract(microsecond,", "'second'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "quoted data and identifier",
+			sql:      "select extract(hour from `from`), 'extract(day from x)' as `timestampadd` from t",
+			contains: []string{"extract(hour from `from`)", "'extract(day from x)'", "`timestampadd`"},
+			rejects:  []string{"extract(hour,"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, test.opts...)
+			for _, fragment := range test.contains {
+				require.Contains(t, formatted, fragment)
+			}
+			for _, fragment := range test.rejects {
+				require.NotContains(t, formatted, fragment)
+			}
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, test.opts...))
+		})
+	}
 }
 
 func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
