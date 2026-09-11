@@ -137,6 +137,9 @@ func (c *Compile) Compile(
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -393,6 +396,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// Cached plans can outlive the negotiated cluster capability.
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	var txnOperator = c.proc.GetTxnOperator()

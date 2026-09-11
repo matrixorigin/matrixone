@@ -6585,16 +6585,82 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func HexFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(v float32) string {
-		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
-		return fmt.Sprintf("%X", uint64(math.Round(float64(v))))
-	}, selectList)
+	return hexFloat[float32](ivecs, result, proc, length, selectList, false)
 }
 
 func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float64](ivecs, result, proc, length, func(v float64) string {
-		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
-		return fmt.Sprintf("%X", uint64(math.Round(v)))
+	return hexFloat[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// HexExplicitFloat32 and HexExplicitFloat64 implement Item_typecast_real's
+// integer conversion. MySQL truncates an explicit REAL CAST, while ordinary
+// REAL constants, expressions, and fields use round-to-nearest-even.
+func HexExplicitFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float32](ivecs, result, proc, length, selectList, true)
+}
+
+func HexExplicitFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float64](ivecs, result, proc, length, selectList, true)
+}
+
+func hexFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
+	return opUnaryFixedToStr[T](ivecs, result, proc, length, func(value T) string {
+		converted := float64(value)
+		if truncate {
+			converted = math.Trunc(converted)
+		} else {
+			converted = math.RoundToEven(converted)
+		}
+		switch {
+		case math.IsNaN(converted):
+			converted = 0
+		case converted >= float64(math.MaxInt64):
+			return hexEncodeInt64(math.MaxInt64)
+		case converted <= float64(math.MinInt64):
+			return hexEncodeInt64(math.MinInt64)
+		}
+		return hexEncodeInt64(int64(converted))
+	}, selectList)
+}
+
+func HexDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStr[types.Decimal64](ivecs, result, proc, length, func(value types.Decimal64) string {
+		return hexEncodeInt64(int64(value.Round(scale, 0, true)))
+	}, selectList)
+}
+
+func HexDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	minimum := types.Decimal128FromInt64(math.MinInt64)
+	maximum := types.Decimal128FromInt64(math.MaxInt64)
+	return opUnaryFixedToStr[types.Decimal128](ivecs, result, proc, length, func(value types.Decimal128) string {
+		rounded := value.Round(scale, 0, true)
+		switch {
+		case rounded.Less(minimum):
+			return hexEncodeInt64(math.MinInt64)
+		case maximum.Less(rounded):
+			return hexEncodeInt64(math.MaxInt64)
+		default:
+			return hexEncodeInt64(int64(rounded.B0_63))
+		}
+	}, selectList)
+}
+
+func HexDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	minimum := types.Decimal256FromInt64(math.MinInt64)
+	maximum := types.Decimal256FromInt64(math.MaxInt64)
+	return opUnaryFixedToStr[types.Decimal256](ivecs, result, proc, length, func(value types.Decimal256) string {
+		rounded := value.Round(scale, 0, true)
+		switch {
+		case rounded.Less(minimum):
+			return hexEncodeInt64(math.MinInt64)
+		case maximum.Less(rounded):
+			return hexEncodeInt64(math.MaxInt64)
+		default:
+			return hexEncodeInt64(int64(rounded.B0_63))
+		}
 	}, selectList)
 }
 

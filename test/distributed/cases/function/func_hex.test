@@ -12,3 +12,61 @@ SELECT hex("おはようございます");
 SELECT hex("-255");
 SELECT hex(0x62);
 SELECT hex(b'1101100');
+
+-- @case
+-- @desc: issue #28457 - preserve MySQL numeric domains and prepared runtime dispatch
+-- @label:bvt
+
+drop database if exists hex_issue_28457;
+create database hex_issue_28457;
+use hex_issue_28457;
+
+select hex(true), hex(false),
+       hex(cast('15.5' as decimal(18,1))), hex(cast('-15.5' as decimal(18,1))),
+       hex(cast(15.5 as double)), hex(cast(-15.5 as double)), hex(cast(456.789 as double));
+
+create table hex_numeric_source (
+    id int,
+    b bool,
+    d64 decimal(18,1),
+    d128 decimal(38,0),
+    d256 decimal(65,0),
+    f float,
+    d double
+);
+insert into hex_numeric_source values
+    (1, true, 15.5, 9007199254740993, 9223372036854775808, 14.5, 15.5),
+    (2, false, -15.5, -9223372036854775809, -9223372036854775809, -14.5, -15.5),
+    (3, null, null, null, null, null, null);
+select id, hex(b), hex(d64), hex(d128), hex(d256), hex(f), hex(d)
+from hex_numeric_source order by id;
+
+create table hex_numeric_ctas as
+select id, hex(b) as hb, hex(d64) as hd64, hex(d128) as hd128,
+       hex(d256) as hd256, hex(f) as hf, hex(d) as hd
+from hex_numeric_source where id <= 2;
+select * from hex_numeric_ctas order by id;
+
+prepare hex_runtime from 'select hex(?)';
+set @hex_arg = 15.5;
+execute hex_runtime using @hex_arg;
+set @hex_arg = -15.5;
+execute hex_runtime using @hex_arg;
+set @hex_arg = true;
+execute hex_runtime using @hex_arg;
+set @hex_arg = '15.5';
+execute hex_runtime using @hex_arg;
+set @hex_arg = cast(15.5 as double);
+execute hex_runtime using @hex_arg;
+set @hex_arg = null;
+execute hex_runtime using @hex_arg;
+deallocate prepare hex_runtime;
+
+prepare hex_explicit_real from 'select hex(cast(? as double))';
+set @hex_arg = 15.5;
+execute hex_explicit_real using @hex_arg;
+set @hex_arg = -15.5;
+execute hex_explicit_real using @hex_arg;
+deallocate prepare hex_explicit_real;
+
+drop database hex_issue_28457;

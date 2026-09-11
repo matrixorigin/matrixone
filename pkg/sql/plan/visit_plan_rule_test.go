@@ -29,9 +29,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
+	require.True(t, preparedFunctionArgUsesSQLExecuteNumericSource(nil, "hex", 0, 1))
+	require.False(t, preparedFunctionArgUsesSQLExecuteNumericSource(nil, "hex", 1, 1))
+	require.False(t, preparedFunctionArgUsesSQLExecuteNumericSource(nil, "hex", 0, 2))
+
+	ctx := context.Background()
+	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex from 'select hex(?)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	preparedHex := findPlanFunctionExpr(preparedPlan, "hex")
+	require.NotNil(t, preparedHex)
+	_, preparedOverload := function.DecodeOverloadID(preparedHex.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(0), preparedOverload)
+
+	for _, tc := range []struct {
+		name       string
+		param      ParamValue
+		overloadID int32
+		argType    types.T
+		want       string
+	}{
+		{
+			name: "decimal", param: ParamValue{
+				Value: "15.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
+			},
+			overloadID: 8, argType: types.T_decimal64, want: "10",
+		},
+		{
+			name: "bool", param: ParamValue{
+				Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+			},
+			overloadID: 2, argType: types.T_int64, want: "1",
+		},
+		{
+			name: "numeric string remains bytes", param: ParamValue{
+				Value: "15.5", SourceType: types.New(types.T_varchar, 4, 0), HasSourceType: true,
+			},
+			overloadID: 0, argType: types.T_varchar, want: "31352E35",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, preparedPlan, []any{tc.param})
+			require.NoError(t, fillErr)
+			require.True(t, specialized)
+			hexExpr := findPlanFunctionExpr(filled, "hex")
+			require.NotNil(t, hexExpr)
+			_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.overloadID, overloadID)
+			require.Equal(t, tc.argType, types.T(hexExpr.GetF().GetArgs()[0].Typ.Id), hexExpr.String())
+
+			proc := testutil.NewProcess(t)
+			executor, execErr := colexec.NewExpressionExecutor(proc, hexExpr)
+			require.NoError(t, execErr)
+			defer executor.Free()
+			out, execErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, execErr)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
+
+	_, unchangedOverload := function.DecodeOverloadID(
+		findPlanFunctionExpr(preparedPlan, "hex").GetF().GetFunc().GetObj())
+	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
+}
 
 func TestRestorePreparedRuntimeParamRefsKeepsTypedCast(t *testing.T) {
 	literal := &planpb.Expr{

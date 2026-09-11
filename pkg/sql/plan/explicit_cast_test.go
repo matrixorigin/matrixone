@@ -65,6 +65,45 @@ func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	require.True(t, DeepCopyExpr(roundTrip).GetF().GetSyntaxExplicitCast())
 }
 
+func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		source     *Expr
+		target     types.Type
+		overloadID int32
+	}{
+		{
+			name:       "float32",
+			source:     MakePlan2Float64ConstExprWithType(15.5),
+			target:     types.T_float32.ToType(),
+			overloadID: 11,
+		},
+		{
+			name:       "float64",
+			source:     MakePlan2Float64ConstExprWithType(15.5),
+			target:     types.T_float64.ToType(),
+			overloadID: 12,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			explicit, err := appendExplicitCastBeforeExpr(
+				ctx, tc.source, makePlan2TypeValue(&tc.target))
+			require.NoError(t, err)
+			hexExpr, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*Expr{explicit})
+			require.NoError(t, err)
+			_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.overloadID, overloadID)
+		})
+	}
+
+	ordinary, err := BindFuncExprImplByPlanExpr(
+		ctx, "hex", []*Expr{MakePlan2Float64ConstExprWithType(15.5)})
+	require.NoError(t, err)
+	_, overloadID := function.DecodeOverloadID(ordinary.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(5), overloadID)
+}
+
 func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {

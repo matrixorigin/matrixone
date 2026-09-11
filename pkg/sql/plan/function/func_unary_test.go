@@ -5874,6 +5874,170 @@ func TestHexInt64(t *testing.T) {
 	}
 }
 
+func TestHexNumericTypeResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		overloadID int32
+		cast       bool
+		castType   types.T
+	}{
+		{name: "bool", typ: types.T_bool.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 8},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 9},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 10},
+		{name: "float32", typ: types.T_float32.ToType(), overloadID: 4},
+		{name: "float64", typ: types.T_float64.ToType(), overloadID: 5},
+		{name: "varchar", typ: types.T_varchar.ToType(), overloadID: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			castTypes, cast := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, tc.cast, cast)
+			if tc.cast {
+				require.Equal(t, tc.castType, castTypes[0].Oid)
+			}
+		})
+	}
+}
+
+func TestHexFloatUsesSignedRoundToEven(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "10", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF0", "1C9", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexExplicitFloatTruncates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "F", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF1", "1C8", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal64Strings := []string{"15.5", "-15.5", "14.5", "-14.5", "0.0"}
+	decimal64Values := make([]types.Decimal64, len(decimal64Strings))
+	for i, value := range decimal64Strings {
+		parsed, scale, err := types.Parse64(value)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), scale)
+		decimal64Values[i] = parsed
+	}
+	decimal128Strings := []string{"9007199254740993", "9223372036854775808", "-9223372036854775809", "0"}
+	decimal128Values := make([]types.Decimal128, len(decimal128Strings))
+	for i, value := range decimal128Strings {
+		parsed, scale, err := types.Parse128(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal128Values[i] = parsed
+	}
+	decimal256Strings := []string{
+		"99999999999999999999999999999999999999999999999999999999999999999",
+		"-9999999999999999999999999999999999999999999999999999999999999999",
+		"0",
+	}
+	decimal256Values := make([]types.Decimal256, len(decimal256Strings))
+	for i, value := range decimal256Strings {
+		parsed, scale, err := types.Parse256(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal256Values[i] = parsed
+	}
+
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		values     any
+		overloadID int32
+		want       []string
+	}{
+		{
+			name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), values: decimal64Values, overloadID: 8,
+			want: []string{"10", "FFFFFFFFFFFFFFF0", "F", "FFFFFFFFFFFFFFF1", ""},
+		},
+		{
+			name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), values: decimal128Values, overloadID: 9,
+			want: []string{"20000000000001", "7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+		{
+			name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), values: decimal256Values, overloadID: 10,
+			want: []string{"7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			input := newVectorByType(proc.Mp(), tc.typ, tc.values, nil)
+			defer input.Free(proc.Mp())
+			input.GetNulls().Add(uint64(len(tc.want) - 1))
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(tc.want))
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			for i, want := range tc.want {
+				if i == len(tc.want)-1 {
+					require.True(t, out.IsNull(uint64(i)))
+					continue
+				}
+				require.Equal(t, want, string(out.GetBytesAt(i)))
+			}
+		})
+	}
+}
+
 // HexArray
 func initHexArrayTestCase() []tcTemp {
 
