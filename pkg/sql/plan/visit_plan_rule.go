@@ -3373,6 +3373,12 @@ func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, 
 		if err != nil {
 			return nil, false
 		}
+		// Materializing the execute-time text again must not discard the marker
+		// provenance. The specialized plan may be cached and restored to a
+		// late-bound ParamRef for the next execution.
+		if literal.Src != nil {
+			attachPreparedRuntimeParamSource(bound, DeepCopyExpr(literal.Src))
+		}
 		arg = bound
 	}
 	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)

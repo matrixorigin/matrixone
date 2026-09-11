@@ -761,6 +761,30 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	require.Equal(t, types.T_bool, runtimeType.Oid)
 }
 
+func TestUnwrapImplicitPreparedParamCastRetainsParamSource(t *testing.T) {
+	ctx := context.Background()
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "3.33"},
+			Src:   source,
+		}},
+	}
+	targetType := types.T_int64.ToType()
+	cast, err := makePlan2CastExpr(ctx, literal, makePlan2Type(&targetType))
+	require.NoError(t, err)
+
+	rewritten, ok := unwrapImplicitPreparedParamCast(ctx, cast, true)
+	require.True(t, ok)
+	position, found := preparedRuntimeSourceParamPosition(rewritten)
+	require.True(t, found)
+	require.Equal(t, 0, position)
+}
+
 func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
 	params := []*planpb.Expr{
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -8}}}},
