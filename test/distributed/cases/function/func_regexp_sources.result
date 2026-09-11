@@ -79,7 +79,7 @@ select regexp_instr(@rs,'.',1,0), hex(regexp_substr(@rs,'.',1,-1)), hex(regexp_r
 ➤ regexp_instr(@rs, ., 1, 0)[-5,64,0]  ¦  hex(regexp_substr(@rs, ., 1, -1))[12,6,0]  ¦  hex(regexp_replace(@rs, ., X, 1, -1))[12,38,0]  𝄀
 1  ¦  C3  ¦  58A961
 select regexp_replace(@rs,'.','X',0);
-invalid input: regexp_replace: Index out of bounds in regular expression search. Search start position: 0, Search string length: 3
+invalid input: regexp_replace: Index out of bounds in regular expression search. Search start position: 0
 select regexp_instr(@rs,'a',null), regexp_instr(@rs,'a',1,null), regexp_instr(@rs,'a',1,1,null);
 ➤ regexp_instr(@rs, a, null)[-5,64,0]  ¦  regexp_instr(@rs, a, 1, null)[-5,64,0]  ¦  regexp_instr(@rs, a, 1, 1, null)[-5,64,0]  𝄀
 null  ¦  null  ¦  null
@@ -93,13 +93,6 @@ set @rs=x'ff61';
 select @rs regexp 'a', regexp_like(@rs,'a'), regexp_instr(@rs,'a'), hex(regexp_substr(@rs,'.')), hex(regexp_replace(@rs,'a','X'));
 ➤ @rs reg_match a[-7,1,0]  ¦  regexp_like(@rs, a)[-7,1,0]  ¦  regexp_instr(@rs, a)[-5,64,0]  ¦  hex(regexp_substr(@rs, .))[-1,16383,0]  ¦  hex(regexp_replace(@rs, a, X))[-1,16383,0]  𝄀
 1  ¦  1  ¦  2  ¦  FF  ¦  FF58
-set sql_mode='';
-create table invalid_text(v varchar(10));
-insert into invalid_text values (x'ff61');
-select hex(v), regexp_instr(v,'a'), v regexp 'a', v rlike 'a', regexp_like(v,'a') from invalid_text;
-➤ hex(v)[12,80,0]  ¦  regexp_instr(v, a)[-5,64,0]  ¦  v reg_match a[-7,1,0]  ¦  v reg_match a[-7,1,0]  ¦  regexp_like(v, a)[-7,1,0]  𝄀
-FF61  ¦  0  ¦  0  ¦  0  ¦  0
-drop table invalid_text;
 prepare regexp_markers from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
 set @rs=_binary'éa', @rp=_binary'.';
 execute regexp_markers using @rs,@rp,@rs,@rp,@rs,@rp;

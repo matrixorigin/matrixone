@@ -91,6 +91,13 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 		connection, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer connection.Close()
+		withStatement := func(t *testing.T, query string, run func(*sql.Stmt)) {
+			t.Helper()
+			stmt, err := connection.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stmt.Close()) }()
+			run(stmt)
+		}
 
 		for _, query := range []string{
 			"select regexp_instr(?, _binary'a')",
@@ -99,7 +106,9 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 		} {
 			stmt, err := connection.PrepareContext(ctx, query)
 			if stmt != nil {
-				require.NoError(t, stmt.Close())
+				func() {
+					defer func() { require.NoError(t, stmt.Close()) }()
+				}()
 			}
 			require.Error(t, err, "COM_STMT_PREPARE must reject before any runtime BLOB value exists")
 			var sqlError *mysql.MySQLError
@@ -161,28 +170,25 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 			{"invalid_pattern_like", "select regexp_like(?, ?)", "abc", "a\xffb", [4]string{"1", "1", "0", "0"}, false},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				stmt, err := connection.PrepareContext(ctx, tc.query)
-				require.NoError(t, err)
-				defer stmt.Close()
-				for _, mask := range []int{1, 0, 1, 2, 0, 2, 3, 0, 3} {
-					got := observe(t, stmt, mask, tc.subject, tc.pattern)
-					require.Equal(t, sql.NullString{String: tc.want[mask], Valid: true}, got.value, "mask=%d", mask)
-					if tc.textResult {
-						wantType := "VARCHAR"
-						if tc.name != "substr_encoding" {
-							// MySQL uses LONGTEXT for REPLACE's expansion bound;
-							// MO represents its unbounded text domain as TEXT.
-							wantType = "TEXT"
+				withStatement(t, tc.query, func(stmt *sql.Stmt) {
+					for _, mask := range []int{1, 0, 1, 2, 0, 2, 3, 0, 3} {
+						got := observe(t, stmt, mask, tc.subject, tc.pattern)
+						require.Equal(t, sql.NullString{String: tc.want[mask], Valid: true}, got.value, "mask=%d", mask)
+						if tc.textResult {
+							wantType := "VARCHAR"
+							if tc.name != "substr_encoding" {
+								// MySQL uses LONGTEXT for REPLACE's expansion bound;
+								// MO represents its unbounded text domain as TEXT.
+								wantType = "TEXT"
+							}
+							require.Equal(t, wantType, got.typ, "marker metadata must not depend on the current BLOB packet")
 						}
-						require.Equal(t, wantType, got.typ, "marker metadata must not depend on the current BLOB packet")
+						withStatement(t, tc.query, func(fresh *sql.Stmt) {
+							freshGot := observe(t, fresh, mask, tc.subject, tc.pattern)
+							require.Equal(t, freshGot, got, "reuse must equal a fresh statement")
+						})
 					}
-					fresh, err := connection.PrepareContext(ctx, tc.query)
-					require.NoError(t, err)
-					defer fresh.Close()
-					freshGot := observe(t, fresh, mask, tc.subject, tc.pattern)
-					require.NoError(t, fresh.Close())
-					require.Equal(t, freshGot, got, "reuse must equal a fresh statement")
-				}
+				})
 			})
 		}
 		t.Run("instr_rebased_text_suffix", func(t *testing.T) {
@@ -197,11 +203,10 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				{"a\xf0bb", "a", 0}, // F0-FF require four remaining bytes
 				{"a\xf5b", "a", 0},
 			} {
-				stmt, err := connection.PrepareContext(ctx, "select regexp_instr(?, ?, 2)")
-				require.NoError(t, err)
-				got := observe(t, stmt, 0, tc.subject, tc.pattern)
-				require.NoError(t, stmt.Close())
-				require.Equal(t, sql.NullString{String: fmt.Sprint(tc.position), Valid: true}, got.value, tc)
+				withStatement(t, "select regexp_instr(?, ?, 2)", func(stmt *sql.Stmt) {
+					got := observe(t, stmt, 0, tc.subject, tc.pattern)
+					require.Equal(t, sql.NullString{String: fmt.Sprint(tc.position), Valid: true}, got.value, tc)
+				})
 			}
 		})
 		t.Run("malformed_text_errors", func(t *testing.T) {
@@ -213,19 +218,40 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 					"select ? regexp ?", "select regexp_like(?, ?)", "select regexp_instr(?, ?)",
 					"select regexp_substr(?, ?)", "select regexp_replace(?, ?, 'X')",
 				} {
-					stmt, err := connection.PrepareContext(ctx, query)
-					require.NoError(t, err)
-					wire.mu.Lock()
-					wire.mask = 0
-					wire.mu.Unlock()
+					withStatement(t, query, func(stmt *sql.Stmt) {
+						wire.mu.Lock()
+						wire.mask = 0
+						wire.mu.Unlock()
+						var value any
+						err := stmt.QueryRowContext(ctx, subject, "a").Scan(&value)
+						require.Error(t, err, "%s %x", query, subject)
+						var sqlError *mysql.MySQLError
+						require.ErrorAs(t, err, &sqlError)
+						require.Equal(t, uint16(3854), sqlError.Number)
+					})
+				}
+			}
+		})
+		t.Run("pattern_and_position_precede_operand_conversion", func(t *testing.T) {
+			for _, tc := range []struct {
+				query       string
+				first, last any
+			}{
+				{"select regexp_replace(?, ?, 'X')", "a\xc3b", "["},
+				{"select regexp_replace('abc', ?, ?)", "[", "X\xc3Y"},
+				{"select regexp_replace('abc', ?, ?)", "", "X\xc3Y"},
+				{"select regexp_substr(?, 'a', ?)", "a\xc3b", int64(0)},
+				{"select regexp_replace(?, 'a', 'X', ?)", "a\xc3b", int64(-1)},
+				{"select regexp_replace('abc', 'a', ?, ?)", "X\xc3Y", int64(0)},
+			} {
+				withStatement(t, tc.query, func(stmt *sql.Stmt) {
 					var value any
-					err = stmt.QueryRowContext(ctx, subject, "a").Scan(&value)
-					require.Error(t, err, "%s %x", query, subject)
+					err := stmt.QueryRowContext(ctx, tc.first, tc.last).Scan(&value)
+					require.Error(t, err, tc.query)
 					var sqlError *mysql.MySQLError
 					require.ErrorAs(t, err, &sqlError)
-					require.Equal(t, uint16(3854), sqlError.Number)
-					require.NoError(t, stmt.Close())
-				}
+					require.NotEqual(t, uint16(3854), sqlError.Number, tc.query)
+				})
 			}
 		})
 		t.Run("replace_null_precedes_malformed_subject", func(t *testing.T) {
@@ -235,27 +261,25 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				"select regexp_replace(?, 'a', 'X', ?)",
 				"select regexp_replace(?, 'a', 'X', 1, ?)",
 			} {
-				stmt, err := connection.PrepareContext(ctx, query)
-				require.NoError(t, err)
-				var value sql.NullString
-				require.NoError(t, stmt.QueryRowContext(ctx, "a\xc3b", nil).Scan(&value), query)
-				require.False(t, value.Valid)
-				require.NoError(t, stmt.Close())
+				withStatement(t, query, func(stmt *sql.Stmt) {
+					var value sql.NullString
+					require.NoError(t, stmt.QueryRowContext(ctx, "a\xc3b", nil).Scan(&value), query)
+					require.False(t, value.Valid)
+				})
 			}
-			stmt, err := connection.PrepareContext(ctx, "select regexp_replace(?, 'a', ?)")
-			require.NoError(t, err)
-			var value sql.NullString
-			err = stmt.QueryRowContext(ctx, nil, "X\xc3Y").Scan(&value)
-			require.Error(t, err)
-			var sqlError *mysql.MySQLError
-			require.ErrorAs(t, err, &sqlError)
-			require.Equal(t, uint16(3854), sqlError.Number)
-			require.NoError(t, stmt.Close())
+			withStatement(t, "select regexp_replace(?, 'a', ?)", func(stmt *sql.Stmt) {
+				var value sql.NullString
+				err := stmt.QueryRowContext(ctx, nil, "X\xc3Y").Scan(&value)
+				require.Error(t, err)
+				var sqlError *mysql.MySQLError
+				require.ErrorAs(t, err, &sqlError)
+				require.Equal(t, uint16(3854), sqlError.Number)
+			})
 		})
 		t.Run("error_and_null_reuse", func(t *testing.T) {
 			stmt, err := connection.PrepareContext(ctx, "select regexp_substr(?, ?)")
 			require.NoError(t, err)
-			defer stmt.Close()
+			defer func() { require.NoError(t, stmt.Close()) }()
 			wire.mu.Lock()
 			wire.mask = 1
 			wire.mu.Unlock()

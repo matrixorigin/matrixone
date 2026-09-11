@@ -15,7 +15,7 @@
 package function
 
 import (
-	"encoding/hex"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -96,7 +96,7 @@ func regexpTextPrefix(value string) (string, error) {
 			continue
 		}
 		return "", moerr.NewCannotConvertStringNoCtx(
-			hex.EncodeToString([]byte(value[i:min(i+4, len(value))])), "utf8mb4", "utf16le")
+			regexpEscapedConversionValue(value), "utf8mb4", "utf16le")
 	}
 	return value, nil
 }
@@ -117,9 +117,16 @@ func regexpUTF8InputWidth(lead byte) int {
 	}
 }
 
-func regexpValidTextPrefix(value string) string {
-	prefix, _ := regexpTextPrefix(value)
-	return prefix
+func regexpEscapedConversionValue(value string) string {
+	var output strings.Builder
+	for i := 0; i < len(value) && output.Len() < 64; i++ {
+		if value[i] >= 0x20 && value[i] <= 0x7e && value[i] != '\\' {
+			output.WriteByte(value[i])
+		} else {
+			fmt.Fprintf(&output, "\\x%02X", value[i])
+		}
+	}
+	return output.String()
 }
 
 // Result encoding is a separate decision from matching. A bare user variable

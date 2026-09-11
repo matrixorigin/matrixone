@@ -1117,9 +1117,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
@@ -1165,9 +1162,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			pos, null3 := positions.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
 			if null2 {
@@ -1215,9 +1209,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
@@ -1275,9 +1266,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
 			if null2 {
 				if err := rs.Append(0, true); err != nil {
@@ -1318,9 +1306,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			pos, null3 := positions.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
 			if null2 {
@@ -1361,9 +1346,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
@@ -1407,9 +1389,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			resOp, null5 := resultOption.GetValue(i)
@@ -1447,10 +1426,27 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 	return op.builtInRegexpPredicate(parameters, result, length, selectList, true, false)
 }
 
+func (op *opBuiltInRegexp) prepareRegexpReplaceRow(
+	parameters []*vector.Vector, row int, pattern, replacement string,
+	position int64, positionNull, replacementNull, matchingBinary bool,
+) (string, error) {
+	if err := op.regMap.validateCompiledRegexpWithMode(pattern, matchingBinary, "regexp_replace"); err != nil {
+		return "", err
+	}
+	if !positionNull && position <= 0 {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"regexp_replace: Index out of bounds in regular expression search. Search start position: %d", position)
+	}
+	if replacementNull || parameters[2].GetIsBinaryStringAt(row) {
+		return replacement, nil
+	}
+	return regexpTextPrefix(replacement)
+}
+
 func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := newRegexpStringParameter(parameters, 0, true)
-	p2 := newRegexpStringParameter(parameters, 1, true)
-	p3 := newRegexpStringParameter(parameters, 2, true)
+	p1 := newRegexpStringParameter(parameters, 0, false)
+	p2 := newRegexpStringParameter(parameters, 1, false)
+	p3 := newRegexpStringParameter(parameters, 2, false)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	switch len(parameters) {
@@ -1465,13 +1461,17 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
-			if err := p3.Error(); err != nil {
-				return err
-			}
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			replacement := functionUtil.QuickBytesToStr(v3)
+			var prepareErr error
+			if !null2 {
+				replacement, prepareErr = op.prepareRegexpReplaceRow(
+					parameters, int(i), functionUtil.QuickBytesToStr(v2), replacement,
+					1, false, null3, matchingIsBinary)
+			}
+			if prepareErr != nil {
+				return prepareErr
+			}
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1487,10 +1487,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				if err := p1.Error(); err != nil {
-					return err
-				}
-				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, 1, 0, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
 				matchingIsBinary = regexpResultUsesBinary(parameters, int(i))
@@ -1518,14 +1514,18 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
-			if err := p3.Error(); err != nil {
-				return err
-			}
 			v4, null4 := p4.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			replacement := functionUtil.QuickBytesToStr(v3)
+			var prepareErr error
+			if !null2 {
+				replacement, prepareErr = op.prepareRegexpReplaceRow(
+					parameters, int(i), functionUtil.QuickBytesToStr(v2), replacement,
+					v4, null4, null3, matchingIsBinary)
+			}
+			if prepareErr != nil {
+				return prepareErr
+			}
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1541,10 +1541,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				if err := p1.Error(); err != nil {
-					return err
-				}
-				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, v4, 0, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
 				matchingIsBinary = regexpResultUsesBinary(parameters, int(i))
@@ -1573,15 +1569,19 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p2.Error(); err != nil {
-				return err
-			}
-			if err := p3.Error(); err != nil {
-				return err
-			}
 			v4, null4 := p4.GetValue(i)
 			v5, null5 := p5.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			replacement := functionUtil.QuickBytesToStr(v3)
+			var prepareErr error
+			if !null2 {
+				replacement, prepareErr = op.prepareRegexpReplaceRow(
+					parameters, int(i), functionUtil.QuickBytesToStr(v2), replacement,
+					v4, null4, null3, matchingIsBinary)
+			}
+			if prepareErr != nil {
+				return prepareErr
+			}
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1597,10 +1597,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				if err := p1.Error(); err != nil {
-					return err
-				}
-				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, v4, v5, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
 				matchingIsBinary = regexpResultUsesBinary(parameters, int(i))
@@ -2057,6 +2053,10 @@ func (rs *regexpSet) regularSubstrWithMode(pat string, str string, pos, occurren
 	reg, err := rs.getCompiledRegexpWithMode(pat, subjectIsBinary, "regexp_substr")
 	if err != nil {
 		return false, "", err
+	}
+	if pos <= 0 {
+		return false, "", moerr.NewInvalidInputNoCtxf(
+			"regexp_substr: Index out of bounds in regular expression search. Search start position: %d", pos)
 	}
 	if !subjectIsBinary {
 		str, err = regexpTextPrefix(str)
