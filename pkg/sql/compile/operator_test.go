@@ -47,6 +47,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -479,6 +481,57 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 			}
 			proc.SetPrepareParams(nil)
 			params.Free(proc.Mp())
+		})
+	}
+}
+
+func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc bool
+	}{
+		{name: "continuous ascending", fn: plan2.NamePercentileCont},
+		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(false)
+			direction := ""
+			if tc.desc {
+				direction = " desc"
+			}
+			stmt, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"select "+tc.fn+"(0.5) within group (order by n_nationkey"+direction+") from nation",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var percentileFn *plan.Function
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				for _, aggregate := range node.GetAggList() {
+					if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == tc.fn {
+						percentileFn = fn
+					}
+				}
+			}
+			require.NotNil(t, percentileFn)
+			require.Len(t, percentileFn.GetArgs(), 2)
+			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
+
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			args, config := constructAggregateConfig(percentileFn, proc)
+			require.Len(t, args, 1)
+			require.Equal(t,
+				aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), tc.desc),
+				config)
+			require.Equal(t, originalConfigExpr, percentileFn.GetArgs()[1])
 		})
 	}
 }

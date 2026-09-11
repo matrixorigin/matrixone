@@ -106,6 +106,20 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return false, s1, s2
 }
 
+// arithmeticTypeCastRule1 applies the fixed coercion rules used by the four
+// arithmetic operators. BIT values are stored and executed as uint64,
+// so pairing BIT with a signed bigint must use the same exact DECIMAL128
+// domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
+// than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
+		s1.Oid = types.T_uint64
+	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
+		s2.Oid = types.T_uint64
+	}
+	return fixedTypeCastRule1(s1, s2)
+}
+
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
