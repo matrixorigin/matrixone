@@ -14,7 +14,9 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const { runInNewContext } = require('node:vm');
 const { classify, resolveScope, verifyResults } = require('./change-scope.cjs');
 
@@ -173,8 +175,46 @@ test('entrypoint routes each scope through one required check', () => {
     assert.ok(gates.match(/^    needs: (.*)$/m)[1].includes(job));
   }
   for (const job of ['change-scope', 'ci-required']) {
-    assert.match(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
+    assert.match(blocks[job], /repository: \$\{\{ github.repository \}\}/);
+    assert.match(blocks[job], /ref: \$\{\{ github.workflow_sha \}\}/);
+    assert.doesNotMatch(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
     assert.match(blocks[job], /persist-credentials: false/);
+    assert.match(blocks[job], /WORKFLOW_SHA: \$\{\{ github.workflow_sha \}\}/);
+    assert.match(blocks[job], /PR_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \}\}/);
+    assert.match(blocks[job], /PR_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \}\}/);
+  }
+});
+
+function loadFixtureHelper(path) {
+  delete require.cache[require.resolve(path)];
+  return require(path);
+}
+
+test('workflow provenance selects its helper when base is missing and head is untrusted', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'matrixone-ci-provenance-'));
+  const refs = Object.fromEntries(['base', 'workflow', 'head'].map(ref => {
+    const dir = join(root, ref);
+    mkdirSync(join(dir, '.github', 'ci'), { recursive: true });
+    return [ref, dir];
+  }));
+  try {
+    cpSync(join(__dirname, 'change-scope.cjs'), join(refs.workflow, '.github', 'ci', 'change-scope.cjs'));
+    writeFileSync(
+      join(refs.head, '.github', 'ci', 'change-scope.cjs'),
+      "module.exports = { resolveScope: async () => 'docs' };\n",
+    );
+
+    const basePath = join(refs.base, '.github', 'ci', 'change-scope.cjs');
+    const workflowPath = join(refs.workflow, '.github', 'ci', 'change-scope.cjs');
+    const headPath = join(refs.head, '.github', 'ci', 'change-scope.cjs');
+    assert.throws(() => require(basePath), /Cannot find module/);
+
+    const workflowHelper = loadFixtureHelper(workflowPath);
+    const headHelper = loadFixtureHelper(headPath);
+    assert.equal(await workflowHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'full');
+    assert.equal(await headHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'docs');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

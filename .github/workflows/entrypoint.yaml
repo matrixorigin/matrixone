@@ -35,22 +35,35 @@ jobs:
     outputs:
       scope: ${{ steps.scope.outputs.scope }}
     steps:
-      # pull_request_target must execute only the trusted base's classifier.
+      # pull_request_target must execute only the classifier from the trusted
+      # commit that supplied this workflow, not from the PR head or a moving ref.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/ci
       - uses: actions/github-script@v7
         id: scope
         env:
           FORCE_FULL: ${{ vars.CI_FORCE_FULL }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
             const { resolveScope } = require('./.github/ci/change-scope.cjs');
             const scope = await resolveScope({ github, context, forceFull: process.env.FORCE_FULL === 'true' });
             core.setOutput('scope', scope);
-            await core.summary.addHeading('CI change scope').addRaw(`Selected: ${scope}`).write();
+            await core.summary
+              .addHeading('CI change scope')
+              .addRaw([
+                `Selected: ${scope}`,
+                `Workflow SHA: ${process.env.WORKFLOW_SHA}`,
+                `PR base SHA: ${process.env.PR_BASE_SHA}`,
+                `PR head SHA: ${process.env.PR_HEAD_SHA}`,
+              ].join('\n'))
+              .write();
 
   docs-check:
     name: Documentation whitespace check
@@ -196,18 +209,27 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/ci
       - uses: actions/github-script@v7
         env:
           SCOPE: ${{ needs.change-scope.outputs.scope }}
           JOB_RESULTS: ${{ toJSON(needs) }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
             const { verifyResults } = require('./.github/ci/change-scope.cjs');
             const message = verifyResults(process.env.SCOPE, JSON.parse(process.env.JOB_RESULTS));
-            await core.summary.addRaw(message).write();
+            await core.summary.addRaw([
+              message,
+              `Workflow SHA: ${process.env.WORKFLOW_SHA}`,
+              `PR base SHA: ${process.env.PR_BASE_SHA}`,
+              `PR head SHA: ${process.env.PR_HEAD_SHA}`,
+            ].join('\n')).write();
 
   # ============ 3.0-dev 分支使用 @release/3.0-dev ============
   matrixone-ci-30:
