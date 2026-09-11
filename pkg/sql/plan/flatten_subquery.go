@@ -1218,7 +1218,8 @@ func (builder *QueryBuilder) restoreAggregateEmptyResult(
 	aggregate *plan.Expr,
 	aggregateName string,
 ) (*plan.Expr, error) {
-	kind := aggexec.GetEmptyResultKind(aggregate.GetF().Func.Obj)
+	baseID := int64(uint64(aggregate.GetF().Func.Obj) & function.DistinctMask)
+	kind := aggexec.GetEmptyResultKind(baseID)
 	if kind == aggexec.EmptyResultNull {
 		return aggregateExpr, nil
 	}
