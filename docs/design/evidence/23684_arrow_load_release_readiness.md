@@ -31,8 +31,8 @@ S3-backed stages, and distributed record-batch fanout are therefore available by
 default. Explicit `enabled=false`, `s3-enabled=false`, or
 `distributed-enabled=false` values remain per-surface rollback switches, and
 configuration, planner, worker, and public-path tests must prove those values
-survive repeated validation and restart. `TestArrowLoadBVT` and
-`TestArrowLoadMultiCN` exercise the no-config paths.
+survive repeated validation and restart. `TestArrowLoadBVT`, including its
+`DistributedRecordBatchFanout` subtest, exercises the no-config paths.
 
 The earlier two-binary rehearsal remains evidence that the old binary rejects
 Arrow syntax. Before treating default-on distributed execution as release-ready,

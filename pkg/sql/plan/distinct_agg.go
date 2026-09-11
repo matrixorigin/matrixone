@@ -61,7 +61,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 
 	if node.NodeType == plan.Node_AGG {
 		if !canOptimizeDistinctAgg(node) {
-			// HavingBinder leaves a single-argument COUNT/SUM DISTINCT value
+			// HavingBinder leaves a single-argument COUNT/SUM/AVG DISTINCT value
 			// unchanged because this rewrite normally gives it a separate physical
 			// key. The rewrite is optional, though: for example, it is skipped
 			// when this node has a sibling aggregate. In that case the generic
@@ -76,14 +76,14 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 
 		oldGroupLen := len(node.GroupBy)
 		oldGroupBy := node.GroupBy
-		toCount := aggFunc.Args[0]
-		toCountNeedsPadSpaceKey := hasPadSpaceStringProvenance(toCount)
-		innerGroupBy := append(slices.Clone(oldGroupBy), toCount)
+		distinctArg := aggFunc.Args[0]
+		distinctArgNeedsPadSpaceKey := hasPadSpaceStringProvenance(distinctArg)
+		innerGroupBy := append(slices.Clone(oldGroupBy), distinctArg)
 		var innerGroupByHashKey []int32
 		hasPadSpaceGroupKey := hasPadSpacePhysicalGroupKey(node)
 		if hasPadSpaceGroupKey {
 			innerGroupByHashKey = slices.Clone(node.GroupByHashKey)
-			if !toCountNeedsPadSpaceKey {
+			if !distinctArgNeedsPadSpaceKey {
 				innerGroupByHashKey = append(innerGroupByHashKey, int32(oldGroupLen))
 			}
 		} else {
@@ -91,10 +91,10 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 			builder.determineGroupByHashKey(candidate)
 			innerGroupByHashKey = candidate.GroupByHashKey
 		}
-		if toCountNeedsPadSpaceKey &&
+		if distinctArgNeedsPadSpaceKey &&
 			(hasPadSpaceGroupKey || hashKeyContains(innerGroupByHashKey, int32(oldGroupLen)) || len(innerGroupByHashKey) == 0) {
 			physicalKeys, err := builder.buildPadSpacePhysicalKeyList(
-				[]*plan.Expr{toCount}, []bool{true},
+				[]*plan.Expr{distinctArg}, []bool{true},
 			)
 			if err != nil {
 				return err
@@ -122,12 +122,12 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 		// has a separate physical key, so retain the local pre-dedup topology and
 		// distribute that canonical key instead of the visible representation.
 		distinctKeyShuffleCol := int32(oldGroupLen)
-		if toCountNeedsPadSpaceKey {
+		if distinctArgNeedsPadSpaceKey {
 			distinctKeyShuffleCol = int32(len(innerGroupBy) - 1)
 		}
 		useDistinctKeyPreAgg := functionID == function.COUNT &&
-			toCount.GetCol() != nil &&
-			isSupportedDistinctKeyShuffleType(toCount.Typ.Id) &&
+			distinctArg.GetCol() != nil &&
+			isSupportedDistinctKeyShuffleType(distinctArg.Typ.Id) &&
 			shouldUseDistinctKeyPreAggregation(node, builder)
 
 		localGroupTag := builder.genNewBindTag()
@@ -179,7 +179,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 
 		aggFunc.Func.Obj &= function.DistinctMask
 		aggFunc.Args[0] = distinctPairGroupCol(
-			toCount, resultGroupTag, int32(oldGroupLen))
+			distinctArg, resultGroupTag, int32(oldGroupLen))
 	}
 	return nil
 }
@@ -200,7 +200,7 @@ func canOptimizeDistinctAgg(node *plan.Node) bool {
 	}
 	baseID := int64(uint64(aggFunc.Func.Obj) & function.DistinctMask)
 	functionID, _ := function.DecodeOverloadID(baseID)
-	if functionID != function.COUNT && functionID != function.SUM {
+	if functionID != function.COUNT && functionID != function.SUM && functionID != function.AVG {
 		return false
 	}
 	return aggFunc.Args[0].Typ.Id != int32(types.T_tuple)
@@ -214,7 +214,7 @@ func normalizeUnrewrittenDistinctAggArguments(ctx context.Context, node *plan.No
 		}
 		baseID := int64(uint64(f.Func.Obj) & function.DistinctMask)
 		functionID, _ := function.DecodeOverloadID(baseID)
-		if functionID != function.COUNT && functionID != function.SUM {
+		if functionID != function.COUNT && functionID != function.SUM && functionID != function.AVG {
 			continue
 		}
 		for i := range f.Args {
