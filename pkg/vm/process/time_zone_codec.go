@@ -19,7 +19,7 @@ import "time"
 // TimeZoneLocationName returns a portable IANA identity. Fixed zones keep the
 // legacy offset payload. Local must never mean another machine's local zone.
 func TimeZoneLocationName(location *time.Location) string {
-	if location == nil || location.String() == "Local" || location.String() == "" {
+	if location == nil || IsFixedTimeZone(location) || location.String() == "Local" || location.String() == "" {
 		return ""
 	}
 	name := location.String()
@@ -27,4 +27,15 @@ func TimeZoneLocationName(location *time.Location) string {
 		return ""
 	}
 	return name
+}
+
+// IsFixedTimeZone distinguishes a fixed offset from historical/DST rules using
+// the public transition bounds. This also recognizes UTC system configurations
+// without assuming that every machine's Local zone has the same rules.
+func IsFixedTimeZone(location *time.Location) bool {
+	if location == nil {
+		return false
+	}
+	start, end := time.Unix(0, 0).In(location).ZoneBounds()
+	return start.IsZero() && end.IsZero()
 }

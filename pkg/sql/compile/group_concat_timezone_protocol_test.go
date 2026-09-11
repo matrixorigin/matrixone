@@ -22,6 +22,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
@@ -52,7 +53,11 @@ func TestNamedGroupConcatNegotiatesPlacementAndFencesOldWorkers(t *testing.T) {
 	}
 	c.proc.Base.SessionInfo.TimeZone = time.Local
 	require.Error(t, validateGroupConcatTimeZoneDestination(nil, wire))
-	require.Error(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
+	if process.IsFixedTimeZone(time.Local) {
+		require.NoError(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
+	} else {
+		require.Error(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
+	}
 	c.proc.Base.SessionInfo.TimeZone = time.FixedZone("FixedZone", 8*3600)
 	client.version = defines.MORPCVersion64
 	require.NoError(t, validateGroupConcatTimeZoneDestination(c.proc, wire))

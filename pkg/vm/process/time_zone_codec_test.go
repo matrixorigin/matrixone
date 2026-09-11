@@ -66,3 +66,14 @@ func TestProcessCodecLegacyOffsetAndInvalidNamedZone(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestFixedTimeZoneDoesNotAcquireRulesFromItsName(t *testing.T) {
+	location := time.FixedZone("America/New_York", 3600)
+	require.True(t, IsFixedTimeZone(location))
+	require.Empty(t, TimeZoneLocationName(location))
+	require.True(t, IsFixedTimeZone(time.UTC))
+	require.False(t, IsFixedTimeZone(nil))
+	named, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	require.False(t, IsFixedTimeZone(named))
+}

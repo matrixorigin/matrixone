@@ -22,7 +22,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 func groupConcatTimeZoneRequirement(proc *process.Process, owner any) (named, local bool, err error) {
@@ -34,11 +33,11 @@ func groupConcatTimeZoneRequirement(proc *process.Process, owner any) (named, lo
 		return false, true, nil
 	}
 	location := proc.GetSessionInfo().TimeZone
-	if location == nil || location.String() == "Local" {
+	if location == nil {
 		return false, true, nil
 	}
 	name := process.TimeZoneLocationName(location)
-	return name != "" && location != time.UTC, false, nil
+	return name != "", name == "" && !process.IsFixedTimeZone(location), nil
 }
 func (c *Compile) constrainGroupConcatTimeZoneWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
