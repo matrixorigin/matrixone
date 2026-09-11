@@ -520,8 +520,11 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		if inputEncoderClosed {
 			return nil
 		}
+		if err := inputEncoder.close(); err != nil {
+			return err
+		}
 		inputEncoderClosed = true
-		return inputEncoder.close()
+		return nil
 	}
 	defer func() {
 		if closeErr := closeInputEncoder(); err == nil && closeErr != nil {
