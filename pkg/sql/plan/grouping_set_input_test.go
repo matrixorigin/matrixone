@@ -185,10 +185,10 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 }
 
 func TestGroupingSetInputSharingAllowsFallibleKeyWhenAllBranchesDrain(t *testing.T) {
-	const sql = `select cast(l_comment as bigint),
-		grouping(cast(l_comment as bigint)), count(*)
+	const sql = `select cast(l_returnflag as bigint),
+		grouping(cast(l_returnflag as bigint)), count(*)
 		from lineitem
-		group by rollup(cast(l_comment as bigint))`
+		group by rollup(cast(l_returnflag as bigint))`
 
 	ctx := NewMockCompilerContext(true)
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
@@ -337,6 +337,7 @@ func TestGroupingSetSharingFitsCostAndStorage(t *testing.T) {
 		{name: "single output row exceeds record safety bound", producerCost: 1e15, inputSize: 8, rows: 1, outSize: float64(materialized.MaxSpillBatchBytes)/2 + 1, branches: 3},
 		{name: "branch scan traffic loses", producerCost: 40, inputSize: 8, rows: 10, outSize: 16, branches: 20},
 		{name: "spill ceiling", producerCost: math.MaxFloat64 / 16, inputSize: 8, rows: groupingSetEstimatedSpillBytesLimit/8 + 1, outSize: 8, branches: 2},
+		{name: "wide high-cardinality result exceeds spill ceiling", producerCost: 300_000_000, inputSize: 1000, rows: 13_500_000, outSize: 1000, branches: 9},
 		{name: "single branch", producerCost: 1000, inputSize: 8, rows: 10, outSize: 16, branches: 1},
 		{name: "unknown input width", producerCost: 1000, rows: 10, outSize: 16, branches: 3},
 		{name: "nan producer", producerCost: math.NaN(), inputSize: 8, rows: 10, outSize: 16, branches: 3},
@@ -345,6 +346,29 @@ func TestGroupingSetSharingFitsCostAndStorage(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, groupingSetSharingFitsCostAndStorage(
 				test.producerCost, test.inputSize, test.rows, test.outSize, test.branches))
+		})
+	}
+}
+
+func TestGroupingSetMaterializedRowsForAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name                              string
+		producerRows, aggregateRows, want float64
+		branches                          int
+		ok                                bool
+	}{
+		{name: "inflate optimistic groups", producerRows: 1_000_000, aggregateRows: 100, branches: 4, want: 3200, ok: true},
+		{name: "cap at relational ceiling", producerRows: 100, aggregateRows: 90, branches: 3, want: 300, ok: true},
+		{name: "keep larger aggregate estimate", producerRows: 10, aggregateRows: 40, branches: 3, want: 40, ok: true},
+		{name: "invalid producer", aggregateRows: 1, branches: 2},
+		{name: "single branch", producerRows: 10, aggregateRows: 1, branches: 1},
+		{name: "overflow", producerRows: math.MaxFloat64, aggregateRows: 1, branches: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := groupingSetMaterializedRowsForAdmission(
+				test.producerRows, test.aggregateRows, test.branches)
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.want, got)
 		})
 	}
 }
