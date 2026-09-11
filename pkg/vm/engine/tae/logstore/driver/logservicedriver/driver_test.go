@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 
 	"github.com/stretchr/testify/assert"
@@ -112,6 +113,41 @@ type deadlineBlockingBackendClient struct {
 	startOnce     *sync.Once
 }
 
+// completionObservedEntry exposes the terminal notification point used by
+// driver.Entry.DoneWithErr. The release barrier keeps the underlying waitgroup
+// incomplete until the test has inspected the durable notification event.
+type completionObservedEntry struct {
+	*walentry.Base
+	doneStarted chan struct{}
+	doneRelease <-chan struct{}
+	doneOnce    sync.Once
+}
+
+func (e *completionObservedEntry) GetInfo() any {
+	e.doneOnce.Do(func() { close(e.doneStarted) })
+	<-e.doneRelease
+	return e.Base.GetInfo()
+}
+
+func newCompletionObservedEntry(
+	payload []byte,
+	doneStarted chan struct{},
+	doneRelease <-chan struct{},
+) *entry.Entry {
+	base := walentry.GetBase()
+	base.SetType(walentry.IOET_WALEntry_Test)
+	base.SetInfo(&walentry.Info{})
+	if err := base.SetPayload(payload); err != nil {
+		panic(err)
+	}
+	base.PrepareWrite()
+	return entry.NewEntry(&completionObservedEntry{
+		Base:        base,
+		doneStarted: doneStarted,
+		doneRelease: doneRelease,
+	})
+}
+
 func (c *deadlineBlockingBackendClient) Append(
 	_ context.Context,
 	record logservice.LogRecord,
@@ -152,12 +188,21 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	var secondSubmitted, secondDone chan struct{}
 	t.Cleanup(func() {
 		releaseWorkers()
-		_ = d.Close()
+		closeErr := d.Close()
+		if closeErr != nil {
+			t.Errorf("driver close failed during cleanup: %v", closeErr)
+		}
+		joined := true
 		if secondDone != nil {
 			select {
 			case <-secondDone:
 			case <-time.After(time.Second):
+				t.Error("second intent goroutine did not terminate during cleanup")
+				joined = false
 			}
+		}
+		if closeErr != nil || !joined {
+			return
 		}
 		if first != nil {
 			first.Entry.Free()
@@ -304,10 +349,17 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	}
 	var first, second *entry.Entry
 	var secondSubmitted chan struct{}
-	var firstDone chan error
-	var firstWaitDone chan struct{}
+	var firstDoneStarted chan struct{}
+	var firstDoneRelease chan struct{}
+	var firstDoneReleaseOnce sync.Once
+	releaseFirstDone := func() {
+		if firstDoneRelease != nil {
+			firstDoneReleaseOnce.Do(func() { close(firstDoneRelease) })
+		}
+	}
 	t.Cleanup(func() {
 		releaseAppend()
+		releaseFirstDone()
 		intakeQueue.Release()
 		if err := d.Close(); err != nil {
 			// Close may have returned at the shared deadline before the worker
@@ -336,19 +388,16 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 			select {
 			case <-secondSubmitted:
 			case <-time.After(time.Second):
-			}
-		}
-		if firstWaitDone != nil {
-			select {
-			case <-firstWaitDone:
-			case <-time.After(time.Second):
+				t.Error("second intent goroutine did not terminate during cleanup")
 			}
 		}
 		select {
 		case <-intakeQueue.stopDone:
 		case <-time.After(time.Second):
+			t.Error("intake stop barrier did not finish during cleanup")
 		}
-		if d.pendingWait.Load() != 0 {
+		if pending := d.pendingWait.Load(); pending != 0 {
+			t.Errorf("%d accepted WAL committers remained pending during cleanup", pending)
 			return
 		}
 		if first != nil {
@@ -361,7 +410,13 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
-	first = entry.MockEntryWithPayload([]byte("first"))
+	firstDoneStarted = make(chan struct{})
+	firstDoneRelease = make(chan struct{})
+	first = newCompletionObservedEntry(
+		[]byte("first"),
+		firstDoneStarted,
+		firstDoneRelease,
+	)
 	second = entry.MockEntryWithPayload([]byte("second"))
 	d.onCommitIntents(first)
 	select {
@@ -407,20 +462,24 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	}
 	require.Error(t, second.WaitDone())
 
-	firstDone = make(chan error, 1)
-	firstWaitDone = make(chan struct{})
-	go func() {
-		defer close(firstWaitDone)
-		firstDone <- first.WaitDone()
-	}()
+	// DoneWithErr closes firstDoneStarted before it can complete the entry's
+	// waitgroup. A closed channel is a durable terminal event, so this check is
+	// independent of whether a waiter goroutine has been scheduled yet.
 	select {
-	case <-firstDone:
+	case <-firstDoneStarted:
 		t.Fatal("in-flight append acquired a synthetic terminal result")
 	default:
 	}
+	require.Equal(t, int64(2), d.pendingWait.Load())
 
 	releaseAppend()
-	require.NoError(t, <-firstDone)
+	select {
+	case <-firstDoneStarted:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight append did not reach terminal notification")
+	}
+	releaseFirstDone()
+	require.NoError(t, first.WaitDone())
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 
 	// A production caller fail-stops after the deadline error. The test keeps
@@ -458,18 +517,29 @@ func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) 
 	var firstWaitDone, secondWaitDone chan struct{}
 	t.Cleanup(func() {
 		release()
-		_ = d.Close()
+		closeErr := d.Close()
+		if closeErr != nil {
+			t.Errorf("driver close failed during cleanup: %v", closeErr)
+		}
+		joined := true
 		if firstWaitDone != nil {
 			select {
 			case <-firstWaitDone:
 			case <-time.After(time.Second):
+				t.Error("first waiter did not terminate during cleanup")
+				joined = false
 			}
 		}
 		if secondWaitDone != nil {
 			select {
 			case <-secondWaitDone:
 			case <-time.After(time.Second):
+				t.Error("second waiter did not terminate during cleanup")
+				joined = false
 			}
+		}
+		if closeErr != nil || !joined {
+			return
 		}
 		if first != nil {
 			first.Entry.Free()
