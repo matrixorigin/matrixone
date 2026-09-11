@@ -1,0 +1,48 @@
+-- @suite
+-- @case
+-- @desc: INSERT/UPDATE IGNORE adjust lexical integer, decimal, and temporal conversions
+-- @label:bvt
+
+drop database if exists issue_28680_ignore_conversion;
+create database issue_28680_ignore_conversion;
+use issue_28680_ignore_conversion;
+
+set sql_mode='STRICT_TRANS_TABLES';
+create table conversion_target(
+    id int primary key,
+    i tinyint,
+    u int unsigned,
+    d decimal(10,2),
+    dt date,
+    dtt datetime,
+    ts timestamp
+);
+
+insert ignore into conversion_target
+    values (1, 'abc', 'abc', 'abc', '2024-02-30',
+            '2024-02-30 25:00:00', '2024-02-30 25:00:00');
+show warnings;
+select id, i, u, d, dt, dtt, ts from conversion_target order by id;
+
+insert into conversion_target
+    values (2, 7, 8, 1.25, '2024-01-01',
+            '2024-01-01 01:02:03', '2024-01-01 01:02:03');
+update ignore conversion_target
+   set i = 'abc', u = 'abc', d = 'abc', dt = '2024-02-30',
+       dtt = '2024-02-30 25:00:00', ts = '2024-02-30 25:00:00'
+ where id = 2;
+show warnings;
+select id, i, u, d, dt, dtt, ts from conversion_target order by id;
+
+-- SQL PREPARE must use the same assignment boundary as direct DML.
+prepare conversion_stmt from
+    'insert ignore into conversion_target(id, i, d, dt) values (?, ?, ?, ?)';
+set @conversion_id = 3, @conversion_i = 'abc', @conversion_d = 'abc',
+    @conversion_dt = '2024-02-30';
+execute conversion_stmt using @conversion_id, @conversion_i,
+    @conversion_d, @conversion_dt;
+show warnings;
+select id, i, d, dt from conversion_target where id = 3;
+deallocate prepare conversion_stmt;
+
+drop database issue_28680_ignore_conversion;
