@@ -116,13 +116,22 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
-	fid, _ := DecodeOverloadID(overloadID)
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
 	return allSupportedFunctions[fid].isWindowOrder()
+}
+
+func validFunctionOverloadID(fid, oIndex int32) bool {
+	return fid >= 0 && int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		oIndex >= 0 && int(oIndex) < len(allSupportedFunctions[fid].Overloads)
 }
 
 func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
@@ -134,15 +143,15 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
 }
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
-	fid, _ := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -150,7 +159,7 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true

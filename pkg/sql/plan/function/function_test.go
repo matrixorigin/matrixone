@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -29,6 +30,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
+	// An older CN may receive an overload selected by a newer CN. It must
+	// reject the unknown index instead of panicking while indexing Overloads.
+	unknown := encodeOverloadID(STR_TO_DATE, 99)
+	_, err := GetFunctionById(context.Background(), unknown)
+	require.Error(t, err)
+	_, exists := GetFunctionByIdWithoutError(unknown)
+	require.False(t, exists)
+	require.False(t, GetFunctionIsWinOrderFunById(unknown))
+}
 
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
@@ -1180,6 +1192,22 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	}
 	require.False(t, ProducesNoNull(-1))
 	require.False(t, HasExecutableCTASTypeDefault(-1))
+}
+
+func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
+	invalid := EncodeOverloadID(BIN, 99)
+
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+
+	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
+	require.Error(t, err)
+	require.False(t, zonemappable)
+	require.False(t, GetFunctionIsWinOrderFunById(invalid))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
