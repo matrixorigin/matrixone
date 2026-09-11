@@ -4,6 +4,8 @@
 package task
 
 import (
+	bytes "bytes"
+	compressgzip "compress/gzip"
 	fmt "fmt"
 	io "io"
 	math "math"
@@ -1485,25 +1487,36 @@ func init() {
 	// required by reflection/dynamic protobuf consumers when the task schema is
 	// extended without regenerating all generated bindings in older toolchains.
 	var fd descriptor.FileDescriptorProto
-	if err := proto.Unmarshal(fileDescriptor_ce5d8dd45b4a91ff, &fd); err == nil {
-		found := false
-		for _, enum := range fd.EnumType {
-			if enum.GetName() == "TaskCode" {
-				for _, value := range enum.Value {
-					if value.GetName() == "InitCdcLosslessStart" {
-						found = true
+	if zr, err := compressgzip.NewReader(bytes.NewReader(fileDescriptor_ce5d8dd45b4a91ff)); err == nil {
+		raw, readErr := io.ReadAll(zr)
+		_ = zr.Close()
+		if readErr == nil {
+			if err := proto.Unmarshal(raw, &fd); err == nil {
+				found := false
+				for _, enum := range fd.EnumType {
+					if enum.GetName() == "TaskCode" {
+						for _, value := range enum.Value {
+							if value.GetName() == "InitCdcLosslessStart" {
+								found = true
+							}
+						}
+						if !found {
+							n := "InitCdcLosslessStart"
+							num := int32(15)
+							enum.Value = append(enum.Value, &descriptor.EnumValueDescriptorProto{Name: &n, Number: &num})
+						}
 					}
 				}
 				if !found {
-					n := "InitCdcLosslessStart"
-					num := int32(15)
-					enum.Value = append(enum.Value, &descriptor.EnumValueDescriptorProto{Name: &n, Number: &num})
+					if encoded, err := proto.Marshal(&fd); err == nil {
+						var out bytes.Buffer
+						if zw := compressgzip.NewWriter(&out); zw != nil {
+							if _, writeErr := zw.Write(encoded); writeErr == nil && zw.Close() == nil {
+								fileDescriptor_ce5d8dd45b4a91ff = out.Bytes()
+							}
+						}
+					}
 				}
-			}
-		}
-		if !found {
-			if encoded, err := proto.Marshal(&fd); err == nil {
-				fileDescriptor_ce5d8dd45b4a91ff = encoded
 			}
 		}
 	}
