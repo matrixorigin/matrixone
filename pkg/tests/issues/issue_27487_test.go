@@ -97,8 +97,13 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 					t.Helper()
 					const indexedSQL = "select count(*) from `" + database + "`.`regular_docs` " +
 						"force index(idx_k) where k = 27487"
-					plan, err := testutils.QueryText(ctx, conn, "explain "+indexedSQL)
-					require.NoError(t, err)
+					var plan string
+					require.Eventually(t, func() bool {
+						var err error
+						plan, err = testutils.QueryText(ctx, conn, "explain "+indexedSQL)
+						return err == nil
+					}, 30*time.Second, 10*time.Millisecond,
+						"writer CN did not observe the committed secondary index")
 					require.Contains(t, strings.ToLower(plan), "index table scan")
 					require.Contains(t, strings.ToLower(plan), "idx_k")
 
