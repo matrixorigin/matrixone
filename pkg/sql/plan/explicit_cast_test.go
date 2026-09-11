@@ -77,13 +77,13 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 			name:       "float32",
 			source:     MakePlan2Float64ConstExprWithType(15.5),
 			target:     types.T_float32.ToType(),
-			overloadID: 11,
+			overloadID: function.HexExplicitFloat32Overload,
 		},
 		{
 			name:       "float64",
 			source:     MakePlan2Float64ConstExprWithType(15.5),
 			target:     types.T_float64.ToType(),
-			overloadID: 12,
+			overloadID: function.HexExplicitFloat64Overload,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 		ctx, "hex", []*Expr{MakePlan2Float64ConstExprWithType(15.5)})
 	require.NoError(t, err)
 	_, overloadID := function.DecodeOverloadID(ordinary.GetF().GetFunc().GetObj())
-	require.Equal(t, int32(5), overloadID)
+	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
 }
 
 func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {

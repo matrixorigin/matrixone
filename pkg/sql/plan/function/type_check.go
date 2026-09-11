@@ -337,8 +337,15 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 // as the numeric value 0/1. BOOL must not be added to the global implicit-cast
 // lattice because unrelated string/binary functions intentionally stringify it.
 func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 1 && inputs[0].Oid == types.T_bool {
-		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_bool:
+			return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+		case types.T_float32:
+			return newCheckResultWithSuccess(HexFloat32Overload)
+		case types.T_float64:
+			return newCheckResultWithSuccess(HexFloat64Overload)
+		}
 	}
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }

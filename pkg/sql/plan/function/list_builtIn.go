@@ -8684,7 +8684,7 @@ var supportedMathBuiltIns = []FuncNew{
 					return numericHexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
-					return HexFloat32
+					return HexLegacyFloat32
 				},
 			},
 			{
@@ -8694,7 +8694,7 @@ var supportedMathBuiltIns = []FuncNew{
 					return numericHexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
-					return HexFloat64
+					return HexLegacyFloat64
 				},
 			},
 			{
@@ -8745,6 +8745,26 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return HexDecimal256
+				},
+			},
+			{
+				overloadId: HexFloat32Overload,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat32
+				},
+			},
+			{
+				overloadId: HexFloat64Overload,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat64
 				},
 			},
 			{

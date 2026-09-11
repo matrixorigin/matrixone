@@ -25,6 +25,15 @@ select hex(true), hex(false),
        hex(cast('15.5' as decimal(18,1))), hex(cast('-15.5' as decimal(18,1))),
        hex(cast(15.5 as double)), hex(cast(-15.5 as double)), hex(cast(456.789 as double));
 
+select hex(cast('0.45000000000000000005' as decimal(21,20))),
+       hex(cast('-0.45000000000000000005' as decimal(21,20))),
+       hex(cast('0.50000000000000000000' as decimal(21,20))),
+       hex(cast('-0.50000000000000000000' as decimal(21,20))),
+       hex(cast('0.4500000000000000000000000000000000000005' as decimal(41,40))),
+       hex(cast('-0.4500000000000000000000000000000000000005' as decimal(41,40))),
+       hex(cast('9223372036854775806.5000000000000000000000000000000000000000' as decimal(59,40))),
+       hex(cast('-9223372036854775807.5000000000000000000000000000000000000000' as decimal(59,40)));
+
 create table hex_numeric_source (
     id int,
     b bool,

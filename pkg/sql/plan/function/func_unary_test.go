@@ -5886,8 +5886,8 @@ func TestHexNumericTypeResolution(t *testing.T) {
 		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 8},
 		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 9},
 		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 10},
-		{name: "float32", typ: types.T_float32.ToType(), overloadID: 4},
-		{name: "float64", typ: types.T_float64.ToType(), overloadID: 5},
+		{name: "float32", typ: types.T_float32.ToType(), overloadID: HexFloat32Overload},
+		{name: "float64", typ: types.T_float64.ToType(), overloadID: HexFloat64Overload},
 		{name: "varchar", typ: types.T_varchar.ToType(), overloadID: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5899,6 +5899,28 @@ func TestHexNumericTypeResolution(t *testing.T) {
 			if tc.cast {
 				require.Equal(t, tc.castType, castTypes[0].Oid)
 			}
+		})
+	}
+}
+
+func TestHexLegacyFloatOverloadsKeepOldSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		value      any
+		overloadID int32
+	}{
+		{name: "float32", typ: types.T_float32.ToType(), value: []float32{14.5}, overloadID: 4},
+		{name: "float64", typ: types.T_float64.ToType(), value: []float64{14.5}, overloadID: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := newVectorByType(proc.Mp(), tc.typ, tc.value, nil)
+			defer input.Free(proc.Mp())
+			out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, tc.overloadID), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, "F", string(out.GetBytesAt(0)))
 		})
 	}
 }
@@ -6033,6 +6055,67 @@ func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
 					continue
 				}
 				require.Equal(t, want, string(out.GetBytesAt(i)))
+			}
+		})
+	}
+}
+
+func TestHexDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		text string
+		want string
+	}{
+		{name: "decimal128_below_half", oid: types.T_decimal128, text: "0.45000000000000000005", want: "0"},
+		{name: "decimal128_negative_below_half", oid: types.T_decimal128, text: "-0.45000000000000000005", want: "0"},
+		{name: "decimal128_half", oid: types.T_decimal128, text: "0.50000000000000000000", want: "1"},
+		{name: "decimal128_negative_half", oid: types.T_decimal128, text: "-0.50000000000000000000", want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal128_upper_boundary", oid: types.T_decimal128,
+			text: "9223372036854775806.5" + strings.Repeat("0", 18), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal128_lower_boundary", oid: types.T_decimal128,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 18), want: "8000000000000000"},
+		{name: "decimal256_below_half", oid: types.T_decimal256,
+			text: "0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_negative_below_half", oid: types.T_decimal256,
+			text: "-0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_half", oid: types.T_decimal256,
+			text: "0.5" + strings.Repeat("0", 39), want: "1"},
+		{name: "decimal256_negative_half", oid: types.T_decimal256,
+			text: "-0.5" + strings.Repeat("0", 39), want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal256_upper_boundary", oid: types.T_decimal256,
+			text: "9223372036854775806.5" + strings.Repeat("0", 39), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal256_lower_boundary", oid: types.T_decimal256,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 39), want: "8000000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value any
+			switch tc.oid {
+			case types.T_decimal128:
+				parsed, scale, err := types.Parse128(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal128{parsed}
+				typ := types.New(tc.oid, 38, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 9), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			case types.T_decimal256:
+				parsed, scale, err := types.Parse256(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal256{parsed}
+				typ := types.New(tc.oid, 65, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 10), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			default:
+				t.Fatalf("unexpected decimal type %s", tc.oid)
 			}
 		})
 	}
