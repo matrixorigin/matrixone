@@ -1101,6 +1101,25 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	return nil
 }
 
+func (op *opBuiltInRegexp) validateRegexpSubstrRow(
+	pattern string, patternNull bool, position int64,
+	positionNull, occurrenceNull, matchingBinary bool,
+) (optionalArgumentNull bool, err error) {
+	if !patternNull {
+		if err = op.regMap.validateCompiledRegexpWithMode(pattern, matchingBinary, "regexp_substr"); err != nil {
+			return false, err
+		}
+	}
+	if positionNull || occurrenceNull {
+		return true, nil
+	}
+	if position <= 0 {
+		return false, moerr.NewInvalidInputNoCtxf(
+			"regexp_substr: Index out of bounds in regular expression search. Search start position: %d", position)
+	}
+	return false, nil
+}
+
 func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := newRegexpStringParameter(parameters, 0, false)
 	p2 := newRegexpStringParameter(parameters, 1, true)
@@ -1170,17 +1189,12 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			}
 			pos, null3 := positions.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
-			if null2 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else if err := op.regMap.validateRegexpBeforeNullableResult(
-				functionUtil.QuickBytesToStr(v2),
-				matchingIsBinary,
-				"regexp_substr", null1 || null3,
-			); err != nil {
+			optionalNull, err := op.validateRegexpSubstrRow(
+				functionUtil.QuickBytesToStr(v2), null2, pos, null3, false, matchingIsBinary)
+			if err != nil {
 				return err
-			} else if null1 || null3 {
+			}
+			if optionalNull || null1 || null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -1221,17 +1235,12 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
-			if null2 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else if err := op.regMap.validateRegexpBeforeNullableResult(
-				functionUtil.QuickBytesToStr(v2),
-				matchingIsBinary,
-				"regexp_substr", null1 || null3 || null4,
-			); err != nil {
+			optionalNull, err := op.validateRegexpSubstrRow(
+				functionUtil.QuickBytesToStr(v2), null2, pos, null3, null4, matchingIsBinary)
+			if err != nil {
 				return err
-			} else if null1 || null3 || null4 {
+			}
+			if optionalNull || null1 || null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}

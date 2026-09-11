@@ -270,6 +270,37 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				})
 			}
 		})
+		t.Run("substr_position_null_precedence", func(t *testing.T) {
+			for _, tc := range []struct {
+				query string
+				args  []any
+				null  bool
+				code  uint16
+			}{
+				{"select regexp_substr(?, ?, ?)", []any{nil, "a", int64(0)}, false, 0},
+				{"select regexp_substr(?, ?, ?)", []any{"abc", nil, int64(0)}, false, 0},
+				{"select regexp_substr(?, ?, ?, ?)", []any{nil, "a", int64(0), int64(1)}, false, 0},
+				{"select regexp_substr(?, ?, ?, ?)", []any{"abc", nil, int64(0), int64(1)}, false, 0},
+				{"select regexp_substr(?, ?, ?, ?)", []any{nil, "a", int64(0), nil}, true, 0},
+				{"select regexp_substr(?, ?, ?, ?)", []any{nil, "a\xc3b", int64(1), nil}, false, 3854},
+			} {
+				withStatement(t, tc.query, func(stmt *sql.Stmt) {
+					var value sql.NullString
+					err := stmt.QueryRowContext(ctx, tc.args...).Scan(&value)
+					if tc.null {
+						require.NoError(t, err)
+						require.False(t, value.Valid)
+						return
+					}
+					require.Error(t, err)
+					if tc.code != 0 {
+						var sqlError *mysql.MySQLError
+						require.ErrorAs(t, err, &sqlError)
+						require.Equal(t, tc.code, sqlError.Number)
+					}
+				})
+			}
+		})
 		t.Run("replace_optional_null_precedence", func(t *testing.T) {
 			for _, tc := range []struct {
 				query string
