@@ -24,6 +24,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedBooleanFloatCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, target := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(target.String(), func(t *testing.T) {
+			var empty, want any = []float64{}, []float64{1, 0, 0, 1, 0, 0}
+			if target == types.T_float32 {
+				empty, want = []float32{}, []float32{1, 0, 0, 1, 0, 0}
+			}
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_text.ToType(), []string{"true", "false", "true", "1", "0", "bad"}, []bool{false, false, false, false, false, true}),
+				NewFunctionTestInput(target.ToType(), empty, nil),
+			}, NewFunctionTestResult(target.ToType(), false, want, []bool{false, false, false, false, false, true}), NewCast)
+			tc.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+				vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamNone,
+				vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamBoolean,
+			})
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestPreparedBooleanFloatCastInactiveRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := newVectorByType(proc.Mp(), types.T_text.ToType(), []string{"true", "invalid"}, nil)
+	defer input.Free(proc.Mp())
+	input.SetPrepareParamKind(vector.PrepareParamBoolean)
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
+	defer result.Free()
+	for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
+		require.NoError(t, result.PreExtendAndReset(2))
+		err := strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(input), result, 64, 2,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+		require.NoError(t, err)
+		require.Equal(t, float64(1), vector.GetFixedAtNoTypeCheck[float64](result.GetResultVector(), 0))
+		require.True(t, result.GetResultVector().GetNulls().Contains(1))
+
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(input), result, 64, 2,
+			&FunctionSelectList{AllNull: true}))
+		require.True(t, result.GetResultVector().GetNulls().Contains(0))
+		require.True(t, result.GetResultVector().GetNulls().Contains(1))
+
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.Error(t, strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(input), result, 64, 2, nil))
+	}
+}
+
 func TestMathFunctionsAcceptBoolInNumericContext(t *testing.T) {
 	ctx := context.Background()
 	boolType := types.T_bool.ToType()
