@@ -405,10 +405,16 @@ func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
 
 func decimalToInt64Rounded[T types.FixedSizeTExceptStrType](
 	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
-	length int, _ *FunctionSelectList, roundToIntegerString func(T) string,
+	length int, selectList *FunctionSelectList, roundToIntegerString func(T) string,
 ) error {
 	to := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null := from.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -1040,11 +1046,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 				func(v types.Decimal256) string { return decimal256RoundedIntegerString(v, fromType.Scale) })
 		}
 	}
-	if (mode == castModeNormal || mode == castModeExplicit) && toType.Oid == types.T_int64 {
-		// Function argument conversion and explicit CAST share one exact DECIMAL
-		// contract: round the scaled integer once, then saturate to BIGINT.
-		// Do this before the generic decimal path, whose multi-step Scale can
-		// double-round values with more than 19 fractional digits.
+	if mode == castModeExplicit && toType.Oid == types.T_int64 {
+		// Explicit DECIMAL-to-BIGINT conversion rounds the scaled integer once
+		// before saturation. Do this before the generic decimal path, whose
+		// multi-step Scale can double-round values with more than 19 fractional digits.
 		switch fromType.Oid {
 		case types.T_decimal64:
 			return decimalToInt64Rounded(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,

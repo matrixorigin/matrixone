@@ -1426,26 +1426,6 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}}},
 		}
 	}
-	makeExactDecimalInt64Cast := func(sourceType types.Type, overload int32) *planpb.Expr {
-		source := &planpb.Expr{
-			Typ:  planpb.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
-			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
-		}
-		target := &planpb.Expr{
-			Typ:  planpb.Type{Id: int32(types.T_int64)},
-			Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
-		}
-		return &planpb.Expr{
-			Typ: planpb.Type{Id: int32(types.T_int64)},
-			Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &planpb.ObjectRef{
-					Obj:     planfunction.EncodeOverloadID(planfunction.CAST, overload),
-					ObjName: "cast",
-				},
-				Args: []*planpb.Expr{source, target},
-			}},
-		}
-	}
 	makeFormatExpr := func(firstType types.Type, withLocale bool) *planpb.Expr {
 		args := []*planpb.Expr{{
 			Typ:  planpb.Type{Id: int32(firstType.Oid), Width: firstType.Width, Scale: firstType.Scale},
@@ -1544,58 +1524,6 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 					"typed numeric FORMAT arguments require MORPC protocol version 59")
 			})
 		}
-	})
-
-	t.Run("exact decimal BIGINT cast sender and receiver boundary", func(t *testing.T) {
-		for _, sourceType := range []types.Type{
-			types.New(types.T_decimal64, 18, 17),
-			types.New(types.T_decimal128, 38, 37),
-			types.New(types.T_decimal256, 65, 64),
-		} {
-			t.Run(sourceType.Oid.String(), func(t *testing.T) {
-				expr := makeExactDecimalInt64Cast(sourceType, 0)
-				remotePipeline := &pipeline.Pipeline{
-					InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
-				}
-				scope := makeScope(expr)
-
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
-				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-				require.ErrorContains(t, err,
-					"exact DECIMAL-to-BIGINT casts require MORPC protocol version 64")
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
-				require.ErrorContains(t, err,
-					"exact DECIMAL-to-BIGINT casts require MORPC protocol version 64")
-
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
-				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
-				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
-				require.NoError(t, err)
-				decoded, err := decodeScope(encoded, proc, true, nil)
-				require.NoError(t, err)
-				decoded.release()
-
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
-				decoded, err = decodeScope(encoded, proc, true, nil)
-				require.ErrorContains(t, err,
-					"exact DECIMAL-to-BIGINT casts require MORPC protocol version 64")
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-				require.Nil(t, decoded)
-
-				decoded, err = decodeScope(encoded, nil, true, nil)
-				require.ErrorContains(t, err,
-					"exact DECIMAL-to-BIGINT casts require MORPC protocol version 64")
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-				require.Nil(t, decoded)
-			})
-		}
-
-		explicit := makeExactDecimalInt64Cast(types.New(types.T_decimal128, 38, 37), 1)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
-		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
-			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{explicit}}},
-		}))
 	})
 
 	t.Run("typed FORMAT rejects nil first argument", func(t *testing.T) {

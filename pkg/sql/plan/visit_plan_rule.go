@@ -715,18 +715,20 @@ func preparedNumericPrefixPositionContext(
 	args []*plan.Expr,
 	positions map[int]types.StringConversionKind,
 ) bool {
-	for i, arg := range args {
-		pos, ok := preparedNumericPrefixFunctionParamPosition(arg)
-		kind, eligible := positions[pos]
-		if !ok || !eligible || kind == types.StringConversionString {
-			continue
-		}
-		cast := arg.GetF()
-		if mysqlNumericPrefixFunctionArg(
-			name, i, len(args), makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
-			// A typed SQL variable must enter a fixed numeric argument through
-			// its source domain, not through the prepare-time TEXT prefix cast.
-			return true
+	if name == "substring_index" {
+		for i, arg := range args {
+			pos, ok := preparedNumericPrefixFunctionParamPosition(arg)
+			kind, eligible := positions[pos]
+			if !ok || !eligible || kind == types.StringConversionString {
+				continue
+			}
+			cast := arg.GetF()
+			if mysqlNumericPrefixFunctionArg(
+				name, i, len(args), makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+				// A typed SQL variable must enter a fixed numeric argument through
+				// its source domain, not through the prepare-time TEXT prefix cast.
+				return true
+			}
 		}
 	}
 
@@ -3235,11 +3237,10 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	if parent == nil {
 		return false
 	}
-	// A provisional implicit cast records a fixed numeric argument contract even
-	// when the function itself returns a non-numeric value. Materialize the SQL
-	// variable in its source domain before rebinding so the shared CAST executor,
-	// rather than a type-retagged TEXT literal, performs the conversion.
-	if !isPreparedNumericComparison(name) && argIndex >= 0 && argIndex < len(parent.GetF().GetArgs()) {
+	// SUBSTRING_INDEX has a fixed numeric count contract despite returning text.
+	// Materialize a typed SQL variable in its source domain before rebinding so
+	// DECIMAL counts use the established explicit CAST conversion.
+	if name == "substring_index" && argIndex == 2 && argIndex < len(parent.GetF().GetArgs()) {
 		arg := parent.GetF().GetArgs()[argIndex]
 		if isImplicitPreparedParamCast(arg) && makeTypeByPlan2Expr(arg).IsNumeric() {
 			return true

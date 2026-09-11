@@ -965,97 +965,23 @@ func Test_CastToDecimal256(t *testing.T) {
 	}
 }
 
-func TestImplicitDecimalToInt64RoundsAllWidths(t *testing.T) {
+func TestImplicitDecimalToInt64PreservesOverflowErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	want := []int64{1, 2, 2, -1, -2, -2, -3}
-	nulls := make([]bool, len(want))
-	for _, tc := range []struct {
-		name  string
-		input FunctionTestInput
-	}{
-		{
-			name: "decimal64",
-			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 1),
-				[]types.Decimal64{
-					14, 15, 19, types.Decimal64(14).Minus(), types.Decimal64(15).Minus(),
-					types.Decimal64(19).Minus(), types.Decimal64(25).Minus(),
-				}, nulls),
-		},
-		{
-			name: "decimal128",
-			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 1),
-				[]types.Decimal128{
-					types.Decimal128FromInt64(14), types.Decimal128FromInt64(15),
-					types.Decimal128FromInt64(19), types.Decimal128FromInt64(-14),
-					types.Decimal128FromInt64(-15), types.Decimal128FromInt64(-19),
-					types.Decimal128FromInt64(-25),
-				}, nulls),
-		},
-		{
-			name: "decimal256",
-			input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 1),
-				[]types.Decimal256{
-					types.Decimal256FromInt64(14), types.Decimal256FromInt64(15),
-					types.Decimal256FromInt64(19), types.Decimal256FromInt64(-14),
-					types.Decimal256FromInt64(-15), types.Decimal256FromInt64(-19),
-					types.Decimal256FromInt64(-25),
-				}, nulls),
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
-				tc.input,
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-			}, NewFunctionTestResult(types.T_int64.ToType(), false, want, nulls), NewCast)
-			ok, info := testCase.Run()
-			require.True(t, ok, info)
-		})
-	}
-}
-
-func TestImplicitDecimalToInt64AvoidsDoubleRounding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	decimal128Below, err := types.ParseDecimal128("4"+strings.Repeat("9", 36), 38, 0)
+	decimal128, err := types.ParseDecimal128("9223372036854775808", 19, 0)
 	require.NoError(t, err)
-	decimal128Half, err := types.ParseDecimal128("5"+strings.Repeat("0", 36), 38, 0)
-	require.NoError(t, err)
-	decimal256Below, err := types.ParseDecimal256("4"+strings.Repeat("9", 63), 65, 0)
-	require.NoError(t, err)
-	decimal256Half, err := types.ParseDecimal256("5"+strings.Repeat("0", 63), 65, 0)
+	decimal256, err := types.ParseDecimal256("9223372036854775808", 39, 0)
 	require.NoError(t, err)
 
-	for _, tc := range []struct {
-		name  string
-		input FunctionTestInput
-	}{
-		{
-			name: "decimal64",
-			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 18), []types.Decimal64{
-				499999999999999999, 500000000000000000,
-				types.Decimal64(499999999999999999).Minus(), types.Decimal64(500000000000000000).Minus(),
-			}, nil),
-		},
-		{
-			name: "decimal128",
-			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 37), []types.Decimal128{
-				decimal128Below, decimal128Half, decimal128Below.Minus(), decimal128Half.Minus(),
-			}, nil),
-		},
-		{
-			name: "decimal256",
-			input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 64), []types.Decimal256{
-				decimal256Below, decimal256Half, decimal256Below.Minus(), decimal256Half.Minus(),
-			}, nil),
-		},
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.New(types.T_decimal128, 19, 0), []types.Decimal128{decimal128}, nil),
+		NewFunctionTestInput(types.New(types.T_decimal256, 39, 0), []types.Decimal256{decimal256}, nil),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
-				tc.input,
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 0, -1}, nil), NewCast)
-			ok, info := testCase.Run()
-			require.True(t, ok, info)
-		})
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			input,
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0}, nil), NewCast)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
 	}
 }
 
