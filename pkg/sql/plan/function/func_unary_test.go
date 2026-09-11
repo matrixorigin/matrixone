@@ -3343,14 +3343,145 @@ func TestBinTypeMatchPreservesNumericOverloads(t *testing.T) {
 
 	parameter, err := GetFunctionByName(proc.Ctx, "bin", []types.Type{types.T_any.ToType()})
 	require.NoError(t, err)
-	require.Equal(t, int32(10), parameter.overloadId)
-	require.True(t, parameter.needCast)
-	require.Equal(t, types.T_varchar, parameter.targetTypes[0].Oid)
+	require.Equal(t, int32(11), parameter.overloadId)
+	require.False(t, parameter.needCast)
+	require.Empty(t, parameter.targetTypes)
 
 	numeric, err := GetFunctionByName(proc.Ctx, "bin", []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
 	require.Equal(t, int32(7), numeric.overloadId)
 	require.False(t, numeric.needCast)
+}
+
+func TestBinDynamicTypedDispatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	date, err := types.ParseDateCast("2024-05-06")
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+	clock, err := types.ParseTime("12:34:56", 6)
+	require.NoError(t, err)
+	decimal, err := types.ParseDecimal64("15.5", 4, 1)
+	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal64, 4, 1)
+
+	cases := []struct {
+		name   string
+		input  FunctionTestInput
+		wanted []string
+		nulls  []bool
+	}{
+		{
+			name:   "bool",
+			input:  NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}),
+			wanted: []string{"1", "0", ""},
+			nulls:  []bool{false, false, true},
+		},
+		{
+			name:   "decimal truncates",
+			input:  NewFunctionTestInput(decimalType, []types.Decimal64{decimal}, []bool{false}),
+			wanted: []string{"1111"},
+			nulls:  []bool{false},
+		},
+		{
+			name:   "date uses packed date",
+			input:  NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			wanted: []string{"11111101000"},
+			nulls:  []bool{false},
+		},
+		{
+			name:   "datetime uses date portion",
+			input:  NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}),
+			wanted: []string{"11111101000"},
+			nulls:  []bool{false},
+		},
+		{
+			name:   "time uses hour",
+			input:  NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}),
+			wanted: []string{"1100"},
+			nulls:  []bool{false},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.wanted, tc.nulls), BinDynamic)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimalType, []types.Decimal64{decimal, decimal}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
+		BinDynamic).WithSelectList(&FunctionSelectList{AllNull: true})
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestBinDynamicCoversRemainingDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal128, err := types.ParseDecimal128("15.5", 20, 1)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("15.5", 65, 1)
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		input  FunctionTestInput
+		wanted []string
+	}{
+		{name: "varchar", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"10x"}, []bool{false}), wanted: []string{"1010"}},
+		{name: "varbinary", input: NewFunctionTestInput(types.T_varbinary.ToType(), []string{"10x"}, []bool{false}), wanted: []string{"1010"}},
+		{name: "int8", input: NewFunctionTestInput(types.T_int8.ToType(), []int8{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "int16", input: NewFunctionTestInput(types.T_int16.ToType(), []int16{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "int32", input: NewFunctionTestInput(types.T_int32.ToType(), []int32{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "int64", input: NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "uint8", input: NewFunctionTestInput(types.T_uint8.ToType(), []uint8{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "uint16", input: NewFunctionTestInput(types.T_uint16.ToType(), []uint16{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "uint32", input: NewFunctionTestInput(types.T_uint32.ToType(), []uint32{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "uint64", input: NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{10.5, 1e6, 1e-5}, []bool{false, false, false}), wanted: []string{"1010", "11110100001001000000", "0"}},
+		{name: "float64", input: NewFunctionTestInput(types.T_float64.ToType(), []float64{10.5}, []bool{false}), wanted: []string{"1010"}},
+		{name: "bit", input: NewFunctionTestInput(types.T_bit.ToType(), []uint64{10}, []bool{false}), wanted: []string{"1010"}},
+		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}), wanted: []string{"1111"}},
+		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 1), []types.Decimal256{decimal256}, []bool{false}), wanted: []string{"1111"}},
+		{name: "timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), wanted: []string{"11111101000"}},
+		{name: "year", input: NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), wanted: []string{"11111101000"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.wanted, []bool{false}), BinDynamic)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	t.Run("unsupported fixed width type is rejected", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{{}}, []bool{false})},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{true}), BinDynamic)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("untyped marker vector returns NULL", func(t *testing.T) {
+		input := vector.NewVec(types.T_any.ToType())
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, BinDynamic([]*vector.Vector{input}, result, proc, 1, nil))
+		_, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.True(t, isNull)
+	})
 }
 
 func initBinFloatTestCase() []tcTemp {
@@ -3380,6 +3511,47 @@ func TestBinFloat(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestBinFloatUsesMySQLNumericPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1e20, -1e20, 1.2345678901234567e-5, 1e-5, math.Ldexp(1, 63), 999999, 1e6, 1e15, 1e-16},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1", "1111111111111111111111111111111111111111111111111111111111111111", "1", "0", "1001", "11110100001000111111", "11110100001001000000", "1", "1"},
+			[]bool{false, false, false, false, false, false, false, false, false}), BinFloat[float64])
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestBinFloatNegativeWidthBoundaryPreservesPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1.2345678901234567e-4}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1111111111111111111111111111111111111111111111111111111111111111"},
+			[]bool{false}), BinFloat[float64])
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestBinFloatScientificWidthRoundsExponentCarry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-9.999999999999999e-100}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1111111111111111111111111111111111111111111111111111111111111111"},
+			[]bool{false}), BinFloat[float64])
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
 }
 
 func initBitLengthFuncTestCase() []tcTemp {
