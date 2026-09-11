@@ -16,8 +16,6 @@ package malloc
 
 import (
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -66,7 +64,7 @@ func init() {
 	go func() {
 		for {
 			slice := <-unmapChan
-			_ = unix.Munmap(slice)
+			unmapMemory(slice)
 		}
 	}()
 }
@@ -146,12 +144,7 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints, clearSize uint64) (slice 
 
 		default:
 			// allocate new
-			slice, err = unix.Mmap(
-				-1, 0,
-				int(f.size),
-				unix.PROT_READ|unix.PROT_WRITE,
-				unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-			)
+			slice, err = mmapMemory(int(f.size))
 			if err != nil {
 				return nil, nil, err
 			}
