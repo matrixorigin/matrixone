@@ -7676,7 +7676,7 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion62
+	return ok && protocolVersion >= defines.MORPCVersion63
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {

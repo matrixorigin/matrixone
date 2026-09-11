@@ -503,15 +503,15 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
-	// Version 61 belongs to index-metadata provenance and must remain below the
+	// Version 62 belongs to VARCHAR OCT overload identity and must remain below the
 	// admission boundary for extended discrete-percentile inputs.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion61)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion62)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, extended),
-		"extended discrete percentile input types require MORPC protocol version 62",
+		"extended discrete percentile input types require MORPC protocol version 63",
 	)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion62)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
 }
 
