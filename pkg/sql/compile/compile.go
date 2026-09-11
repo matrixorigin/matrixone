@@ -7718,6 +7718,32 @@ func hasVarianceAggregate(node *plan.Node) bool {
 	return false
 }
 
+// hasWidenedDecimalSum reports SUM expressions whose public result is
+// Decimal256. Before MORPC v65, a new CN can still exchange the legacy
+// Decimal128 partial state with an old CN, but a final shuffle Group evaluates
+// the state on its remote owner and sends the public result directly. That
+// final batch would be Decimal256 on the new binary and Decimal128 on the old
+// binary, so mixed-version clusters must use Group + coordinator MergeGroup.
+func hasWidenedDecimalSum(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+			int64(uint64(fn.Func.Obj)&function.DistinctMask) != aggexec.AggIdOfSum {
+			continue
+		}
+
+		input := fn.Args[0].Typ
+		oid := types.T(input.Id)
+		if oid != types.T_decimal64 && oid != types.T_decimal128 && oid != types.T_decimal256 {
+			continue
+		}
+		if aggexec.SumReturnType([]types.Type{types.New(oid, input.Width, input.Scale)}).Oid == types.T_decimal256 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -7757,6 +7783,16 @@ func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion35
+}
+
+func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion65
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -8023,7 +8059,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
-		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

@@ -3979,7 +3979,7 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
 
-func TestDecimalSumUsesLegacyStateBeforeProtocolV64(t *testing.T) {
+func TestDecimalSumUsesLegacyStateBeforeProtocolV65(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	rt := moruntime.ServiceRuntime(proc.GetService())
