@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,17 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 				exec(conns[0], fmt.Sprintf("create table %s(id bigint auto_increment primary key, v int) auto_id_cache=%d", name, policy))
 				exec(conns[0], "insert into "+name+"(v) values(7)")
 				exec(conns[0], "alter table "+name+" "+op)
+				// DDL commit on CN0 does not imply CN1 has replayed its logtail.
+				// Fence the observer to that commit rather than retrying stale SHOW.
+				writer, err := c.GetCNService(0)
+				require.NoError(t, err)
+				reader, err := c.GetCNService(1)
+				require.NoError(t, err)
+				commitTS := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+				readerClient := reader.RawService().(cnservice.Service).GetTxnClient()
+				_, err = readerClient.WaitLogTailAppliedAt(ctx, commitTS)
+				require.NoError(t, err)
+				readerClient.SyncLatestCommitTS(commitTS)
 				var table, ddl string
 				require.NoError(t, conns[1].QueryRowContext(ctx, "show create table "+name).Scan(&table, &ddl))
 				require.NotContains(t, ddl, "AUTO_ID_CACHE")
