@@ -172,6 +172,7 @@ func TestRegexpPredicateInvalidTextPrefix(t *testing.T) {
 func TestRegexpOutputEncoding(t *testing.T) {
 	for _, tc := range []struct{ input, prefix string }{
 		{"ASCII", "ASCII"}, {"éa", "éa"}, {"\xffa", ""}, {"a\xffb", "a"}, {"é\xc3", "é"},
+		{"a\xe0b", "a"}, {"a\xf0bb", "a"}, {"a\xf5b", "a"},
 	} {
 		prefix, err := regexpTextPrefix(tc.input)
 		require.NoError(t, err)
@@ -179,6 +180,7 @@ func TestRegexpOutputEncoding(t *testing.T) {
 	}
 	for _, input := range []string{
 		"\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", "a\xc3b",
+		"a\xffbbb", "a\xf5bbb",
 	} {
 		_, err := regexpTextPrefix(input)
 		require.Error(t, err, "%x", input)

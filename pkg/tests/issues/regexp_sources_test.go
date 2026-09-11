@@ -190,9 +190,12 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				subject, pattern string
 				position         int64
 			}{
-				{"\xffa", "a", 2},  // invalid byte is before pos and is discarded
-				{"a\xff", ".", 0},  // suffix begins with a truncatable byte
-				{"aa\xff", "a", 2}, // invalid byte is after the match
+				{"\xffa", "a", 2},   // invalid byte is before pos and is discarded
+				{"a\xff", ".", 0},   // suffix begins with a truncatable byte
+				{"aa\xff", "a", 2},  // invalid byte is after the match
+				{"a\xe0b", "a", 0},  // pos=2 suffix truncates to empty
+				{"a\xf0bb", "a", 0}, // F0-FF require four remaining bytes
+				{"a\xf5b", "a", 0},
 			} {
 				stmt, err := connection.PrepareContext(ctx, "select regexp_instr(?, ?, 2)")
 				require.NoError(t, err)
@@ -202,7 +205,10 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 			}
 		})
 		t.Run("malformed_text_errors", func(t *testing.T) {
-			for _, subject := range []string{"a\xc3b", "\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80"} {
+			for _, subject := range []string{
+				"a\xc3b", "\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80",
+				"a\xffbbb", "a\xf5bbb",
+			} {
 				for _, query := range []string{
 					"select ? regexp ?", "select regexp_like(?, ?)", "select regexp_instr(?, ?)",
 					"select regexp_substr(?, ?)", "select regexp_replace(?, ?, 'X')",
@@ -221,6 +227,30 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 					require.NoError(t, stmt.Close())
 				}
 			}
+		})
+		t.Run("replace_null_precedes_malformed_subject", func(t *testing.T) {
+			for _, query := range []string{
+				"select regexp_replace(?, ?, 'X')",
+				"select regexp_replace(?, 'a', ?)",
+				"select regexp_replace(?, 'a', 'X', ?)",
+				"select regexp_replace(?, 'a', 'X', 1, ?)",
+			} {
+				stmt, err := connection.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				var value sql.NullString
+				require.NoError(t, stmt.QueryRowContext(ctx, "a\xc3b", nil).Scan(&value), query)
+				require.False(t, value.Valid)
+				require.NoError(t, stmt.Close())
+			}
+			stmt, err := connection.PrepareContext(ctx, "select regexp_replace(?, 'a', ?)")
+			require.NoError(t, err)
+			var value sql.NullString
+			err = stmt.QueryRowContext(ctx, nil, "X\xc3Y").Scan(&value)
+			require.Error(t, err)
+			var sqlError *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlError)
+			require.Equal(t, uint16(3854), sqlError.Number)
+			require.NoError(t, stmt.Close())
 		})
 		t.Run("error_and_null_reuse", func(t *testing.T) {
 			stmt, err := connection.PrepareContext(ctx, "select regexp_substr(?, ?)")

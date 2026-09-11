@@ -52,6 +52,7 @@ func newRegexpStringParameter(
 }
 
 func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
+	p.err = nil
 	value, isNull := p.FunctionParameterWrapper.GetStrValue(row)
 	if isNull {
 		return value, true
@@ -85,41 +86,35 @@ func regexpTextPrefix(value string) (string, error) {
 			i++
 			continue
 		}
+		need := regexpUTF8InputWidth(value[i])
+		if need > 0 && len(value)-i < need {
+			return value[:i], nil
+		}
 		_, width := utf8.DecodeRuneInString(value[i:])
 		if width > 1 {
 			i += width
 			continue
 		}
-		if value[i] == 0xff || regexpIncompleteUTF8Tail(value[i:]) {
-			return value[:i], nil
-		}
 		return "", moerr.NewCannotConvertStringNoCtx(
-			hex.EncodeToString([]byte(value[i:min(i+4, len(value))])), "utf8mb4", "utf8mb4")
+			hex.EncodeToString([]byte(value[i:min(i+4, len(value))])), "utf8mb4", "utf16le")
 	}
 	return value, nil
 }
 
-func regexpIncompleteUTF8Tail(value string) bool {
-	need := 0
+func regexpUTF8InputWidth(lead byte) int {
 	switch {
-	case value[0] >= 0xc2 && value[0] <= 0xdf:
-		need = 2
-	case value[0] >= 0xe0 && value[0] <= 0xef:
-		need = 3
-	case value[0] >= 0xf0 && value[0] <= 0xf4:
-		need = 4
+	case lead >= 0xc2 && lead <= 0xdf:
+		return 2
+	case lead >= 0xe0 && lead <= 0xef:
+		return 3
+	case lead >= 0xf0:
+		// MySQL's regexp charset scanner applies the four-byte input-width
+		// test through 0xff, then rejects an invalid sequence only when all
+		// four input bytes are present.
+		return 4
 	default:
-		return false
+		return 0
 	}
-	if len(value) >= need {
-		return false
-	}
-	for i := 1; i < len(value); i++ {
-		if value[i]&0xc0 != 0x80 {
-			return false
-		}
-	}
-	return true
 }
 
 func regexpValidTextPrefix(value string) string {

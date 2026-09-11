@@ -1465,9 +1465,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p1.Error(); err != nil {
-				return err
-			}
 			if err := p2.Error(); err != nil {
 				return err
 			}
@@ -1490,6 +1487,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
+				if err := p1.Error(); err != nil {
+					return err
+				}
 				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, 1, 0, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
@@ -1518,9 +1518,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p1.Error(); err != nil {
-				return err
-			}
 			if err := p2.Error(); err != nil {
 				return err
 			}
@@ -1544,6 +1541,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
+				if err := p1.Error(); err != nil {
+					return err
+				}
 				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, v4, 0, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
@@ -1573,9 +1573,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			if err := p1.Error(); err != nil {
-				return err
-			}
 			if err := p2.Error(); err != nil {
 				return err
 			}
@@ -1600,6 +1597,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
+				if err := p1.Error(); err != nil {
+					return err
+				}
 				replacement := functionUtil.QuickBytesToStr(v3)
 				val, err := op.regMap.regularReplaceWithMode(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), replacement, v4, v5, matchingIsBinary)
 				val = regexpEncodeResult(val, matchingIsBinary, regexpResultUsesBinary(parameters, int(i)))
