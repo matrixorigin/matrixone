@@ -279,7 +279,7 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 		require.Equal(t, "group_concat_max_len", name)
 		require.True(t, system)
 		require.False(t, global)
-		return int64(5), nil
+		return uint64(5), nil
 	})
 
 	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}

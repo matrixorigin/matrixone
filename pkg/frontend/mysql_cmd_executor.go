@@ -2848,11 +2848,11 @@ func createPrepareStmtInSession(
 	if err != nil {
 		return nil, err
 	}
-	groupConcatLimit, validGroupConcat := groupConcatValue.(int64)
-	if !validGroupConcat || groupConcatLimit < 4 {
+	groupConcatLimit, validGroupConcat := groupConcatMaxLenAsUint64(groupConcatValue)
+	if !validGroupConcat || groupConcatLimit < groupConcatMaxLenMinimum {
 		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "invalid group_concat_max_len: %v", groupConcatValue)
 	}
-	groupConcatFloor := uint64(groupConcatLimit)
+	groupConcatFloor := groupConcatLimit
 
 	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(

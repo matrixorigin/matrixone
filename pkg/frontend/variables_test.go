@@ -17,8 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -76,11 +78,13 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(sv.Default, convey.ShouldEqual, int64(1024))
+		convey.So(sv.Default, convey.ShouldEqual, uint64(1024))
+		_, isUint := sv.Type.(SystemVariableUintType)
+		convey.So(isUint, convey.ShouldBeTrue)
 
 		got, err := sv.Type.Convert(sv.Default)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(got, convey.ShouldEqual, int64(1024))
+		convey.So(got, convey.ShouldEqual, uint64(1024))
 	})
 }
 
@@ -110,6 +114,63 @@ func TestDiagnosticCountSystemVariables(t *testing.T) {
 	assert.Error(t, err)
 	err = ses.SetSessionSysVar(context.Background(), warningCountSystemVariable, uint64(0))
 	assert.Error(t, err)
+}
+
+func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         uint64
+		wantWarning  bool
+		warningValue string
+	}{
+		{name: "zero", value: int64(0), want: 4, wantWarning: true, warningValue: "0"},
+		{name: "one", value: int64(1), want: 4, wantWarning: true, warningValue: "1"},
+		{name: "three", value: int64(3), want: 4, wantWarning: true, warningValue: "3"},
+		{name: "minimum", value: int64(4), want: 4},
+		{name: "int64 maximum", value: int64(math.MaxInt64), want: uint64(math.MaxInt64)},
+		{name: "above int64 maximum", value: uint64(math.MaxInt64) + 1, want: uint64(math.MaxInt64) + 1},
+		{name: "uint64 maximum", value: uint64(math.MaxUint64), want: uint64(math.MaxUint64)},
+		{name: "negative one", value: int64(-1), want: 4, wantWarning: true, warningValue: "-1"},
+		{name: "default", value: uint64(1024), want: 1024},
+		{name: "numeric string", value: "5", want: 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, tt.value)
+			assert.NoError(t, err)
+
+			got, err := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+
+			info := ses.diagnosticsSnapshot()
+			if tt.wantWarning {
+				assert.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, info.codes)
+				if len(info.msgs) > 0 {
+					assert.Equal(t,
+						groupConcatMaxLenTruncationWarning(tt.warningValue), info.msgs[0])
+				}
+			} else {
+				assert.Empty(t, info.codes)
+			}
+		})
+	}
+}
+
+func TestGroupConcatMaxLenFailedAssignmentKeepsPreviousValue(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
+
+	err := ses.SetSessionSysVar(
+		context.Background(), groupConcatMaxLenVariable, "18446744073709551616")
+	assert.Error(t, err)
+	got, getErr := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+	assert.NoError(t, getErr)
+	assert.Equal(t, uint64(1024), got)
+	assert.Empty(t, ses.diagnosticsSnapshot().codes)
 }
 
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
