@@ -59,6 +59,18 @@ MAX_CLOSED_GROUP_BYTES = MAX_LEDGER_BYTES
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
+# The handler IPC frame keeps the control metadata in pickle and transports
+# the Arrow bytes through protocol 5's out-of-band buffer.  The Arrow payload
+# itself is a RecordBatch message; its schema is reconstructed from the
+# frozen descriptors on both sides, so a schema message is not repeated for
+# every batch in a bounded invocation burst.
+HANDLER_ARROW_STREAM = "stream"
+HANDLER_ARROW_RECORD_BATCH = "record_batch"
+# A definition validation action carries one immutable source plus its typed
+# contract. The source itself is bounded by the artifact limit below; keep
+# the action envelope separate from MAX_CONTROL_BYTES, which bounds the
+# smaller per-invocation control frames.
+MAX_DEFINITION_VALIDATION_BYTES = (2 << 20) + MAX_CONTROL_BYTES
 MAX_HANDLER_PROCESSES = 8
 # H is a worker-wide child limit.  The two narrower limits prevent one
 # account, or one principal inside an account, from consuming all H slots.
@@ -303,6 +315,24 @@ def _definition_fingerprint(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_definition_json(body)).hexdigest()
 
 _CAPABILITY_REQUEST_KEYS = frozenset({"protocol_version"})
+_DEFINITION_VALIDATION_KEYS = frozenset(
+    {
+        "account_id",
+        "handler",
+        "source",
+        "mode",
+        "null_policy",
+        "abi_contract",
+        "adapter_version",
+        "sdk_version",
+        "definition_schema_version",
+        "artifact_digest",
+        "environment_digest",
+        "definition_fingerprint",
+        "args",
+        "return",
+    }
+)
 _CAPABILITY_RESPONSE_KEYS = frozenset(
     {
         "protocol_version",
@@ -761,6 +791,111 @@ def _decode_capability_request(data: bytes) -> Dict[str, Any]:
     return value
 
 
+def _decode_definition_validation(data: bytes) -> Dict[str, Any]:
+    """Decode the strict, pre-publication definition validation payload."""
+    if not data or len(data) > MAX_DEFINITION_VALIDATION_BYTES:
+        raise ValueError("PROTOCOL: invalid definition validation size")
+    try:
+        value = json.loads(
+            bytes(data).decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("PROTOCOL: invalid definition validation JSON") from exc
+    if not isinstance(value, dict) or set(value) != _DEFINITION_VALIDATION_KEYS:
+        raise ValueError("PROTOCOL: invalid definition validation fields")
+
+    account_id = value.get("account_id")
+    if (
+        isinstance(account_id, bool)
+        or not isinstance(account_id, int)
+        or account_id < 0
+        or account_id > (1 << 64) - 1
+    ):
+        raise ValueError("PROTOCOL: invalid definition validation account")
+    handler = _required_string(value, "handler")
+    if ":" in handler:
+        raise ValueError(
+            "UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires the immutable artifact catalog"
+        )
+    source = _required_string(value, "source")
+    try:
+        source_bytes = source.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("PROTOCOL: definition validation source is not valid UTF-8") from exc
+    if len(source_bytes) > (1 << 20):
+        raise ValueError("RESOURCE_EXHAUSTED: Python artifact exceeds 1048576 bytes")
+
+    mode = _required_string(value, "mode")
+    null_policy = _required_string(value, "null_policy")
+    abi_contract = _required_string(value, "abi_contract")
+    adapter_version = _required_string(value, "adapter_version")
+    sdk_version = _required_string(value, "sdk_version")
+    if mode not in (MODE_SCALAR, MODE_VECTOR) or null_policy not in (NULL_CALL, NULL_RETURN):
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python mode or NULL policy")
+    if abi_contract != ABI_CONTRACT or adapter_version != ADAPTER_VERSION:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python ABI contract")
+    if sdk_version != SDK_VERSION:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python SDK")
+    if value.get("definition_schema_version") != DEFINITION_SCHEMA_VERSION:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python definition schema")
+    artifact_digest = _required_digest(value, "artifact_digest")
+    environment_digest = _required_digest(value, "environment_digest")
+    definition_fingerprint = _required_digest(value, "definition_fingerprint")
+    if artifact_digest != _inline_artifact_digest(handler, source):
+        raise ValueError(
+            "UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the source"
+        )
+    if environment_digest != _environment_digest():
+        raise ValueError(
+            "UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the worker contract"
+        )
+
+    args = value.get("args")
+    result_descriptor = value.get("return")
+    if not isinstance(args, list) or any(not isinstance(item, dict) for item in args):
+        raise ValueError("TYPE_CONTRACT: definition validation args must be an array of descriptors")
+    if not isinstance(result_descriptor, dict):
+        raise ValueError("TYPE_CONTRACT: definition validation return must be a descriptor")
+    for index, descriptor in enumerate(args):
+        _field(f"arg_{index}", descriptor)
+    _field("return", result_descriptor)
+    expected_fingerprint = _definition_fingerprint(value)
+    if definition_fingerprint != expected_fingerprint:
+        raise ValueError(
+            "UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition"
+        )
+    return value
+
+
+def _validate_definition_syntax(value: Dict[str, Any]) -> None:
+    """Compile source without executing its module or resolving its handler."""
+    try:
+        compile(value["source"], "<matrixone-python-udf>", "exec")
+    except SyntaxError as exc:
+        line = exc.lineno or 0
+        column = exc.offset or 0
+        message = exc.msg or "invalid syntax"
+        raise ValueError(
+            f"USER_CODE: Python syntax error at line {line}, column {column}: {message}"
+        ) from exc
+
+
+def _encode_definition_validation_result(
+    value: Dict[str, Any], status: str, reason: Optional[str] = None
+) -> bytes:
+    response = {"status": status}
+    if reason:
+        response["reason"] = reason
+    if status == "OK":
+        response["artifact_digest"] = value["artifact_digest"]
+        response["definition_fingerprint"] = value["definition_fingerprint"]
+    return json.dumps(response, separators=(",", ":"), sort_keys=True, allow_nan=False).encode(
+        "utf-8"
+    )
+
+
 def _encode_capabilities(request: Dict[str, Any], lease_epoch: int = 1) -> bytes:
     _decode_capability_request(json.dumps(request, separators=(",", ":")).encode("utf-8"))
     if isinstance(lease_epoch, bool) or not isinstance(lease_epoch, int) or lease_epoch <= 0 or lease_epoch > (1 << 64) - 1:
@@ -1093,6 +1228,14 @@ def _field(name: str, descriptor: Dict[str, Any]) -> pa.Field:
     return pa.field(name, _arrow_type(descriptor), nullable=True, metadata=metadata)
 
 
+def _schema_from_descriptors(
+    descriptors: Iterable[Dict[str, Any]], prefix: str
+) -> pa.Schema:
+    return pa.schema(
+        [_field(f"{prefix}_{index}", descriptor) for index, descriptor in enumerate(descriptors)]
+    )
+
+
 TypeMetadataKey = b"mo.udf.type"
 TypeFingerprintKey = b"mo.udf.type_fingerprint"
 
@@ -1121,9 +1264,15 @@ def _validate_input_batch_schema(
     # Flight carries one stream schema, but each received RecordBatch still
     # owns a schema object.  Validate every batch so a later frame cannot
     # replace a fixed-width Arrow type after the first frame was admitted.
+    # The first batch validates every field against the descriptor.  Later
+    # batches only need the schema equality check in the normal case; rebuilding
+    # every Field and its metadata for every batch was measurable overhead on
+    # small W=1 bursts.  Retain the detailed validation on the mismatch path so
+    # a malformed later frame still gets the same contract diagnosis.
+    if batch.schema == expected_schema:
+        return
     _validate_schema(batch.schema, descriptors)
-    if batch.schema != expected_schema:
-        raise ValueError("TYPE_CONTRACT: input batch schema changed")
+    raise ValueError("TYPE_CONTRACT: input batch schema changed")
 
 
 def _load_handler(source: str, handler: str):
@@ -1385,8 +1534,21 @@ def _serialize_record_batch(record: pa.RecordBatch) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
+def _serialize_record_batch_message(record: pa.RecordBatch) -> memoryview:
+    """Serialize one Arrow record-batch message without repeating its schema."""
+    try:
+        # Keep the Arrow-owned buffer alive through the returned memoryview so
+        # the parent can hand it directly to protocol 5's out-of-band buffer
+        # without first copying it into a Python bytes object.
+        return memoryview(record.serialize())
+    except (pa.ArrowException, OSError, ValueError, TypeError) as exc:
+        raise ValueError("PROTOCOL: cannot serialize Arrow record batch") from exc
+
+
 def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
-    if not isinstance(data, (bytes, bytearray)) or not data:
+    if isinstance(data, pickle.PickleBuffer):
+        data = data.raw()
+    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
         raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
     try:
         reader = pa.ipc.open_stream(pa.py_buffer(data))
@@ -1406,15 +1568,46 @@ def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
         reader.close()
 
 
+def _deserialize_record_batch_message(data: Any, schema: pa.Schema) -> pa.RecordBatch:
+    """Decode one schema-free Arrow IPC record-batch message.
+
+    The schema is derived from the already validated routine descriptor.  This
+    is an internal handler IPC format, not a replacement for the Flight
+    schema, which remains validated independently at the worker boundary.
+    """
+    if isinstance(data, pickle.PickleBuffer):
+        data = data.raw()
+    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
+        raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
+    if not isinstance(schema, pa.Schema):
+        raise ValueError("PROTOCOL: execution payload schema is invalid")
+    try:
+        return pa.ipc.read_record_batch(pa.py_buffer(data), schema)
+    except (pa.ArrowException, OSError, ValueError, TypeError) as exc:
+        raise ValueError("PROTOCOL: execution payload is not a valid Arrow record batch") from exc
+
+
 def _execute_handler_batch(
     request: Dict[str, Any],
     *,
     handler=None,
     statement_context: Optional[StatementContext] = None,
+    input_schema: Optional[pa.Schema] = None,
+    result_schema: Optional[pa.Schema] = None,
 ) -> bytes:
-    batch = _deserialize_record_batch(request["input"])
     args = request["args"]
     result_descriptor = request["return"]
+    arrow_encoding = request.get("arrow_encoding", HANDLER_ARROW_STREAM)
+    if arrow_encoding == HANDLER_ARROW_RECORD_BATCH:
+        if input_schema is None:
+            input_schema = _schema_from_descriptors(args, "arg")
+        batch = _deserialize_record_batch_message(
+            request["input"], input_schema
+        )
+    elif arrow_encoding == HANDLER_ARROW_STREAM:
+        batch = _deserialize_record_batch(request["input"])
+    else:
+        raise ValueError("PROTOCOL: unsupported handler Arrow encoding")
     mode = request["mode"]
     null_policy = request["null_policy"]
     sdk_version = request["sdk_version"]
@@ -1442,12 +1635,15 @@ def _execute_handler_batch(
                     values.append(handler(call_context, *params))
             output = values
         output_array = _output_array(output, result_descriptor, batch.num_rows)
-        result_field = _field("result", result_descriptor)
+        if result_schema is None:
+            result_schema = pa.schema([_field("result", result_descriptor)])
         result_batch = pa.RecordBatch.from_arrays(
-            [output_array], schema=pa.schema([result_field])
+            [output_array], schema=result_schema
         )
         if pa.ipc.get_record_batch_size(result_batch) > request["max_batch_bytes"]:
             raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
+        if arrow_encoding == HANDLER_ARROW_RECORD_BATCH:
+            return _serialize_record_batch_message(result_batch)
         return _serialize_record_batch(result_batch)
 
 
@@ -1467,6 +1663,78 @@ def _write_execution_frame(stream, payload: bytes) -> None:
     stream.write(struct.pack(">Q", len(payload)))
     stream.write(payload)
     stream.flush()
+
+
+def _encode_execution_request(request: Dict[str, Any]):
+    """Build a handler frame without copying Arrow bytes into pickle.
+
+    The outer length bounds the complete frame.  The first eight bytes of the
+    payload bound the pickle metadata, and protocol 5 carries exactly one
+    out-of-band Arrow buffer.  Returning write parts lets the nonblocking
+    sender avoid concatenating another full request-sized byte string.
+    """
+    if not isinstance(request, dict) or "input" not in request:
+        raise ValueError("PROTOCOL: execution request is missing an Arrow batch")
+    input_wire = request["input"]
+    if isinstance(input_wire, pickle.PickleBuffer):
+        input_wire = input_wire.raw()
+    if not isinstance(input_wire, (bytes, bytearray, memoryview)):
+        raise ValueError("PROTOCOL: execution request Arrow batch is not bytes-like")
+    if not input_wire:
+        raise ValueError("PROTOCOL: execution request Arrow batch is empty")
+    metadata = dict(request)
+    metadata["input"] = pickle.PickleBuffer(input_wire)
+    buffers = []
+    try:
+        metadata_wire = pickle.dumps(
+            metadata, protocol=5, buffer_callback=buffers.append
+        )
+    except (pickle.PickleError, TypeError, ValueError) as exc:
+        raise ValueError("PROTOCOL: cannot encode execution request") from exc
+    if len(buffers) != 1:
+        raise ValueError("PROTOCOL: execution request must contain one Arrow buffer")
+    arrow_wire = buffers[0].raw()
+    payload_size = 8 + len(metadata_wire) + len(arrow_wire)
+    if payload_size > MAX_EXECUTION_FRAME_BYTES:
+        raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+    parts = (
+        struct.pack(">Q", payload_size),
+        struct.pack(">Q", len(metadata_wire)),
+        metadata_wire,
+        arrow_wire,
+    )
+    return parts, payload_size
+
+
+def _read_execution_request(stream) -> Optional[Dict[str, Any]]:
+    """Read and validate one metadata plus out-of-band Arrow frame."""
+    header = stream.read(8)
+    if not header:
+        return None
+    if len(header) != 8:
+        raise EOFError("execution request header ended unexpectedly")
+    payload_size = struct.unpack(">Q", header)[0]
+    if payload_size > MAX_EXECUTION_FRAME_BYTES or payload_size < 8:
+        raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+    metadata_size = struct.unpack(">Q", _read_exact(stream, 8))[0]
+    if metadata_size > payload_size - 8:
+        raise ValueError("PROTOCOL: execution request metadata is too large")
+    metadata_wire = _read_exact(stream, metadata_size)
+    arrow_size = payload_size - 8 - metadata_size
+    if arrow_size <= 0:
+        raise ValueError("PROTOCOL: execution request Arrow batch is empty")
+    arrow_wire = _read_exact(stream, arrow_size)
+    try:
+        request = pickle.loads(
+            metadata_wire, buffers=[pickle.PickleBuffer(arrow_wire)]
+        )
+    except (EOFError, pickle.PickleError, TypeError, ValueError) as exc:
+        raise ValueError("PROTOCOL: execution request metadata is invalid") from exc
+    if not isinstance(request, dict) or not isinstance(
+        request.get("input"), pickle.PickleBuffer
+    ):
+        raise ValueError("PROTOCOL: execution request does not contain one Arrow buffer")
+    return request
 
 
 def _watch_parent_liveness(read_fd: int) -> None:
@@ -1546,19 +1814,14 @@ def _execute_handler_subprocess() -> None:
         frozen = None
         handler = None
         statement_context = None
+        input_schema = None
+        result_schema = None
         while True:
-            header = sys.stdin.buffer.read(8)
-            if not header:
-                break
-            if len(header) != 8:
-                raise EOFError("execution request header ended unexpectedly")
-            size = struct.unpack(">Q", header)[0]
-            if size > MAX_EXECUTION_FRAME_BYTES:
-                raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
             try:
-                request = pickle.loads(_read_exact(sys.stdin.buffer, size))
-                if not isinstance(request, dict):
-                    raise ValueError("PROTOCOL: execution request is not an object")
+                request = _read_execution_request(sys.stdin.buffer)
+                if request is None:
+                    # EOF before a new frame is the normal burst shutdown.
+                    break
                 contract = {
                     key: request.get(key)
                     for key in (
@@ -1566,17 +1829,24 @@ def _execute_handler_subprocess() -> None:
                         "adapter_version", "sdk_version", "definition_schema_version",
                         "artifact_digest", "environment_digest", "definition_fingerprint",
                         "context", "args", "return", "max_batch_bytes", "max_batch_rows",
-                        "max_invocation_rows", "max_invocation_result_bytes",
+                        "max_invocation_rows", "max_invocation_result_bytes", "arrow_encoding",
                     )
                 }
                 if frozen is None:
                     frozen = contract
                     statement_context = _statement_context(request.get("context"))
                     handler = _load_handler(request["source"], request["handler"])
+                    if request.get("arrow_encoding") == HANDLER_ARROW_RECORD_BATCH:
+                        input_schema = _schema_from_descriptors(request["args"], "arg")
+                        result_schema = pa.schema([_field("result", request["return"])])
                 elif contract != frozen:
                     raise ValueError("PROTOCOL: handler burst contract changed")
                 response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(
-                    request, handler=handler, statement_context=statement_context
+                    request,
+                    handler=handler,
+                    statement_context=statement_context,
+                    input_schema=input_schema,
+                    result_schema=result_schema,
                 )
             except Exception as exc:
                 response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
@@ -1974,13 +2244,11 @@ class _HandlerProcessSession:
         # unbounded part of the caller's budget before the deadline was even
         # installed.
         deadline = time.monotonic() + timeout_seconds
-        request_wire = pickle.dumps(request, protocol=5)
+        request_parts, request_size = _encode_execution_request(request)
         if time.monotonic() >= deadline:
             raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
-        if len(request_wire) > MAX_EXECUTION_FRAME_BYTES:
-            raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
-        request_frame = struct.pack(">Q", len(request_wire)) + request_wire
-        request_offset = 0
+        request_part_index = 0
+        request_part_offset = 0
         stdin_fd = self._process.stdin.fileno()
         self._selector.register(stdin_fd, selectors.EVENT_WRITE, "request")
         try:
@@ -1997,13 +2265,25 @@ class _HandlerProcessSession:
                 for event, _ in events:
                     if event.data == "request":
                         try:
-                            written = os.write(stdin_fd, request_frame[request_offset:])
+                            while request_part_index < len(request_parts):
+                                part = request_parts[request_part_index]
+                                if request_part_offset == len(part):
+                                    request_part_index += 1
+                                    request_part_offset = 0
+                                    continue
+                                written = os.write(stdin_fd, part[request_part_offset:])
+                                if written <= 0:
+                                    raise BrokenPipeError("handler request channel made no progress")
+                                request_part_offset += written
+                                if request_part_offset < len(part):
+                                    break
                         except BlockingIOError:
                             continue
                         except BrokenPipeError as exc:
-                            raise ValueError("USER_CODE: handler process closed its request channel") from exc
-                        request_offset += written
-                        if request_offset == len(request_frame):
+                            raise ValueError(
+                                "USER_CODE: handler process closed its request channel"
+                            ) from exc
+                        if request_part_index == len(request_parts):
                             self._selector.unregister(stdin_fd)
                     else:
                         try:
@@ -2031,7 +2311,7 @@ class _HandlerProcessSession:
                 raise ValueError("PROTOCOL: handler process returned an unknown status")
             output = response[1:]
             self._burst_batches += 1
-            self._burst_bytes += len(request_wire) + len(response)
+            self._burst_bytes += request_size + len(response)
             return output
         finally:
             # A failed write/read must not leave a stale registration that a
@@ -2727,6 +3007,23 @@ class RoutineFlightServer(flight.FlightServerBase):
             # path before any routine is opened.
             yield flight.Result(_encode_capabilities(request, self._lease_epoch))
             return
+        if action.type == "ValidatePythonDefinition":
+            value = _decode_definition_validation(action.body)
+            try:
+                _validate_definition_syntax(value)
+            except Exception as exc:
+                # A syntax error is a definition result, not an invocation
+                # failure. Returning a bounded structured result lets the
+                # Gateway reject CREATE/REPLACE without creating an active
+                # invocation, handler process, or terminal tombstone.
+                yield flight.Result(
+                    _encode_definition_validation_result(
+                        value, "ERROR", _safe_error(exc)
+                    )
+                )
+            else:
+                yield flight.Result(_encode_definition_validation_result(value, "OK"))
+            return
         control = _decode_control(action.body)
         key = _tuple_key(control["tuple"])
         self._require_current_lease(key)
@@ -2924,7 +3221,8 @@ class RoutineFlightServer(flight.FlightServerBase):
                         "max_batch_rows": max_batch_rows,
                         "max_invocation_rows": max_invocation_rows,
                         "max_invocation_result_bytes": max_invocation_result_bytes,
-                        "input": _serialize_record_batch(batch),
+                        "arrow_encoding": HANDLER_ARROW_RECORD_BATCH,
+                        "input": _serialize_record_batch_message(batch),
                     }
                     if handler_session is None:
                         owner_id = _handler_quota_owner(payload)
@@ -2937,7 +3235,9 @@ class RoutineFlightServer(flight.FlightServerBase):
                     output_wire = handler_session.run(
                         context, execution_request, handler_timeout_seconds
                     )
-                    output_batch = _deserialize_record_batch(output_wire)
+                    output_batch = _deserialize_record_batch_message(
+                        output_wire, result_schema
+                    )
                     if output_batch.num_rows != batch.num_rows or output_batch.num_columns != 1:
                         raise ValueError("TYPE_CONTRACT: handler result has the wrong shape")
                     _validate_field(output_batch.schema.field(0), "result", result_descriptor)
