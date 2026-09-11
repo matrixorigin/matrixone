@@ -5002,19 +5002,63 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 		return true, 0, nil, nil
 	}
 
-	temp := (end - start + 1) / int64(parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		tempEnd := start + temp - 1
-		if i == parallelSize-1 {
-			tempEnd = end
-		}
+	offset, ok := generateSeriesOffsets(start, end, step, parallelSize)
+	if !ok {
+		return false, 0, nil, nil
+	}
+	return true, step, offset, nil
+}
 
-		arr := [2]int64{start, tempEnd}
-		offset = append(offset, arr)
-		start = tempEnd + 1
+func generateSeriesOffsets(start, end, step int64, parallelSize int) ([][2]int64, bool) {
+	if parallelSize <= 0 || step == 0 ||
+		(step > 0 && start > end) || (step < 0 && start < end) {
+		return nil, false
 	}
 
-	return true, step, offset, nil
+	var distance, stepMagnitude uint64
+	if step > 0 {
+		distance = uint64(end) - uint64(start)
+		stepMagnitude = uint64(step)
+	} else {
+		distance = uint64(start) - uint64(end)
+		stepMagnitude = uint64(-(step + 1)) + 1
+	}
+	lastIndex := distance / stepMagnitude
+	if lastIndex == math.MaxUint64 {
+		// Keep the only cardinality that cannot fit in uint64 on the serial path.
+		return nil, false
+	}
+	count := lastIndex + 1
+	shardCount := uint64(parallelSize)
+	if count < shardCount {
+		return nil, false
+	}
+
+	baseSize := count / shardCount
+	extra := count % shardCount
+	offsets := make([][2]int64, 0, parallelSize)
+	var firstIndex uint64
+	for shard := uint64(0); shard < shardCount; shard++ {
+		size := baseSize
+		if shard < extra {
+			size++
+		}
+		lastIndex := firstIndex + size - 1
+		offsets = append(offsets, [2]int64{
+			generateSeriesValueAt(start, step, stepMagnitude, firstIndex),
+			generateSeriesValueAt(start, step, stepMagnitude, lastIndex),
+		})
+		firstIndex = lastIndex + 1
+	}
+	return offsets, true
+}
+
+func generateSeriesValueAt(start, step int64, stepMagnitude, index uint64) int64 {
+	delta := index * stepMagnitude
+	if step > 0 {
+		return int64(uint64(start) + delta)
+	}
+	return int64(uint64(start) - delta)
 }
 
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
