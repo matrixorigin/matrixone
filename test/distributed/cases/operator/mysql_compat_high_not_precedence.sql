@@ -19,7 +19,11 @@ SELECT
   NOT (0 IN (0, 1)) AS parenthesized_not_in,
   (NOT 0) IN (0, 1) AS explicit_not_in;
 
+SELECT NOT 1 BETWEEN 2 AND 3 AS cached_not;
+
 SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+SELECT NOT 1 BETWEEN 2 AND 3 AS cached_not;
+
 SELECT
   NOT 1 BETWEEN 2 AND 3 AS high_not_between,
   NOT (1 BETWEEN 2 AND 3) AS parenthesized_not_between,

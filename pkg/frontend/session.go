@@ -1391,10 +1391,23 @@ func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasHighNotPrecedence() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasHighNotPrecedenceValue(value)
+	return ok && has
+}
+
 // updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
-// the plan changes membership. Every token the planner reads at bind time
-// must be compared here: the cache is keyed by SQL text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
+// the plan or parser output changes membership. Every token the planner or
+// parser reads at bind time must be compared here: the cache is keyed by SQL
+// text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1408,8 +1421,12 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSu
 	if !ok {
 		return
 	}
+	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
+	if !ok {
+		return
+	}
 	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg {
+		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence {
 		ses.cleanCache()
 	}
 }

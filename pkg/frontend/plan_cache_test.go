@@ -461,6 +461,12 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "HIGH_NOT_PRECEDENCE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
