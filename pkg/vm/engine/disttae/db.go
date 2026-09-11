@@ -704,7 +704,9 @@ func parseSnapshotCheckpointEntries(
 
 // requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
 // from a checkpoint set that cannot cover the requested snapshot. TN reports
-// the former as Succeed=false, so retry it with a bounded, context-aware wait.
+// the former as Succeed=false, so retry it with a context-aware wait. A caller
+// deadline is the operation's authoritative budget; the fallback timeout only
+// protects callers that did not provide one.
 // Once TN reports success, getOrCreateSnapPartBy still validates the returned
 // checkpoint range before using it.
 func requestSnapshotReadUntilReady(
@@ -712,23 +714,32 @@ func requestSnapshotReadUntilReady(
 	tbl *txnTable,
 	snapshot *types.TS,
 	retryInterval time.Duration,
-	retryTimeout time.Duration,
+	fallbackRetryTimeout time.Duration,
 ) (*cmd_util.SnapshotReadResp, error) {
-	retryCtx, cancel := context.WithTimeoutCause(
-		ctx,
-		retryTimeout,
-		moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
-	)
+	retryCtx := ctx
+	cancel := func() {}
+	if _, hasCallerDeadline := ctx.Deadline(); !hasCallerDeadline {
+		retryCtx, cancel = context.WithTimeoutCause(
+			ctx,
+			fallbackRetryTimeout,
+			moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
+		)
+	}
 	defer cancel()
 
 	var resp *cmd_util.SnapshotReadResp
 	err := common.RetryWithInterval(
 		retryCtx,
 		func() (bool, error) {
-			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
+			// The fallback retry context only bounds completed Succeed=false
+			// responses. A ready snapshot request may legitimately take longer while
+			// TN walks a long checkpoint-manifest chain. Keep that in-flight work
+			// under the caller's context instead of misclassifying it as checkpoint
+			// lag when the fallback budget expires.
+			response, err := RequestSnapshotRead(ctx, tbl, snapshot)
 			if err != nil {
-				if retryCtx.Err() != nil {
-					return true, context.Cause(retryCtx)
+				if ctx.Err() != nil {
+					return true, context.Cause(ctx)
 				}
 				return true, err
 			}

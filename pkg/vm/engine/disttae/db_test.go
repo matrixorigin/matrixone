@@ -124,7 +124,36 @@ func TestRequestSnapshotReadUntilReadyBoundsCheckpointLag(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), err)
 }
 
-func TestRequestSnapshotReadUntilReadyPreservesRetryTimeoutCause(t *testing.T) {
+func TestRequestSnapshotReadUntilReadyUsesCallerDeadlineForCheckpointLag(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	calls := 0
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		calls++
+		return &cmd_util.SnapshotReadResp{Succeed: calls > 4}, nil
+	}
+
+	ts := types.BuildTS(10, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := requestSnapshotReadUntilReady(
+		ctx,
+		&txnTable{},
+		&ts,
+		10*time.Millisecond,
+		20*time.Millisecond,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.Succeed)
+	require.Equal(t, 5, calls)
+}
+
+func TestRequestSnapshotReadUntilReadyDoesNotCancelReadyRequestAtRetryTimeout(t *testing.T) {
 	oldRequestSnapshotRead := RequestSnapshotRead
 	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
 
@@ -133,20 +162,26 @@ func TestRequestSnapshotReadUntilReadyPreservesRetryTimeoutCause(t *testing.T) {
 		_ *txnTable,
 		_ *types.TS,
 	) (any, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(40 * time.Millisecond):
+			return &cmd_util.SnapshotReadResp{Succeed: true}, nil
+		}
 	}
 
 	ts := types.BuildTS(10, 0)
-	_, err := requestSnapshotReadUntilReady(
-		context.Background(),
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := requestSnapshotReadUntilReady(
+		ctx,
 		&txnTable{},
 		&ts,
 		time.Hour,
 		20*time.Millisecond,
 	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), err)
+	require.NoError(t, err)
+	require.True(t, resp.Succeed)
 }
 
 func TestRequestSnapshotReadUntilReadyHonorsCallerCancellation(t *testing.T) {
