@@ -25,6 +25,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,15 +33,16 @@ import (
 // planSearchGeneration is fully initialized before readers are published. Its
 // immutable state is shared; only reference ownership changes during execution.
 type planSearchGeneration struct {
-	proc        *process.Process
-	snapshot    client.TxnOperator
-	membership  docfilter.MembershipFilter
-	route       []int64
-	search      func(*planReader) error
-	refs        atomic.Int32
-	parallelism int32
-	completed   atomic.Int32
-	outputRows  atomic.Uint64
+	proc         *process.Process
+	snapshot     client.TxnOperator
+	membership   docfilter.MembershipFilter
+	route        []int64
+	search       func(*planReader) error
+	refs         atomic.Int32
+	parallelism  int32
+	completed    atomic.Int32
+	outputRows   atomic.Uint64
+	prepareStats vectorindex.IvfExecutionDiagnostic
 }
 
 func (s *planSearchGeneration) release() {
@@ -132,6 +134,9 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 	if err := prototype.prepareSearch(true); err != nil {
 		return nil, err
 	}
+	if prototype.executionStats != nil {
+		session.prepareStats = *prototype.executionStats
+	}
 	readers := make([]engine.Reader, 0, parallelism)
 	for i := 0; i < parallelism; i++ {
 		child := session.proc.NewContextChildProc(0)
@@ -149,6 +154,9 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		r.scanner.generation = session
 		r.scanner.partitionCount, r.scanner.partitionIndex = int32(parallelism), int32(i)
 		r.scanner.ownsInMemory = i == 0
+		if i == 0 && r.executionStats != nil {
+			r.executionStats.Merge(session.prepareStats)
+		}
 		readers = append(readers, r)
 	}
 	return readers, nil

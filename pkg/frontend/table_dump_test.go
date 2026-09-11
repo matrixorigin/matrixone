@@ -1355,6 +1355,7 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 			"index_algo_table_type": "",
 			"source_table": "src",
 			"schema_hash": "relation",
+			"logical_schema_hash": "logical-relation",
 			"auto_increment": [{"column": "id", "high_watermark": 42}],
 			"unknown_relation_field": [{"ignored": true}],
 			"objects": [{"name": "object"}]
@@ -1365,6 +1366,7 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 	require.Equal(t, "src", manifest.SourceTable)
 	require.True(t, manifest.MetadataOnly)
 	require.Len(t, manifest.Relations, 1)
+	require.Equal(t, "logical-relation", manifest.Relations[0].LogicalSchemaHash)
 	require.Equal(t, []tableDumpAutoIncr{{Column: "id", HighWatermark: 42}}, manifest.Relations[0].AutoIncrement)
 	require.Len(t, manifest.Relations[0].Objects, 1)
 
@@ -1824,4 +1826,114 @@ func TestTableSchemaHashFallback(t *testing.T) {
 	require.Error(t, err)
 	_, err = tableSchemaHash(&plan.TableDef{Createsql: "not valid sql", Cols: []*plan.ColDef{{Name: "a"}}})
 	require.Error(t, err)
+}
+
+func TestTableLogicalSchemaHashNormalizesIndexDefaults(t *testing.T) {
+	secondaryIndexDef := func(defaultCharset uint32) *plan.TableDef {
+		return &plan.TableDef{
+			Name:           "__mo_index_secondary_debug",
+			TableType:      catalog.SystemIndexRel,
+			DefaultCharset: defaultCharset,
+			Cols: []*plan.ColDef{
+				{
+					Name: catalog.IndexTableIndexColName, Primary: true,
+					Typ:     plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Charset: uint32(types.CharsetBinary)},
+					Default: &plan.Default{},
+				},
+				{
+					Name:    catalog.IndexTablePrimaryColName,
+					Typ:     plan.Type{Id: int32(types.T_varchar), Width: 255, Charset: uint32(types.CharsetUTF8)},
+					Default: &plan.Default{},
+				},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				Names: []string{catalog.IndexTableIndexColName}, PkeyColName: catalog.IndexTableIndexColName,
+			},
+		}
+	}
+
+	source := secondaryIndexDef(uint32(types.CharsetLegacy))
+	recreated := secondaryIndexDef(uint32(types.CharsetUTF8))
+	sourceLegacyHash, err := tableSchemaHash(source)
+	require.NoError(t, err)
+	recreatedLegacyHash, err := tableSchemaHash(recreated)
+	require.NoError(t, err)
+	require.NotEqual(t, sourceLegacyHash, recreatedLegacyHash)
+
+	sourceHash, err := tableLogicalSchemaHashWithResolver(t.Context(), source, nil)
+	require.NoError(t, err)
+	recreatedHash, err := tableLogicalSchemaHashWithResolver(t.Context(), recreated, nil)
+	require.NoError(t, err)
+	require.Equal(t, sourceHash, recreatedHash)
+	require.Equal(t, uint32(types.CharsetLegacy), source.DefaultCharset, "hashing must not mutate catalog metadata")
+
+	recreated.Cols[1].Typ.Charset = uint32(types.CharsetBinary)
+	incompatibleHash, err := tableLogicalSchemaHashWithResolver(t.Context(), recreated, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, sourceHash, incompatibleHash, "effective index column charset must remain part of the schema")
+
+	legacyColumn := secondaryIndexDef(uint32(types.CharsetLegacy))
+	legacyColumn.Cols[1].Typ.Charset = uint32(types.CharsetLegacy)
+	replayedColumn := secondaryIndexDef(uint32(types.CharsetUTF8MB4Bin))
+	replayedColumn.Cols[1].Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+	legacyColumnHash, err := tableLogicalSchemaHashWithResolver(t.Context(), legacyColumn, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetLegacy), legacyColumn.Cols[1].Typ.Charset,
+		"hashing must not mutate catalog column metadata")
+	replayedColumnHash, err := tableLogicalSchemaHashWithResolver(t.Context(), replayedColumn, nil)
+	require.NoError(t, err)
+	require.Equal(t, legacyColumnHash, replayedColumnHash,
+		"legacy bytewise index columns and their replay-safe spelling must compare equal")
+}
+
+func TestTableLogicalSchemaHashIgnoresIndexDefaultWithoutText(t *testing.T) {
+	definition := func(defaultCharset uint32, createSQL string) *plan.TableDef {
+		return &plan.TableDef{
+			Name:           "__mo_index_secondary_centroids",
+			TableType:      catalog.SystemIndexRel,
+			DefaultCharset: defaultCharset,
+			Createsql:      createSQL,
+			Cols: []*plan.ColDef{
+				{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "centroid", Typ: plan.Type{Id: int32(types.T_array_float64), Width: 1024}, Default: &plan.Default{NullAbility: true}},
+			},
+		}
+	}
+
+	legacy := definition(uint32(types.CharsetLegacy), "")
+	recreated := definition(uint32(types.CharsetUTF8), "create table replayed(version bigint not null, centroid vecf64(1024))")
+	legacyStorageHash, err := tableSchemaHash(legacy)
+	require.NoError(t, err)
+	recreatedStorageHash, err := tableSchemaHash(recreated)
+	require.NoError(t, err)
+	require.NotEqual(t, legacyStorageHash, recreatedStorageHash,
+		"catalog DDL presence historically selected a different hashing representation")
+	legacyHash, err := tableLogicalSchemaHashWithResolver(t.Context(), legacy, nil)
+	require.NoError(t, err)
+	recreatedHash, err := tableLogicalSchemaHashWithResolver(t.Context(), recreated, nil)
+	require.NoError(t, err)
+	require.Equal(t, legacyHash, recreatedHash)
+
+	ordinary := definition(uint32(types.CharsetLegacy), "")
+	ordinary.TableType = catalog.SystemOrdinaryRel
+	recreatedOrdinary := definition(uint32(types.CharsetUTF8), "")
+	recreatedOrdinary.TableType = catalog.SystemOrdinaryRel
+	ordinaryHash, err := tableSchemaHash(ordinary)
+	require.NoError(t, err)
+	recreatedOrdinaryHash, err := tableSchemaHash(recreatedOrdinary)
+	require.NoError(t, err)
+	require.NotEqual(t, ordinaryHash, recreatedOrdinaryHash, "user-table defaults must remain part of the schema")
+}
+
+func TestTableDumpRelationSchemaMatches(t *testing.T) {
+	target := tableDumpRelation{SchemaHash: "legacy", LogicalSchemaHash: "logical"}
+	require.True(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{SchemaHash: "legacy"}),
+		"manifests created before logical hashes must keep using the legacy hash")
+	require.False(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{SchemaHash: "other"}))
+	require.True(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{
+		SchemaHash: "other", LogicalSchemaHash: "logical",
+	}))
+	require.False(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{
+		SchemaHash: "legacy", LogicalSchemaHash: "other",
+	}), "a present logical hash must not fall back to the legacy hash")
 }

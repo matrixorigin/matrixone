@@ -14013,7 +14013,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg1 := tree.NewTimeUnitExpr(str)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
