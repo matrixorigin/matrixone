@@ -51,15 +51,28 @@ func requireConjunctiveParity(t *testing.T, s *Segment, query string, allow Memb
 		want, err := s.searchBooleanFull(q, algo, int(s.N)+1, allow, nil)
 		require.NoError(t, err)
 		got := s.searchConjunctiveTerms(clauses, algo, int(s.N)+1, allow, nil)
-		require.Equal(t, resultScoreBits(want), resultScoreBits(got),
+		wantBits := resultScoreBits(want)
+		gotBits := resultScoreBits(got)
+		require.Len(t, wantBits, len(want), "query=%q algo=%d fallback PKs must be unique", query, algo)
+		require.Len(t, gotBits, len(got), "query=%q algo=%d conjunctive PKs must be unique", query, algo)
+		require.Equal(t, wantBits, gotBits,
 			"query=%q algo=%d must preserve pk and float32 score bits", query, algo)
 
-		for _, k := range []int{1, 3, 10, int(s.N) + 1} {
+		// k<=0 is the API's empty-result boundary; the no-LIMIT SQL path
+		// normalizes its runtime limit to N before reaching this helper.
+		for _, k := range []int{0, 1, 3, 10, int(s.N) + 1} {
 			routed, err := s.SearchBoolean(q, algo, k, allow, nil)
 			require.NoError(t, err)
 			legacy, err := s.searchBooleanFull(q, algo, k, allow, nil)
 			require.NoError(t, err)
 			require.Equal(t, len(legacy), len(routed), "query=%q algo=%d k=%d", query, algo, k)
+			routedBits := resultScoreBits(routed)
+			require.Len(t, routedBits, len(routed), "query=%q algo=%d k=%d routed PKs must be unique", query, algo, k)
+			for pk, bits := range routedBits {
+				wantScore, ok := wantBits[pk]
+				require.True(t, ok, "query=%q algo=%d k=%d routed PK is not a full-evaluator hit: %v", query, algo, k, pk)
+				require.Equal(t, wantScore, bits, "query=%q algo=%d k=%d routed PK score bits", query, algo, k)
+			}
 			for i := range legacy {
 				require.Equal(t, math.Float32bits(legacy[i].Score), math.Float32bits(routed[i].Score),
 					"query=%q algo=%d k=%d rank=%d", query, algo, k, i)
@@ -219,6 +232,133 @@ func TestConjunctiveParityBuildAndLoaded(t *testing.T) {
 			a := ordSet{1: {}, 5: {}, 11: {}, 17: {}}
 			b := ordSet{5: {}, 11: {}, 23: {}}
 			requireConjunctiveParity(t, s, "+alpha +beta", andMembership{a: a, b: b})
+		})
+	}
+}
+
+// TestConjunctiveBoundaryAndEmptyParity exercises the ordered posting
+// intersection across multiple posting blocks.  common/alpha are dense and
+// beta is selective but still spans more than one block, while missing-term
+// cases must return an empty result without changing the build/loaded score
+// contract.
+func TestConjunctiveBoundaryAndEmptyParity(t *testing.T) {
+	const nDocs = 3*BlockSize + 5
+	b := NewBuilder("conj-boundary", int32(types.T_int64))
+	for i := 0; i < nDocs; i++ {
+		words := []string{"common", "alpha"}
+		if i%2 == 0 {
+			words = append(words, "beta")
+			if i == 2*BlockSize {
+				words = append(words, "beta") // a tf>1 boundary witness
+			}
+		}
+		feed(t, b, int64(i+1), words...)
+	}
+	build, err := b.Finish()
+	require.NoError(t, err)
+	blob, err := build.Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("conj-boundary-loaded", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+	require.Greater(t, build.terms["beta"].df(), BlockSize)
+	loadedBeta, ok := loaded.lookup("beta")
+	require.True(t, ok)
+	require.Greater(t, loadedBeta.df(), BlockSize)
+
+	queries := []string{
+		"+alpha +beta",
+		"+beta +alpha",         // reversed clauses must retain the same intersection
+		"+alpha +alpha +beta",  // duplicate MUST keeps both score contributions
+		"+common +alpha +beta", // dense driver plus sparse boundary intersection
+		"+alpha +missing",
+		"+missing +beta",
+	}
+	for _, variant := range []struct {
+		name string
+		seg  *Segment
+	}{
+		{name: "build", seg: build},
+		{name: "loaded", seg: loaded},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			for _, q := range queries {
+				t.Run(q, func(t *testing.T) { requireConjunctiveParity(t, variant.seg, q, nil) })
+			}
+		})
+	}
+}
+
+// TestConjunctiveLivenessAtBlockBoundary compares the cursor path with the
+// full evaluator after a base copy is superseded at a posting-block boundary.
+// Both segments are serialized so the base's dirty live-DF walk must decode
+// only loaded blocks while the tail remains fully live.
+func TestConjunctiveLivenessAtBlockBoundary(t *testing.T) {
+	const nBase = 2*BlockSize + 3
+	baseBuilder := NewBuilder("conj-live-base", int32(types.T_int64))
+	for i := 0; i < nBase; i++ {
+		feed(t, baseBuilder, int64(i+1), "alpha", "beta")
+	}
+	base := loadedSeg(t, baseBuilder)
+	base.Recency = 0
+
+	// Replace one copy immediately before the first block boundary and one at
+	// the second boundary; the first replacement intentionally removes beta.
+	replacePk := int64(BlockSize)
+	keepPk := int64(2*BlockSize + 1)
+	tailBuilder := NewBuilder("conj-live-tail", int32(types.T_int64))
+	feed(t, tailBuilder, replacePk, "alpha")
+	feed(t, tailBuilder, keepPk, "alpha", "beta", "beta")
+	feed(t, tailBuilder, int64(nBase+1), "alpha", "beta")
+	tail := loadedSeg(t, tailBuilder)
+	tail.Recency = 10
+
+	idx := NewIndex([]*Segment{base, tail}, nil)
+	q, err := ParseBoolean([]byte("+alpha +beta"), tokenizer.NewSimpleTokenizer())
+	require.NoError(t, err)
+	_, ok := conjunctiveTerms(q)
+	require.True(t, ok)
+	require.NotNil(t, idx.liveOrd[0], "superseded base copies need a liveness bitmap")
+
+	for _, algo := range []ScoreAlgo{TfIdf, BM25} {
+		want := legacyIndexConjunction(t, idx, q, algo, nBase+2)
+		got, err := idx.SearchBoolean(q, algo, nBase+2, nil)
+		require.NoError(t, err)
+		require.Equal(t, resultScoreBits(want), resultScoreBits(got), "algo=%d score bits", algo)
+		require.ElementsMatch(t, resultIDs(want), resultIDs(got), "algo=%d membership", algo)
+		require.NotContains(t, resultIDs(got), replacePk, "superseded copy without beta must not match")
+		require.Contains(t, resultIDs(got), keepPk, "newer copy at the second boundary must match")
+	}
+}
+
+// TestConjunctiveRoutingControlsUseFullEvaluator guards the negative side of
+// the route predicate: phrases, prefixes, groups, SHOULD, MUST-NOT, ADJUST,
+// and mixed Boolean shapes keep their existing evaluator and result contract.
+func TestConjunctiveRoutingControlsUseFullEvaluator(t *testing.T) {
+	s := fulltextCorpus(t)
+	queries := []string{
+		`+quick "brown fox"`,  // MUST + phrase
+		"+qui* +fox",          // MUST + prefix
+		"+(quick brown) +fox", // MUST + group
+		"+quick brown",        // MUST + SHOULD
+		"+lazy -fox",          // MUST + MUST-NOT
+		"+quick ~fox",         // MUST + ADJUST
+		`"quick brown"`,       // phrase-only SHOULD
+	}
+	for _, pattern := range queries {
+		t.Run(pattern, func(t *testing.T) {
+			q, err := ParseBoolean([]byte(pattern), tokenizer.NewSimpleTokenizer())
+			require.NoError(t, err)
+			_, pure := conjunctiveTerms(q)
+			require.False(t, pure, "control query must stay on the full evaluator")
+			for _, algo := range []ScoreAlgo{TfIdf, BM25} {
+				full, err := s.searchBooleanFull(q, algo, int(s.N)+1, nil, nil)
+				require.NoError(t, err)
+				routed, err := s.SearchBoolean(q, algo, int(s.N)+1, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, resultScoreBits(full), resultScoreBits(routed), "algo=%d score bits", algo)
+				require.ElementsMatch(t, resultIDs(full), resultIDs(routed), "algo=%d membership", algo)
+			}
 		})
 	}
 }

@@ -8,32 +8,59 @@ body text not null,
 category varchar(20) not null
 );
 insert into ft_exact values
-(1, 'needle needle needle needle needle', 'drop'),
-(2, 'needle needle needle', 'drop'),
-(3, 'needle', 'keep'),
-(4, 'needle', 'keep'),
-(5, 'needle', 'keep');
+(1, 'needle needle needle needle needle high', 'drop'),
+(2, 'needle needle medium', 'drop'),
+(3, 'needle alpha', 'keep'),
+(4, 'needle alpha beta', 'keep'),
+(5, 'needle alpha beta gamma', 'keep'),
+(6, 'background alpha beta gamma', 'other');
 create fulltext2 index ft_exact_idx on ft_exact(body) with parser gojieba;
-set fulltext_bloom_filter_pushdown = 0;
-select id from ft_exact
-where match(body) against('+needle' in boolean mode) and category = 'keep'
-limit 2 offset 1;
-➤ id[-5,64,0]  𝄀
-5  𝄀
-3
-set fulltext_bloom_filter_pushdown = 1;
-select id from ft_exact
-where match(body) against('+needle' in boolean mode) and category = 'keep'
-limit 2 offset 1;
-➤ id[-5,64,0]  𝄀
-5  𝄀
-3
-select id from ft_exact
-where match(body) against('+needle' in boolean mode) and category = 'keep'
-limit 2;
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
 ➤ id[-5,64,0]  𝄀
 4  𝄀
+5
+select id, category, match(body) against('+needle' in boolean mode) as score from ft_exact where match(body) against('+needle' in boolean mode) order by score desc, id;
+➤ id[-5,64,0]  ¦  category[12,20,0]  ¦  score[7,5,0]  𝄀
+1  ¦  drop  ¦  0.010860845  𝄀
+2  ¦  drop  ¦  0.009512602  𝄀
+3  ¦  keep  ¦  0.0078818705  𝄀
+4  ¦  keep  ¦  0.0068283533  𝄀
+5  ¦  keep  ¦  0.0060232636
+set fulltext_bloom_filter_pushdown = 0;
+select count(*) as page_count from (select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' limit 2 offset 1) as page;
+➤ page_count[-5,64,0]  𝄀
+2
+set fulltext_bloom_filter_pushdown = 1;
+select count(*) as page_count from (select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' limit 2 offset 1) as page;
+➤ page_count[-5,64,0]  𝄀
+2
+select count(*) as page_count from (select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' limit 2) as page;
+➤ page_count[-5,64,0]  𝄀
+2
+set fulltext_bloom_filter_pushdown = 0;
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 0;
+➤ id[-5,64,0]
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 1;
+➤ id[-5,64,0]  𝄀
 3
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 10;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+4  𝄀
+5
 explain select id from ft_exact
 where match(body) against('+needle' in boolean mode) and category = 'keep'
 limit 2 offset 1;
@@ -66,18 +93,22 @@ category varchar(20) not null
 );
 insert into ft_varchar values
 ('doc-1', 'needle needle needle needle needle', 'drop'),
-('doc-2', 'needle needle needle', 'drop'),
-('doc-3', 'needle', 'keep'),
-('doc-4', 'needle', 'keep'),
-('doc-5', 'needle', 'keep');
+('doc-2', 'needle needle medium', 'drop'),
+('doc-3', 'needle alpha', 'keep'),
+('doc-4', 'needle alpha beta', 'keep'),
+('doc-5', 'needle alpha beta gamma', 'keep'),
+('doc-6', 'background alpha beta gamma', 'other');
 create fulltext2 index ft_varchar_idx on ft_varchar(body) with parser gojieba;
-set fulltext_bloom_filter_pushdown = 1;
-select id from ft_varchar
-where match(body) against('+needle' in boolean mode) and category = 'keep'
-limit 2 offset 1;
+set fulltext_bloom_filter_pushdown = 0;
+select id from ft_varchar where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
 ➤ id[12,20,0]  𝄀
-doc-5  𝄀
-doc-3
+doc-4  𝄀
+doc-5
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_varchar where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[12,20,0]  𝄀
+doc-4  𝄀
+doc-5
 explain select id from ft_varchar
 where match(body) against('+needle' in boolean mode) and category = 'keep'
 limit 2 offset 1;
@@ -102,6 +133,82 @@ Project  𝄀
                           Runtime Filter Probe: #[7,0]  𝄀
                     ->  Table Scan on fulltext2_candidate_limit.ft_varchar  𝄀
                           Filter Cond: (ft_varchar.category = 'keep')
+create table ft_uuid (
+id uuid primary key,
+body text not null,
+category varchar(20) not null
+);
+insert into ft_uuid values
+(cast('00000000-0000-0000-0000-000000000001' as uuid), 'needle needle needle needle needle', 'drop'),
+(cast('00000000-0000-0000-0000-000000000002' as uuid), 'needle needle medium', 'drop'),
+(cast('00000000-0000-0000-0000-000000000003' as uuid), 'needle alpha', 'keep'),
+(cast('00000000-0000-0000-0000-000000000004' as uuid), 'needle alpha beta', 'keep'),
+(cast('00000000-0000-0000-0000-000000000005' as uuid), 'needle alpha beta gamma', 'keep'),
+(cast('00000000-0000-0000-0000-000000000006' as uuid), 'background alpha beta gamma', 'other');
+create fulltext2 index ft_uuid_idx on ft_uuid(body) with parser gojieba;
+set fulltext_bloom_filter_pushdown = 0;
+select id from ft_uuid where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[12,-1,0]  𝄀
+00000000-0000-0000-0000-000000000004  𝄀
+00000000-0000-0000-0000-000000000005
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_uuid where match(body) against('+needle' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[12,-1,0]  𝄀
+00000000-0000-0000-0000-000000000004  𝄀
+00000000-0000-0000-0000-000000000005
+prepare ft_candidate_pattern from 'select id from ft_exact where match(body) against(? in boolean mode) and category = ''keep'' order by id limit 2 offset 1';
+set @candidate_pattern = '+needle';
+execute ft_candidate_pattern using @candidate_pattern;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+deallocate prepare ft_candidate_pattern;
+create table ft_multi (
+id bigint primary key,
+title text not null,
+body text not null,
+category varchar(20) not null
+);
+insert into ft_multi values
+(1, 'needle', 'anchor anchor', 'drop'),
+(2, 'needle', 'anchor', 'keep'),
+(3, 'needle', 'anchor', 'keep'),
+(4, 'needle', 'unrelated', 'keep');
+create fulltext2 index ft_multi_idx on ft_multi(title, body) with parser gojieba;
+select id from ft_multi where match(title) against('+needle' in boolean mode) and match(body) against('+anchor' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from ft_exact where match(body) against('"needle needle"' in boolean mode) and category = 'drop' order by id limit 2;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from ft_exact where match(body) against('need*' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle other' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+(needle other)' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle -other' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle ~other' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('needle' in natural language mode) order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3
+select id from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' and rand() < 2 order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
 explain select id from ft_exact
 where match(body) against('+needle other' in boolean mode) and category = 'keep'
 limit 2 offset 1;
@@ -290,7 +397,11 @@ insert into ft_ngram values
 (1, '中文 中文', 'drop'),
 (2, '中文', 'keep'),
 (3, '中文', 'keep');
+set experimental_fulltext2_index = 1;
 create fulltext2 index ft_ngram_idx on ft_ngram(body) with parser ngram;
+select id from ft_ngram where match(body) against('+中文' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+3
 explain select id from ft_ngram
 where match(body) against('+中文' in boolean mode) and category = 'keep'
 limit 2 offset 1;
@@ -326,7 +437,12 @@ insert into ft_include values
 (2, 'needle', 1, 'b'),
 (3, 'needle', 1, 'c'),
 (4, 'needle', 1, 'd');
+set experimental_fulltext2_index = 1;
 create fulltext2 index ft_include_idx on ft_include(body) include(category) with parser gojieba;
+select id, payload from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by id limit 2 offset 1;
+➤ id[-5,64,0]  ¦  payload[12,20,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d
 explain select id, payload from ft_include
 where match(body) against('needle' in natural language mode) and category = 1
 limit 2 offset 1;

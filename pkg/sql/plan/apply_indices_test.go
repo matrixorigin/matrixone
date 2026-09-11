@@ -5375,6 +5375,11 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 			require.True(t, changed)
 			functions := collectFullTextFunctionScans(builder, newID)
 			require.Len(t, functions, 1)
+			if tc.classicIndex {
+				require.Equal(t, fulltext_index_scan_func_name, functions[0].TableDef.TblFunc.Name)
+			} else {
+				require.Equal(t, fulltext2_search_func_name, functions[0].TableDef.TblFunc.Name)
+			}
 			if tc.wantCandidateK {
 				require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
 			} else {
@@ -5457,7 +5462,12 @@ func convertFullTextJoinTestToFulltext2(builder *QueryBuilder, scan *planpb.Node
 func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	scan := builder.qry.Nodes[leftScanID]
-	scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
+	convertFullTextJoinTestToFulltext2(builder, scan)
+	// Keep both matches independently addressable: a distinct term over the
+	// indexed column set exercises two FULLTEXT2 streams instead of relying on
+	// duplicate expression handling.
+	secondMatch := makeFullTextMatchExpr("world", 0, scan.TableDef, scan.BindingTags[0], []int32{2, 3})
+	scan.FilterList = append(scan.FilterList, secondMatch)
 	scan.Limit = makePlan2Uint64ConstExprWithType(10)
 	scan.Offset = makePlan2Uint64ConstExprWithType(5)
 
@@ -5472,6 +5482,7 @@ func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 2)
 	for _, functionNode := range functions {
+		require.Equal(t, fulltext2_search_func_name, functionNode.TableDef.TblFunc.Name)
 		require.Nil(t, functionNode.Limit)
 	}
 }
