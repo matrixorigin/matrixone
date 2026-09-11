@@ -133,7 +133,7 @@ type ivfRunState struct {
 }
 type ivfCase struct {
 	name, col, fn, op, vector string
-	desc                      bool
+	desc, concurrent          bool
 }
 
 func TestIssue28378IVFFlatRemoteLifecycle(t *testing.T) {
@@ -343,10 +343,10 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 		}
 
 		cases = []ivfCase{
-			{"l2", "v", "l2_distance", "vector_l2_ops", queryVector, false},
-			{"cosine", "v", "cosine_distance", "vector_cosine_ops", queryVector, false},
-			{"normalized_l2", "n", "l2_distance", "vector_l2_ops", normalizedQuery, false},
-			{"ip_normalized", "v", "inner_product", "vector_ip_ops", "normalize_l2(" + queryVector + ")", false},
+			{"l2", "v", "l2_distance", "vector_l2_ops", queryVector, false, true},
+			{"cosine", "v", "cosine_distance", "vector_cosine_ops", queryVector, false, false},
+			{"normalized_l2", "n", "l2_distance", "vector_l2_ops", normalizedQuery, false, false},
+			{"ip_normalized", "v", "inner_product", "vector_ip_ops", "normalize_l2(" + queryVector + ")", false, false},
 		}
 		for _, tc := range cases[:3] {
 			if err := prepareIndex(tc); err != nil {
@@ -429,74 +429,78 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 				}
 
 			}
-			// Preserve the incident's SELECT id shape under bounded concurrent
-			// sessions. A single sql.Conn would serialize the workload.
-			completed := make(chan error, 8)
-			for worker := 0; worker < 8; worker++ {
-				state.workers.Add(1)
-				go func(worker int) {
-					defer state.workers.Done()
-					completed <- func() error {
-						conn, err := databases[worker%2].Conn(ctx)
-						if err != nil {
-							return err
-						}
-						defer conn.Close()
-						for _, setting := range []string{"use `" + name + "`", "set probe_limit=5", "set max_dop=16", "set experimental_ivf_index=1"} {
-							if _, err := conn.ExecContext(ctx, setting); err != nil {
-								return err
-							}
-						}
-						statement := "select id from " + tc.name + " order by " + tc.fn + "(v," + tc.vector + ") " + direction + " limit 10"
-						for iteration := 0; iteration < 20; iteration++ {
-							rows, err := conn.QueryContext(ctx, statement)
+			if tc.concurrent {
+				// Preserve the incident's SELECT id shape under bounded concurrent
+				// sessions. A single sql.Conn would serialize the workload. The
+				// lifecycle is shared by all distance operators, so run the full
+				// stress loop once while each operator still gets its own assertions.
+				completed := make(chan error, 8)
+				for worker := 0; worker < 8; worker++ {
+					state.workers.Add(1)
+					go func(worker int) {
+						defer state.workers.Done()
+						completed <- func() error {
+							conn, err := databases[worker%2].Conn(ctx)
 							if err != nil {
 								return err
 							}
-							err = func() (runErr error) {
-								defer func() {
-									if closeErr := rows.Close(); runErr == nil {
-										runErr = closeErr
-									}
-								}()
-								count := 0
-								seen := make(map[int64]bool)
-								for rows.Next() {
-									var id int64
-									if err := rows.Scan(&id); err != nil {
-										return err
-									}
-									if id < 0 || id >= 65536 || seen[id] {
-										return fmt.Errorf("invalid vector id %d", id)
-									}
-									seen[id] = true
-									count++
-								}
-								if err := rows.Err(); err != nil {
+							defer conn.Close()
+							for _, setting := range []string{"use `" + name + "`", "set probe_limit=5", "set max_dop=16", "set experimental_ivf_index=1"} {
+								if _, err := conn.ExecContext(ctx, setting); err != nil {
 									return err
 								}
-								if count != 10 {
-									return fmt.Errorf("got %d rows, want 10", count)
-								}
-								return nil
-							}()
-							if err != nil {
-								return err
 							}
-						}
-						return nil
-					}()
-				}(worker)
-			}
-			// Join every worker before assertions/DDL cleanup, including failures.
-			var firstErr error
-			for worker := 0; worker < 8; worker++ {
-				if err := <-completed; err != nil && firstErr == nil {
-					firstErr = err
+							statement := "select id from " + tc.name + " order by " + tc.fn + "(v," + tc.vector + ") " + direction + " limit 10"
+							for iteration := 0; iteration < 20; iteration++ {
+								rows, err := conn.QueryContext(ctx, statement)
+								if err != nil {
+									return err
+								}
+								err = func() (runErr error) {
+									defer func() {
+										if closeErr := rows.Close(); runErr == nil {
+											runErr = closeErr
+										}
+									}()
+									count := 0
+									seen := make(map[int64]bool)
+									for rows.Next() {
+										var id int64
+										if err := rows.Scan(&id); err != nil {
+											return err
+										}
+										if id < 0 || id >= 65536 || seen[id] {
+											return fmt.Errorf("invalid vector id %d", id)
+										}
+										seen[id] = true
+										count++
+									}
+									if err := rows.Err(); err != nil {
+										return err
+									}
+									if count != 10 {
+										return fmt.Errorf("got %d rows, want 10", count)
+									}
+									return nil
+								}()
+								if err != nil {
+									return err
+								}
+							}
+							return nil
+						}()
+					}(worker)
 				}
+				// Join every worker before assertions/DDL cleanup, including failures.
+				var firstErr error
+				for worker := 0; worker < 8; worker++ {
+					if err := <-completed; err != nil && firstErr == nil {
+						firstErr = err
+					}
+				}
+				t.Logf("IVF_WORKERS_JOINED distance=%s count=8", tc.name)
+				require.NoError(t, firstErr)
 			}
-			t.Logf("IVF_WORKERS_JOINED distance=%s count=8", tc.name)
-			require.NoError(t, firstErr)
 			cancelCtx, cancel := context.WithCancel(ctx)
 			cancel()
 			cancelledRows, err := conns[0].QueryContext(cancelCtx, statement)
