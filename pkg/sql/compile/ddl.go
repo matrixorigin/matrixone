@@ -6951,12 +6951,13 @@ func (c *Compile) checkPitrGranularity(
 			if exclude != "" {
 				excludeFilter = fmt.Sprintf(" AND concat(t.%s, '.', t.%s) NOT REGEXP %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(exclude))
 			}
-			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
+			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
 				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter, tableFilter, excludeFilter,
 				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
 				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
 				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
 				sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.Ident(catalog.SystemRelAttr_Name),
+				sqlquote.Ident(catalog.SystemColAttr_RelID), sqlquote.Ident(catalog.SystemRelAttr_ID),
 				sqlquote.Ident(catalog.SystemColAttr_ConstraintType), sqlquote.String("p"),
 				sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
 			res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
