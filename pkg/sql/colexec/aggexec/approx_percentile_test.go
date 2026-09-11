@@ -725,10 +725,12 @@ func TestApproxPercentileExec_ExactMinimumAfterCompactionAndMerge(t *testing.T) 
 	}
 
 	leftValues := make([]int64, 400)
-	rightValues := make([]int64, 400)
-	for i := range 400 {
-		leftValues[i] = int64(800 - i)
-		rightValues[i] = int64(400 - i)
+	rightValues := make([]int64, 800)
+	for i := range leftValues {
+		leftValues[i] = int64(1200 - i)
+	}
+	for i := range rightValues {
+		rightValues[i] = int64(800 - i)
 	}
 	leftVec := buildFixedVec(t, mp, types.T_int64.ToType(), leftValues)
 	rightVec := buildFixedVec(t, mp, types.T_int64.ToType(), rightValues)
@@ -740,8 +742,8 @@ func TestApproxPercentileExec_ExactMinimumAfterCompactionAndMerge(t *testing.T) 
 
 	ret, err := left.Flush()
 	require.NoError(t, err)
+	defer ret[0].Free(mp)
 	require.Equal(t, 1.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
-	ret[0].Free(mp)
 }
 
 func TestApproxPercentileExec_Float64ExtremeInterpolation(t *testing.T) {
