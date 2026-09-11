@@ -1,11 +1,62 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Accepted for this PR，revision 6
+- 状态：Proposed for this PR，revision 8
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 8: timeout observability for partial UT runs
+
+超时现场必须同时回答“现在卡在哪里”和“此前哪些 case 已经异常慢”。`run_ut.sh` 在
+收到 TERM、停止并回收自己创建的进程组后，从已经写入的 Go `-json` 前缀生成已完成
+case 和 package 的耗时排行；仍在运行的 case 继续由 active-case 分析单独列出，不能
+把它误报成已完成结果。JSON 报告按二进制行读取，尾部截断的 UTF-8 或半行只计为损坏
+行，不影响此前完整事件的输出。排行写入 `ut-report/top.txt`，因此现有 CI 的 always-run
+“Print the Top 10 Time-Consuming Tests”步骤会在超时后直接打印它。
+
+UT 运行期间默认每 60 秒写一条 heartbeat，记录最近 stage/label、active case 数、进程
+数、报告路径和 checkpoint；取消时再把原始 JSON、checkpoint、stderr 和排行复制到
+`ut-report/`。active-case 扫描会跳过不改变状态的 `output` 事件；主报告在同一文件
+系统上优先用 hard link 快照，避免失败时复制一份完整 JSON。CI artifact 只上传快照和
+尚未合并的 helper report，避免再次上传主报告。这些文件是诊断输入，不参与测试结论，
+解析失败也不能覆盖原始退出码。
+当前 reusable `matrixorigin/CI` workflow 只打印 `top.txt`，没有上传 `ut-report`；要在
+GitHub UI 下载原始现场，需要在该 workflow 增加 always-run 的 `actions/upload-artifact`
+步骤。这个上传步骤属于 CI 基础设施 PR，不能由 MatrixOne 的 `make ut` 单独完成。
+CI PR 合并后，失败或取消的 job 会生成
+`ut-diagnostics-<run-id>-<attempt>-<shard>` artifact；可用
+`gh run download <run-id> -n <artifact-name>` 下载，再运行
+`python3 optools/summarize_ut_slow_cases.py ut-report/ut-report.json` 查看已完成的慢
+case，结合 `ut-report/ut-checkpoint.log` 和 helper report 判断卡点。
+CI 上传副本设置 250 MiB 总预算和 5 分钟超时；超出预算的文件保留带截断标记的头尾，
+`manifest.txt` 记录原始与保存字节数。该预算只约束诊断 artifact，不改变测试输入、
+coverage 或失败结论。
+成功的 UT job 只上传 `top.txt` 和 checkpoint 作为 1 天的轻量 baseline；原始 JSON 和
+helper report 仅在失败或取消时上传，便于比较正常 run 的阶段耗时而不复制完整测试流。
+
+## Revision 7: bounded light/issues overlap on one runner
+
+最近成功的单 runner UT 记录显示，`light race-test` 约占 10--20 分钟，
+`pkg/tests/issues` 的独占阶段约占 6--11 分钟；两者当前完全串行。依赖图分组已经把
+所有会启动 embedded cluster 的 package 从 light 组移除，因此可以在不增加 runner、
+不改变测试参数和不共享 fixture 的前提下，让两个阶段重叠。
+
+调度保持 HNSW 的 native worker pool 独占约束：先完成 HNSW，再启动 light helper，随后
+前台执行 issues。light helper 使用 `-race`、相同的 tags/timeout 和完整的 light scope，
+但将自己的 JSON 写入私有文件；issues 的 writer 结束后，父进程再原子合并 helper 报告。
+两条路径都执行完毕后才进入 embedded 阶段。helper 的 PID、进程组、退出状态和报告消费
+纳入同一 TERM 取消路径，任何一边失败都不会跳过另一边。
+
+并发是有界的：`UT_OVERLAP_LIGHT=0` 默认保持顺序基线，`UT_OVERLAP_LIGHT=1` 提供受限 A/B，
+`UT_OVERLAP_LIGHT_PARALLEL=2` 默认限制 light 的 package 并行度，并在小于该值的
+`UT_PARALLEL` 下自动收窄。开启 overlap 时不同时启动 compile-only embedded prebuild，
+避免叠加第二条编译通道。所有 package 仍只执行一次，测试函数、subtest、race detector、
+coverage 事件和失败断言都保持不变；这里改变的是阶段顺序和 package 调度，而不是测试
+强度。预期收益是被重叠的 issues wall time，约 6--11 分钟只是基于阶段长度的上限，
+必须在同资源 Linux runner 上用 cgroup memory/OOM、CPU throttling、长尾和失败率的 A/B
+结果确认净收益后再调整并行度。
 
 ## Revision 6: reuse released engine capacity on one runner
 
