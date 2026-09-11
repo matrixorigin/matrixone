@@ -43,16 +43,15 @@ select id from ft_sync where match(body) against('new') order by id;
 ➤ id[4,32,0]  𝄀
 1
 update ft_sync set id = 3, body = 'sync failed token' where id = 1;
-unsupported DML: update primary key on a table with a synchronous full-text/vector index
 select id, k, body from ft_sync order by id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  body[12,0,0]  𝄀
-1  ¦  1  ¦  sync new token  𝄀
-2  ¦  2  ¦  sync peer token
+2  ¦  2  ¦  sync peer token  𝄀
+3  ¦  1  ¦  sync failed token
 select id from ft_sync where match(body) against('failed') order by id;
-➤ id[4,32,0]
-select id from ft_sync where match(body) against('new') order by id;
 ➤ id[4,32,0]  𝄀
-1
+3
+select id from ft_sync where match(body) against('new') order by id;
+➤ id[4,32,0]
 select case_name, identity from (select 'composite' as case_name, concat(tenant, ':', id) as identity from ft_async_composite where match(body) against('composite') union all select 'null-column', cast(id as char) from ft_null_async where match(left_text, right_text) against('asyncrighttoken') union all select 'pk', cast(id as char) from ft_async_pk where match(body) against('identity')) readiness order by case_name;
 ➤ case_name[12,-1,0]  ¦  identity[12,-1,0]  𝄀
 composite  ¦  a:1  𝄀

@@ -763,6 +763,7 @@ message UpdateCtx {
   ColRef changed_rows_col = 17;
   ColRef affected_rows_weight_col = 18;
   ColRef physical_changed_rows_col = 19;
+  PartitionIndexCtx partition_index_ctx = 20;
 }
 
 message InsertCtx {
@@ -2321,6 +2322,17 @@ message RankOption {
 
 message AlterTableAutoIncrement {
   uint64 new_offset = 1;
+}
+
+// PartitionIndexCtx describes an index-only maintenance target whose logical
+// table belongs to a partitioned parent table.  The target's TableDef remains
+// the index table; the parent metadata is carried here so execution can route
+// each input row to the matching physical index relation without ever writing
+// the logical aggregate relation.
+message PartitionIndexCtx {
+  ObjectRef parent_ref = 1;
+  TableDef parent_table = 2;
+  ColRef partition_col = 3 [(gogoproto.nullable) = false];
 }
 
 message ODKUForeignKeyCheck {

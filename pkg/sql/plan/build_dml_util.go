@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -2871,8 +2872,17 @@ func buildInsertPlansWithRelatedHiddenTable(
 	}
 
 	multiTableIndexes := make(map[string]*MultiTableIndex)
+	seenFullTextTbls := make(map[string]struct{})
 
 	for idx, indexdef := range tableDef.Indexes {
+		if catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			key := fullTextIndexGroupKey(indexdef)
+			if _, seen := seenFullTextTbls[key]; seen {
+				continue
+			}
+			seenFullTextTbls[key] = struct{}{}
+			indexdef = mergeFullTextIndexParts(tableDef.Indexes, indexdef)
+		}
 		if updateColLength == 0 {
 			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
 				continue
@@ -2913,7 +2923,8 @@ func buildInsertPlansWithRelatedHiddenTable(
 					return err
 				}
 
-			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) &&
+				!isPartitionedClassicFulltext(tableDef, indexdef) {
 				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
 				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
 				if err != nil {
@@ -2923,7 +2934,8 @@ func buildInsertPlansWithRelatedHiddenTable(
 		}
 
 		// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
-		if !postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+		if (!postdml_flag || isPartitionedClassicFulltext(tableDef, indexdef)) &&
+			indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx, updateColPosMap)
 			if err != nil {
 				return err
@@ -6941,6 +6953,26 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	canTruncate := delCtx.isUnrestrictedDelete
+	if canTruncate {
+		// The base-table delete already disables physical truncation for a
+		// partitioned parent. A synchronous classic FULLTEXT index must follow
+		// the selected old rows through the same routed path; otherwise its
+		// logical aggregate table would be left populated by an unconditional
+		// DELETE.
+		for _, indexdef := range delCtx.tableDef.Indexes {
+			if !isPartitionedClassicFulltext(delCtx.tableDef, indexdef) {
+				continue
+			}
+			async, asyncErr := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
+			if asyncErr != nil {
+				return asyncErr
+			}
+			if !async {
+				canTruncate = false
+				break
+			}
+		}
+	}
 
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
@@ -6969,7 +7001,16 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 			colMap[col.Name] = col
 		}
 		multiTableIndexes := make(map[string]*MultiTableIndex)
+		seenFullTextTbls := make(map[string]struct{})
 		for idx, indexdef := range delCtx.tableDef.Indexes {
+			if catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+				key := fullTextIndexGroupKey(indexdef)
+				if _, seen := seenFullTextTbls[key]; seen {
+					continue
+				}
+				seenFullTextTbls[key] = struct{}{}
+				indexdef = mergeFullTextIndexParts(delCtx.tableDef.Indexes, indexdef)
+			}
 
 			if isUpdate {
 				needsRewrite, err := indexNeedsRewriteForUpdate(delCtx.tableDef, indexdef, delCtx.updateColPosMap, posMap, colMap)
@@ -7005,7 +7046,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				}
 			} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostDeleteFullTextIndex or PreDeleteFullTextIndex
-				if postdml_flag {
+				if postdml_flag && !isPartitionedClassicFulltext(delCtx.tableDef, indexdef) {
 					err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
 				} else {
 					err = buildPreDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
@@ -7022,6 +7063,144 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	}
 
 	return nil
+}
+
+func isPartitionedClassicFulltext(tableDef *TableDef, indexdef *plan.IndexDef) bool {
+	return tableDef != nil && indexdef != nil && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) &&
+		features.IsPartitioned(tableDef.FeatureFlag) && tableDef.Partition != nil &&
+		len(tableDef.Partition.PartitionDefs) > 0
+}
+
+// fullTextIndexGroupKey identifies the physical hidden table that owns one
+// logical classic FULLTEXT index. Older catalog/planner paths can represent a
+// multi-column FULLTEXT index as several IndexDefs sharing that table, while
+// newer paths keep all parts on one definition. Both shapes must produce one
+// tokenizer/delete branch with the complete part set.
+func fullTextIndexGroupKey(indexdef *plan.IndexDef) string {
+	if indexdef == nil {
+		return ""
+	}
+	key := indexdef.IndexTableName
+	if key == "" {
+		key = indexdef.IndexName
+	}
+	return key
+}
+
+func mergeFullTextIndexParts(indexes []*plan.IndexDef, first *plan.IndexDef) *plan.IndexDef {
+	if first == nil {
+		return nil
+	}
+	merged := DeepCopyIndexDef(first)
+	seen := make(map[string]struct{}, len(first.Parts))
+	for _, part := range merged.Parts {
+		seen[part] = struct{}{}
+	}
+	key := fullTextIndexGroupKey(first)
+	for _, indexdef := range indexes {
+		if indexdef == nil || !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) ||
+			fullTextIndexGroupKey(indexdef) != key {
+			continue
+		}
+		for _, part := range indexdef.Parts {
+			if _, ok := seen[part]; ok {
+				continue
+			}
+			seen[part] = struct{}{}
+			merged.Parts = append(merged.Parts, part)
+		}
+	}
+	return merged
+}
+
+// buildPartitionRouteExpr returns the partition ordinal for the row visible at
+// relPos. Partition definitions are already bound to the parent table's column
+// positions; only their relation tag is changed so the expression can be
+// evaluated after the source projection has been materialized. The final -1
+// is intentional: execution reports an invalid route instead of silently
+// writing the first physical partition.
+func buildPartitionRouteExprWithRemap(
+	ctx context.Context,
+	tableDef *TableDef,
+	remap func(*plan.ColRef) error,
+) (*plan.Expr, error) {
+	if tableDef == nil || tableDef.Partition == nil || len(tableDef.Partition.PartitionDefs) == 0 {
+		return nil, nil
+	}
+	route := makePlan2Int32ConstExprWithType(-1)
+	for i := len(tableDef.Partition.PartitionDefs) - 1; i >= 0; i-- {
+		def := tableDef.Partition.PartitionDefs[i]
+		if def == nil || def.Def == nil {
+			return nil, moerr.NewInvalidInput(ctx, "partition definition is missing")
+		}
+		cond := DeepCopyExpr(def.Def)
+		if err := plan.VisitExprTree(cond, func(expr *plan.Expr) error {
+			if col := expr.GetCol(); col != nil {
+				if err := remap(col); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		var err error
+		route, err = BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			cond,
+			makePlan2Int32ConstExprWithType(int32(i)),
+			route,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return route, nil
+}
+
+func buildPartitionRouteExpr(ctx context.Context, tableDef *TableDef, relPos int32) (*plan.Expr, error) {
+	return buildPartitionRouteExprWithRemap(ctx, tableDef, func(col *plan.ColRef) error {
+		name := col.Name
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[dot+1:]
+		}
+		if name != "" {
+			name = catalog.ResolveAlias(name)
+			if pos, ok := tableDef.Name2ColIndex[name]; ok {
+				col.ColPos = pos
+			}
+		}
+		col.RelPos = relPos
+		return nil
+	})
+}
+
+func buildPartitionRouteExprFromColumns(
+	ctx context.Context,
+	tableDef *TableDef,
+	columns map[string][2]int32,
+) (*plan.Expr, error) {
+	return buildPartitionRouteExprWithRemap(ctx, tableDef, func(col *plan.ColRef) error {
+		name := col.Name
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[dot+1:]
+		}
+		if name == "" && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
+			name = tableDef.Cols[col.ColPos].Name
+		}
+		name = catalog.ResolveAlias(name)
+		pos, ok := columns[name]
+		if !ok {
+			if col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
+				pos, ok = columns[tableDef.Cols[col.ColPos].Name]
+			}
+		}
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "partition definition references missing old column %s", name)
+		}
+		col.RelPos = pos[0]
+		col.ColPos = pos[1]
+		return nil
+	})
 }
 
 // This function try to create a INSERT plan to tokenize the index parts into index table.  The expected insert plans is as follow:
@@ -7052,6 +7231,8 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef,
 	tableDef *TableDef, updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef,
 	idx int, updateColPosMap map[string]int) error {
+	partitioned := features.IsPartitioned(tableDef.FeatureFlag) &&
+		tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0
 
 	// Check if secondary key is being updated.
 	isSecondaryKeyUpdated := func() bool {
@@ -7065,6 +7246,31 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			if colIdx, ok := posMap[resolvedColName]; ok {
 				col := tableDef.Cols[colIdx]
 				if _, exists := updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
+					return true
+				}
+			}
+		}
+
+		// A partition-key update moves the document even when none of the
+		// FULLTEXT parts changed. The delete branch has already removed the old
+		// postings; force the insert branch to rebuild them at the new route.
+		if partitioned && updateColPosMap != nil {
+			updatedCols := make(map[string]struct{}, len(updateColPosMap))
+			for colName := range updateColPosMap {
+				updatedCols[colName] = struct{}{}
+			}
+			if partitionColumnsUpdated(tableDef, updatedCols) {
+				return true
+			}
+		}
+
+		// The document id is the FULLTEXT row's lookup key. A primary-key
+		// update therefore needs a fresh tokenization even when no indexed
+		// text or partition dependency changed; the delete branch removes the
+		// old postings by the captured old key.
+		if updateColPosMap != nil && tableDef.Pkey != nil {
+			for _, pkName := range tableDef.Pkey.Names {
+				if _, updated := updateColPosMap[pkName]; updated {
 					return true
 				}
 			}
@@ -7090,6 +7296,26 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	}
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+	sourceTag := int32(0)
+	routePos := int32(-1)
+	routeTyp := plan.Type{}
+	if partitioned {
+		sourceTag = builder.genNewBindTag()
+		sourceProjection := getProjectionByLastNode(builder, lastNodeId)
+		routeExpr, routeErr := buildPartitionRouteExpr(builder.GetContext(), tableDef, 0)
+		if routeErr != nil {
+			return routeErr
+		}
+		routeTyp = routeExpr.Typ
+		routePos = int32(len(sourceProjection))
+		sourceProjection = append(sourceProjection, routeExpr)
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: sourceProjection,
+			BindingTags: []int32{sourceTag},
+		}, bindCtx)
+	}
 
 	pkName := tableDef.Pkey.PkeyColName
 	var pkPos int32 = -1
@@ -7117,7 +7343,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: tableDef.Cols[pkPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: sourceTag,
 					ColPos: pkPos,
 				},
 			},
@@ -7128,7 +7354,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: tableDef.Cols[pos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: sourceTag,
 					ColPos: pos,
 				},
 			},
@@ -7156,9 +7382,9 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	tableFuncId := builder.appendNode(tablefunc, bindCtx)
 
 	// cross apply projection = fulltext_index_tokenize output (doc_id, pos, word)
-	apply_project := make([]*plan.Expr, len(ftcols))
+	apply_project := make([]*plan.Expr, 0, len(ftcols)+1)
 	for i := range ftcols {
-		apply_project[i] = &plan.Expr{
+		apply_project = append(apply_project, &plan.Expr{
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -7166,7 +7392,13 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 					ColPos: int32(i),
 				},
 			},
-		}
+		})
+	}
+	if partitioned {
+		apply_project = append(apply_project, &plan.Expr{
+			Typ:  routeTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: routePos}},
+		})
 	}
 
 	lastNodeId = builder.appendNode(&plan.Node{
@@ -7191,6 +7423,14 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 				},
 			},
 		}
+	}
+	if partitioned {
+		project = append(project, &plan.Expr{
+			Typ: apply_project[len(ftcols)].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: crossapply.BindingTags[0], ColPos: int32(len(ftcols))},
+			},
+		})
 	}
 
 	// fake primary key hidden column must be a NULL constant. See getDefaultExpr func from build_util.go
@@ -7227,6 +7467,33 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		if col.Name != catalog.Row_ID {
 			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, col)
 		}
+	}
+	if partitioned {
+		insertCols := make([]plan.ColRef, 0, len(ftcols)+1)
+		for i := range ftcols {
+			insertCols = append(insertCols, plan.ColRef{ColPos: int32(i)})
+		}
+		// The route column is execution-only; the fake primary key follows it
+		// in the projection and is the final index-table input column.
+		insertCols = append(insertCols, plan.ColRef{ColPos: int32(len(ftcols) + 1)})
+		multiUpdate := &plan.Node{
+			NodeType:    plan.Node_MULTI_UPDATE,
+			Children:    []int32{lastNodeId},
+			BindingTags: []int32{builder.genNewBindTag()},
+			UpdateCtxList: []*plan.UpdateCtx{{
+				ObjRef:             indexObjRef,
+				TableDef:           insertEntriesTableDef,
+				InsertCols:         insertCols,
+				IgnoreAffectedRows: true,
+				PartitionIndexCtx: &plan.PartitionIndexCtx{
+					ParentRef:    DeepCopyObjectRef(objRef),
+					ParentTable:  DeepCopyTableDef(tableDef, true),
+					PartitionCol: plan.ColRef{ColPos: int32(len(ftcols))},
+				},
+			}},
+		}
+		builder.appendStep(builder.appendNode(multiUpdate, bindCtx))
+		return nil
 	}
 
 	preInsertNode := &Node{
@@ -7279,9 +7546,11 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 // To create rows of (rowid, docid, __mo_fake_pk_col) for DELETE
 func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
-	indexObjRef *ObjectRef, indexTableDef *TableDef, indexdef *plan.IndexDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, error) {
+	indexObjRef *ObjectRef, indexTableDef *TableDef, indexdef *plan.IndexDef, typMap map[string]plan.Type, posMap map[string]int) (int32, int, int, Type, int32, error) {
+	partitioned := features.IsPartitioned(delCtx.tableDef.FeatureFlag) &&
+		delCtx.tableDef.Partition != nil && len(delCtx.tableDef.Partition.PartitionDefs) > 0
 
-	if delCtx.isUnrestrictedDelete {
+	if delCtx.isUnrestrictedDelete && !partitioned {
 		// truncate and create a table scan of index table
 
 		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
@@ -7308,7 +7577,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		retPkPos := 3 // __mo_fake_pk_col
 		retPkTyp := indexTableDef.Cols[retPkPos].Typ
 
-		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
+		return lastNodeId, deleteIdx, retPkPos, retPkTyp, -1, nil
 
 	} else {
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
@@ -7407,10 +7676,10 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 		if err != nil {
-			return -1, -1, -1, Type{}, err
+			return -1, -1, -1, Type{}, -1, err
 		}
 
-		projectList := make([]*Expr, 0, 2)
+		projectList := make([]*Expr, 0, 4)
 		projectList = append(projectList, &plan.Expr{
 			Typ: scanNodeProject[0].Typ,
 			Expr: &plan.Expr_Col{
@@ -7440,6 +7709,15 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			},
 		},
 		)
+		routePos := int32(-1)
+		if partitioned {
+			routeExpr, routeErr := buildPartitionRouteExpr(builder.GetContext(), delCtx.tableDef, 1)
+			if routeErr != nil {
+				return -1, -1, -1, Type{}, -1, routeErr
+			}
+			routePos = int32(len(projectList))
+			projectList = append(projectList, routeExpr)
+		}
 
 		rfBuildExpr := &plan.Expr{
 			Typ: joinCond.GetF().Args[1].Typ,
@@ -7478,7 +7756,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		retPkPos := deleteIdx + 2
 		retPkTyp := scanNodeProject[2].Typ
 
-		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
+		return lastNodeId, deleteIdx, retPkPos, retPkTyp, routePos, nil
 	}
 }
 
@@ -7538,9 +7816,34 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	}
 
 	// create (rowid, doc_id, __mo_fake_pk_col) for delete
-	lastNodeId, deleteIdx, pkPos, pkTyp, err := buildDeleteRowsFullTextIndex(ctx, builder, bindCtx, delCtx, indexObjRef, indexTableDef, indexdef, typMap, posMap)
+	lastNodeId, deleteIdx, pkPos, pkTyp, routePos, err := buildDeleteRowsFullTextIndex(ctx, builder, bindCtx, delCtx, indexObjRef, indexTableDef, indexdef, typMap, posMap)
 	if err != nil {
 		return err
+	}
+	partitioned := features.IsPartitioned(delCtx.tableDef.FeatureFlag) &&
+		delCtx.tableDef.Partition != nil && len(delCtx.tableDef.Partition.PartitionDefs) > 0
+	if partitioned {
+		if routePos < 0 {
+			return moerr.NewInvalidInput(builder.GetContext(), "partition fulltext delete is missing its route column")
+		}
+		deleteNode := &plan.Node{
+			NodeType:    plan.Node_MULTI_UPDATE,
+			Children:    []int32{lastNodeId},
+			BindingTags: []int32{builder.genNewBindTag()},
+			UpdateCtxList: []*plan.UpdateCtx{{
+				ObjRef:             indexObjRef,
+				TableDef:           indexTableDef,
+				DeleteCols:         []plan.ColRef{{ColPos: int32(deleteIdx)}, {ColPos: int32(pkPos)}},
+				IgnoreAffectedRows: true,
+				PartitionIndexCtx: &plan.PartitionIndexCtx{
+					ParentRef:    DeepCopyObjectRef(delCtx.objRef),
+					ParentTable:  DeepCopyTableDef(delCtx.tableDef, true),
+					PartitionCol: plan.ColRef{ColPos: routePos},
+				},
+			}},
+		}
+		builder.appendStep(builder.appendNode(deleteNode, bindCtx))
+		return nil
 	}
 
 	// delete

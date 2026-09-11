@@ -320,6 +320,53 @@ func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 
 }
 
+func TestBuildPartitionRouteExprRemapsBoundColumns(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Partition: &plan.Partition{PartitionDefs: []*plan.PartitionDef{
+			{Def: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 4}},
+			}},
+			{Def: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 9}},
+			}},
+		}},
+	}
+	route, err := buildPartitionRouteExpr(context.Background(), tableDef, 17)
+	require.NoError(t, err)
+	require.NotNil(t, route)
+	require.Equal(t, int32(types.T_int32), route.Typ.Id)
+	require.Equal(t, int32(17), route.GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(4), route.GetF().Args[0].GetCol().ColPos)
+	require.Equal(t, int32(17), route.GetF().Args[2].GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(9), route.GetF().Args[2].GetF().Args[0].GetCol().ColPos)
+
+	_, err = buildPartitionRouteExpr(context.Background(), &plan.TableDef{
+		Partition: &plan.Partition{PartitionDefs: []*plan.PartitionDef{{}}},
+	}, 0)
+	require.Error(t, err)
+}
+
+func TestMergeFullTextIndexPartsKeepsOneLogicalBranch(t *testing.T) {
+	first := &plan.IndexDef{
+		IndexName:      "ft",
+		IndexTableName: "__ft_hidden",
+		IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+		Parts:          []string{"body"},
+	}
+	second := &plan.IndexDef{
+		IndexName:      "ft",
+		IndexTableName: "__ft_hidden",
+		IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+		Parts:          []string{"title", "body"},
+	}
+	merged := mergeFullTextIndexParts([]*plan.IndexDef{first, second}, first)
+	require.Equal(t, []string{"body", "title"}, merged.Parts)
+	require.Equal(t, []string{"body"}, first.Parts)
+	require.NotSame(t, first, merged)
+}
+
 // Test WITH clause support for INSERT statement (Issue #22583)
 func TestBuildWithInsert(t *testing.T) {
 	sqls := []string{
