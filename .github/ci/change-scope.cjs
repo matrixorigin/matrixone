@@ -67,19 +67,25 @@ async function resolveScope({ github, context, forceFull }) {
 }
 
 function verifyResults(scope, needs) {
-  if (needs['change-scope']?.result !== 'success' ||
-      needs['check-pr-valid']?.result !== 'success' ||
-      needs['check-pr-valid']?.outputs?.pr_valid !== 'true') {
+  if (needs.preflight?.result !== 'success' ||
+      needs.preflight?.outputs?.pr_valid !== 'true') {
     throw new Error('PR validation or scope planning did not succeed');
   }
   const required = {
     docs: ['docs-check'],
     ut: ['matrixone-ci'],
-    bvt: ['bvt-group-plan', 'matrixone-compose-ci', 'matrixone-standalone-ci'],
-    full: ['bvt-group-plan', 'matrixone-ci', 'matrixone-ut-coverage',
+    bvt: ['matrixone-compose-ci', 'matrixone-standalone-ci'],
+    full: ['matrixone-ci', 'matrixone-ut-coverage',
       'matrixone-compose-ci', 'matrixone-standalone-ci', 'matrixone-coverage-merge'],
   }[scope];
   if (!required) throw new Error(`Invalid CI scope: ${scope}`);
+  if (scope === 'full' || scope === 'bvt') {
+    const { compose_group, launch_group, generation } = needs.preflight.outputs;
+    if (!['0', '1'].includes(compose_group) || !['0', '1'].includes(launch_group) ||
+        compose_group === launch_group || !/^[1-9][0-9]*-[1-9][0-9]*$/.test(generation || '')) {
+      throw new Error('Missing or invalid complementary BVT plan');
+    }
+  }
   for (const job of required) {
     if (needs[job]?.result !== 'success') throw new Error(`${job}: ${needs[job]?.result || 'missing'}`);
   }

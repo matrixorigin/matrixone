@@ -1,8 +1,10 @@
 # Pull request CI scope
 
-The PR entrypoint classifies the complete file list before scheduling expensive
-jobs. Tests still run as complete suites; this does not shard or select individual
-test cases.
+The PR entrypoint uses one `CI preflight` job to validate PR metadata, classify
+the complete file list and, where needed, assign complementary BVT groups before
+scheduling expensive jobs. Full/BVT runs use one preparation runner allocation
+instead of three; UT/docs runs use one instead of two. Tests still run as complete
+suites; this does not shard or select individual test cases.
 
 | Changed files | Scope | Work performed |
 | --- | --- | --- |
@@ -30,6 +32,14 @@ states the scope and intentional omissions. Actual test results remain visible
 under the reusable workflow calls named `... execution`. This replaces six
 identical summary jobs with one runner allocation and gives the aggregate result
 a distinct name rather than labeling it as an individual test's result.
+
+Preflight publishes the original `pr_valid` and `scope` outputs plus both BVT
+groups and their run/attempt generation. All BVT and coverage consumers take the
+same generation from preflight. The required verifier rejects missing or
+non-complementary groups. Invalid metadata and classification failures prevent
+test producers from starting; the required check still fails. The 3.0-dev path
+keeps metadata validation and its release workflows, and skips modern scope
+classification and BVT planning.
 
 The independent UT coverage and merged UT+BVT coverage jobs run only for full
 runs. Scoped runs explicitly report coverage as not evaluated; they do not
@@ -87,11 +97,36 @@ deployment through `workflow_dispatch` on the default branch with
 the same identity, ordering and attempt checks; it is not an arbitrary run killer.
 A manually cancelled run with no successor is outside automatic recovery scope.
 
-The independent controller still needs an `ubuntu-latest` runner and GitHub API
+The independent controller still needs a control runner and GitHub API
 availability. Its six-minute execution timeout and two-minute grace do not bound
 runner queue delay. Platform scheduling and forced-cancellation propagation need
 a post-merge test with an older cancelled run and a newer pending run; local
 tests exercise mocked API state transitions, not GitHub's scheduler.
+
+## Lightweight control runner pool
+
+Preflight, `CI Required` and the cancellation controller share the repository
+variable `CI_CONTROL_RUNNER_LABEL`. If unset or empty, it resolves to
+`ubuntu-latest`. This PR does not provision a runner or change repository variables.
+Setting a nonexistent label will queue jobs indefinitely; there is no automatic
+fallback after a configured pool stops serving work.
+
+An operator should first provision and verify a separate, repository-accessible
+Linux pool with a unique label, Git, Bash, and support for the checked-in checkout
+and github-script action runtimes. Set `CI_CONTROL_RUNNER_LABEL` to that label
+only after a smoke job is picked up. Use ephemeral isolated workers; this pool
+handles trusted control code, including metadata-validation credentials and the
+cancellation controller's Actions write token. Do not reuse a persistent worker
+that executes untrusted PR tests. UT/BVT pools and the PR documentation-diff job
+do not consume this variable.
+
+Roll out by checking runner assignments for preflight, the summary and the
+cancellation controller, then compare queue times. Clear the variable to restore
+the hosted default. Separate capacity avoids contention with test jobs but still
+requires its own availability; merging preparation jobs alone saves allocations,
+not a guaranteed number of minutes. Run 34571127635, where producers had already
+failed and only the summary awaited a hosted runner, is a capacity case rather
+than a superseded-run cancellation case.
 
 References: [workflow cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation),
 [force cancellation](https://docs.github.com/en/rest/actions/workflow-runs#force-cancel-a-workflow-run),

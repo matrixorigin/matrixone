@@ -13,27 +13,19 @@ permissions:
   contents: read
 
 jobs:
-  check-pr-valid:
-    runs-on: ubuntu-latest
-    name: CHECK PR VALID
-    outputs:
-      pr_valid: ${{ steps.check_pr_valid.outputs.pull_valid }}
-    steps:
-      - uses: matrixorigin/CI/actions/pulls-content-check@main
-        id: check_pr_valid
-        with:
-          github_token: ${{ secrets.TOKEN_ACTION }}
-          title_for_find_issue: "Which issue(s) this PR fixes:"
-          title_for_find_content: "What this PR does / why we need it:"
-
-  change-scope:
-    name: Classify CI changes
-    runs-on: ubuntu-latest
+  preflight:
+    name: CI preflight
+    runs-on: ${{ vars.CI_CONTROL_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
+      pr_valid: ${{ steps.check_pr_valid.outputs.pull_valid }}
       scope: ${{ steps.scope.outputs.scope }}
+      compose_group: ${{ steps.plan.outputs.compose_group }}
+      launch_group: ${{ steps.plan.outputs.launch_group }}
+      generation: ${{ steps.plan.outputs.generation }}
     steps:
       - name: Record CI provenance
         env:
@@ -47,9 +39,16 @@ jobs:
             echo "- PR base SHA: ${PR_BASE_SHA}"
             echo "- PR head SHA: ${PR_HEAD_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: matrixorigin/CI/actions/pulls-content-check@main
+        id: check_pr_valid
+        with:
+          github_token: ${{ secrets.TOKEN_ACTION }}
+          title_for_find_issue: "Which issue(s) this PR fixes:"
+          title_for_find_content: "What this PR does / why we need it:"
       # pull_request_target must execute only the classifier from the trusted
       # commit that supplied this workflow, not from the PR head or a moving ref.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && github.base_ref != '3.0-dev' }}
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
@@ -57,6 +56,7 @@ jobs:
           sparse-checkout: .github/ci
       - uses: actions/github-script@v7
         id: scope
+        if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && github.base_ref != '3.0-dev' }}
         env:
           FORCE_FULL: ${{ vars.CI_FORCE_FULL }}
         with:
@@ -65,37 +65,9 @@ jobs:
             const scope = await resolveScope({ github, context, forceFull: process.env.FORCE_FULL === 'true' });
             core.setOutput('scope', scope);
             await core.summary.addHeading('CI change scope').addRaw(`Selected: ${scope}`).write();
-
-  docs-check:
-    name: Documentation whitespace check
-    needs: change-scope
-    if: ${{ needs.change-scope.outputs.scope == 'docs' && github.base_ref != '3.0-dev' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          sparse-checkout: docs
-          persist-credentials: false
-      - name: Check documentation diff
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git -c core.whitespace=blank-at-eof,space-before-tab diff --no-ext-diff --no-textconv --check "${BASE_SHA}...${HEAD_SHA}"
-
-  bvt-group-plan:
-    name: Plan complementary BVT groups
-    needs: [check-pr-valid, change-scope]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.change-scope.outputs.scope) && github.base_ref != '3.0-dev' }}
-    runs-on: ubuntu-latest
-    outputs:
-      compose_group: ${{ steps.plan.outputs.compose_group }}
-      launch_group: ${{ steps.plan.outputs.launch_group }}
-      generation: ${{ steps.plan.outputs.generation }}
-    steps:
       - id: plan
         name: Assign both BVT groups
+        if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && contains(fromJSON('["full","bvt"]'), steps.scope.outputs.scope) && github.base_ref != '3.0-dev' }}
         run: |
           set -euo pipefail
           compose_group=$(( (${{ github.run_id }} + ${{ github.run_attempt }}) % 2 ))
@@ -113,6 +85,24 @@ jobs:
             echo "- Generation: ${generation}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  docs-check:
+    name: Documentation whitespace check
+    needs: preflight
+    if: ${{ needs.preflight.outputs.scope == 'docs' && github.base_ref != '3.0-dev' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          sparse-checkout: docs
+          persist-credentials: false
+      - name: Check documentation diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git -c core.whitespace=blank-at-eof,space-before-tab diff --no-ext-diff --no-textconv --check "${BASE_SHA}...${HEAD_SHA}"
+
   # Build the coverage-instrumented mo-service once and share it with the BVT
   # workflows below, instead of each of them spending ~10 minutes on its own
   # identical build. Consumers verify the artifact's sha and fall back to
@@ -122,15 +112,15 @@ jobs:
   # workflow caps its token to contents: read and pulls images anonymously.
   matrixone-shared-build:
     name: Matrixone Shared Build
-    needs: [check-pr-valid, change-scope]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.change-scope.outputs.scope) && github.base_ref != '3.0-dev' }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.preflight.outputs.scope) && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/build-mo.yaml@main
 
   # ============ 非 3.0-dev 分支使用 @main ============
   matrixone-ci:
     name: Matrixone CI execution
-    needs: [check-pr-valid, change-scope]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && contains(fromJSON('["full","ut"]'), needs.change-scope.outputs.scope) && github.base_ref != '3.0-dev' }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","ut"]'), needs.preflight.outputs.scope) && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
       ut_parallel: 6
@@ -139,17 +129,17 @@ jobs:
 
   matrixone-ut-coverage:
     name: Matrixone UT Coverage execution
-    needs: [check-pr-valid, change-scope, bvt-group-plan]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && needs.change-scope.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
     with:
-      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit
 
   matrixone-upgrade-ci:
     name: Matrixone Upgrade CI
-    needs: [check-pr-valid, change-scope]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && needs.change-scope.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@main
     secrets: inherit
 
@@ -163,41 +153,41 @@ jobs:
   # silently skipping both BVT suites.
   matrixone-compose-ci:
     name: Matrixone Compose CI execution
-    needs: [check-pr-valid, change-scope, bvt-group-plan, matrixone-shared-build]
-    if: ${{ !cancelled() && needs.check-pr-valid.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.change-scope.outputs.scope) && needs.bvt-group-plan.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
+    needs: [preflight, matrixone-shared-build]
+    if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.preflight.outputs.scope) && needs.preflight.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
     with:
-      bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
-      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      bvt_group: ${{ needs.preflight.outputs.compose_group }}
+      bvt_generation: ${{ needs.preflight.outputs.generation }}
       build_artifact: ${{ needs.matrixone-shared-build.result == 'success' && needs.matrixone-shared-build.outputs.artifact_name || '' }}
     secrets: inherit
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI execution
-    needs: [check-pr-valid, change-scope, bvt-group-plan, matrixone-shared-build]
-    if: ${{ !cancelled() && needs.check-pr-valid.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.change-scope.outputs.scope) && needs.bvt-group-plan.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
+    needs: [preflight, matrixone-shared-build]
+    if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.preflight.outputs.scope) && needs.preflight.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
     with:
-      bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
-      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      bvt_group: ${{ needs.preflight.outputs.launch_group }}
+      bvt_generation: ${{ needs.preflight.outputs.generation }}
       build_artifact: ${{ needs.matrixone-shared-build.result == 'success' && needs.matrixone-shared-build.outputs.artifact_name || '' }}
     secrets: inherit
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@main
     secrets: inherit
 
   matrixone-coverage-merge:
     name: Matrixone Coverage execution
-    needs: [check-pr-valid, change-scope, bvt-group-plan, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
-    if: ${{ !cancelled() && needs.check-pr-valid.outputs.pr_valid == 'true' && needs.change-scope.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
+    needs: [preflight, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
+    if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
     with:
-      prerequisites_ready: ${{ needs.bvt-group-plan.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
-      expected_bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      prerequisites_ready: ${{ needs.preflight.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
+      expected_bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit
 
   # One required check validates the selected suite as an AND gate; failed/cancelled/missing
@@ -207,8 +197,8 @@ jobs:
     # Keep cancellation fail-closed. ci-cancellation.yml independently escalates
     # cancellation of superseded runs if this always() job holds the group.
     if: ${{ always() && github.base_ref != '3.0-dev' }}
-    needs: [check-pr-valid, change-scope, docs-check, bvt-group-plan, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
-    runs-on: ubuntu-latest
+    needs: [preflight, docs-check, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
+    runs-on: ${{ vars.CI_CONTROL_RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Record CI provenance
@@ -231,7 +221,7 @@ jobs:
           sparse-checkout: .github/ci
       - uses: actions/github-script@v7
         env:
-          SCOPE: ${{ needs.change-scope.outputs.scope }}
+          SCOPE: ${{ needs.preflight.outputs.scope }}
           JOB_RESULTS: ${{ toJSON(needs) }}
         with:
           script: |
@@ -242,35 +232,35 @@ jobs:
   # ============ 3.0-dev 分支使用 @release/3.0-dev ============
   matrixone-ci-30:
     name: Matrixone CI (3.0)
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@release/3.0-dev
     secrets: inherit
 
   matrixone-upgrade-ci-30:
     name: Matrixone Upgrade CI (3.0)
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@release/3.0-dev
     secrets: inherit
 
   matrixone-compose-ci-30:
     name: Matrixone Compose CI (3.0)
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@release/3.0-dev
     secrets: inherit
 
   matrixone-standalone-ci-30:
     name: Matrixone Standlone CI (3.0)
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@release/3.0-dev
     secrets: inherit
 
   matrixone-utils-ci-30:
     name: Matrixone Utils CI (3.0)
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/utils.yaml@release/3.0-dev
     secrets: inherit
