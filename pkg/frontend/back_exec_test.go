@@ -80,6 +80,7 @@ func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {
 	ctx := context.Background()
 	ses := newFeatureLimitTestSession(t)
+	ses.errInfo = &errInfo{maxCnt: MoDefaultErrorCount}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(7)))
 	backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
 
