@@ -1105,6 +1105,15 @@ func requireTestRequestAccepted(t *testing.T, accepted <-chan struct{}) {
 	}
 }
 
+func requireTestFutureReleased(t *testing.T, released <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("Future release did not complete")
+	}
+}
+
 func TestDataProgressLatchPreservesWriteReadOrdering(t *testing.T) {
 	rb := &remoteBackend{}
 	rb.options.bufferSize = 16
@@ -1472,15 +1481,38 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
+			var closeOnce sync.Once
+			closeFuture := func() {
+				closeOnce.Do(func() { f.Close() })
+			}
+			defer closeFuture()
+
+			released := make(chan struct{})
+			f.mu.Lock()
+			originalRelease := f.releaseFunc
+			if originalRelease == nil {
+				f.mu.Unlock()
+				t.Fatal("backend Future has no release callback")
+			}
+			f.releaseFunc = func(releasedFuture *Future) {
+				releasedFuture.mu.Lock()
+				releasedFuture.releaseFunc = originalRelease
+				releasedFuture.mu.Unlock()
+				originalRelease(releasedFuture)
+				close(released)
+			}
+			f.mu.Unlock()
+
 			requireTestRequestAccepted(t, entered)
 			require.NoError(t, f.waitSendCompleted())
 			id := f.getSendMessageID()
-			f.Close()
+			closeFuture()
+			requireTestFutureReleased(t, released)
 			b.mu.RLock()
 			_, ok := b.mu.futures[id]
 			b.mu.RUnlock()
 			require.False(t, ok,
-				"closing a completed Future must remove it before the response arrives")
+				"Future release must remove the request before the response is allowed")
 			releaseHandler()
 			select {
 			case err := <-responseWriteErr:
