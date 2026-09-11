@@ -3381,6 +3381,50 @@ func TestConvTypedNumericDispatch(t *testing.T) {
 		testTemporalCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}), "18")
 		testTemporalCase(NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), "8228")
 	})
+	t.Run("typed integer prefix honors from base", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			input FunctionTestInput
+			from  int64
+			to    int64
+			want  string
+		}{
+			{
+				name:  "signed decimal digits parsed as hexadecimal",
+				input: NewFunctionTestInput(types.T_int64.ToType(), []int64{15}, []bool{false}),
+				from:  16,
+				to:    10,
+				want:  "21",
+			},
+			{
+				name:  "unsigned decimal digits parsed as binary prefix",
+				input: NewFunctionTestInput(types.T_uint64.ToType(), []uint64{15}, []bool{false}),
+				from:  2,
+				to:    10,
+				want:  "1",
+			},
+			{
+				name:  "signed source keeps sign with negative from base",
+				input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-15}, []bool{false}),
+				from:  -16,
+				to:    -10,
+				want:  "-21",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						tc.input,
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.from}, []bool{false}),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.to}, []bool{false}),
+					},
+					NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}), Conv)
+				succeed, info := fc.Run()
+				require.True(t, succeed, info)
+			})
+		}
+	})
 	t.Run("masked rows do not access the typed vector", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
