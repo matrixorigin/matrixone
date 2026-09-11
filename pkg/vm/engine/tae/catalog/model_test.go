@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"testing"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,21 +27,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSchemaRejectsCaseInsensitiveDuplicateColumn(t *testing.T) {
-	schema := NewEmptySchema("duplicate_column_case")
-	require.NoError(t, schema.AppendCol("Id", types.T_int32.ToType()))
-
-	err := schema.AppendCol("id", types.T_int32.ToType())
-	require.Error(t, err)
-	require.Len(t, schema.ColDefs, 1)
-	require.Len(t, schema.NameMap, 1)
-
-	replayed := NewEmptySchema("duplicate_column_case_replayed")
-	replayed.ColDefs = []*ColDef{
-		{Name: "Id", Idx: 0},
-		{Name: "id", Idx: 1},
+func TestSchemaReplayPreservesCaseVariantColumns(t *testing.T) {
+	legacy := NewEmptySchema("duplicate_column_case_replayed")
+	legacy.ColDefs = []*ColDef{
+		{Name: "Id", Idx: 0, Type: types.T_int32.ToType()},
+		{Name: "id", Idx: 1, Type: types.T_int32.ToType()},
 	}
-	require.Error(t, replayed.Finalize(true))
+	legacy.NameMap = map[string]int{"Id": 0, "id": 1}
+	buf, err := legacy.Marshal()
+	require.NoError(t, err)
+
+	replayed := NewEmptySchema("")
+	_, err = replayed.ReadFromWithVersion(bytes.NewReader(buf), IOET_WALTxnCommand_Table_CurrVer)
+	require.NoError(t, err)
+	require.Len(t, replayed.ColDefs, 2)
+	require.Equal(t, "Id", replayed.ColDefs[0].Name)
+	require.Equal(t, "id", replayed.ColDefs[1].Name)
 }
 
 func TestCoverage_DefsToSchema_FromPublicationProperty(t *testing.T) {
