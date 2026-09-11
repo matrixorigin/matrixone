@@ -1582,7 +1582,11 @@ def _deserialize_record_batch_message(data: Any, schema: pa.Schema) -> pa.Record
     if not isinstance(schema, pa.Schema):
         raise ValueError("PROTOCOL: execution payload schema is invalid")
     try:
-        return pa.ipc.read_record_batch(pa.py_buffer(data), schema)
+        reader = pa.BufferReader(pa.py_buffer(data))
+        record = pa.ipc.read_record_batch(reader, schema)
+        if reader.tell() != reader.size():
+            raise ValueError("trailing bytes after Arrow record batch")
+        return record
     except (pa.ArrowException, OSError, ValueError, TypeError) as exc:
         raise ValueError("PROTOCOL: execution payload is not a valid Arrow record batch") from exc
 
