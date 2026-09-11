@@ -1683,17 +1683,17 @@ def _encode_execution_request(request: Dict[str, Any]):
     if not input_wire:
         raise ValueError("PROTOCOL: execution request Arrow batch is empty")
     metadata = dict(request)
-    metadata["input"] = pickle.PickleBuffer(input_wire)
     buffers = []
     try:
+        metadata["input"] = pickle.PickleBuffer(input_wire)
         metadata_wire = pickle.dumps(
             metadata, protocol=5, buffer_callback=buffers.append
         )
-    except (pickle.PickleError, TypeError, ValueError) as exc:
+        if len(buffers) != 1:
+            raise ValueError("PROTOCOL: execution request must contain one Arrow buffer")
+        arrow_wire = buffers[0].raw()
+    except (BufferError, pickle.PickleError, TypeError, ValueError) as exc:
         raise ValueError("PROTOCOL: cannot encode execution request") from exc
-    if len(buffers) != 1:
-        raise ValueError("PROTOCOL: execution request must contain one Arrow buffer")
-    arrow_wire = buffers[0].raw()
     payload_size = 8 + len(metadata_wire) + len(arrow_wire)
     if payload_size > MAX_EXECUTION_FRAME_BYTES:
         raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
