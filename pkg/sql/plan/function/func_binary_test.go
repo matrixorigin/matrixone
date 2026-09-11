@@ -4809,106 +4809,54 @@ func initSubStrIndexTestCase() []tcTemp {
 	}
 }
 
-func TestGetCountFloatTruncation(t *testing.T) {
-	tests := []struct {
-		value float64
-		want  int64
-	}{
-		{1.4, 1},
-		{1.5, 1},
-		{1.9, 1},
-		{-1.5, -1},
-		{-2.5, -2},
-	}
-	for _, tt := range tests {
-		require.Equal(t, tt.want, getCount(types.T_float64.ToType(), tt.value))
-	}
-}
-
-func TestGetDecimalCountRounding(t *testing.T) {
-	tests := []struct {
-		value types.Decimal64
-		want  int64
-	}{{14, 1}, {15, 2}, {types.Decimal64(15).Minus(), -2}, {types.Decimal64(25).Minus(), -3}}
-	typ := types.T_decimal64.ToType()
-	typ.Scale = 1
-	for _, tt := range tests {
-		require.Equal(t, tt.want, getDecimalCount(typ, tt.value))
-	}
-	maxTyp := types.T_decimal64.ToType()
-	require.Equal(t, int64(-1), getDecimalCount(maxTyp, types.Decimal64(^uint64(0))))
-	require.Equal(t, int64(-1), getDecimalCount(maxTyp, types.Decimal64(1).Minus()))
-	typ128 := types.T_decimal128.ToType()
-	typ128.Scale = 1
-	require.Equal(t, int64(2), getDecimalCount(typ128, types.Decimal128{B0_63: 15}))
-	for _, tc := range []struct {
-		value string
-		want  int64
-	}{
-		{"100000000000000000000", math.MaxInt64},
-		{"-100000000000000000000", math.MinInt64},
-	} {
-		value, err := types.ParseDecimal128(tc.value, 38, 0)
-		require.NoError(t, err)
-		require.Equal(t, tc.want, getDecimalCount(types.New(types.T_decimal128, 38, 0), value))
-	}
-}
-
-func TestSubStrIndexDecimalOverloads(t *testing.T) {
+func TestSubStrIndexIntegerArgumentResolution(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, counts := range []FunctionTestInput{
-		NewFunctionTestInput(types.New(types.T_decimal64, 4, 1),
-			[]types.Decimal64{15, types.Decimal64(15).Minus(), 0, 15, 15}, []bool{false, false, true, false, false}),
-		NewFunctionTestInput(types.New(types.T_decimal128, 30, 1),
-			[]types.Decimal128{{B0_63: 15}, types.Decimal128FromInt64(-15), {}, {B0_63: 15}, {B0_63: 15}}, []bool{false, false, true, false, false}),
+	for _, tc := range []struct {
+		name      string
+		countType types.Type
+		wantIndex int32
+		wantCast  bool
+		wantType  types.T
+	}{
+		{"int64", types.T_int64.ToType(), 2, false, types.T_int64},
+		{"uint64", types.T_uint64.ToType(), 1, false, types.T_uint64},
+		{"uint32", types.T_uint32.ToType(), 1, true, types.T_uint64},
+		{"float32", types.T_float32.ToType(), 0, true, types.T_float64},
+		{"float64", types.T_float64.ToType(), 0, false, types.T_float64},
+		{"decimal64", types.New(types.T_decimal64, 18, 1), 2, true, types.T_int64},
+		{"decimal128", types.New(types.T_decimal128, 38, 1), 2, true, types.T_int64},
+		{"decimal256", types.New(types.T_decimal256, 65, 1), 2, true, types.T_int64},
 	} {
-		// Resolve the SQL overload as well as executing its vector kernel.
-		inputs := []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c,d", "a,b,c,d", "a,b,c,d", "", "a,b,c,d"}, []bool{false, false, false, true, false}),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{",", ",", ",", ",", ""}, []bool{false, false, false, false, true}),
-			counts,
-		}
-		resolved, err := GetFunctionByName(proc.Ctx, "substring_index", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), counts.typ})
-		require.NoError(t, err)
-		require.False(t, resolved.needCast)
-		_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
-		if counts.typ.Oid == types.T_decimal64 {
-			require.Equal(t, int32(3), overloadIndex)
-		} else {
-			require.Equal(t, int32(4), overloadIndex)
-		}
-		ov, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
-		require.NoError(t, err)
-		exec, _, _, _ := ov.GetExecuteMethod()
-		tc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"a,b", "c,d", "", "", ""}, []bool{false, false, true, true, true}), fEvalFn(exec))
-		ok, info := tc.Run()
-		require.True(t, ok, info)
-
-		partial := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"", "c,d", "", "", ""}, []bool{true, false, true, true, true}), fEvalFn(exec)).
-			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, false, false}})
-		ok, info = partial.Run()
-		require.True(t, ok, info)
-
-		allNull := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false,
-			make([]string, 5), []bool{true, true, true, true, true}), fEvalFn(exec)).
-			WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: true})
-		ok, info = allNull.Run()
-		require.True(t, ok, info)
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "substring_index", []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), tc.countType,
+			})
+			require.NoError(t, err)
+			_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.wantIndex, overloadIndex)
+			castTypes, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, tc.wantCast, needsCast)
+			if needsCast {
+				require.Equal(t, tc.wantType, castTypes[2].Oid)
+			}
+		})
 	}
+}
 
-	for oid, wantIndex := range map[types.T]int32{
-		types.T_float64: 0,
-		types.T_uint64:  1,
-		types.T_int64:   2,
-	} {
-		resolved, err := GetFunctionByName(proc.Ctx, "substring_index",
-			[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), oid.ToType()})
-		require.NoError(t, err)
-		_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
-		require.Equal(t, wantIndex, overloadIndex, oid.String())
+func TestSubStrIndexLegacyFloatOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(SUBSTRING_INDEX, 0))
+	require.NoError(t, err)
+	exec, _, _, _ := overload.GetExecuteMethod()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c,d"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5}, nil),
 	}
+	tc := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a"}, nil), fEvalFn(exec))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestSubStrIndex(t *testing.T) {
@@ -15545,38 +15493,5 @@ func TestTimeDiffZeroDatetimeReturnsNull(t *testing.T) {
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
 		})
-	}
-}
-
-func TestDecimalCountExactHalfBoundaries(t *testing.T) {
-	for _, scale := range []int32{18, 38} {
-		for _, sign := range []int64{1, -1} {
-			for _, tc := range []struct {
-				digits string
-				want   int64
-			}{
-				{"4" + strings.Repeat("9", int(scale)-1), 0},
-				{"5" + strings.Repeat("0", int(scale)-1), 1},
-				{"5" + strings.Repeat("0", int(scale)-2) + "1", 1},
-			} {
-				name := "0." + tc.digits
-				t.Run(fmt.Sprintf("%d/%s", sign, name), func(t *testing.T) {
-					// Construct the scaled integer directly. The decimal string parsers apply
-					// their own rounding, which would destroy the boundary under test.
-					d128, err := types.ParseDecimal128(tc.digits, 38, 0)
-					require.NoError(t, err)
-					if sign < 0 {
-						d128 = d128.Minus()
-					}
-					require.Equal(t, sign*tc.want, getDecimalCount(types.New(types.T_decimal128, 38, scale), d128))
-					if scale == 18 {
-						raw, err := strconv.ParseInt(tc.digits, 10, 64)
-						require.NoError(t, err)
-						require.Equal(t, sign*tc.want, getDecimalCount(
-							types.New(types.T_decimal64, 18, scale), types.Decimal64(sign*raw)))
-					}
-				})
-			}
-		}
 	}
 }

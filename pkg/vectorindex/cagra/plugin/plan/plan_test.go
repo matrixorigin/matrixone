@@ -31,6 +31,8 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // init wires the two planplugin helper vars the BuildSecondaryIndexDefs
@@ -60,6 +62,11 @@ func init() {
 type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
+
+// GetProcess hands back a test process on the default service runtime, which carries
+// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
+func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }
@@ -162,7 +169,11 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	require.Len(t, tblDefs, 2)
 	require.Equal(t, catalog.Cagra_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Cagra_TblType_Storage, tblDefs[1].TableType)
-	require.Len(t, tblDefs[0].Cols, 4)
+	// metadata: index_id, checksum, timestamp, filesize, then nrow and build_ts appended
+	// last so a reader that predates them keeps its positional 0..3.
+	require.Len(t, tblDefs[0].Cols, 6)
+	require.Equal(t, catalog.Cagra_TblCol_Metadata_Nrow, tblDefs[0].Cols[4].Name)
+	require.Equal(t, catalog.Cagra_TblCol_Metadata_Build_Ts, tblDefs[0].Cols[5].Name)
 	require.Len(t, tblDefs[1].Cols, 5)
 	require.NotNil(t, tblDefs[0].Pkey)
 	require.NotNil(t, tblDefs[1].Pkey)

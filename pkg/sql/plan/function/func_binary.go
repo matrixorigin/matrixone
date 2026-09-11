@@ -5806,6 +5806,42 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	if scale > 0 {
+		var power types.Decimal128
+		if scale <= 19 {
+			power = types.Decimal128{B0_63: types.Pow10[scale]}
+		} else {
+			power, _ = (types.Decimal128{B0_63: types.Pow10[19]}).Mul128(types.Decimal128{B0_63: types.Pow10[scale-19]})
+		}
+		quotient, _ := value.Div128Trunc(power)
+		product, _ := quotient.Mul128(power)
+		remainder, _ := value.Sub128(product)
+		halfPower, _ := power.Div128Trunc(types.Decimal128{B0_63: 2})
+		if remainder.Compare(halfPower) >= 0 {
+			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
+		}
+		value = quotient
+	}
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if value.B64_127 != 0 || value.B0_63 > limit {
+		return limit
+	}
+	if negative {
+		return -value.B0_63
+	}
+	return value.B0_63
+}
+
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5905,6 +5941,26 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return 0, true
 			}
 			return uint64(int64(val)), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
@@ -7157,77 +7213,6 @@ func getCount[T number](typ types.Type, val T) int64 {
 		r = int64(val)
 	}
 	return r
-}
-
-func getDecimalCount[T types.Decimal64 | types.Decimal128](typ types.Type, val T) int64 {
-	var magnitude types.Decimal128
-	switch x := any(val).(type) {
-	case types.Decimal64:
-		magnitude = types.Decimal128FromInt64(int64(x))
-	case types.Decimal128:
-		magnitude = x
-	}
-	negative := magnitude.Sign()
-	if negative {
-		magnitude = magnitude.Minus()
-	}
-	// A valid DECIMAL scale is 0..38, so this divisor is nonzero and
-	// representable. Divide once to avoid both float conversion and double rounding.
-	divisor, _ := (types.Decimal128{B0_63: 1}).Scale(typ.Scale)
-	whole, _ := magnitude.Div128Trunc(divisor)
-	product, _ := whole.Mul128(divisor)
-	remainder, _ := magnitude.Sub128(product)
-	distance, _ := divisor.Sub128(remainder)
-	if remainder.Compare(distance) >= 0 {
-		whole = whole.Add128Unchecked(types.Decimal128{B0_63: 1})
-	}
-	limit := uint64(math.MaxInt64)
-	if negative {
-		limit++
-	}
-	if whole.B64_127 != 0 || whole.B0_63 >= limit {
-		if negative {
-			return math.MinInt64
-		}
-		return math.MaxInt64
-	}
-	if negative {
-		return -int64(whole.B0_63)
-	}
-	return int64(whole.B0_63)
-}
-
-func SubStrIndexDecimal[T types.Decimal64 | types.Decimal128](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	vs := vector.GenerateFunctionStrParameter(ivecs[0])
-	delims := vector.GenerateFunctionStrParameter(ivecs[1])
-	counts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
-	typ := counts.GetType()
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		v, null1 := vs.GetStrValue(i)
-		d, null2 := delims.GetStrValue(i)
-		c, null3 := counts.GetValue(i)
-		if null1 || null2 || null3 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		r, err := subStrIndex(string(v), string(d), getDecimalCount(typ, c))
-		if err != nil {
-			return err
-		}
-		if err = rs.AppendBytes([]byte(r), false); err != nil {
-			return err
-		}
-	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
 }
 
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

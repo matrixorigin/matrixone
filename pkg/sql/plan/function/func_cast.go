@@ -403,7 +403,7 @@ func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
 	return nil
 }
 
-func decimalToInt64Explicit[T types.FixedSizeTExceptStrType](
+func decimalToInt64Rounded[T types.FixedSizeTExceptStrType](
 	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
 	length int, _ *FunctionSelectList, roundToIntegerString func(T) string,
 ) error {
@@ -1040,6 +1040,23 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 				func(v types.Decimal256) string { return decimal256RoundedIntegerString(v, fromType.Scale) })
 		}
 	}
+	if (mode == castModeNormal || mode == castModeExplicit) && toType.Oid == types.T_int64 {
+		// Function argument conversion and explicit CAST share one exact DECIMAL
+		// contract: round the scaled integer once, then saturate to BIGINT.
+		// Do this before the generic decimal path, whose multi-step Scale can
+		// double-round values with more than 19 fractional digits.
+		switch fromType.Oid {
+		case types.T_decimal64:
+			return decimalToInt64Rounded(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
+				func(v types.Decimal64) string { return decimal64RoundedIntegerString(v, fromType.Scale) })
+		case types.T_decimal128:
+			return decimalToInt64Rounded(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
+				func(v types.Decimal128) string { return decimal128RoundedIntegerString(v, fromType.Scale) })
+		case types.T_decimal256:
+			return decimalToInt64Rounded(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
+				func(v types.Decimal256) string { return decimal256RoundedIntegerString(v, fromType.Scale) })
+		}
+	}
 	if mode == castModeExplicit && toType.Oid == types.T_int64 {
 		switch fromType.Oid {
 		case types.T_uint8:
@@ -1054,15 +1071,6 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return floatToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[float32](from), result, length, selectList)
 		case types.T_float64:
 			return floatToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[float64](from), result, length, selectList)
-		case types.T_decimal64:
-			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
-				func(v types.Decimal64) string { return decimal64RoundedIntegerString(v, fromType.Scale) })
-		case types.T_decimal128:
-			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
-				func(v types.Decimal128) string { return decimal128RoundedIntegerString(v, fromType.Scale) })
-		case types.T_decimal256:
-			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
-				func(v types.Decimal256) string { return decimal256RoundedIntegerString(v, fromType.Scale) })
 		}
 	}
 	strictStringWidth := mode.strictStringWidth()
@@ -7239,12 +7247,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

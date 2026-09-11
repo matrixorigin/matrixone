@@ -436,9 +436,9 @@ type ResetParamRefRule struct {
 	// different execute-time overload.
 	preserveRoots        map[*plan.Expr]struct{}
 	validateFunctionArgs func(string, []*Expr) error
-	// specialized is set only when execute-time rebinding changes a function
-	// overload/result type. Literal replacement alone is not enough to require
-	// rebuilding a cached prepared compile.
+	// specialized is set when execute-time rebinding changes the cached plan's
+	// execution semantics, including value-only rewrites whose overload and
+	// result type remain stable.
 	specialized bool
 	// inferTextParamPositions records only the COM_STMT text parameters that may
 	// carry numeric payloads.  Keep this per parameter: enabling inference for
@@ -715,6 +715,21 @@ func preparedNumericPrefixPositionContext(
 	args []*plan.Expr,
 	positions map[int]types.StringConversionKind,
 ) bool {
+	for i, arg := range args {
+		pos, ok := preparedNumericPrefixFunctionParamPosition(arg)
+		kind, eligible := positions[pos]
+		if !ok || !eligible || kind == types.StringConversionString {
+			continue
+		}
+		cast := arg.GetF()
+		if mysqlNumericPrefixFunctionArg(
+			name, i, len(args), makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+			// A typed SQL variable must enter a fixed numeric argument through
+			// its source domain, not through the prepare-time TEXT prefix cast.
+			return true
+		}
+	}
+
 	switch name {
 	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
 	default:
@@ -913,8 +928,20 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok && param.HasRuntimeType {
-			return param.RuntimeType, true
+		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			// SQL EXECUTE values are transported through a text vector, so their
+			// logical source type must drive overload rebinding without becoming
+			// the visible type of a bare result marker.  An explicit RuntimeType
+			// (for protocol values or a latched specialization) remains authoritative;
+			// a SQL source is only a fallback when no such type is present.
+			if param.HasRuntimeType {
+				return param.RuntimeType, true
+			}
+			if !param.IsBinaryProtocol && param.HasSourceType &&
+				(param.SourceType.IsNumeric() || param.SourceType.Oid == types.T_bool ||
+					param.SourceType.Oid == types.T_year) {
+				return param.SourceType, true
+			}
 		}
 	}
 	switch kind {
@@ -1861,7 +1888,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			paramPos, hasParamPos := preparedParamPosition(arg)
 			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
 				e, functionName, i, len(exprImpl.F.Args)) {
-				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
+				paramPos, hasParamPos = preparedNumericPrefixFunctionParamPosition(arg)
+				if !hasParamPos {
+					paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
+				}
 			}
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
@@ -1946,6 +1976,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if useSQLExecuteNumericSource {
 				needResetFunction = true
 				compareArgTypes = true
+				// The execute-time source may change only an argument literal while
+				// the selected overload and result type remain stable (for example,
+				// the precision argument of `ROUND(decimal, ?)`).  The copied plan still
+				// contains a different value and must be installed for this execute;
+				// functionBindingChanged cannot observe that value-only change.
+				rule.specialized = true
 				// SourceType already represents the SQL value's numeric contract.
 				// Do not also reinterpret the same argument through the text-prefix
 				// specialization selected for comparisons and common-value peers.
@@ -3188,7 +3224,29 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	if preparedSQLExecuteNumericResultConsumer(name) {
 		return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
 	}
-	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
+	if parent == nil {
+		return false
+	}
+	// A provisional implicit cast records a fixed numeric argument contract even
+	// when the function itself returns a non-numeric value. Materialize the SQL
+	// variable in its source domain before rebinding so the shared CAST executor,
+	// rather than a type-retagged TEXT literal, performs the conversion.
+	if !isPreparedNumericComparison(name) && argIndex >= 0 && argIndex < len(parent.GetF().GetArgs()) {
+		arg := parent.GetF().GetArgs()[argIndex]
+		if isImplicitPreparedParamCast(arg) && makeTypeByPlan2Expr(arg).IsNumeric() {
+			return true
+		}
+		// Textual arguments with MySQL numeric-prefix semantics use the existing
+		// comparison-cast overload for rolling-upgrade compatibility. That cast is
+		// likewise provisional when SQL EXECUTE supplies a typed numeric variable.
+		if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.GetObjName() == "cast" &&
+			!cast.GetSyntaxExplicitCast() && len(cast.Args) > 0 &&
+			mysqlNumericPrefixFunctionArg(
+				name, argIndex, argCount, makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+			return true
+		}
+	}
+	if !makeTypeByPlan2Expr(parent).IsNumeric() {
 		return false
 	}
 	if !isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
@@ -3258,6 +3316,23 @@ func functionBindingChanged(
 		}
 	}
 	return false
+}
+
+func preparedNumericPrefixFunctionParamPosition(expr *plan.Expr) (int, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+		fn.GetSyntaxExplicitCast() {
+		return 0, false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 2 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 {
+		return 0, false
+	}
+	return int(param.Pos), true
 }
 
 // preparedResultParamPosition recognizes provisional result-domain casts that

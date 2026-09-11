@@ -49,6 +49,47 @@ com
 SELECT SUBSTRING_INDEX('www.mysql.com', '', '0');
 substring_index(www.mysql.com, , 0)
 
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(1.5 AS DECIMAL(4,1)));
+substring_index(a,b,c,d, ,, cast(1.5 as decimal(4, 1)))
+a,b
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(-1.5 AS DECIMAL(4,1)));
+substring_index(a,b,c,d, ,, cast(-1.5 as decimal(4, 1)))
+c,d
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(0.4999999999999999999999999999999999999 AS DECIMAL(38,37)));
+substring_index(a,b,c,d, ,, cast(0.4999999999999999999999999999999999999 as decimal(38, 37)))
+
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(0.5000000000000000000000000000000000000 AS DECIMAL(38,37)));
+substring_index(a,b,c,d, ,, cast(0.5000000000000000000000000000000000000 as decimal(38, 37)))
+a
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(1.5 AS DECIMAL(65,1)));
+substring_index(a,b,c,d, ,, cast(1.5 as decimal(65, 1)))
+a,b
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(-1.5 AS DECIMAL(65,1)));
+substring_index(a,b,c,d, ,, cast(-1.5 as decimal(65, 1)))
+c,d
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(2.9 AS DOUBLE));
+substring_index(a,b,c,d, ,, cast(2.9 as double))
+a,b
+DROP TABLE IF EXISTS substring_index_decimal_count;
+CREATE TABLE substring_index_decimal_count (n DECIMAL(4,1), wide DECIMAL(65,1));
+INSERT INTO substring_index_decimal_count VALUES (1.5, 1.5), (-1.5, -1.5);
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', n), SUBSTRING_INDEX('a,b,c,d', ',', wide)
+FROM substring_index_decimal_count ORDER BY n DESC;
+substring_index(a,b,c,d, ,, n)	substring_index(a,b,c,d, ,, wide)
+a,b	a,b
+c,d	c,d
+DROP TABLE substring_index_decimal_count;
+PREPARE substring_index_decimal_stmt FROM "SELECT SUBSTRING_INDEX('a,b,c,d', ',', ?)";
+SET @substring_index_decimal_count = CAST(1.5 AS DECIMAL(4,1));
+EXECUTE substring_index_decimal_stmt USING @substring_index_decimal_count;
+substring_index(a,b,c,d, ,, ?)
+a,b
+SET @substring_index_decimal_count = CAST(-1.5 AS DECIMAL(65,1));
+EXECUTE substring_index_decimal_stmt USING @substring_index_decimal_count;
+substring_index(a,b,c,d, ,, ?)
+c,d
+DEALLOCATE PREPARE substring_index_decimal_stmt;
+SET @substring_index_decimal_count = NULL;
 select substring_index('xyz', 'abc', 9223372036854775808);
 substring_index(xyz, abc, 9223372036854775808)
 xyz

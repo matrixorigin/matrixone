@@ -99,6 +99,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateOctStringProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -123,6 +126,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateOctStringProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -229,6 +235,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateOctStringProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -2061,12 +2070,6 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {
 		return moerr.NewNotSupportedNoCtx(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
-		)
-	}
-	if features.DecimalSubstringIndex &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion61) {
-		return moerr.NewNotSupportedNoCtx(
-			"DECIMAL SUBSTRING_INDEX overloads require MORPC protocol version 61",
 		)
 	}
 	return nil

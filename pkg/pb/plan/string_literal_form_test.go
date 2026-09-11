@@ -355,36 +355,6 @@ func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion61DecimalSubstringIndex(t *testing.T) {
-	makeExpr := func(functionID, overloadIndex int32) *Expr {
-		return &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{
-				Obj:     int64(functionID)<<32 | int64(overloadIndex),
-				ObjName: "substring_index",
-			},
-		}}}
-	}
-	for _, test := range []struct {
-		name string
-		expr *Expr
-		want bool
-	}{
-		{"decimal64 overload", makeExpr(215, 3), true},
-		{"decimal128 overload", makeExpr(215, 4), true},
-		{"legacy overload", makeExpr(215, 2), false},
-		{"future unknown overload", makeExpr(215, 5), false},
-		{"same index on another function", makeExpr(214, 3), false},
-		{"nil function", &Expr{Expr: &Expr_F{F: &Function{}}}, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			features, err := RequiredRemoteExpressionFeatures(test.expr)
-			require.NoError(t, err)
-			require.Equal(t, test.want, features.DecimalSubstringIndex)
-			require.Equal(t, test.want, features.Any())
-		})
-	}
-}
-
 func TestRequiresMORPCVersion59NumericFormatArguments(t *testing.T) {
 	numeric := func(typeID int32, position int32) *Expr {
 		return &Expr{Typ: Type{Id: typeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: position}}}

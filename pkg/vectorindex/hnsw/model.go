@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -47,6 +48,12 @@ type HnswModel[T types.RealNumbers] struct {
 	Index    *usearch.Index
 	Path     string
 	FileSize int64
+
+	// TmpDir is where this model's local file is created: the LOCAL fileservice scratch
+	// volume, resolved once by whoever built the model (see hnswSpillDir). Empty means
+	// $TMPDIR, which os.CreateTemp reads from "" -- the behaviour for callers with no
+	// fileservice to reach, such as unit tests. Mirrors CagraModel/IvfpqModel.TmpDir.
+	TmpDir string
 
 	// info required for build
 	MaxCapacity uint
@@ -63,6 +70,12 @@ type HnswModel[T types.RealNumbers] struct {
 	Timestamp int64
 	Checksum  string
 
+	// Nrow is the source rows this generation indexes and BuildTS is the transaction
+	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
+	// columns -- read as unknown, never as "empty" or "built at the epoch".
+	Nrow    int64
+	BuildTS int64
+
 	// for cdc update
 	Dirty atomic.Bool
 	View  bool
@@ -73,9 +86,9 @@ type HnswModel[T types.RealNumbers] struct {
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswModel[T], error) {
+func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, tmpdir string) (*HnswModel[T], error) {
 	var err error
-	idx := &HnswModel[T]{}
+	idx := &HnswModel[T]{TmpDir: tmpdir}
 
 	idx.Id = id
 	idx.NThread = uint(nthread)
@@ -188,6 +201,12 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	}
 	idx.Path = ""
 
+	// Capture the vector count while the index is still alive: SaveToFile destroys the handle
+	// below, and ToInsertSql needs the count for the metadata row.
+	if n, lerr := idx.Index.Len(); lerr == nil {
+		idx.Len.Store(int64(n))
+	}
+
 	empty, err := idx.Empty()
 	if err != nil {
 		return err
@@ -203,8 +222,8 @@ func (idx *HnswModel[T]) SaveToFile() error {
 		return nil
 	}
 
-	// save to file
-	f, err := os.CreateTemp("", "hnsw")
+	// save to file, on the LOCAL fileservice volume when the builder resolved one
+	f, err := os.CreateTemp(idx.TmpDir, "hnsw")
 	if err != nil {
 		return err
 	}
@@ -460,6 +479,37 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 	return idx.Index.Contains(uint64(key))
 }
 
+// hnswSpillDir returns where a model's local file belongs: the LOCAL fileservice volume, not
+// $TMPDIR. A model is multi-GB and the load path MMAPS it for the entry's whole cache lifetime,
+// so on a host where $TMPDIR is a tmpfs the "off-heap" index is really sitting in RAM -- the
+// memory the index cache governor budgets. The LOCAL volume is also the one provisioned for
+// exactly this, while /tmp is frequently small or slow.
+//
+// Mirrors what ivfpq/cagra FetchArtifact already does. HostSpillDir returns "" when there is no
+// LOCAL fileservice, and os.CreateTemp reads "" as $TMPDIR, so unit tests and one-shot tools keep
+// today's behaviour with no branch at the call sites.
+// spillDir is this model's scratch directory: whatever the builder already resolved, else
+// resolved now from the request. Mirrors ivfpq/cagra FetchArtifact's TmpDir-then-HostSpillDir.
+func (idx *HnswModel[T]) spillDir(sqlproc *sqlexec.SqlProcess) string {
+	if idx.TmpDir != "" {
+		return idx.TmpDir
+	}
+	return hnswSpillDir(sqlproc)
+}
+
+func hnswSpillDir(sqlproc *sqlexec.SqlProcess) string {
+	if sqlproc == nil {
+		return ""
+	}
+	if sqlproc.Proc == nil {
+		// A background / ISCP job runs on a SqlContext with no process.Process, so there is
+		// no FileService to reach from here. Those callers resolve the directory themselves
+		// and hand it to NewHnswSync -- see pkg/iscp, which does the same for fulltext2.
+		return ""
+	}
+	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
+}
+
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -484,12 +534,17 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
+	// ownsTempFile records that THIS call created the spill file, so only a file we
+	// created is unlinked after the mapping is established. A caller-supplied Path is
+	// left alone.
+	ownsTempFile := false
 	if len(idx.Path) == 0 {
 		// Stream index chunks from DB into a temp file, then let usearch
 		// mmap it via View(). This keeps the index data entirely off the
 		// Go heap, eliminating GC pressure for multi-GB indexes.
 
-		fp, err = os.CreateTemp("", "hnsw")
+		ownsTempFile = true
+		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}
@@ -601,10 +656,27 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 
 	// View() mmaps the file — data stays off Go heap, OS can page out
-	// under memory pressure. File must remain until Destroy().
+	// under memory pressure.
 	err = usearchidx.View(idx.Path)
 	if err != nil {
 		return err
+	}
+
+	// Unlink the spill file now that it is mapped. unlink() drops the directory entry,
+	// not the inode: usearch holds the mapping (mmap MAP_SHARED, PROT_READ) and its own
+	// descriptor open until Destroy(), so reads keep faulting in from the still-live
+	// inode and the blocks are released only when that mapping goes away -- including on
+	// a crash, via process teardown. Without this a killed CN leaves a full-size model
+	// behind in the LOCAL fileservice volume with nothing to ever collect it.
+	//
+	// Only a file this call created is unlinked; Path is cleared so Destroy skips the
+	// remove and a later reload recreates its own temp file.
+	if ownsTempFile {
+		if rerr := os.Remove(idx.Path); rerr != nil && !os.IsNotExist(rerr) {
+			logutil.Warnf("HnswModel.LoadIndexFromBuffer: unlink spill file %s: %v", idx.Path, rerr)
+		} else {
+			idx.Path = ""
+		}
 	}
 
 	// always get the number of item and capacity when model loaded.
@@ -709,7 +781,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	if len(idx.Path) == 0 {
 
 		// create tempfile for writing
-		fp, err = os.CreateTemp("", "hnsw")
+		fp, err = os.CreateTemp(idx.spillDir(sqlproc), "hnsw")
 		if err != nil {
 			return err
 		}

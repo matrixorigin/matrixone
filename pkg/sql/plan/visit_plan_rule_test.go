@@ -633,15 +633,15 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 	}
 	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
-				SchemaName:       "publisher_db",
-				ObjName:          tableName,
-				Obj:              20,
-				SubscriptionName: databaseName,
-				PubInfo:          &planpb.PubInfo{TenantId: 11},
-			}, &TableDef{
-				DbName: "publisher_db", Name: tableName,
-				DbId: 10, TblId: 20, Version: 30,
-			}, nil
+			SchemaName:       "publisher_db",
+			ObjName:          tableName,
+			Obj:              20,
+			SubscriptionName: databaseName,
+			PubInfo:          &planpb.PubInfo{TenantId: 11},
+		}, &TableDef{
+			DbName: "publisher_db", Name: tableName,
+			DbId: 10, TblId: 20, Version: 30,
+		}, nil
 	}
 
 	schemas, err := collectPrepareViewSchemas(ctx)
@@ -1310,6 +1310,45 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
 }
 
+func TestFillValuesOfParamsInPlanPreservesSubstringIndexIntegerContract(t *testing.T) {
+	ctx := context.Background()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	substringIndex, err := BindFuncExprImplByPlanExpr(ctx, "substring_index", []*planpb.Expr{
+		makePlan2StringConstExprWithType("a,b,c,d"),
+		makePlan2StringConstExprWithType(","),
+		param,
+	})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{substringIndex},
+		}},
+	}}}
+
+	params := []any{ParamValue{
+		Value:               "1.5",
+		PrepareParamKind:    vector.PrepareParamDecimal,
+		SourceType:          types.New(types.T_decimal64, 2, 1),
+		HasSourceType:       true,
+		EnableNumericPrefix: true,
+	}}
+	require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, params))
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, params)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	result := filled.GetQuery().Nodes[0].ProjectList[0]
+	count := result.GetF().Args[2]
+	require.Equal(t, int32(types.T_int64), count.Typ.Id, result.String())
+	require.Equal(t, "cast", count.GetF().Func.GetObjName(), result.String())
+	require.Equal(t, int32(types.T_decimal64), count.GetF().Args[0].Typ.Id, result.String())
+}
+
 func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {
 	ctx := context.Background()
 	makeQuery := func(t *testing.T) *planpb.Plan {
@@ -1503,6 +1542,44 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	comparisonResult := comparisonFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_int32), comparisonResult.GetF().Args[1].Typ.Id,
 		"a SQL source type must not replace the comparison domain")
+
+	sign, err := BindFuncExprImplByPlanExpr(ctx, "sign", []*planpb.Expr{makeParam()})
+	require.NoError(t, err)
+	signFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, sign), []any{ParamValue{
+			Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	signResult := signFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, types.T_int64, types.T(signResult.Typ.Id), signResult.String())
+	require.Equal(t, types.T_int64, types.T(signResult.GetF().Args[0].Typ.Id), signResult.String())
+}
+
+func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_precision from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+					Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized, filled.String())
+			result := findPlanFunctionExpr(filled, name)
+			require.NotNil(t, result, filled.String())
+			require.Len(t, result.GetF().Args, 2, result.String())
+			require.Equal(t, int32(types.T_int64), result.GetF().Args[1].Typ.Id, result.String())
+			precisionCast := result.GetF().Args[1].GetF()
+			require.NotNil(t, precisionCast, result.String())
+			require.Equal(t, "cast", precisionCast.GetFunc().GetObjName(), result.String())
+			precisionLiteral := precisionCast.Args[0].GetLit()
+			require.NotNil(t, precisionLiteral, result.String())
+			require.True(t, precisionLiteral.GetBval(), result.String())
+		})
+	}
 }
 
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {

@@ -333,6 +333,24 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
+// substringIndexTypeMatch models exact numeric counts through the function's
+// integer argument contract. The FLOAT64 overload at index 0 remains selectable
+// for FLOAT inputs so existing DOUBLE truncation semantics and persisted overload
+// IDs stay unchanged. DECIMAL values use the ordinary implicit cast to INT64;
+// that shared cast owns rounding and range semantics for every DECIMAL width.
+func substringIndexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 || len(overloads) < 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if inputs[2].Oid.IsFloat() {
+		return stringDomainMatchSingleOverload(overloads, inputs, 0)
+	}
+	if inputs[2].Oid.IsUnsignedInt() {
+		return stringDomainMatchSingleOverload(overloads, inputs, 1)
+	}
+	return stringDomainMatchSingleOverload(overloads, inputs, 2)
+}
+
 // sha2TypeMatch defers an unknown hash-length operand to SHA2's string
 // overload. A parameter marker is represented as T_any during prepare, but a
 // later execution may bind a character value such as "256tail". Resolving it

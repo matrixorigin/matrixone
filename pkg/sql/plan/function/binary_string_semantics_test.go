@@ -361,32 +361,6 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 		require.Equal(t, [][]byte{{'a'}, {'a'}}, binaryStringResultBytes(indexed))
 		require.Equal(t, types.RuntimeStringBinary, indexed.GetResultVector().GetRuntimeStringDomainAt(1))
 
-		decimal64 := vector.NewVec(types.New(types.T_decimal64, 2, 1))
-		defer decimal64.Free(mp)
-		require.NoError(t, vector.AppendFixedList(decimal64, []types.Decimal64{10, 10}, nil, mp))
-		decimal128 := vector.NewVec(types.New(types.T_decimal128, 2, 1))
-		defer decimal128.Free(mp)
-		require.NoError(t, vector.AppendFixedList(decimal128,
-			[]types.Decimal128{types.Decimal128FromInt64(10), types.Decimal128FromInt64(10)}, nil, mp))
-		decimalResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
-		defer decimalResult.Free()
-		for _, tc := range []struct {
-			name  string
-			count *vector.Vector
-			fn    binaryStringTestFn
-		}{
-			{"decimal64", decimal64, SubStrIndexDecimal[types.Decimal64]},
-			{"decimal128", decimal128, SubStrIndexDecimal[types.Decimal128]},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				require.NoError(t, decimalResult.PreExtendAndReset(2))
-				require.NoError(t, tc.fn([]*vector.Vector{source, delimiter, tc.count}, decimalResult, proc, 2, nil))
-				require.Equal(t, [][]byte{{'a'}, {'a'}}, binaryStringResultBytes(decimalResult))
-				require.Equal(t, types.RuntimeStringBinary,
-					decimalResult.GetResultVector().GetRuntimeStringDomainAt(1))
-			})
-		}
-
 		field := vector.NewVec(types.T_uint32.ToType())
 		defer field.Free(mp)
 		require.NoError(t, vector.AppendFixedList(field, []uint32{2, 2}, nil, mp))

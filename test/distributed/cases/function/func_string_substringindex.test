@@ -17,6 +17,30 @@ SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-2');
 SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-1');
 SELECT SUBSTRING_INDEX('www.mysql.com', '', '0');
 
+-- Decimal counts use the function's integer-argument conversion contract.
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(1.5 AS DECIMAL(4,1)));
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(-1.5 AS DECIMAL(4,1)));
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(0.4999999999999999999999999999999999999 AS DECIMAL(38,37)));
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(0.5000000000000000000000000000000000000 AS DECIMAL(38,37)));
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(1.5 AS DECIMAL(65,1)));
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(-1.5 AS DECIMAL(65,1)));
+-- FLOAT counts retain the established truncation behavior.
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', CAST(2.9 AS DOUBLE));
+
+DROP TABLE IF EXISTS substring_index_decimal_count;
+CREATE TABLE substring_index_decimal_count (n DECIMAL(4,1), wide DECIMAL(65,1));
+INSERT INTO substring_index_decimal_count VALUES (1.5, 1.5), (-1.5, -1.5);
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', n), SUBSTRING_INDEX('a,b,c,d', ',', wide)
+FROM substring_index_decimal_count ORDER BY n DESC;
+DROP TABLE substring_index_decimal_count;
+
+PREPARE substring_index_decimal_stmt FROM "SELECT SUBSTRING_INDEX('a,b,c,d', ',', ?)";
+SET @substring_index_decimal_count = CAST(1.5 AS DECIMAL(4,1));
+EXECUTE substring_index_decimal_stmt USING @substring_index_decimal_count;
+SET @substring_index_decimal_count = CAST(-1.5 AS DECIMAL(65,1));
+EXECUTE substring_index_decimal_stmt USING @substring_index_decimal_count;
+DEALLOCATE PREPARE substring_index_decimal_stmt;
+SET @substring_index_decimal_count = NULL;
 
 select substring_index('xyz', 'abc', 9223372036854775808);
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',18446744073709551613);
