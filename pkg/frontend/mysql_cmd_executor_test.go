@@ -280,6 +280,9 @@ func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
 	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
 	require.NoError(t, err)
+	require.Equal(t, "Error", level)
+	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 1, 0)
+	require.NoError(t, err)
 	require.Equal(t, "Warning", level)
 }
 
