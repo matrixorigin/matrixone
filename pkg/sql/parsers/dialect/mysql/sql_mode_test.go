@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -148,6 +149,84 @@ func TestIgnoreSpaceFunctionParsing(t *testing.T) {
 			}
 			if fn.IsGeneric != test.wantGeneric {
 				t.Fatalf("parsed %q IsGeneric = %v, want %v", test.query, fn.IsGeneric, test.wantGeneric)
+			}
+		})
+	}
+}
+
+func TestIgnoreSpaceReservedFunctionIdentifiers(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mode    string
+		wantErr bool
+	}{
+		{name: "table name without whitespace is allowed by default", query: "create table count(i int)", mode: "STRICT_TRANS_TABLES"},
+		{name: "table name with whitespace is allowed by default", query: "create table count (i int)", mode: "STRICT_TRANS_TABLES"},
+		{name: "table name without whitespace is reserved", query: "create table count(i int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
+		{name: "table name with whitespace is reserved", query: "create table count (i int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
+		{name: "column name is allowed by default", query: "create table src(count int)", mode: "STRICT_TRANS_TABLES"},
+		{name: "column name is reserved", query: "create table src(count int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
+		{name: "qualified non-sensitive identifier remains valid", query: "select src.id", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "qualified sensitive identifier is reserved", query: "select src.count", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
+		{name: "quoted qualified sensitive identifier remains valid", query: "select src.`count`", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "quoted table name remains valid", query: "create table `count`(i int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "quoted column name remains valid", query: "create table src(`count` int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(context.Background(), test.query, 1, test.mode)
+			if test.wantErr {
+				if err == nil {
+					if stmt != nil {
+						stmt.Free()
+					}
+					t.Fatalf("ParseOneWithSQLMode(%q, %q) succeeded, want an error", test.query, test.mode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseOneWithSQLMode(%q, %q) failed: %v", test.query, test.mode, err)
+			}
+			stmt.Free()
+		})
+	}
+}
+
+func TestIgnoreSpaceFunctionFormatting(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		mode  string
+		want  string
+	}{
+		{name: "generic trim string", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES", want: "trim(' x ')"},
+		{name: "generic trim numeric", query: "select trim (0)", mode: "STRICT_TRANS_TABLES", want: "trim(0)"},
+		{name: "native trim string", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", want: "trim(' x ')"},
+		{name: "native trim numeric", query: "select trim (0)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", want: "trim(0)"},
+		{name: "generic group concat", query: "select group_concat (1)", mode: "STRICT_TRANS_TABLES", want: "group_concat(1)"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(context.Background(), test.query, 1, test.mode)
+			if err != nil {
+				t.Fatalf("ParseOneWithSQLMode(%q, %q) failed: %v", test.query, test.mode, err)
+			}
+			defer stmt.Free()
+
+			selectStmt, ok := stmt.(*tree.Select)
+			if !ok {
+				t.Fatalf("parsed %q as %T, want *tree.Select", test.query, stmt)
+			}
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			if !ok || len(selectClause.Exprs) != 1 {
+				t.Fatalf("parsed %q without one select expression", test.query)
+			}
+			got := tree.StringWithOpts(selectClause.Exprs[0].Expr, dialect.MYSQL, tree.WithSingleQuoteString())
+			if got != test.want {
+				t.Fatalf("formatted %q as %q, want %q", test.query, got, test.want)
 			}
 		})
 	}

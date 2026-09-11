@@ -1012,10 +1012,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
-	isExtract := strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
-	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
-		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
+	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
 	if isConvertUsing {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" using ")
@@ -1038,7 +1038,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
-	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	} else if !node.IsGeneric && node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)

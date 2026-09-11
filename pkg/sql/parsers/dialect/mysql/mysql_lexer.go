@@ -260,6 +260,19 @@ func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
 	return l.sqlMode.Has(flag)
 }
 
+func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
+	return l.HasSQLMode(SQLModeIgnoreSpace) && isSQLModeSensitiveFunctionName(name)
+}
+
+func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
+	lexer := yylex.(*Lexer)
+	if !lexer.isSQLModeReservedFunctionName(name) {
+		return false
+	}
+	lexer.Error(fmt.Sprintf("function name '%s' is reserved in IGNORE_SPACE mode", name))
+	return true
+}
+
 func (l *Lexer) GetParamIndex() int {
 	l.paramIndex = l.paramIndex + 1
 	return l.paramIndex

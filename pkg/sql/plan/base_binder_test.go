@@ -94,8 +94,12 @@ func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
 		{name: "spaced now uses stored function path", query: "select now ()", mode: "STRICT_TRANS_TABLES", wantErr: true},
 		{name: "spaced substring uses stored function path", query: "select substring ('abcdef', 2, 3)", mode: "STRICT_TRANS_TABLES", wantErr: true},
 		{name: "spaced date add uses stored function path", query: "select date_add ('2024-01-01', interval 1 day)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim string uses stored function path", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim numeric uses stored function path", query: "select trim (0)", mode: "STRICT_TRANS_TABLES", wantErr: true},
 		{name: "native now remains builtin", query: "select now()", mode: "STRICT_TRANS_TABLES"},
 		{name: "ignore space makes spaced now builtin", query: "select now ()", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim string builtin", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim numeric builtin", query: "select trim (0)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
 	}
 
 	for _, test := range tests {

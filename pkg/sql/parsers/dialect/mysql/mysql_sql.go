@@ -29643,6 +29643,9 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:12163
 		{
+			if rejectSQLModeReservedFunctionName(yylex, yyDollar[1].str) {
+				goto ret1
+			}
 			yyLOCAL = tree.NewCStr(yyDollar[1].str, 1)
 		}
 		yyVAL.union = yyLOCAL
@@ -29659,6 +29662,9 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:12171
 		{
+			if rejectSQLModeReservedFunctionName(yylex, yyDollar[1].str) {
+				goto ret1
+			}
 			yyLOCAL = tree.NewCStr(yyDollar[1].str, 1)
 		}
 		yyVAL.union = yyLOCAL
@@ -29667,6 +29673,9 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:12175
 		{
+			if rejectSQLModeReservedFunctionName(yylex, yyDollar[1].str) {
+				goto ret1
+			}
 			yyLOCAL = tree.NewCStr(yyDollar[1].str, 1)
 		}
 		yyVAL.union = yyLOCAL
