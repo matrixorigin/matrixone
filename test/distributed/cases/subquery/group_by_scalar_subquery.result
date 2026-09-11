@@ -38,9 +38,9 @@ DEALLOCATE PREPARE group_stmt;
 DELETE FROM outer_t;
 SELECT COUNT(*) AS grouped_rows
 FROM (
-  SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
-  FROM outer_t
-  GROUP BY (SELECT MAX(v) FROM inner_t)
+SELECT (SELECT MAX(v) FROM inner_t) AS k, COUNT(*) AS c
+FROM outer_t
+GROUP BY (SELECT MAX(v) FROM inner_t)
 ) AS grouped;
 grouped_rows
 0
