@@ -62,7 +62,7 @@ import (
 )
 
 func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
-	stub := gostub.Stub(&getPitrLengthAndUnit, func(context.Context, BackgroundExec, string, string, string) (int64, string, bool, error) {
+	stub := gostub.Stub(&getPitrLengthAndUnit, func(context.Context, BackgroundExec, string, string, string, string) (int64, string, bool, error) {
 		return 24, "h", true, nil
 	})
 	defer stub.Reset()
