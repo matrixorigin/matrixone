@@ -182,6 +182,10 @@ func TestComposeAnalyzedStatsGenerationKeepsFreshPhysicalDistribution(t *testing
 	metadata.MinValMap["a"] = 1
 	metadata.MaxValMap["a"] = 99
 	metadata.ShuffleRangeMap["a"] = &pbstats.ShuffleRange{Overlap: 0.25}
+	metadata.ShuffleRangeMap["url"] = &pbstats.ShuffleRange{
+		IsStrType: true,
+		Result:    []float64{10, 20},
+	}
 
 	collected := plan2.NewStatsInfo()
 	collected.TableCnt = 100
@@ -190,6 +194,10 @@ func TestComposeAnalyzedStatsGenerationKeepsFreshPhysicalDistribution(t *testing
 	collected.NullCntMap["a"] = 2
 	collected.SizeMap["a"] = 800
 	collected.DataTypeMap["a"] = uint64(types.T_int64)
+	collected.ShuffleRangeMap["url"] = &pbstats.ShuffleRange{
+		IsStrType: true,
+		Result:    []float64{30, 40},
+	}
 
 	published := composeAnalyzedStatsGeneration(metadata, collected)
 	require.Equal(t, float64(100), published.TableCnt)
@@ -201,6 +209,8 @@ func TestComposeAnalyzedStatsGenerationKeepsFreshPhysicalDistribution(t *testing
 	require.Equal(t, float64(1), published.MinValMap["a"])
 	require.Equal(t, float64(99), published.MaxValMap["a"])
 	require.Equal(t, 0.25, published.ShuffleRangeMap["a"].Overlap)
+	require.Equal(t, []float64{30, 40}, published.ShuffleRangeMap["url"].Result,
+		"fresh string range metadata must remain available to non-aggregate consumers")
 
 	collected.NdvMap["a"] = 1
 	metadata.ShuffleRangeMap["a"].Overlap = 1
