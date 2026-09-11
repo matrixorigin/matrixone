@@ -15,13 +15,16 @@
 package iscp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,21 +39,55 @@ import (
 )
 
 func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
-	jsonBytes, err := json.Marshal(jobSpec)
-	if err != nil {
+	if jobSpec == nil {
+		return "", mvdefinition.Invalid("nil job specification")
+	}
+	if jobSpec.ConsumerType == int8(ConsumerType_MaterializedView) {
+		if err := jobSpec.MVReference.Validate(); err != nil {
+			return "", err
+		}
+		// Old binaries reject this supported discriminator with no index selector
+		// before constructing a writer. They never see the new in-memory enum.
+		wire := *jobSpec
+		wire.ConsumerType = int8(ConsumerType_IndexSync)
+		wire.IndexName = ""
+		wire.RefreshSQL, wire.SourceSQL, wire.IncrementalSpec, wire.RefreshMethod = "", "", "", ""
+		wire.Columns = nil
+		jobSpec = &wire
+	}
+
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(jobSpec); err != nil {
 		return "", err
 	}
-	return string(jsonBytes), nil
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 func UnmarshalJobSpec(jsonByte []byte) (*JobSpec, error) {
-	byteJson := types.DecodeJson(jsonByte)
-	var jobSpec JobSpec
-	err := json.Unmarshal([]byte(byteJson.String()), &jobSpec)
+	// Return a parsed specification alongside a semantic error so replay can
+	// quarantine this job using its durable row key, then continue other jobs.
+	decoded, err := decodeISCPJSON(jsonByte)
 	if err != nil {
 		return nil, err
 	}
-	return &jobSpec, nil
+	var spec JobSpec
+	if err := json.Unmarshal(decoded, &spec); err != nil {
+		return nil, err
+	}
+	if spec.MVReference != nil {
+		if spec.ConsumerType != int8(ConsumerType_IndexSync) || spec.IndexName != "" {
+			return &spec, mvdefinition.Invalid("unsupported MV job envelope")
+		}
+		if err := spec.MVReference.Validate(); err != nil {
+			return &spec, err
+		}
+		spec.ConsumerType = int8(ConsumerType_MaterializedView)
+	} else if spec.ConsumerType != int8(ConsumerType_IndexSync) && spec.ConsumerType != int8(ConsumerType_CNConsumer) {
+		return &spec, mvdefinition.Invalid("unsupported consumer type %d", spec.ConsumerType)
+	}
+	return &spec, nil
 }
 
 var ExecWithResult = func(
@@ -134,6 +171,158 @@ func UnregisterJobsByDBName(
 		DefaultRetryInterval,
 		DefaultRetryDuration,
 	)
+}
+
+// MarkJobsErrorBySourceTable preserves materialized results when any source
+// relation is dropped. Jobs may be anchored on the dropped source or on a
+// different source, so dependency matching must use the complete job spec.
+func MarkJobsErrorBySourceTable(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	sourceTableID uint64,
+	errMsg string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND drop_at IS NULL", accountID)
+	result, err := ExecWithResult(ctx, query, cnUUID, txn)
+	if err != nil {
+		// Generic table DROP/RENAME paths run in deployments and tests where
+		// the optional ISCP catalog has not been bootstrapped. No MV job can
+		// exist without mo_iscp_log, so dependency invalidation is a no-op in
+		// that state. Other catalog and executor failures must still abort DDL.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil
+		}
+		return err
+	}
+	defer result.Close()
+	type jobRef struct {
+		tableID, jobID uint64
+		name           string
+	}
+	refs := make([]jobRef, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		names := executor.GetStringRows(cols[1])
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[2])
+		for i := 0; i < rows; i++ {
+			spec, decodeErr := UnmarshalJobSpec([]byte(cols[3].GetStringAt(i)))
+			if decodeErr != nil {
+				continue
+			}
+			if materializedViewJobReferencesSource(spec, sourceTableID) {
+				refs = append(refs, jobRef{tableID: tableIDs[i], jobID: jobIDs[i], name: names[i]})
+			}
+		}
+		return true
+	})
+	status, err := json.Marshal(&JobStatus{ErrorCode: 1, ErrorMsg: errMsg})
+	if err != nil {
+		return err
+	}
+	quotedStatus := strings.NewReplacer(`\`, `\\`, "'", "''").Replace(string(status))
+	for _, ref := range refs {
+		quotedName := strings.NewReplacer(`\`, `\\`, "'", "''").Replace(ref.name)
+		update := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET job_state = %d, job_status = '%s' WHERE account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d AND drop_at IS NULL",
+			ISCPJobState_Error, quotedStatus, accountID, ref.tableID, quotedName, ref.jobID)
+		updated, updateErr := ExecWithResult(ctx, update, cnUUID, txn)
+		if updateErr != nil {
+			return updateErr
+		}
+		updated.Close()
+	}
+	return nil
+}
+
+func materializedViewJobReferencesSource(spec *JobSpec, sourceTableID uint64) bool {
+	if spec == nil || spec.ConsumerType != int8(ConsumerType_MaterializedView) {
+		return false
+	}
+	for _, source := range spec.ConsumerInfo.SourceTableInfos() {
+		if source.TableID == sourceTableID {
+			return true
+		}
+	}
+	return false
+}
+
+func materializedViewJobMatchesTarget(spec *JobSpec, dbName, tableName string, targetID ...uint64) bool {
+	if spec != nil && spec.MVReference != nil && len(targetID) > 0 {
+		return spec.ConsumerType == int8(ConsumerType_MaterializedView) && spec.MVReference.TargetID == targetID[0]
+	}
+
+	return spec != nil &&
+		spec.ConsumerType == int8(ConsumerType_MaterializedView) &&
+		strings.EqualFold(spec.ConsumerInfo.DBName, dbName) &&
+		strings.EqualFold(spec.ConsumerInfo.TableName, tableName)
+}
+
+// UnregisterMaterializedView drops every active generation of one MV without
+// resolving its source table. Job names are not unique because database/table
+// underscores can collide, so the target identity comes from the job spec.
+func UnregisterMaterializedView(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+	tableName string,
+	targetID ...uint64,
+) error {
+	return retry(ctx, func() error {
+		return unregisterMaterializedView(ctx, cnUUID, txn, dbName, tableName, targetID...)
+	}, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
+}
+
+func unregisterMaterializedView(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+	tableName string,
+	targetID ...uint64,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND drop_at IS NULL", accountID)
+	result, err := ExecWithResult(ctxWithSysAccount, query, cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	type jobRef struct {
+		tableID, jobID uint64
+		name           string
+	}
+	refs := make([]jobRef, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		names := executor.GetStringRows(cols[1])
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[2])
+		for i := 0; i < rows; i++ {
+			spec, decodeErr := UnmarshalJobSpec([]byte(cols[3].GetStringAt(i)))
+			matchesIDName := len(targetID) > 0 && targetID[0] != 0 && names[i] == fmt.Sprintf("materialized_view_%d", targetID[0])
+			if matchesIDName || decodeErr == nil && materializedViewJobMatchesTarget(spec, dbName, tableName, targetID...) {
+				refs = append(refs, jobRef{tableID: tableIDs[i], jobID: jobIDs[i], name: names[i]})
+			}
+		}
+		return true
+	})
+	for _, ref := range refs {
+		update := cdc.CDCSQLBuilder.ISCPLogUpdateDropAtSQL(accountID, ref.tableID, ref.name, ref.jobID)
+		updated, updateErr := ExecWithResult(ctxWithSysAccount, update, cnUUID, txn)
+		if updateErr != nil {
+			return updateErr
+		}
+		updated.Close()
+	}
+	return nil
 }
 
 func unregisterJobsByDBName(
@@ -271,6 +460,38 @@ func registerJob(
 		DBName:    jobID.DBName,
 		TableName: jobID.TableName,
 	}
+	// Resolve every source in the same transaction as the anchor. The anchor
+	// remains SrcTable for compatibility with existing log readers.
+	sources := jobSpec.ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		sources = []TableInfo{jobSpec.SrcTable}
+	}
+	if len(sources) > MaxSourceTables {
+		return false, moerr.NewInternalErrorNoCtxf("too many ISCP source tables: %d", len(sources))
+	}
+	resolved := make([]TableInfo, 0, len(sources))
+	seenSources := make(map[[2]uint64]struct{}, len(sources))
+	for _, source := range sources {
+		if source.TableID == 0 {
+			source.TableID, source.DBID, err = getTableID(
+				ctxWithSysAccount, cnUUID, txn, tenantId, source.DBName, source.TableName)
+			if err != nil {
+				return
+			}
+		}
+		key := [2]uint64{source.DBID, source.TableID}
+		if _, exists := seenSources[key]; exists {
+			continue
+		}
+		seenSources[key] = struct{}{}
+		resolved = append(resolved, source)
+	}
+	if len(resolved) == 0 {
+		resolved = []TableInfo{jobSpec.SrcTable}
+	}
+	jobSpec.SrcTables = resolved
+	jobSpec.SrcTable = resolved[0]
+	tableID = jobSpec.SrcTable.TableID
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,
@@ -397,7 +618,6 @@ func renameSrcTable(
 	defer cancel()
 	var tenantId uint32
 	jobNames := make([]string, 0)
-	jobIDs := make([]uint64, 0)
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -425,39 +645,52 @@ func renameSrcTable(
 		return
 	}
 	defer result.Close()
-	jobSpecStrs := make([]string, 0)
+	type renamedJob struct {
+		name          string
+		id            uint64
+		specification string
+	}
+	var jobs []renamedJob
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		currentJobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		for i := 0; i < rows; i++ {
-			jobNames = append(jobNames, cols[0].GetStringAt(i))
-			jobIDs = append(jobIDs, currentJobIDs[i])
 			jobSpecStr := cols[2].GetStringAt(i)
 			var jobSpec *JobSpec
 			jobSpec, err = UnmarshalJobSpec([]byte(jobSpecStr))
 			if err != nil {
 				return false
 			}
+			if jobSpec.ConsumerType == int8(ConsumerType_MaterializedView) {
+				continue
+			}
 			jobSpec.ConsumerInfo.TableName = newTableName
 			jobSpec.ConsumerInfo.SrcTable.TableName = newTableName
+			for j := range jobSpec.ConsumerInfo.SrcTables {
+				source := &jobSpec.ConsumerInfo.SrcTables[j]
+				if source.TableID == tableID && (source.DBID == 0 || source.DBID == dbID) {
+					source.TableName = newTableName
+				}
+			}
 			var newJobSpecStr string
 			newJobSpecStr, err = MarshalJobSpec(jobSpec)
 			if err != nil {
 				return false
 			}
-			jobSpecStrs = append(jobSpecStrs, newJobSpecStr)
+			jobs = append(jobs, renamedJob{name: cols[0].GetStringAt(i), id: currentJobIDs[i], specification: newJobSpecStr})
+			jobNames = append(jobNames, cols[0].GetStringAt(i))
 		}
 		return true
 	})
 	if err != nil {
 		return
 	}
-	for i := 0; i < len(jobNames); i++ {
+	for _, job := range jobs {
 		sql := cdc.CDCSQLBuilder.ISCPLogUpdateJobSpecSQL(
 			tenantId,
 			tableID,
-			jobNames[i],
-			jobIDs[i],
-			jobSpecStrs[i])
+			job.name,
+			job.id,
+			job.specification)
 		result, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 		if err != nil {
 			return
@@ -721,4 +954,19 @@ func queryIndexLog(
 		return true
 	})
 	return
+}
+
+// The storage byte-JSON decoder assumes valid lengths. Isolate malformed job
+// payloads at this boundary, rather than letting one row abort log replay.
+func decodeISCPJSON(data []byte) (decoded []byte, err error) {
+	defer func() {
+		if recover() != nil {
+			decoded = nil
+			err = mvdefinition.Invalid("malformed ISCP storage JSON")
+		}
+	}()
+	if len(data) == 0 {
+		return nil, mvdefinition.Invalid("empty ISCP storage JSON")
+	}
+	return []byte(types.DecodeJson(data).String()), nil
 }

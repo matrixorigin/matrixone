@@ -453,6 +453,8 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		if s.AsSource != nil {
 			remapDbInSelect(s.AsSource, remap)
 		}
+	case *tree.RefreshMaterializedView:
+		remapTableName(s.Name, remap)
 	case *tree.CreateIndex:
 		remapTableName(s.Table, remap)
 	case *tree.AlterTable:

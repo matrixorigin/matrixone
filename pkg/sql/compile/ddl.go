@@ -36,6 +36,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -1408,6 +1409,15 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				if err = iscp.MarkJobsErrorBySourceTable(
+					c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.TableId,
+					"source table was renamed",
+				); err != nil {
+					return err
+				}
 				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
@@ -2660,6 +2670,11 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
+		if err := requireMaterializedViewCapability(c); err != nil {
+			return err
+		}
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2750,6 +2765,26 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
+		// CreateView has a physical-table path for materialized views, but it
+		// does not go through CreateTable's auto-increment setup. The storage
+		// engine adds the hidden fake primary key, so initialize its sequence
+		// before the ISCP consumer can issue the first refresh insert.
+		if err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			qry.GetTableDef(),
+			c.proc.GetTxnOperator(),
+			nil,
+		); err != nil {
+			return err
+		}
+		if err = c.createMaterializedViewDefinition(dbSource, qry.GetTableDef()); err != nil {
+			return err
+		}
+
+	}
 	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
 		return err
 	}
@@ -2757,6 +2792,53 @@ func (s *Scope) CreateView(c *Compile) error {
 		return c.refreshViewsAfterRelationMutation(dbName, viewName, oldRelationID, oldLogicalID)
 	}
 	return nil
+}
+
+func (s *Scope) RefreshMaterializedView(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
+	qry := s.Plan.GetDdl().GetRefreshMaterializedView()
+	if qry == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "missing materialized view refresh plan")
+	}
+	dbName, viewName := qry.GetDatabase(), qry.GetName()
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return convertDBEOB(c.proc.Ctx, err, dbName)
+	}
+	relation, err := dbSource.Relation(c.proc.Ctx, viewName, nil)
+	if err != nil {
+		return err
+	}
+	tableDef := relation.GetTableDef(c.proc.Ctx)
+	if !plan2.IsMaterializedViewTableDef(tableDef) {
+		return moerr.NewNotSupportedf(c.proc.Ctx, "%s.%s is not a materialized view", dbName, viewName)
+	}
+	d, err := mvdefinition.FromTable(tableDef)
+	if err != nil {
+		return err
+	}
+	if d.Timing != "demand" || d.Method != "complete" {
+		return moerr.NewNotSupported(c.proc.Ctx, "manual REFRESH requires COMPLETE ON DEMAND")
+	}
+	info, err := iscp.MaterializedViewInfo(d)
+	if err != nil {
+		return err
+	}
+	refreshContext, cancel := context.WithTimeout(c.proc.Ctx, time.Hour)
+	defer cancel()
+	return iscp.RefreshMaterializedView(refreshContext, c.e, c.proc.GetService(), c.proc.GetTxnOperator(), info, nil)
+
 }
 
 var checkIndexInitializable = func(dbName string, tblName string) bool {
@@ -3618,6 +3700,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	if truncate.IsDelete {
+		preserve, err := c.hasMaterializedViewDependent(accountID, oldID)
+		if err != nil {
+			return err
+		}
+		if preserve {
+			// DELETE is a data change. Replacing a referenced physical relation
+			// would invalidate both ON CHANGE and ON DEMAND definitions. This
+			// check follows the source catalog lock, which also serializes CREATE
+			// MV; WHERE TRUE keeps the nested delete on its row-based path.
+			result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(db, table)), int32(accountID))
+			if err != nil {
+				return err
+			}
+			defer result.Close()
+			c.addAffectedRows(result.AffectedRows)
+			return nil
+		}
+	}
+
 	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
@@ -4073,6 +4175,17 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 	}
+	if !isTemp && !isView {
+		if err = iscp.MarkJobsErrorBySourceTable(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			droppedRelationID,
+			"source table was dropped",
+		); err != nil {
+			return err
+		}
+	}
 
 	// Check if the table is a CCPR shared table
 	if !isTemp && !isView && !isSource {
@@ -4172,6 +4285,37 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Unregister the source-table ISCP job before deleting its materialized result.
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
+		if err = DeleteMaterializedViewTask(c, qry.Database, qry.Table, qry.GetTableDef().GetTblId()); err != nil {
+			return err
+		}
+		stateTable, stateErr := materializedViewStateTableFromDef(qry.GetTableDef())
+		if stateErr != nil {
+			return stateErr
+		}
+		if stateTable != "" {
+			var stateRel engine.Relation
+			if stateRel, stateErr = dbSource.Relation(c.proc.Ctx, stateTable, nil); stateErr != nil {
+				if !moerr.IsMoErrCode(stateErr, moerr.ErrNoSuchTable) {
+					return stateErr
+				}
+			} else {
+				owner, ownerErr := mvdefinition.StateOwner(stateRel.GetTableDef(c.proc.Ctx))
+				d, defErr := mvdefinition.FromTable(qry.GetTableDef())
+				if ownerErr != nil || defErr != nil || d.State == nil || owner.TargetID != d.Target.ID || owner.AccountID != d.AccountID || owner.Generation != d.Generation || owner.StateID != d.State.ID {
+					return moerr.NewInternalErrorf(c.proc.Ctx, "materialized view state relation %s has invalid identity", stateTable)
+				}
+				if stateErr = lockMoTable(c, dbName, stateTable, lock.LockMode_Exclusive); stateErr != nil {
+					return stateErr
+				}
+				if stateErr = dbSource.Delete(c.proc.Ctx, stateTable); stateErr != nil {
+					return stateErr
+				}
+			}
 		}
 	}
 
@@ -4354,6 +4498,23 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		tblID,
 		c.proc.GetTxnOperator(),
 	)
+}
+
+func materializedViewStateTableFromDef(def *plan.TableDef) (string, error) {
+	d, err := mvdefinition.FromTable(def)
+	if err != nil {
+		// Unreleased legacy MVs can be removed, but guessed state names cannot
+		// authorize deleting another relation.
+		if mvdefinition.PropertyValue(def, mvdefinition.Property) == "" {
+			return "", nil
+		}
+		return "", err
+	}
+	if d.State == nil {
+		return "", nil
+	}
+	return d.State.Name, nil
+
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {

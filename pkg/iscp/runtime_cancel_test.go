@@ -26,6 +26,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestISCPExecutorDefaultChangePollInterval(t *testing.T) {
+	option := fillDefaultOption(nil)
+	require.Equal(t, DefaultSyncTaskInterval, option.SyncTaskInterval)
+	require.Equal(t, DefaultChangePollInterval, option.ChangePollInterval)
+
+	option = fillDefaultOption(&ISCPExecutorOption{SyncTaskInterval: 100 * time.Millisecond})
+	require.Equal(t, 100*time.Millisecond, option.ChangePollInterval)
+}
+
 func newRuntimeTestExecutor() *ISCPTaskExecutor {
 	return &ISCPTaskExecutor{
 		fencedJobs:       make(map[JobRuntimeKey]JobFence),
@@ -465,7 +474,7 @@ func TestAddOrUpdateJobDropAtPreservesFenceOnParseFailure(t *testing.T) {
 		false,
 	)
 
-	require.Error(t, err)
+	require.NoError(t, err, "malformed jobs are isolated rather than aborting replay")
 	require.True(t, exec.IsJobFenced(key))
 	iters, _ := table.getCandidate()
 	require.Empty(t, iters)

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,7 @@ type ConsumerType int8
 const (
 	ConsumerType_IndexSync ConsumerType = iota
 	ConsumerType_CNConsumer
+	ConsumerType_MaterializedView
 
 	ConsumerType_CustomizedStart = 1000
 )
@@ -92,23 +94,27 @@ type DataRetriever interface {
 */
 
 type IterationContext struct {
-	accountID uint32
-	tableID   uint64
-	jobNames  []string
-	jobIDs    []uint64
-	lsn       []uint64
-	stages    []int8
-	fromTS    types.TS
-	toTS      types.TS
+	accountID    uint32
+	tableID      uint64
+	sourceTables []TableInfo
+	jobNames     []string
+	jobIDs       []uint64
+	lsn          []uint64
+	stages       []int8
+	fromTS       types.TS
+	toTS         types.TS
 }
 
 type ISCPData struct {
 	refcnt atomic.Int32
 
-	insertBatch *AtomicBatch
-	deleteBatch *AtomicBatch
-	noMoreData  bool
-	err         error
+	// SourceTableID identifies the source relation that produced this batch.
+	// Zero preserves the legacy single-table shape.
+	SourceTableID uint64
+	insertBatch   *AtomicBatch
+	deleteBatch   *AtomicBatch
+	noMoreData    bool
+	err           error
 }
 
 const (
@@ -210,10 +216,11 @@ type RunningJobConsumer struct {
 
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {
-	tableInfo *TableEntry
-	jobName   string
-	jobSpec   *TriggerSpec
-	jobID     uint64
+	tableInfo    *TableEntry
+	jobName      string
+	jobSpec      *TriggerSpec
+	sourceTables []TableInfo
+	jobID        uint64
 
 	watermark          types.TS
 	persistedWatermark types.TS
@@ -221,9 +228,9 @@ type JobEntry struct {
 	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
-	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
-	// on IndexFlushWatermarkInterval rather than the general threshold.
-	isIndexJob bool
+	// consumerType selects both batch-layout compatibility and watermark flush
+	// policy; the trigger-only jobSpec does not retain the consumer projection.
+	consumerType ConsumerType
 }
 
 type JobKey struct {
@@ -266,13 +273,26 @@ type TriggerSpec struct {
 }
 
 type ConsumerInfo struct {
+	MVReference  *mvdefinition.Reference `json:",omitempty"`
 	ConsumerType int8
 	IndexName    string
 	TableName    string
 	DBName       string
 	Columns      []string
 	SrcTable     TableInfo
-	InitSQL      string
+	// SrcTables contains all source relations for a logical job. SrcTable is
+	// retained as the compatibility anchor for legacy single-table jobs.
+	SrcTables  []TableInfo
+	InitSQL    string
+	RefreshSQL string
+	SourceSQL  string
+	// IncrementalSpec is a planner-produced JSON description for the
+	// supported direct-column aggregate subset. Empty means full refresh.
+	IncrementalSpec string
+	// RefreshMethod is force, fast, or complete. Empty is the legacy force
+	// behavior, which attempts an incremental tail and falls back to a full
+	// refresh when necessary.
+	RefreshMethod string
 }
 
 type TableInfo struct {
@@ -280,6 +300,21 @@ type TableInfo struct {
 	DBID      uint64
 	TableName string
 	TableID   uint64
+}
+
+const MaxSourceTables = mvdefinition.MaxSources
+
+func (info *ConsumerInfo) SourceTableInfos() []TableInfo {
+	if info == nil {
+		return nil
+	}
+	if len(info.SrcTables) == 0 {
+		if info.SrcTable.TableID == 0 {
+			return nil
+		}
+		return []TableInfo{info.SrcTable}
+	}
+	return info.SrcTables
 }
 
 type Consumer interface {
@@ -367,7 +402,16 @@ func (bat *AtomicBatch) Append(
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		var compositedPkBytes [][]byte
+		if batch.Vecs[compositedPkColIdx].GetType().Oid == types.T_Rowid {
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[compositedPkColIdx])
+			compositedPkBytes = make([][]byte, len(rowids))
+			for i := range rowids {
+				compositedPkBytes[i] = append([]byte(nil), rowids[i][:]...)
+			}
+		} else {
+			compositedPkBytes = readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		}
 
 		for i, pk := range compositedPkBytes {
 			// if ts is constant, then tsVec[0] is the ts for all rows

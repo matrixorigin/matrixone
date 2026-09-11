@@ -395,6 +395,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
+	if err = c.validateMaterializedViewReads(); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.

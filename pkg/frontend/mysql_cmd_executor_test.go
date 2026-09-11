@@ -4934,6 +4934,7 @@ func Test_statement_type(t *testing.T) {
 		kases := []kase{
 			{&tree.CreateTable{}},
 			{&tree.CreateTable{IsAsSelect: true}},
+			{&tree.RefreshMaterializedView{}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -4953,6 +4954,7 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
+		convey.So(IsDDL(&tree.RefreshMaterializedView{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)

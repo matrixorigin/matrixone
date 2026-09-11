@@ -5961,6 +5961,42 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestValuesNullabilityIncludesEveryRow(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		rows        string
+		notNullable bool
+	}{
+		{"null first", "row(cast(null as int),1),row(cast(1 as int),1)", false},
+		{"null last", "row(cast(1 as int),1),row(cast(null as int),1)", false},
+		{"all null", "row(cast(null as int),1),row(cast(null as int),1)", false},
+		{"non-null control", "row(cast(1 as int),1),row(cast(2 as int),1)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+				"select column_0,sum(column_1) from (values "+tc.rows+") v group by column_0", 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+			var scans, aggregates int
+			for _, node := range p.GetQuery().Nodes {
+				switch node.NodeType {
+				case plan.Node_VALUE_SCAN:
+					scans++
+					require.Equal(t, tc.notNullable, node.TableDef.Cols[0].Typ.NotNullable)
+					require.True(t, node.TableDef.Cols[1].Typ.NotNullable)
+				case plan.Node_AGG:
+					aggregates++
+					require.Equal(t, tc.notNullable, node.GroupBy[0].Typ.NotNullable)
+				}
+			}
+			require.Equal(t, 1, scans)
+			require.Equal(t, 1, aggregates)
+		})
+	}
+}
+
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 	for _, sql := range []string{
 		"select (values row(1))",

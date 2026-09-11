@@ -650,6 +650,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.CreateCDC(c)
 	case CreateView:
 		return s.CreateView(c)
+	case RefreshMaterializedView:
+		return s.RefreshMaterializedView(c)
 	case AlterView:
 		return s.AlterView(c)
 	case AlterTable:
@@ -1237,6 +1239,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_CREATE_VIEW:
 			return []*Scope{
 				newScope(CreateView).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_REFRESH_MATERIALIZED_VIEW:
+			return []*Scope{
+				newScope(RefreshMaterializedView).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_ALTER_VIEW:
@@ -7723,6 +7730,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func supportsMultiSourceISCP(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion64
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {

@@ -164,17 +164,28 @@ func NewDropTable(i bool, n TableNames) *DropTable {
 // DropView DROP View statement
 type DropView struct {
 	statementImpl
-	IfExists bool
-	Names    TableNames
+	IfExists     bool
+	Names        TableNames
+	Materialized bool
 }
 
 func (node *DropView) Format(ctx *FmtCtx) {
-	ctx.WriteString("drop view")
+	ctx.WriteString("drop ")
+	if node.Materialized {
+		ctx.WriteString("materialized ")
+	}
+	ctx.WriteString("view")
 	if node.IfExists {
 		ctx.WriteString(" if exists")
 	}
 	ctx.WriteByte(' ')
 	node.Names.Format(ctx)
+}
+
+func NewDropMaterializedView(i bool, n TableNames) *DropView {
+	node := NewDropView(i, n)
+	node.Materialized = true
+	return node
 }
 
 func (node *DropView) GetStatementType() string { return "Drop View" }

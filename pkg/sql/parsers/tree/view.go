@@ -26,11 +26,42 @@ func init() {
 
 type CreateView struct {
 	statementImpl
-	Replace     bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
+	Replace       bool
+	Name          *TableName
+	ColNames      IdentifierList
+	AsSource      *Select
+	IfNotExists   bool
+	Materialized  bool
+	RefreshMethod MaterializedViewRefreshMethod
+	RefreshTiming MaterializedViewRefreshTiming
+}
+
+type MaterializedViewRefreshMethod int8
+
+const (
+	MaterializedViewRefreshForce MaterializedViewRefreshMethod = iota
+	MaterializedViewRefreshFast
+	MaterializedViewRefreshComplete
+)
+
+type MaterializedViewRefreshTiming int8
+
+const (
+	MaterializedViewRefreshOnChange MaterializedViewRefreshTiming = iota
+	MaterializedViewRefreshOnDemand
+)
+
+func NewCreateMaterializedView(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+	node := NewCreateView(false, name, colNames, asSource, ifNotExists)
+	node.Materialized = true
+	return node
+}
+
+func NewCreateMaterializedViewWithRefresh(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, method MaterializedViewRefreshMethod, timing MaterializedViewRefreshTiming) *CreateView {
+	node := NewCreateMaterializedView(name, colNames, asSource, ifNotExists)
+	node.RefreshMethod = method
+	node.RefreshTiming = timing
+	return node
 }
 
 func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
@@ -54,6 +85,9 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 		ctx.WriteString("or replace ")
 	}
 
+	if node.Materialized {
+		ctx.WriteString("materialized ")
+	}
 	ctx.WriteString("view ")
 
 	if node.IfNotExists {
@@ -65,6 +99,23 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 		ctx.WriteString(" (")
 		node.ColNames.Format(ctx)
 		ctx.WriteByte(')')
+	}
+	if node.Materialized && (node.RefreshMethod != MaterializedViewRefreshForce || node.RefreshTiming != MaterializedViewRefreshOnChange) {
+		ctx.WriteString(" refresh ")
+		switch node.RefreshMethod {
+		case MaterializedViewRefreshFast:
+			ctx.WriteString("fast")
+		case MaterializedViewRefreshComplete:
+			ctx.WriteString("complete")
+		default:
+			ctx.WriteString("force")
+		}
+		ctx.WriteString(" on ")
+		if node.RefreshTiming == MaterializedViewRefreshOnDemand {
+			ctx.WriteString("demand")
+		} else {
+			ctx.WriteString("change")
+		}
 	}
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
@@ -84,3 +135,22 @@ func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }
+
+type RefreshMaterializedView struct {
+	statementImpl
+	Name *TableName
+}
+
+func NewRefreshMaterializedView(name *TableName) *RefreshMaterializedView {
+	return &RefreshMaterializedView{Name: name}
+}
+
+func (node *RefreshMaterializedView) Format(ctx *FmtCtx) {
+	ctx.WriteString("refresh materialized view ")
+	node.Name.Format(ctx)
+}
+
+func (node *RefreshMaterializedView) Free()                    {}
+func (node RefreshMaterializedView) TypeName() string          { return "tree.RefreshMaterializedView" }
+func (node *RefreshMaterializedView) GetStatementType() string { return "Refresh Materialized View" }
+func (node *RefreshMaterializedView) GetQueryType() string     { return QueryTypeDDL }

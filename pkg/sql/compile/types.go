@@ -60,6 +60,7 @@ const (
 	CreatePitr
 	CreateCDC
 	CreateView
+	RefreshMaterializedView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -93,6 +94,8 @@ func (m magicType) String() string {
 		return "CreateTable"
 	case CreateView:
 		return "CreateView"
+	case RefreshMaterializedView:
+		return "RefreshMaterializedView"
 	case CreateIndex:
 		return "CreateIndex"
 	case DropDatabase:

@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -1748,6 +1751,11 @@ func ctasExprCanBeNull(expr *Expr) bool {
 }
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
+	if stmt.Materialized {
+		if err := validateMaterializedViewQuery(ctx.GetContext(), stmt.AsSource); err != nil {
+			return nil, err
+		}
+	}
 	viewName := stmt.Name.ObjectName
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
 		return nil, err
@@ -1799,6 +1807,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.Cols = tableDef.Cols
 	createView.TableDef.ViewSql = tableDef.ViewSql
 	createView.TableDef.Defs = tableDef.Defs
+	if stmt.Materialized {
+		if err := buildMaterializedViewDefinition(ctx, stmt, createView); err != nil {
+			return nil, err
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1810,6 +1823,294 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			},
 		},
 	}, nil
+}
+
+func buildRefreshMaterializedView(stmt *tree.RefreshMaterializedView, ctx CompilerContext) (*Plan, error) {
+	dbName := string(stmt.Name.SchemaName)
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	viewName := string(stmt.Name.ObjectName)
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+	_, def, err := ctx.Resolve(dbName, viewName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if def == nil {
+		return nil, moerr.NewNoSuchTablef(ctx.GetContext(), "%s.%s", dbName, viewName)
+	}
+	if !IsMaterializedViewTableDef(def) {
+		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "%s.%s is not a materialized view", dbName, viewName)
+	}
+	if err = ValidateMaterializedViewSources(ctx, def); err != nil {
+		return nil, err
+	}
+	definition, err := mvdefinition.FromTable(def)
+	if err != nil {
+		return nil, err
+	}
+	if definition.Timing != "demand" {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "manual REFRESH is only supported for materialized views created ON DEMAND")
+	}
+	return &Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType: plan.DataDefinition_REFRESH_MATERIALIZED_VIEW,
+		Definition: &plan.DataDefinition_RefreshMaterializedView{RefreshMaterializedView: &plan.RefreshMaterializedView{
+			Database: dbName,
+			Name:     viewName,
+		}},
+	}}}, nil
+}
+
+func materializedViewRefreshMethodName(method tree.MaterializedViewRefreshMethod) string {
+	switch method {
+	case tree.MaterializedViewRefreshFast:
+		return "fast"
+	case tree.MaterializedViewRefreshComplete:
+		return "complete"
+	default:
+		return "force"
+	}
+}
+
+func materializedViewRefreshTimingName(timing tree.MaterializedViewRefreshTiming) string {
+	if timing == tree.MaterializedViewRefreshOnDemand {
+		return "demand"
+	}
+	return "change"
+}
+
+// validateMaterializedViewSourceTable keeps MV registration limited to
+// ordinary persistent tables. Views, external tables, temporary tables and
+// catalog/special relations do not provide the ordinary-table CDC contract
+// required to keep an asynchronously maintained result correct.
+func validateMaterializedViewSourceTable(ctx CompilerContext, dbName, tableName string) error {
+	_, def, err := ctx.Resolve(dbName, tableName, nil)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return moerr.NewNoSuchTablef(ctx.GetContext(), "materialized view source table %q does not exist", tableName)
+	}
+	if IsMaterializedViewTableDef(def) {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use materialized view %s.%s as source", dbName, tableName)
+	}
+	if IsMaterializedViewStateTableDef(def) {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use internal materialized view state %s.%s as source", dbName, tableName)
+	}
+	if def.IsTemporary || def.TableType == catalog.SystemTemporaryTable {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use temporary table %s.%s as source", dbName, tableName)
+	}
+	if def.TableType != catalog.SystemOrdinaryRel {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use relation type %q for source %s.%s", def.TableType, dbName, tableName)
+	}
+	return nil
+}
+
+// IsMaterializedViewTableDef identifies the catalog relation kind, the
+// authenticated definition envelope, or an exact persisted MATERIALIZED VIEW
+// definition. Arbitrary user properties, comments, and CREATE SQL substrings
+// have no ownership meaning.
+func IsMaterializedViewTableDef(def *plan.TableDef) bool {
+	if def == nil {
+		return false
+	}
+	if def.TableType == catalog.SystemMaterializedRel || mvdefinition.PropertyValue(def, mvdefinition.Property) != "" {
+		return true
+	}
+	return isExactMaterializedViewCreateSQL(def.Createsql) ||
+		isExactMaterializedViewCreateSQL(mvdefinition.PropertyValue(def, catalog.SystemRelAttr_CreateSQL))
+}
+
+func isExactMaterializedViewCreateSQL(sql string) bool {
+	if strings.TrimSpace(sql) == "" {
+		return false
+	}
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	view, ok := stmt.(*tree.CreateView)
+	return ok && view.Materialized
+}
+
+func IsMaterializedViewStateTableDef(def *plan.TableDef) bool {
+	// The reserved name is only a CREATE/RENAME admission rule. Once a
+	// relation has been resolved from the catalog, the presence of the owner
+	// marker identifies a protected relation. Callers must still use
+	// CanWrite/StateOwner to validate the marker; malformed or future owner
+	// formats must fail closed rather than becoming ordinary tables.
+	return def != nil && mvdefinition.PropertyValue(def, mvdefinition.OwnerProperty) != ""
+}
+
+func CanWriteMaterializedViewHiddenColumns(ctx context.Context, def *plan.TableDef) bool {
+	return IsMaterializedViewTableDef(def) && mvdefinition.CanWrite(ctx, def)
+}
+
+func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) error {
+	if IsMaterializedViewStateTableDef(def) {
+		if !mvdefinition.CanWrite(ctx.GetContext(), def) {
+			return mvdefinition.Invalid("internal state is accessible only to its owning refresh")
+		}
+		return nil
+	}
+	if !IsMaterializedViewTableDef(def) || mvdefinition.CanWrite(ctx.GetContext(), def) {
+		return nil
+	}
+	d, err := mvdefinition.FromTable(def)
+	if err != nil {
+		return err
+	}
+	accountID, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
+	if accountID != d.AccountID {
+		return mvdefinition.Invalid("account identity changed")
+	}
+	return d.ValidateSources(func(source mvdefinition.Source) (*plan.TableDef, error) {
+		_, resolved, err := ctx.Resolve(source.Database, source.Name, ctx.GetSnapshot())
+		return resolved, err
+	})
+}
+
+func rejectMaterializedViewAlter(def *plan.TableDef) error {
+	if IsMaterializedViewTableDef(def) || IsMaterializedViewStateTableDef(def) {
+		return mvdefinition.Invalid("ALTER, RENAME and TRUNCATE require dropping and recreating the materialized view")
+	}
+	return nil
+}
+
+const materializedViewMarkerComment = "matrixone materialized view"
+
+func materializedViewStateTableName(dbName, viewName string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(dbName) + "\x00" + strings.ToLower(viewName)))
+	return fmt.Sprintf("__mo_mv_state_%x", digest[:8])
+}
+
+type materializedViewIncrementalAggregate = mvdefinition.Aggregate
+type materializedViewIncrementalGroup = mvdefinition.Group
+type materializedViewIncrementalDescription = mvdefinition.Incremental
+type materializedViewIncrementalBranch = mvdefinition.Branch
+
+func materializedViewRefreshSQL(stmt *tree.Select) string {
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+}
+
+func materializedViewIncrementalPrimaryKey(encoded string) []string {
+	if encoded == "" {
+		return nil
+	}
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	var desc materializedViewIncrementalDescription
+	if json.Unmarshal(b, &desc) != nil || desc.GroupKeyColumn == "" {
+		return nil
+	}
+	return []string{desc.GroupKeyColumn}
+}
+
+func isMaterializedViewStar(expr tree.Expr) bool {
+	name, ok := expr.(*tree.UnresolvedName)
+	if ok {
+		return name.Star
+	}
+	num, ok := expr.(*tree.NumVal)
+	return ok && num.ValType == tree.P_star
+}
+
+func materializedViewSourceTable(expr tree.TableExpr) *tree.TableName {
+	switch table := expr.(type) {
+	case *tree.TableName:
+		return table
+	case *tree.AliasedTableExpr:
+		return materializedViewSourceTable(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewSourceTable(table.Expr)
+	case *tree.JoinTableExpr:
+		if table.Right == nil && table.Cond == nil {
+			return materializedViewSourceTable(table.Left)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool) {
+	switch table := expr.(type) {
+	case *tree.TableName:
+		if table.AtTsExpr != nil {
+			return nil, false
+		}
+		return []*tree.TableName{table}, true
+	case *tree.AliasedTableExpr:
+		return materializedViewSourceTables(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewSourceTables(table.Expr)
+	case *tree.JoinTableExpr:
+		if table.Right == nil && table.Cond == nil {
+			return materializedViewSourceTables(table.Left)
+		}
+		left, ok := materializedViewSourceTables(table.Left)
+		if !ok {
+			return nil, false
+		}
+		right, ok := materializedViewSourceTables(table.Right)
+		if !ok {
+			return nil, false
+		}
+		return append(left, right...), true
+	default:
+		return nil, false
+	}
+}
+
+const materializedViewMaxDirectInputs = mvdefinition.MaxSources
+
+func materializedViewDefinitionSources(stmt *tree.Select, defaultDB string) ([]*tree.TableName, bool) {
+	if stmt == nil {
+		return nil, false
+	}
+	clauses, unionAll := materializedViewUnionAllClauses(stmt.Select)
+	if !unionAll || len(clauses) > materializedViewMaxDirectInputs {
+		return nil, false
+	}
+	// A non-UNION SelectClause retains the existing direct FROM/JOIN support.
+	isUnion := len(clauses) > 1
+	sources := make([]*tree.TableName, 0, len(clauses))
+	seen := make(map[string]struct{})
+	for _, clause := range clauses {
+		if clause == nil || clause.From == nil || len(clause.From.Tables) == 0 {
+			return nil, false
+		}
+		if isUnion && len(clause.From.Tables) != 1 {
+			return nil, false
+		}
+		for _, expr := range clause.From.Tables {
+			found, supported := materializedViewSourceTables(expr)
+			if !supported || isUnion && len(found) != 1 {
+				return nil, false
+			}
+			for _, source := range found {
+				dbName := string(source.SchemaName)
+				if dbName == "" {
+					dbName = defaultDB
+				}
+				key := strings.ToLower(dbName) + "\x00" + strings.ToLower(string(source.ObjectName))
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				sources = append(sources, source)
+			}
+		}
+	}
+	return sources, len(sources) > 0
 }
 
 func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
@@ -2335,6 +2636,13 @@ func buildCreateTable(
 	isPrepareStmt bool,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
+	stateDatabase := string(stmt.Table.SchemaName)
+	if stateDatabase == "" {
+		stateDatabase = ctx.DefaultDatabase()
+	}
+	if _, internalState := mvdefinition.GetStateCreation(ctx.GetContext(), stateDatabase, tableName); mvdefinition.IsStateName(tableName) && !internalState {
+		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "table name %s is reserved for materialized view state", tableName)
+	}
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
 		return nil, err
 	}
@@ -2527,6 +2835,9 @@ func buildCreateTable(
 		case *tree.TableOptionProperties:
 			properties := make([]*plan.Property, len(opt.Preperties))
 			for idx, property := range opt.Preperties {
+				if mvdefinition.IsReservedProperty(property.Key) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "materialized view properties are reserved")
+				}
 				properties[idx] = &plan.Property{
 					Key:   property.Key,
 					Value: property.Value,
@@ -2835,6 +3146,22 @@ func buildCreateTable(
 		if err := validateUniquePersistedTableColumns(ctx.GetContext(), createTable.TableDef); err != nil {
 			return nil, err
 		}
+	}
+
+	if state, ok := mvdefinition.GetStateCreation(ctx.GetContext(), createTable.Database, createTable.TableDef.Name); ok {
+		target := createTable.TableDef
+		target.TableType = catalog.SystemViewRel
+		target.ViewSql = &plan.ViewDef{View: state.ViewSQL}
+		for _, item := range target.Defs {
+			if props := item.GetProperties(); props != nil {
+				for _, p := range props.Properties {
+					if p.Key == catalog.SystemRelAttr_Kind {
+						p.Value = catalog.SystemViewRel
+					}
+				}
+			}
+		}
+		target.Defs = append(target.Defs, &plan.TableDef_DefType{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(state.Owner)}}}}})
 	}
 
 	return &Plan{
@@ -5164,6 +5491,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			}
 		}
 
+		if err := rejectMaterializedViewAlter(tableDef); err != nil {
+			return nil, err
+		}
 		if tableDef.ViewSql != nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 		}
@@ -5305,6 +5635,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 		}
 		return dropTable, nil
 	}
+	if IsMaterializedViewStateTableDef(tableDef) && !defines.IsInternalExecutor(ctx.GetContext()) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view internal state must be dropped with its materialized view")
+	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
@@ -5434,7 +5767,10 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		if tableDef.ViewSql == nil {
+		if stmt.Materialized && !IsMaterializedViewTableDef(tableDef) {
+			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		if !stmt.Materialized && tableDef.ViewSql == nil {
 			if !dropTable.IfExists {
 				return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 			}
@@ -5447,6 +5783,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 	dropTable.IsView = true
+	dropTable.TableDef = tableDef
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -5886,6 +6223,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
+		if err := rejectMaterializedViewAlter(oldViewDef); err != nil {
+			return nil, err
+		}
 		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
 		}
@@ -5993,6 +6333,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 		}
 
+		if err := rejectMaterializedViewAlter(tableDef); err != nil {
+			return nil, err
+		}
 		if tableDef.ViewSql != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 		}
@@ -6022,6 +6365,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				if mvdefinition.IsStateName(newName) {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "materialized view state namespace is reserved")
+				}
 				if err := validateIdentifier(ctx.GetContext(), newName); err != nil {
 					return nil, err
 				}
@@ -6598,6 +6944,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
+			if mvdefinition.IsStateName(newName) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "materialized view state namespace is reserved")
+			}
 			if oldName == newName {
 				continue
 			}
