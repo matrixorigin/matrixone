@@ -224,6 +224,7 @@ func (d *LogServiceDriver) Close() error {
 			return
 		}
 		d.waitCommitLoop.Stop()
+		// Flush pending truncation requests while the client pool is still usable.
 		d.truncateQueue.Stop()
 		d.clientPool.Close()
 		d.cancel()

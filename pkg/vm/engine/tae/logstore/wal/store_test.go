@@ -233,7 +233,7 @@ func TestTruncate(t *testing.T) {
 // 8. append 2 entries for group GroupUserTxn
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
-	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	backend, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
 	wal := NewLogserviceHandle(clientFactory)
 	replayHandle := func(
 		group uint32,
@@ -352,6 +352,9 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStaleCheckpointIntent)
 
 	wal.Close()
+	truncated, err := backend.GetTruncatedLsn(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(9), truncated)
 
 	wal = NewLogserviceHandle(clientFactory)
 	defer wal.Close()

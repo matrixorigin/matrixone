@@ -1349,9 +1349,18 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 	}
 }
 
+func TestRemoteExpressionMemberOfDoesNotRequireDigest(t *testing.T) {
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: int64(planfunction.INTERNAL_JSON_MEMBER_OF) << 32},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.False(t, features.StatementDigestFunction)
+}
+
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
-		"the v36 remote-expression capability must remain available after later protocol increments")
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion58,
+		"the v58 remote-expression capability must remain available after later protocol increments")
 
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -1413,6 +1422,17 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{Obj: int64(functionID) << 32},
 				Args: args,
+			}},
+		}
+	}
+	statementDigest := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     int64(planfunction.STATEMENT_DIGEST) << 32,
+					ObjName: "statement_digest",
+				},
 			}},
 		}
 	}
@@ -1480,6 +1500,20 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("statement digest function requires v63", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{statementDigest()},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion62)
+		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "STATEMENT_DIGEST remote execution requires MORPC protocol version 63")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 	t.Run("typed FORMAT sender and receiver boundary", func(t *testing.T) {

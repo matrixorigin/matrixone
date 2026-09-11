@@ -781,6 +781,8 @@ message SessionInfo {
   // value of one on the receiving CN.
   uint64 auto_increment_increment = 15;
   uint64 auto_increment_offset = 16;
+  int64 max_digest_length = 17;
+  bool max_digest_length_set = 18;
 }
 
 message SessionLoggerInfo {
