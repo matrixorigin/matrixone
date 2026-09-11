@@ -109,6 +109,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 	group.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
+	group.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()

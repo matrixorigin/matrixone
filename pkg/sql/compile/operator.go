@@ -1921,18 +1921,25 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	return arg
 }
 
-// preflightOrderedPercentileConfigs evaluates runtime percentile arguments
+// preflightPercentileConfigs evaluates runtime percentile arguments
 // before the aggregate's child scopes are compiled. constructGroup follows the
 // operator-construction convention of panicking on errors; using that path for
 // a user-supplied prepared-statement value both decorates the client error with
 // a panic stack and strands the scopes that were already constructed.
-func preflightOrderedPercentileConfigs(node *plan.Node, proc *process.Process) error {
+func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
 	for _, expr := range node.AggList {
 		f := expr.GetF()
 		if f == nil {
 			continue
 		}
 		switch f.Func.ObjName {
+		case plan2.NameApproxPercentile:
+			if len(f.Args) <= 1 || !expressionContainsParam(f.Args[len(f.Args)-1]) {
+				continue
+			}
+			if _, _, err := constructApproxPercentileConfig(f, proc); err != nil {
+				return err
+			}
 		case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 			if len(f.Args) != 2 || !expressionContainsParam(f.Args[1]) {
 				continue
@@ -1987,30 +1994,11 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 
 	case plan2.NameApproxPercentile:
 		if len(args) > 1 {
-			configExpr := args[len(args)-1]
-			if err := validateApproxPercentileExpr(configExpr); err != nil {
-				panic(err)
-			}
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			args, config, err := constructApproxPercentileConfig(f, proc)
 			if err != nil {
 				panic(err)
 			}
-			defer free()
-			config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
-			if err != nil {
-				panic(err)
-			}
-			// The existing approximate-percentile executor always ranks values in
-			// ascending order. An ordered-set DESC call has the same result as the
-			// ascending complementary percentile, so preserve the executor and its
-			// wire-compatible text configuration by translating p to 1-p here.
-			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
-				config, err = complementPercentileConfig(config)
-				if err != nil {
-					panic(err)
-				}
-			}
-			return args[:len(args)-1], config
+			return args, config
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
@@ -2021,6 +2009,40 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		return args, config
 	}
 	return args, nil
+}
+
+func constructApproxPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"approx_percentile requires a value and percentile argument")
+	}
+	configExpr := args[1]
+	if err := validateApproxPercentileExpr(configExpr); err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The existing approximate-percentile executor always ranks values in
+	// ascending order. An ordered-set DESC call has the same result as the
+	// ascending complementary percentile, so preserve the executor and its
+	// wire-compatible text configuration by translating p to 1-p here.
+	if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
+		config, err = complementPercentileConfig(config)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return args[:1], config, nil
 }
 
 func constructOrderedPercentileConfig(

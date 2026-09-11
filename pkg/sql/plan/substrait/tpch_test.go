@@ -31,6 +31,14 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
+	// Substrait's decimal primitive is limited to 38 digits. These queries have
+	// a SUM whose MatrixOne result now uses Decimal256 so that accumulation can
+	// exceed Decimal128 without becoming input-order dependent. They must take
+	// the normal not-eligible path and fall back to local execution.
+	decimal256SumQueries := map[int]struct{}{
+		1: {}, 3: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {},
+		11: {}, 14: {}, 15: {}, 19: {},
+	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
 			path := filepath.Join("..", "tpch", fmt.Sprintf("q%d.sql", queryNumber))
@@ -54,6 +62,15 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
+			if _, expectsDecimal256Fallback := decimal256SumQueries[queryNumber]; expectsDecimal256Fallback {
+				require.Error(t, err)
+				require.True(t, IsNotEligible(err))
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, EligibilityType, reason)
+				require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				return
+			}
 			require.NoError(t, err)
 			readValues := make(map[int32][]byte, len(candidate.Reads()))
 			for _, read := range candidate.Reads() {

@@ -1914,7 +1914,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
-		if err = preflightOrderedPercentileConfigs(node, c.proc); err != nil {
+		if err = preflightPercentileConfigs(node, c.proc); err != nil {
 			return nil, err
 		}
 		childNodeID := node.Children[0]
@@ -5005,19 +5005,63 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 		return true, 0, nil, nil
 	}
 
-	temp := (end - start + 1) / int64(parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		tempEnd := start + temp - 1
-		if i == parallelSize-1 {
-			tempEnd = end
-		}
+	offset, ok := generateSeriesOffsets(start, end, step, parallelSize)
+	if !ok {
+		return false, 0, nil, nil
+	}
+	return true, step, offset, nil
+}
 
-		arr := [2]int64{start, tempEnd}
-		offset = append(offset, arr)
-		start = tempEnd + 1
+func generateSeriesOffsets(start, end, step int64, parallelSize int) ([][2]int64, bool) {
+	if parallelSize <= 0 || step == 0 ||
+		(step > 0 && start > end) || (step < 0 && start < end) {
+		return nil, false
 	}
 
-	return true, step, offset, nil
+	var distance, stepMagnitude uint64
+	if step > 0 {
+		distance = uint64(end) - uint64(start)
+		stepMagnitude = uint64(step)
+	} else {
+		distance = uint64(start) - uint64(end)
+		stepMagnitude = uint64(-(step + 1)) + 1
+	}
+	lastIndex := distance / stepMagnitude
+	if lastIndex == math.MaxUint64 {
+		// Keep the only cardinality that cannot fit in uint64 on the serial path.
+		return nil, false
+	}
+	count := lastIndex + 1
+	shardCount := uint64(parallelSize)
+	if count < shardCount {
+		return nil, false
+	}
+
+	baseSize := count / shardCount
+	extra := count % shardCount
+	offsets := make([][2]int64, 0, parallelSize)
+	var firstIndex uint64
+	for shard := uint64(0); shard < shardCount; shard++ {
+		size := baseSize
+		if shard < extra {
+			size++
+		}
+		lastIndex := firstIndex + size - 1
+		offsets = append(offsets, [2]int64{
+			generateSeriesValueAt(start, step, stepMagnitude, firstIndex),
+			generateSeriesValueAt(start, step, stepMagnitude, lastIndex),
+		})
+		firstIndex = lastIndex + 1
+	}
+	return offsets, true
+}
+
+func generateSeriesValueAt(start, step int64, stepMagnitude, index uint64) int64 {
+	delta := index * stepMagnitude
+	if step > 0 {
+		return int64(uint64(start) + delta)
+	}
+	return int64(uint64(start) - delta)
 }
 
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
@@ -7677,6 +7721,32 @@ func hasVarianceAggregate(node *plan.Node) bool {
 	return false
 }
 
+// hasWidenedDecimalSum reports SUM expressions whose public result is
+// Decimal256. Before MORPC v65, a new CN can still exchange the legacy
+// Decimal128 partial state with an old CN, but a final shuffle Group evaluates
+// the state on its remote owner and sends the public result directly. That
+// final batch would be Decimal256 on the new binary and Decimal128 on the old
+// binary, so mixed-version clusters must use Group + coordinator MergeGroup.
+func hasWidenedDecimalSum(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+			int64(uint64(fn.Func.Obj)&function.DistinctMask) != aggexec.AggIdOfSum {
+			continue
+		}
+
+		input := fn.Args[0].Typ
+		oid := types.T(input.Id)
+		if oid != types.T_decimal64 && oid != types.T_decimal128 && oid != types.T_decimal256 {
+			continue
+		}
+		if aggexec.SumReturnType([]types.Type{types.New(oid, input.Width, input.Scale)}).Oid == types.T_decimal256 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -7715,7 +7785,7 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion65
+	return ok && protocolVersion >= defines.MORPCVersion66
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
@@ -7726,6 +7796,16 @@ func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion35
+}
+
+func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion65
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -7992,7 +8072,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
-		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
