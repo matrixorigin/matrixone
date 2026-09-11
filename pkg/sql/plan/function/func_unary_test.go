@@ -661,8 +661,8 @@ func initAsciiStringTestCase() []tcTemp {
 					[]string{"-23", "9999999", "-11"},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 57, 45},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{45, 57, 45},
 				[]bool{false, false, false}),
 		},
 	}
@@ -690,8 +690,8 @@ func initAsciiIntTestCase() []tcTemp {
 					[]int64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -719,8 +719,8 @@ func initAsciiUintTestCase() []tcTemp {
 					[]uint64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -737,6 +737,44 @@ func TestAsciiUint(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("string", func(t *testing.T) {
+		input := testutil.MakeVarlenaVector(
+			[][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiString(
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{65}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("signed integer", func(t *testing.T) {
+		input := testutil.MakeInt64Vector([]int64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiInt[int64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("unsigned integer", func(t *testing.T) {
+		input := testutil.MakeUint64Vector([]uint64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiUint[uint64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
 }
 
 // ORD
