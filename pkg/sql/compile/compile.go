@@ -935,13 +935,15 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 // execute the base-table plan produced while the hint was unresolved.
 func (c *Compile) unresolvedIndexHintError() error {
 	query := c.pn.GetQuery()
-	for _, hint := range query.GetUnresolvedIndexHints() {
-		if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
-			return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
-		}
-		return moerr.NewErrKeyDoesNotExist(c.proc.Ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
+	hints := query.GetUnresolvedIndexHints()
+	if len(hints) == 0 {
+		return nil
 	}
-	return nil
+	hint := hints[0]
+	if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
+		return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
+	}
+	return moerr.NewErrKeyDoesNotExist(c.proc.Ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
 }
 
 func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {

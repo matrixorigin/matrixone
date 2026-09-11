@@ -417,19 +417,23 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 }
 
 func TestUnresolvedIndexHintMetadataValidation(t *testing.T) {
-	query := &plan.Query{UnresolvedIndexHints: []*plan.UnresolvedIndexHint{{
-		Table:     &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
-		IndexName: "idx_new",
-	}}}
+	query := &plan.Query{UnresolvedIndexHints: []*plan.UnresolvedIndexHint{
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_new"},
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "u"}, IndexName: "idx_later"},
+	}}
 
 	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
 	c.appendUnresolvedIndexHintMetaTables(query)
-	require.Equal(t, map[string]struct{}{"db t": {}}, c.lockMeta.metaTables)
+	require.Equal(t, map[string]struct{}{"db t": {}, "db u": {}}, c.lockMeta.metaTables)
 
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 	c.proc = testutil.NewProcess(t)
 	err := c.unresolvedIndexHintError()
 	require.ErrorContains(t, err, "Key 'idx_new' doesn't exist in table 't'")
+	require.NotContains(t, err.Error(), "idx_later")
+
+	query.UnresolvedIndexHints = nil
+	require.NoError(t, c.unresolvedIndexHintError())
 }
 
 func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
