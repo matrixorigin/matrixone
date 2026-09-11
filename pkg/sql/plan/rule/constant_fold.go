@@ -214,6 +214,12 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 		return expr
 	}
+	// A typed RoutineCall is an execute-time boundary. Even a zero-argument
+	// call with only literal metadata must reach ExternalRoutineEval so that
+	// volatility, row cardinality, and the captured revision remain intact.
+	if fn.RoutineCall != nil {
+		return expr
+	}
 	overloadID := fn.Func.GetObj()
 	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
 		return expr
