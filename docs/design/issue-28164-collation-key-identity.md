@@ -868,3 +868,72 @@ ready for maintainer review, not approved: the named owners must still record
 acceptance or new findings against this revision before production code is
 written. The baseline reproduction is evidence of the current defect only;
 `production_fix` and `qa_acceptance` remain not implemented/not run.
+
+### 10.2 Implementation series status (PR1)
+
+The first implementation delivery is intentionally limited to the dependency-
+light codec foundation in `pkg/common/collationkey`. It does not change any
+planner, executor, catalog, protobuf, storage, or SQL entry point. The package
+therefore cannot make an existing relation collation-aware by itself; the
+remaining metadata, capability, sidecar, query, DML, migration, and activation
+deliveries remain required before the issue can be closed.
+
+PR1 freezes the following implementation details without changing the approved
+revision-3 contract:
+
+- registry name `collationkey/domains-v1`, registry version `1`, codec envelope
+  version `2`, and a maximum framed key size of `67108864` bytes;
+- family IDs `0x0001` (UTF-8 general-ci-v1/PAD SPACE), `0x0002` (UTF-8 `_bin`/
+  PAD SPACE), `0x0003` (exact binary), `0x0101` (signed integer), `0x0102`
+  (unsigned integer), and `0x0103` (decimal);
+- canonical parameter bytes use big-endian prefix/width fields and the schema
+  bytes defined in Section 4.3; the immutable registry digest is
+  `0c84115b0e4999cd90fd03c1fb4bedb3ed560a4e97e64f73840952c4e469feca`;
+- all text input is validated as complete UTF-8 before prefixing, general-ci
+  emits one four-byte big-endian weight per code point, and NULL/empty values
+  retain distinct framed states;
+- malformed descriptors, unknown families, invalid widths/scales, non-canonical
+  decimal payloads, invalid UTF-8, and over-sized envelopes fail before a key is
+  published; `HashEncoded` is only a bucket hint and never a uniqueness oracle.
+
+The digest and golden vectors are package tests, not a claim that a relation has
+adopted v2. Subsequent implementation PRs must copy the exact bytes and digest
+through the approved metadata and capability boundaries before any production
+writer is allowed to emit this format.
+
+### 10.3 Implementation series status (PR3)
+
+PR3 is a metadata transport and validation foundation only. It adds typed
+`UniqueKeyCodecVersion` fields to the plan and schema-extra messages, reserves
+typed capability/activation records in the logservice messages, and explicitly
+copies the relation version through the current plan, engine, catalog-cache,
+schema-extra, and deep-copy boundaries. The dependency-light codec package
+validates the supported version, registry version/digest, and maximum encoded
+key size, and separates readable from writable capability bits.
+
+PR3 does not publish an activation state, admit a v2 relation, change a unique
+index, or make any existing writer emit v2 bytes. Capability publication,
+HAKeeper persistence, generation acknowledgements, plan/TN admission, and
+activation recovery remain unimplemented until the distributed state-machine
+and storage owners provide those consumers. A missing or absent field therefore
+continues to mean legacy behavior; this PR must not be interpreted as a
+production compatibility gate by itself.
+
+### 10.4 Implementation series status (PR4)
+
+PR4 adds the dependency-light row-locator envelope used by the planned
+storage-owned UNIQUE sidecar. `pkg/common/collationkey` now defines
+`RowLocator`, `EncodeLocator`, and `DecodeLocator`. The format is the fixed
+big-endian sequence `MOKL | version(1) | relation_id(u64) |
+partition_id(u64) | primary_key_length(u32) | original_primary_key_bytes`.
+Relation identity is mandatory, the primary-key bytes are copied on decode, and
+truncation, version, length, zero-relation, and the shared 64 MiB allocation
+guard fail closed. Empty primary-key bytes remain valid; the locator never
+stores a compaction-sensitive `__mo_rowid` and is not a replacement for the
+user-visible primary-key value.
+
+This PR is a storage contract and test foundation only. No catalog relation is
+created, no existing hidden index changes type, and no planner, lock owner, TN
+commit path, or migration command consumes the locator yet. Until those paths
+are wired atomically with the base row and capability/activation checks, v2
+remains disabled and all production writes retain their existing behavior.

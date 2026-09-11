@@ -576,6 +576,9 @@ message TableDef {
   // Default collation class inherited by textual columns without an explicit
   // column-level collation. Uses the container/types Charset constants.
   uint32 default_charset = 39;
+  // Physical primary/UNIQUE key identity format. Zero/absent retains legacy
+  // bytewise behavior; v2 remains gated until capability activation.
+  UniqueKeyCodecVersion unique_key_codec_version = 40;
 }
 
 message TableFunction {
@@ -2338,4 +2341,15 @@ message VectorIndexScanWork {
   int32 blocks = 2;
   double vector_bytes_per_row = 3;
   int32 objects = 4;
+}
+
+// UniqueKeyCodecVersion identifies the physical encoding used by a primary or
+// secondary UNIQUE relation. The message is shared by plan.TableDef and
+// api.SchemaExtra so catalog and plan copies cannot silently diverge.
+message UniqueKeyCodecVersion {
+  // 0 retains legacy/bytewise behavior; value 2 is the framed collation key.
+  uint32 value = 1;
+  uint32 registry_version = 2;
+  bytes registry_digest = 3;
+  uint32 max_encoded_key_bytes = 4;
 }
