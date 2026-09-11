@@ -447,33 +447,6 @@ func TestRemoteTerminalEnvelopeByteBudgetCapsMaxCapacity(t *testing.T) {
 	}
 }
 
-func TestRemoteTerminalAnalysisFitsMessageBody(t *testing.T) {
-	const bodyLimit = 16 * 1024
-	const total = 10
-	warnings := make([]remoteWarningDiagnostic, total)
-	for i := range warnings {
-		warnings[i] = remoteWarningDiagnostic{
-			Code:    1292,
-			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
-		}
-	}
-	receiver := &messageReceiverOnServer{
-		maxMessageSize:     bodyLimit,
-		warningCount:       total,
-		warningDiagnostics: warnings,
-	}
-	message := &pipeline.Message{}
-	require.NoError(t, receiver.setTerminalAnalysis(message))
-	require.Less(t, message.ProtoSize(), bodyLimit)
-
-	var envelope remoteTerminalEnvelope
-	require.NoError(t, json.Unmarshal(message.GetAnalyse(), &envelope))
-	require.Equal(t, uint64(total), envelope.WarningCount)
-	require.NotEmpty(t, envelope.WarningDiagnostics)
-	require.Less(t, len(envelope.WarningDiagnostics), total)
-	require.Equal(t, warnings[0], envelope.WarningDiagnostics[0])
-}
-
 func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 2}
 	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})
