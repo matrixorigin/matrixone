@@ -120,7 +120,12 @@ not a source-table row ID or a globally ordered distributed row number.
 Distributed terminal envelopes sum fragment warning counts and retain bounded
 diagnostics. Records keep each fragment's production order, and the
 coordinator merges batches in the order it receives them; no global ordering or
-reproducible row numbering across different physical plans is promised.
+reproducible row numbering across different physical plans is promised. Before
+the terminal JSON is attached to MORPC, a conservative byte budget is applied
+to the diagnostic array. The exact count is always sent, while only the
+longest prefix that fits the frame is sent; a remote terminal may therefore
+carry fewer records than its configured `max_error_count` when messages are
+large.
 Ordinary partial-state transport must not itself emit a second copy of a warning
 for the same finalization; the finalizing operator owns reporting. Window
 finalizations can represent separate frame evaluations.
@@ -145,7 +150,8 @@ statement's `max_error_count` is carried in the appended protobuf SessionInfo
 fields. Older receivers ignore those fields and use the legacy 64-record
 capacity; during mixed-version operation, successful SQL execution remains
 compatible but complete warning coverage is not guaranteed. Once all CNs are
-upgraded, the configured capacity is preserved end to end.
+upgraded, the configured capacity is preserved through collection, subject to
+the terminal frame byte budget.
 The single-record optional sink fallback reports retained records only; exact
 totals above retention require the batch interface used by the frontend and
 attempt collectors. The frontend's wire warning count saturates at uint16 max.
@@ -161,8 +167,8 @@ retain a sealed old collector until their existing RPC lifecycle ends. No new
 goroutine, queue, timer, retry, or log is added.
 
 Retained record count is bounded independently of total count. Retained *bytes*
-are O(`max_error_count` times maximum produced message length), not a universal
-fixed byte cap:
+are O(`max_error_count` times maximum produced message length), while terminal
+serialization applies a separate conservative frame byte budget:
 GROUP_CONCAT messages contain only a row number, while existing scalar conversion
 messages can contain input text. This design does not newly cap scalar message
 length, and does not claim to bound the existing aggregate payload/spill memory.

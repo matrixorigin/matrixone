@@ -421,6 +421,59 @@ func TestRemoteWarningCollectorLegacyPayloadFallsBackTo64(t *testing.T) {
 	require.Len(t, retained, remoteWarningRetentionLimit)
 }
 
+func TestRemoteTerminalEnvelopeByteBudgetCapsMaxCapacity(t *testing.T) {
+	const total = 65535
+	message := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes)
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{Code: uint16(i), Message: message}
+	}
+
+	data, err := marshalRemoteTerminalEnvelope(remoteTerminalEnvelope{
+		WarningCount:       total,
+		WarningDiagnostics: warnings,
+	}, 64*1024)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(data), 64*1024)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(data, &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	for i, warning := range envelope.WarningDiagnostics {
+		require.Equal(t, uint16(i), warning.Code)
+		require.Equal(t, message, warning.Message)
+	}
+}
+
+func TestRemoteTerminalAnalysisFitsMessageBody(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+	receiver := &messageReceiverOnServer{
+		maxMessageSize:     bodyLimit,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+	message := &pipeline.Message{}
+	require.NoError(t, receiver.setTerminalAnalysis(message))
+	require.Less(t, message.ProtoSize(), bodyLimit)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(message.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	require.Equal(t, warnings[0], envelope.WarningDiagnostics[0])
+}
+
 func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 2}
 	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})

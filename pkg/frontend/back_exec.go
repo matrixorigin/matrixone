@@ -1117,14 +1117,7 @@ func (backSes *backSession) GetWarningRetentionLimit() int {
 		return process.WarningDiagnosticDefaultRetentionLimit
 	}
 	if backSes.upstream != nil {
-		if provider, ok := backSes.upstream.(process.WarningDiagnosticRetentionLimitProvider); ok {
-			return provider.GetWarningRetentionLimit()
-		}
-		if value, err := backSes.upstream.GetSessionSysVar("max_error_count"); err == nil {
-			if limit, ok := sessionWarningRetentionLimit(value); ok {
-				return limit
-			}
-		}
+		return backSes.upstream.GetWarningRetentionLimit()
 	}
 	if backSes.parentBackSession != nil {
 		return backSes.parentBackSession.GetWarningRetentionLimit()

@@ -62,10 +62,10 @@ no diagnostic destination and does not allocate a collector.
 
 Remote fragments use the same optional terminal JSON fields as existing
 diagnostics.  The remote server accumulates its fragment warnings and sends
-the exact count plus at most the retained records at terminal completion.  The
-client captures the initiating process's sink before sending the RPC.  If the
-attempt is retried or canceled, the captured collector is sealed and the late
-terminal is dropped.
+the exact count plus the retained prefix that fits the terminal MORPC byte
+budget at completion.  The client captures the initiating process's sink before
+sending the RPC.  If the attempt is retried or canceled, the captured collector
+is sealed and the late terminal is dropped.
 
 ## Producers and user-facing keys
 
@@ -115,8 +115,10 @@ attempts.
 ## Cost and failure containment
 
 Each accumulator and remote collector retains at most the statement's
-`max_error_count` records; an individual message is capped at 4 KiB.  Counts
-use saturating `uint64` arithmetic and are independent of the retained-record
+`max_error_count` records; an individual message is capped at 4 KiB.  Terminal
+serialization adds a frame byte budget, so a large message can reduce the
+number of records sent while leaving the exact count intact.  Counts use
+saturating `uint64` arithmetic and are independent of the retained-record
 capacity.  Each producer stops formatting after its local capacity, while the
 attempt collector and final session apply the same capacity; a large ignored
 statement therefore does not retain or transmit every duplicate key.  The
