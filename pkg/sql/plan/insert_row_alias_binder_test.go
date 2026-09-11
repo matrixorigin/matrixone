@@ -153,6 +153,28 @@ func TestInsertRowAliasCorrelatedFromBuildPlanKeepsTargetLookupReachable(t *test
 	require.GreaterOrEqual(t, targetScans, 3)
 }
 
+func TestInsertRowAliasCorrelatedScalarJoinGuardsNonConflict(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = coalesce(constraint_test.dept.deptno, 0))")
+	require.NoError(t, err)
+
+	guardedScalarJoin := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE {
+			continue
+		}
+		for _, predicate := range node.OnList {
+			if exprContainsFunc(predicate, "isnotnull") {
+				guardedScalarJoin = true
+			}
+		}
+	}
+	require.True(t, guardedScalarJoin,
+		"target-correlated scalar ODKU subquery must be gated by the target lookup match")
+}
+
 func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+

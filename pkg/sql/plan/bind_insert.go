@@ -42,6 +42,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
 	builder.insertInputSingleRow = false
+	builder.odkuTargetCorrelationGuard = nil
 	// INSERT IGNORE is independent from the duplicate-key action.  In
 	// particular, a non-empty ODKU list still selects UPDATE while its input and
 	// assignment conversions use the IGNORE policy.
@@ -2655,6 +2656,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoIncrementGeneratedColumn int32,
 	rowAliases ...*insertRowAliasBinding,
 ) (int32, error) {
+	previousTargetCorrelationGuard := builder.odkuTargetCorrelationGuard
+	defer func() {
+		builder.odkuTargetCorrelationGuard = previousTargetCorrelationGuard
+	}()
+
 	var rowAlias *insertRowAliasBinding
 	if len(rowAliases) > 0 {
 		rowAlias = rowAliases[0]
@@ -3455,6 +3461,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// resolved target row part of the candidate subtree first. The lookup is
 		// only needed for statements that actually contain a subquery; ordinary
 		// ODKU expressions keep their existing two-input plan and cost.
+		var targetCorrelationGuard *plan.Expr
 		if updateExprListHasSubquery(updateColExprList) {
 			lookupKeyPos := targetPkPos
 			if lookupKeyPos < 0 {
@@ -3494,6 +3501,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
+			targetCorrelationGuard, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "isnotnull", []*plan.Expr{DeepCopyExpr(lookupPK)})
+			if err != nil {
+				return 0, err
+			}
 			lookupCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 				lookupPK, incomingPK,
 			})
@@ -3509,6 +3521,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for i, updateExpr := range updateColExprList {
+			builder.odkuTargetCorrelationGuard = nil
+			if targetCorrelationGuard != nil && builder.exprHasTargetCorrelatedSubquery(updateExpr, targetCorrelationTag) {
+				builder.odkuTargetCorrelationGuard = targetCorrelationGuard
+			}
 			previousNodeID := lastNodeID
 			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
 			if err != nil {
@@ -3541,6 +3557,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 		}
+		builder.odkuTargetCorrelationGuard = nil
 
 		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0 || useTargetPk) {
 			builder.addNameByColRef(scanTag, tableDef)
