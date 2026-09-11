@@ -82,6 +82,7 @@ func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {
 	ses := newFeatureLimitTestSession(t)
 	ses.errInfo = &errInfo{maxCnt: MoDefaultErrorCount}
 	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(7)))
+	ses.beginWarningDiagnostics()
 	backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
 
 	require.Equal(t, 7, backSes.GetWarningRetentionLimit())

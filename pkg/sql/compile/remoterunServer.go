@@ -1315,14 +1315,21 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 }
 
 // terminalAnalysisByteBudget returns the largest JSON payload that can be
-// attached to message while keeping its MORPC body below the conservative
-// remote message limit. maxMessageSize is also the application-level payload
-// limit used for remote result fragments; using the smaller of the two keeps a
-// terminal frame safe for the same connection settings.
+// attached to message while keeping its MORPC body below the limit configured
+// on the owning RPC server. maxMessageSize is also the application-level
+// payload limit used for remote result fragments; using the smaller of the two
+// keeps a terminal frame safe for the same connection settings. The context
+// carries the production codec limit; the package default remains the
+// compatibility fallback for receivers created outside an RPC server.
 func terminalAnalysisByteBudget(receiver *messageReceiverOnServer, message *pipeline.Message) int {
 	bodyLimit := morpc.GetMessageSize()
-	if receiver != nil && receiver.maxMessageSize > 0 && receiver.maxMessageSize < bodyLimit {
-		bodyLimit = receiver.maxMessageSize
+	if receiver != nil {
+		if configured, ok := morpc.MaxMessageSizeFromContext(receiver.messageCtx); ok && configured < bodyLimit {
+			bodyLimit = configured
+		}
+		if receiver.maxMessageSize > 0 && receiver.maxMessageSize < bodyLimit {
+			bodyLimit = receiver.maxMessageSize
+		}
 	}
 	baseSize := 0
 	if message != nil {

@@ -320,6 +320,10 @@ func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
 	ctx := context.Background()
 	require.Equal(t, MoDefaultErrorCount, ses.GetWarningRetentionLimit())
 	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(3)))
+	// SET changes the configured session value immediately, while the active
+	// capacity remains fixed until the next top-level statement boundary.
+	require.Equal(t, MoDefaultErrorCount, ses.GetWarningRetentionLimit())
+	ses.beginWarningDiagnostics()
 	require.Equal(t, 3, ses.GetWarningRetentionLimit())
 	ses.appendErrorDiagnostic(1064, "error")
 	ses.appendWarningDiagnostic(1329, "warning")
@@ -330,8 +334,9 @@ func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
 	require.Equal(t, uint64(3), info.totalWarnings)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+	require.Equal(t, 3, ses.GetWarningRetentionLimit())
+	ses.beginWarningDiagnostics()
 	require.Equal(t, 0, ses.GetWarningRetentionLimit())
-	ses.resetDiagnostics()
 	ses.appendErrorDiagnostic(1064, "not retained")
 	ses.appendWarningDiagnostic(1329, "not retained")
 	info = ses.diagnosticsSnapshot()
@@ -339,6 +344,34 @@ func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
 	require.Equal(t, uint64(1), info.totalWarnings)
 	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(-1)))
 	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(65536)))
+}
+
+func TestSetMaxErrorCountDefersActiveCapacityUntilStatementBoundary(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+		},
+		errInfo: &errInfo{maxCnt: 10},
+	}
+	ses.appendWarningDiagnostic(1329, "warning from SET statement")
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+	require.Equal(t, 10, ses.GetWarningRetentionLimit())
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, []uint16{1329}, info.codes)
+	require.Equal(t, []string{"warning from SET statement"}, info.msgs)
+
+	// The following SHOW WARNINGS is diagnostic and therefore must not reset or
+	// re-trim the records produced by the SET statement. A later non-diagnostic
+	// statement applies the newly configured zero capacity.
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Zero(t, ses.GetWarningRetentionLimit())
+	require.Empty(t, ses.diagnosticsSnapshot().codes)
 }
 
 func TestMaxErrorCountSessionCapacityPrefixes(t *testing.T) {
@@ -352,6 +385,7 @@ func TestMaxErrorCountSessionCapacityPrefixes(t *testing.T) {
 				errInfo: &errInfo{maxCnt: MoDefaultErrorCount},
 			}
 			require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(limit)))
+			ses.beginWarningDiagnostics()
 			for i := 0; i < 100; i++ {
 				ses.appendWarningDiagnostic(uint16(2000+i), fmt.Sprintf("warning-%d", i))
 			}

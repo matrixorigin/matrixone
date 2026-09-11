@@ -307,6 +307,40 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.True(t, second.SessionInfo.MaxErrorCountSet)
 }
 
+func TestBuildProcessInfoUsesEffectiveWarningSinkAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.SessionInfo.MaxErrorCount = WarningDiagnosticDefaultRetentionLimit
+	proc.Base.SessionInfo.MaxErrorCountSet = true
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), first.SessionInfo.MaxErrorCount)
+	require.True(t, first.SessionInfo.MaxErrorCountSet)
+
+	// An explicit zero from the active attempt must survive serialization even
+	// when the reused Process still carries the normal SessionInfo default.
+	proc.WarningSink = &retentionWarningSession{limit: 0}
+	zero, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Zero(t, zero.SessionInfo.MaxErrorCount)
+	require.True(t, zero.SessionInfo.MaxErrorCountSet)
+
+	// Decode the effective snapshot and forward it again from a second CN. The
+	// second hop must use its current attempt sink, rather than resurrecting the
+	// NewTopProcess default of 1024.
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+	decoded.WarningSink = &retentionWarningSession{limit: 2048}
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), second.SessionInfo.MaxErrorCount)
+	require.True(t, second.SessionInfo.MaxErrorCountSet)
+}
+
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)

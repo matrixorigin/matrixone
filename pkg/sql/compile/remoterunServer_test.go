@@ -766,6 +766,47 @@ func TestMessageReceiverSendEndMessageBoundsWarningPayload(t *testing.T) {
 	require.Equal(t, warnings[0], envelope.WarningDiagnostics[0])
 }
 
+func TestMessageReceiverTerminalUsesConfiguredRPCBodyLimit(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:         morpc.ContextWithMaxMessageSize(context.Background(), bodyLimit),
+		maxMessageSize:     maxMessageSizeToMoRpc,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+	message := &pipeline.Message{
+		Sid: pipeline.Status_MessageEnd,
+		Cmd: pipeline.Method_PipelineMessage,
+		Id:  1,
+	}
+	require.NoError(t, receiver.setTerminalAnalysis(message))
+
+	// Exercise the same codec validation used by production MORPC instead of
+	// relying on a mock ClientSession.Write implementation.
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return &pipeline.Message{} },
+		morpc.WithCodecMaxBodySize(bodyLimit),
+	)
+	require.NoError(t, codec.Valid(message))
+	require.Less(t, message.ProtoSize(), bodyLimit)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(message.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+}
+
 func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)

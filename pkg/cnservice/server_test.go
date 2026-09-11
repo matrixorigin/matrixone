@@ -1449,6 +1449,46 @@ func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
 	require.Equal(t, int32(1), cancelCount.Load())
 }
 
+func TestHandleRequestPropagatesConfiguredRPCMaxMessageSize(t *testing.T) {
+	const configuredLimit = 32 * 1024
+	s := &service{cfg: &Config{UUID: t.Name()}}
+	s.cfg.RPC.MaxMessageSize = configuredLimit
+
+	observed := make(chan int, 1)
+	s.requestHandler = func(
+		ctx context.Context,
+		_ string,
+		_ morpc.Message,
+		_ morpc.ClientSession,
+		_ engine.Engine,
+		_ fileservice.FileService,
+		_ lockservice.LockService,
+		_ qclient.QueryClient,
+		_ logservice.CNHAKeeperClient,
+		_ udf.Service,
+		_ client.TxnClient,
+		_ *defines.AutoIncrCacheManager,
+		_ func() morpc.Message,
+	) error {
+		limit, ok := morpc.MaxMessageSizeFromContext(ctx)
+		if !ok {
+			observed <- 0
+			return nil
+		}
+		observed <- limit
+		return nil
+	}
+
+	require.NoError(t, s.handleRequest(
+		context.Background(),
+		morpc.RPCMessage{Message: &pipeline.Message{Sid: pipeline.Status_Last}},
+		0,
+		nil,
+	))
+	require.NoError(t, s.waitPipelineHandlers())
+	require.Equal(t, configuredLimit, <-observed)
+}
+
 func TestPipelineEarlyReturnCancelsRequestOnce(t *testing.T) {
 	t.Run("invalid fragment command", func(t *testing.T) {
 		s := &service{}

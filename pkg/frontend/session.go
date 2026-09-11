@@ -2292,6 +2292,26 @@ func (ses *Session) resetDiagnostics() {
 	}
 }
 
+// beginWarningDiagnostics fixes the configured session capacity for the next
+// top-level statement and clears the previous statement's retained records.
+// SET max_error_count updates the session variable immediately, but the active
+// diagnostic capacity changes only at this boundary so warnings produced by
+// that SET statement remain observable through the following SHOW command.
+func (ses *Session) beginWarningDiagnostics() {
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if value, err := ses.GetSessionSysVar("max_error_count"); err == nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			limit = parsed
+		}
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.setMaxCnt(limit)
+		ses.errInfo.reset()
+	}
+}
+
 func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

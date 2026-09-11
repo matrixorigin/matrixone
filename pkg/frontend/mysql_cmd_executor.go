@@ -1930,7 +1930,7 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
-		ses.resetDiagnostics()
+		ses.beginWarningDiagnostics()
 	}
 }
 
@@ -5679,7 +5679,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
 		if isTopLevelClientStatement(ses, execCtx, errorInput) {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
@@ -6235,7 +6235,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -6288,7 +6288,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
-				ses.resetDiagnostics()
+				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -6296,7 +6296,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			preparedRemapDb = extractInlineRemapDb(sql)
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -6325,7 +6325,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -6342,6 +6342,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		prepareStmt.closeCursor()
 		if cursorRequested {
 			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				ses.beginWarningDiagnostics()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 				markRowCountFailed(ses, ses.GetProc())
 				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),

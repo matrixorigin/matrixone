@@ -1846,16 +1846,6 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
-	if err == nil && name == "max_error_count" {
-		if limit, ok := sessionWarningRetentionLimit(val); ok {
-			ses.mu.Lock()
-			if ses.errInfo != nil {
-				ses.errInfo.setMaxCnt(limit)
-			}
-			ses.mu.Unlock()
-		}
-	}
-
 	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
 	// time (the injected hint and the remapdb applied to its AST). Changing that
 	// state must invalidate the cached prepared statements, otherwise a later

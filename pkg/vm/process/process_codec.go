@@ -148,7 +148,12 @@ func (proc *Process) BuildProcessInfo(
 			loc = time.Local
 		}
 		maxErrorCount := proc.Base.SessionInfo.MaxErrorCount
-		if proc.Base.SessionInfo.MaxErrorCountSet &&
+		maxErrorCountSet := proc.Base.SessionInfo.MaxErrorCountSet
+		if provider, ok := proc.WarningSink.(WarningDiagnosticRetentionLimitProvider); ok {
+			maxErrorCount = clampWarningRetentionLimit(provider.GetWarningRetentionLimit())
+			maxErrorCountSet = true
+		}
+		if maxErrorCountSet &&
 			(maxErrorCount < 0 || maxErrorCount > int(^uint16(0))) {
 			return procInfo, moerr.NewInvalidInputNoCtxf(
 				"invalid max_error_count %d", maxErrorCount)
@@ -174,7 +179,7 @@ func (proc *Process) BuildProcessInfo(
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 			MaxErrorCount:          uint32(maxErrorCount),
-			MaxErrorCountSet:       proc.Base.SessionInfo.MaxErrorCountSet,
+			MaxErrorCountSet:       maxErrorCountSet,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
