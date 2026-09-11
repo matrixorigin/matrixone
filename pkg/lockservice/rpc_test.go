@@ -1436,8 +1436,11 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 		},
 	}
 	serviceID := "0000000000000000000cn-id"
+	present, err := c.activeTxnOwnerPresent(context.Background(), serviceID)
+	require.NoError(t, err)
+	require.True(t, present, "pending public admission must not suppress active-txn recovery")
 
-	_, err := c.AsyncSend(context.Background(), &lock.Request{
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
 		Method:    lock.Method_Unlock,
 		LockTable: lock.LockTable{ServiceID: serviceID},
 	})

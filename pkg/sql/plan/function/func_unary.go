@@ -7932,95 +7932,163 @@ func reverse(str string) string {
 }
 
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, oct[T], selectList)
-}
-
-func oct[T constraints.Unsigned | constraints.Signed](val T) (types.Decimal128, error) {
-	_val := uint64(val)
-	return types.ParseDecimal128(fmt.Sprintf("%o", _val), 38, 0)
+	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(val T) (string, error) {
+		return strconv.FormatUint(uint64(val), 8), nil
+	}, selectList)
 }
 
 func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, octFloat[T], selectList)
+	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, octFloat[T], selectList)
 }
 
 func OctDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[types.Date, types.Decimal128](ivecs, result, proc, length, func(v types.Date) (types.Decimal128, error) {
+	return opUnaryFixedToStrWithErrorCheck[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		// MySQL behavior: OCT(DATE) returns octal of the year, not days since epoch
 		// Extract year from DATE and convert to octal
 		year, _, _, _ := v.Calendar(true)
-		val := int64(year)
-		return oct[int64](val)
+		return strconv.FormatUint(uint64(year), 8), nil
 	}, selectList)
 }
 
 func OctDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[types.Datetime, types.Decimal128](ivecs, result, proc, length, func(v types.Datetime) (types.Decimal128, error) {
+	return opUnaryFixedToStrWithErrorCheck[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		// MySQL behavior: OCT(DATETIME) returns octal of the year, not days since epoch or microseconds
 		// Extract year from DATETIME and convert to octal
 		year, _, _, _ := v.ToDate().Calendar(true)
-		val := int64(year)
-		return oct[int64](val)
+		return strconv.FormatUint(uint64(year), 8), nil
 	}, selectList)
 }
 
-// OctString handles OCT function for string types (varchar, char, text)
-// It tries to parse the string as DATE or DATETIME, then converts to octal
+func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStrWithErrorCheck[types.Time](ivecs, result, proc, length, func(v types.Time) (string, error) {
+		// TIME is a duration, not a date.  Its numeric conversion starts with
+		// the signed hour component; routing it through DATE would introduce the
+		// current year and make OCT(TIME) time-dependent.
+		hour, _, _, _, isNeg := v.ClockFormat()
+		if isNeg {
+			return strconv.FormatUint(uint64(-int64(hour)), 8), nil
+		}
+		return strconv.FormatUint(hour, 8), nil
+	}, selectList)
+}
+
+// OctString handles OCT function for string types (varchar, char, text).
+// MySQL converts a string to its integer prefix before formatting it in base 8.
+// The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v []byte) (types.Decimal128, error) {
-		s := string(v)
-		// Try to parse as DATETIME first (more common for date_add/sub results)
-		dt, err := types.ParseDatetime(s, 6)
-		if err == nil {
-			// MySQL behavior: OCT(DATETIME string) returns octal of the year, not days since epoch or microseconds
-			// Extract year from DATETIME and convert to octal
-			year, _, _, _ := dt.ToDate().Calendar(true)
-			val := int64(year)
-			return oct[int64](val)
+	isBinaryLiteral := ivecs[0].GetIsBin()
+	resultNulls := result.GetResultVector().GetNulls()
+	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
+		if len(v) == 0 {
+			if ivecs[0].IsConst() {
+				nulls.AddRange(resultNulls, 0, uint64(length))
+			} else {
+				resultNulls.Add(uint64(row))
+			}
 		}
-		// Try to parse as DATE
-		d, err2 := types.ParseDateCast(s)
-		if err2 == nil {
-			// MySQL behavior: OCT(DATE string) returns octal of the year, not days since epoch
-			// Extract year from DATE and convert to octal
-			year, _, _, _ := d.Calendar(true)
-			val := int64(year)
-			return oct[int64](val)
+		if isBinaryLiteral {
+			return strconv.FormatUint(octBinaryLiteralValue(v), 8), nil
 		}
-		// If both parsing fail, try to parse as integer directly
-		// This handles cases where the string is already a number
-		val, err3 := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-		if err3 == nil {
-			return oct[int64](val)
-		}
-		// If all parsing fails, return error (MySQL behavior: invalid input returns error)
-		return types.Decimal128{}, moerr.NewInvalidArgNoCtx("function oct", s)
+		s := trimASCIISpace(functionUtil.QuickBytesToStr(v))
+		value, _ := parseLeadingUint64(s)
+		return strconv.FormatUint(uint64(value), 8), nil
 	}, selectList)
+	return err
 }
 
-func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
-	var res types.Decimal128
+// octBinaryLiteralValue implements the integer conversion MySQL applies to
+// HEX/BIT literals before OCT formats the value. Leading zero bytes are
+// ignored; a non-zero value wider than uint64 is not representable and is
+// converted to zero by MySQL's binary-literal integer path.
+func octBinaryLiteralValue(v []byte) uint64 {
+	first := 0
+	for first < len(v) && v[first] == 0 {
+		first++
+	}
+	if len(v)-first > 8 {
+		return 0
+	}
 
-	if xs < 0 {
-		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs), 10, 64)
-		if err != nil {
-			return res, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+	var value uint64
+	for _, b := range v[first:] {
+		value = value<<8 | uint64(b)
+	}
+	return value
+}
+
+func octFloat[T constraints.Float](xs T) (string, error) {
+	// MySQL's OCT/CONV reads an integer prefix from the number's text, not
+	// from its integer cast. In scientific notation only the leading digit
+	// participates: OCT(1e308) is "1", as is OCT(1e-16).
+	value := float64(xs)
+	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return "0", nil
+	}
+	// Use expression formatting consistently for constants and columns.
+	// MySQL's Field_double uses a wider budget for some tiny values, but
+	// vector constness is not SQL expression provenance and must not alter OCT.
+	precision, width := -1, 22
+	if _, isFloat32 := any(xs).(float32); isFloat32 {
+		// FLOAT text has six significant digits and a 12-character budget.
+		precision, width = 5, 12
+	} else if magnitude := math.Abs(value); magnitude >= 1e-3 && magnitude < 1e15 {
+		// This DOUBLE range always fits fixed-point text and INT64, so its
+		// integer prefix is exactly truncation. Avoid temporary row strings.
+		return strconv.FormatUint(uint64(int64(value)), 8), nil
+	}
+	text := strconv.FormatFloat(value, 'e', precision, 64)
+	e := strings.IndexByte(text, 'e')
+	exponent, _ := strconv.Atoi(text[e+1:])
+	digits := strings.ReplaceAll(strings.TrimPrefix(text[:e], "-"), ".", "")
+	digits = strings.TrimRight(digits, "0")
+	decpt := exponent + 1
+	fixedWidth := decpt
+	if decpt <= 0 {
+		fixedWidth = len(digits) - decpt + 2
+	} else if decpt < len(digits) {
+		fixedWidth = len(digits) + 1
+	}
+	if value < 0 {
+		width--
+	}
+	// Match my_gcvt's fixed/scientific choice. For these type-specific
+	// budgets, a fixed representation that does not fit always favors 'e'.
+	if fixedWidth <= width && decpt >= -14 && (decpt <= 15 || len(digits) > decpt) {
+		if decpt <= 0 {
+			return "0", nil
 		}
-		res, err = oct(uint64(val))
-		if err != nil {
-			return res, err
+		if decpt < len(digits) {
+			digits = digits[:decpt]
+		} else {
+			digits += strings.Repeat("0", decpt-len(digits))
+		}
+		text = digits
+		if value < 0 {
+			text = "-" + text
 		}
 	} else {
-		val, err := strconv.ParseUint(fmt.Sprintf("%1.0f", xs), 10, 64)
-		if err != nil {
-			return res, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+		// Scientific output also obeys the character budget. Rounding can
+		// carry into the first digit that OCT reads (for example -9.999...e-100).
+		exponentWidth := 1
+		if exponent >= 10 || exponent <= -10 {
+			exponentWidth++
 		}
-		res, err = oct(val)
-		if err != nil {
-			return res, err
+		if exponent >= 100 || exponent <= -100 {
+			exponentWidth++
+		}
+		capacity := width - 1 - exponentWidth
+		if exponent < 0 {
+			capacity--
+		}
+		if len(digits) > 1 {
+			capacity--
+		}
+		if capacity < len(digits) {
+			text = strconv.FormatFloat(value, 'e', capacity-1, 64)
 		}
 	}
-	return res, nil
+	integer, _ := parseLeadingUint64(text)
+	return strconv.FormatUint(integer, 8), nil
 }
 
 func generateSHAKey(key []byte) []byte {

@@ -1503,6 +1503,44 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	comparisonResult := comparisonFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_int32), comparisonResult.GetF().Args[1].Typ.Id,
 		"a SQL source type must not replace the comparison domain")
+
+	sign, err := BindFuncExprImplByPlanExpr(ctx, "sign", []*planpb.Expr{makeParam()})
+	require.NoError(t, err)
+	signFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, sign), []any{ParamValue{
+			Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	signResult := signFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, types.T_int64, types.T(signResult.Typ.Id), signResult.String())
+	require.Equal(t, types.T_int64, types.T(signResult.GetF().Args[0].Typ.Id), signResult.String())
+}
+
+func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_precision from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+					Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized, filled.String())
+			result := findPlanFunctionExpr(filled, name)
+			require.NotNil(t, result, filled.String())
+			require.Len(t, result.GetF().Args, 2, result.String())
+			require.Equal(t, int32(types.T_int64), result.GetF().Args[1].Typ.Id, result.String())
+			precisionCast := result.GetF().Args[1].GetF()
+			require.NotNil(t, precisionCast, result.String())
+			require.Equal(t, "cast", precisionCast.GetFunc().GetObjName(), result.String())
+			precisionLiteral := precisionCast.Args[0].GetLit()
+			require.NotNil(t, precisionLiteral, result.String())
+			require.True(t, precisionLiteral.GetBval(), result.String())
+		})
+	}
 }
 
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {
