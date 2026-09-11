@@ -15653,6 +15653,10 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{{
 			overloadId: 0,
 			args:       []types.T{types.T_bool, types.T_varchar},
+			// This function has a per-row diagnostic side effect in INSERT
+			// IGNORE. Folding a constant result would evaluate it once and lose
+			// one warning for every additional input row.
+			volatile: true,
 			retType: func(parameters []types.Type) types.Type {
 				return types.T_bool.ToType()
 			},
@@ -15673,14 +15677,30 @@ var supportedOthersBuiltIns = []FuncNew{
 							"the CHECK constraint error message should not be null",
 						)
 					}
-					errMsg := functionUtil.QuickBytesToStr(value)
+					// The warning can outlive this invocation when it is forwarded to
+					// a session/remote diagnostic sink. Own the bytes instead of
+					// retaining a string view into the input vector.
+					errMsg := string(value)
 					res := vector.MustFunctionResult[bool](result)
+					ignore := statementIgnore(proc)
+					var warnings process.WarningAccumulator
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
-							return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							if !ignore {
+								return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							}
+							// Keep the value false so the surrounding FILTER
+							// removes this row, while retaining one bounded
+							// warning record per ignored row.
+							warnings.Add(moerr.ER_CHECK_CONSTRAINT_VIOLATED, errMsg)
+							res.AppendMustValue(false)
+							continue
 						}
 						res.AppendMustValue(true)
+					}
+					if ignore {
+						warnings.Flush(proc)
 					}
 					return nil
 				}

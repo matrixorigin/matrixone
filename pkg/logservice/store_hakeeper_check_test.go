@@ -435,10 +435,6 @@ func runHAKeeperStoreTestWithWorkers(
 	fn(t, store)
 }
 
-func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
-	runHakeeperTaskServiceTestWithCNStoreTimeout(t, 5*time.Second, fn)
-}
-
 func runHakeeperTaskServiceTestWithCNStoreTimeout(
 	t *testing.T,
 	cnStoreTimeout time.Duration,
