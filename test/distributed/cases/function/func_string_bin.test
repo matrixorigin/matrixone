@@ -45,6 +45,9 @@ DEALLOCATE PREPARE conv_runtime;
 CREATE TABLE typed_bin_conv(d DECIMAL(6,2), b BOOLEAN, dt DATE, dtt DATETIME, tm TIME);
 INSERT INTO typed_bin_conv VALUES (15.50, TRUE, '2024-05-06', '2024-05-06 12:34:56', '12:34:56'), (NULL, NULL, NULL, NULL, NULL);
 SELECT BIN(d), BIN(b), BIN(dt), BIN(dtt), BIN(tm), CONV(d, 10, 16), CONV(b, 10, 16), CONV(dt, 10, 16), CONV(dtt, 10, 16), CONV(tm, 10, 16) FROM typed_bin_conv ORDER BY d IS NULL;
+SELECT CONV(DATE '2024-05-06', 16, 10) AS conv_date_hex_to_dec,
+       CONV(CAST('2024-05-06 12:34:56' AS DATETIME), 16, 10) AS conv_datetime_hex_to_dec,
+       CONV(CAST('12:34:56' AS TIME), 16, 10) AS conv_time_hex_to_dec;
 DROP TABLE typed_bin_conv;
 create table t1(a int);
 insert into t1 values();

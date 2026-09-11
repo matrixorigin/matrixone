@@ -3324,6 +3324,8 @@ func TestConvTypedNumericDispatch(t *testing.T) {
 	require.NoError(t, err)
 	clock, err := types.ParseTime("12:34:56", 6)
 	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
 	decimal, err := types.ParseDecimal64("15.5", 4, 1)
 	require.NoError(t, err)
 	decimalType := types.New(types.T_decimal64, 4, 1)
@@ -3359,6 +3361,25 @@ func TestConvTypedNumericDispatch(t *testing.T) {
 	t.Run("time uses hour", func(t *testing.T) {
 		testCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}),
 			[]string{"C"}, []bool{false})
+	})
+	t.Run("temporal prefix honors from base", func(t *testing.T) {
+		testTemporalCase := func(input FunctionTestInput, wanted string) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{wanted}, []bool{false}), Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		}
+
+		testTemporalCase(NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}), "18")
+		testTemporalCase(NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), "8228")
 	})
 	t.Run("masked rows do not access the typed vector", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc,

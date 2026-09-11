@@ -3305,33 +3305,39 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
 			fromBase, toBase, rs, length, selectList)
 	case types.T_date:
-		return convMappedInt64(
+		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
-			func(v types.Date) int64 { return int64(v.Year()) }, toBase, rs, length, selectList)
+			func(dst []byte, v types.Date) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	case types.T_datetime:
-		return convMappedInt64(
+		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
-			func(v types.Datetime) int64 { return int64(v.Year()) },
-			toBase, rs, length, selectList)
+			func(dst []byte, v types.Datetime) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
-		return convMappedInt64(
+		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
-			func(v types.Timestamp) int64 { return int64(v.ToDatetime(zone).Year()) },
-			toBase, rs, length, selectList)
+			func(dst []byte, v types.Timestamp) []byte {
+				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	case types.T_time:
-		return convMappedInt64(
+		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
-			func(v types.Time) int64 { return v.Hour() },
-			toBase, rs, length, selectList)
+			func(dst []byte, v types.Time) []byte {
+				return strconv.AppendInt(dst, v.Hour(), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	case types.T_year:
-		return convMappedInt64(
+		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
-			func(v types.MoYear) int64 { return v.ToInt64() },
-			toBase, rs, length, selectList)
+			func(dst []byte, v types.MoYear) []byte {
+				return strconv.AppendInt(dst, v.ToInt64(), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	default:
 		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
 		// doing so is the panic reported by #28461. Unsupported input types
@@ -3430,6 +3436,50 @@ func convMappedInt64[T types.FixedSizeTExceptStrType](
 			continue
 		}
 		if err := rs.AppendBytes([]byte(formatSignedToBase(mapValue(value), toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// convTemporalPrefix preserves CONV's string-prefix semantics for temporal
+// values. MySQL obtains a temporal value's textual form first (for example,
+// "2024-05-06" or "12:34:56") and parses the leading year/hour using
+// from_base. Only that leading numeric prefix is needed here, which avoids
+// formatting the remainder of every date/time value on the hot path.
+func convTemporalPrefix[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
+	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var prefix [32]byte
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Reuse one stack buffer per batch row. The temporal prefix is at most
+		// the signed hour/year representation and never needs heap storage.
+		text := appendPrefix(prefix[:0], value)
+		signedValue, unsignedValue, signed, err := parseBaseIntegerPrefix(text, fromBase)
+		if err != nil {
+			return err
+		}
+		formatted := formatUnsignedToBase(unsignedValue, toBase)
+		if signed {
+			formatted = formatSignedToBase(signedValue, toBase)
+		}
+		if err := rs.AppendBytes([]byte(formatted), false); err != nil {
 			return err
 		}
 	}
