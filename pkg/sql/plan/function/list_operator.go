@@ -1787,7 +1787,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if plusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1864,7 +1864,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if minusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1939,7 +1939,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					// Multiply-specific: when coercion promotes intN×D64 to
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
@@ -2147,7 +2147,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if modOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -2328,7 +2328,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_MINUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryMinusMatch,
 
 		Overloads: []overload{
 			{

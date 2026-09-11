@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -136,6 +137,78 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 			require.Equal(t, in.want[0], t1, msg)
 			require.Equal(t, in.want[1], t2, msg)
 		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitSignedBigintUsesDecimal(t *testing.T) {
+	bit64 := types.New(types.T_bit, 64, 0)
+	signedBigint := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, test := range []struct {
+		name  string
+		left  types.Type
+		right types.Type
+	}{
+		{name: "bit plus signed bigint", left: bit64, right: signedBigint},
+		{name: "signed bigint plus bit", left: signedBigint, right: bit64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(test.left, test.right)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
+	}
+
+	// The generic rule remains the comparison contract; only arithmetic uses
+	// the widened mixed-integer domain.
+	hasCast, left, right := fixedTypeCastRule1(bit64, signedBigint)
+	require.True(t, hasCast)
+	require.Equal(t, signedBigint, left)
+	require.Equal(t, signedBigint, right)
+}
+
+func TestGetArithmeticFunctionBitSignedBigintUsesDecimal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, operands := range []struct {
+		name        string
+		left, right types.Type
+	}{
+		{name: "bit-left", left: bit64, right: types.T_int64.ToType()},
+		{name: "bit-right", left: types.T_int64.ToType(), right: bit64},
+	} {
+		for _, name := range []string{"+", "-", "*", "%"} {
+			t.Run(operands.name+"/"+name, func(t *testing.T) {
+				get, err := GetFunctionByName(proc.Ctx, name, []types.Type{operands.left, operands.right})
+				require.NoError(t, err)
+				targets, shouldCast := get.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.Type{want, want}, targets)
+				require.Equal(t, want, get.GetReturnType())
+			})
+		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitWidthsUseUnsignedDomain(t *testing.T) {
+	int64Type := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	// The result of an arithmetic subtree can exceed the declared BIT width, so
+	// use the full unsigned domain even for narrow BIT inputs.
+	for _, width := range []int32{1, 8, 63, 64} {
+		t.Run(fmt.Sprintf("bit-%d", width), func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(
+				types.New(types.T_bit, width, 0), int64Type,
+			)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
 	}
 }
 
@@ -1191,6 +1264,22 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	}
 	require.False(t, ProducesNoNull(-1))
 	require.False(t, HasExecutableCTASTypeDefault(-1))
+}
+
+func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
+	invalid := EncodeOverloadID(BIN, 99)
+
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+
+	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
+	require.Error(t, err)
+	require.False(t, zonemappable)
+	require.False(t, GetFunctionIsWinOrderFunById(invalid))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
