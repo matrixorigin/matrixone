@@ -6929,7 +6929,31 @@ func (c *Compile) checkPitrGranularity(
 	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
 	// fake key used by no-PK tables is deliberately not accepted.
 	for _, pt := range pts.Pts {
-		if pt == nil || pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+		if pt == nil {
+			continue
+		}
+		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			dbFilter := ""
+			if pt.Source.Database != cdc.CDCPitrGranularity_All {
+				dbFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.String(pt.Source.Database))
+			}
+			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter,
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
+				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
+				sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.Ident(catalog.SystemRelAttr_Name),
+				sqlquote.Ident(catalog.SystemColAttr_ConstraintType), sqlquote.String("p"),
+				sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+			res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			invalid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+			res.Close()
+			if invalid {
+				return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains a table without a primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+			}
 			continue
 		}
 		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
