@@ -6079,6 +6079,11 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 		if precision < 1 {
 			precision = 1
 		}
+		// A carry may require one more integer digit, but the result keeps the
+		// input decimal family for rolling-upgrade compatibility. Do not publish
+		// metadata wider than that family can represent (in particular,
+		// DECIMAL(65,0) with a negative digits argument must stay precision 65).
+		precision = min(precision, maxDecimalPrecisionForRounding(input.Oid))
 		returnType.Width = precision
 		returnType.Scale = resultScale
 
@@ -6119,6 +6124,19 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 		}
 		returnType.Width = precision
 		returnType.Scale = resultScale
+	}
+}
+
+func maxDecimalPrecisionForRounding(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 65
+	default:
+		return 1
 	}
 }
 
