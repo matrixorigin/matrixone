@@ -20,11 +20,15 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -92,6 +96,35 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	lossless := (&CDCCreateTaskOptions{
+		TaskId: "no-full-hlc", NoFull: true,
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+}
+
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	setNoFullStartTS(opts, txnOp)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+
+	// Explicit StartTs and absent transaction operators do not alter the start.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	setNoFullStartTS(opts, txnOp)
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+	setNoFullStartTS(&CDCCreateTaskOptions{NoFull: true}, nil)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	setNoFullStartTS(noSnapshot, zeroTxnOp)
+	require.Empty(t, noSnapshot.StartTs)
 }
 
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {

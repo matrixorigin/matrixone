@@ -66,7 +66,8 @@ const (
 
 func isCDCTaskCode(code task.TaskCode) bool {
 	return code == task.TaskCode_InitCdc ||
-		code == task.TaskCode_InitCdcStableEpoch
+		code == task.TaskCode_InitCdcStableEpoch ||
+		code == task.TaskCode_InitCdcLosslessStart
 }
 
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
@@ -1255,6 +1256,7 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		for _, code := range []task.TaskCode{
 			task.TaskCode_InitCdc,
 			task.TaskCode_InitCdcStableEpoch,
+			task.TaskCode_InitCdcLosslessStart,
 		} {
 			localPausedFinalize = append(localPausedFinalize,
 				r.queryDaemonTasks(ctx,
@@ -1268,6 +1270,7 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		for _, code := range []task.TaskCode{
 			task.TaskCode_InitCdc,
 			task.TaskCode_InitCdcStableEpoch,
+			task.TaskCode_InitCdcLosslessStart,
 		} {
 			laggedPausedFinalize = append(laggedPausedFinalize,
 				r.queryDaemonTasks(ctx,

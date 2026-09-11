@@ -87,7 +87,8 @@ option (gogoproto.protosizer_all) = true;
    // CDC initial snapshot with persisted stable-epoch retry semantics. Keeping
    // a distinct code prevents older CNs from claiming protocol-marked tasks.
    InitCdcStableEpoch = 14;
- }
+   InitCdcLosslessStart = 15;
+}
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
  message TaskMetadata {

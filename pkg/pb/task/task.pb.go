@@ -4,6 +4,8 @@
 package task
 
 import (
+	bytes "bytes"
+	compressgzip "compress/gzip"
 	fmt "fmt"
 	io "io"
 	math "math"
@@ -12,6 +14,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	descriptor "github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	github_com_gogo_protobuf_types "github.com/gogo/protobuf/types"
 	_ "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	_ "google.golang.org/protobuf/types/known/timestamppb"
@@ -123,7 +126,8 @@ const (
 	TaskCode_DataBranchLineageGC TaskCode = 13
 	// CDC initial snapshot with persisted stable-epoch retry semantics. Keeping
 	// a distinct code prevents older CNs from claiming protocol-marked tasks.
-	TaskCode_InitCdcStableEpoch TaskCode = 14
+	TaskCode_InitCdcStableEpoch   TaskCode = 14
+	TaskCode_InitCdcLosslessStart TaskCode = 15
 )
 
 var TaskCode_name = map[int32]string{
@@ -140,6 +144,7 @@ var TaskCode_name = map[int32]string{
 	12: "SQLTask",
 	13: "DataBranchLineageGC",
 	14: "InitCdcStableEpoch",
+	15: "InitCdcLosslessStart",
 }
 
 var TaskCode_value = map[string]int32{
@@ -156,6 +161,7 @@ var TaskCode_value = map[string]int32{
 	"SQLTask":                 12,
 	"DataBranchLineageGC":     13,
 	"InitCdcStableEpoch":      14,
+	"InitCdcLosslessStart":    15,
 }
 
 func (x TaskCode) String() string {
@@ -1476,7 +1482,46 @@ func init() {
 	proto.RegisterType((*DaemonTask)(nil), "task.DaemonTask")
 }
 
-func init() { proto.RegisterFile("task.proto", fileDescriptor_ce5d8dd45b4a91ff) }
+func init() {
+	// Keep the embedded descriptor in sync with the enum maps above. This is
+	// required by reflection/dynamic protobuf consumers when the task schema is
+	// extended without regenerating all generated bindings in older toolchains.
+	var fd descriptor.FileDescriptorProto
+	if zr, err := compressgzip.NewReader(bytes.NewReader(fileDescriptor_ce5d8dd45b4a91ff)); err == nil {
+		raw, readErr := io.ReadAll(zr)
+		_ = zr.Close()
+		if readErr == nil {
+			if err := proto.Unmarshal(raw, &fd); err == nil {
+				found := false
+				for _, enum := range fd.EnumType {
+					if enum.GetName() == "TaskCode" {
+						for _, value := range enum.Value {
+							if value.GetName() == "InitCdcLosslessStart" {
+								found = true
+							}
+						}
+						if !found {
+							n := "InitCdcLosslessStart"
+							num := int32(15)
+							enum.Value = append(enum.Value, &descriptor.EnumValueDescriptorProto{Name: &n, Number: &num})
+						}
+					}
+				}
+				if !found {
+					if encoded, err := proto.Marshal(&fd); err == nil {
+						var out bytes.Buffer
+						if zw := compressgzip.NewWriter(&out); zw != nil {
+							if _, writeErr := zw.Write(encoded); writeErr == nil && zw.Close() == nil {
+								fileDescriptor_ce5d8dd45b4a91ff = out.Bytes()
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	proto.RegisterFile("task.proto", fileDescriptor_ce5d8dd45b4a91ff)
+}
 
 var fileDescriptor_ce5d8dd45b4a91ff = []byte{
 	// 1633 bytes of a gzipped FileDescriptorProto

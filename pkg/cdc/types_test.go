@@ -887,6 +887,16 @@ func TestUsesStableEpochInitialSnapshot(t *testing.T) {
 	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
 }
 
+func TestUsesLosslessNoFullStart(t *testing.T) {
+	require.True(t, UsesLosslessNoFullStart(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_InitialSnapshotProtocol,
+		CDCInitialSnapshotProtocolNoFullHLC,
+	)))
+	require.False(t, UsesLosslessNoFullStart(`{"InitialSnapshotProtocol":"future"}`))
+	require.False(t, UsesLosslessNoFullStart(`not-json`))
+}
+
 func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion47))
@@ -895,6 +905,11 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	err := ValidateStableInitialSnapshotProtocol(
 		context.Background(), true, defines.MORPCVersion47)
 	require.ErrorContains(t, err, "protocol version 48")
+}
+
+func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
+	require.ErrorContains(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion63), "protocol version 64")
+	require.NoError(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion64))
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

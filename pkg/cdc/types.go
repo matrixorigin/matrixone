@@ -279,6 +279,7 @@ const (
 	// compatibility marker. It must not be exposed as a CREATE CDC user option.
 	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
 	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
+	CDCInitialSnapshotProtocolNoFullHLC         = "no-full-hlc-v1"
 )
 
 var CDCRequestOptions = []string{
@@ -332,6 +333,22 @@ func ValidateStableInitialSnapshotProtocol(
 		"bounded CDC initial snapshots require all CNs to support protocol version %d",
 		defines.MORPCVersion48,
 	)
+}
+
+func ValidateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion int64) error {
+	if protocolVersion >= defines.MORPCVersion64 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(ctx, "lossless NoFull CDC starts require all CNs to support protocol version %d", defines.MORPCVersion64)
+}
+
+func UsesLosslessNoFullStart(extraOpts string) bool {
+	var opts map[string]any
+	if err := json.Unmarshal([]byte(extraOpts), &opts); err != nil {
+		return false
+	}
+	protocol, _ := opts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	return protocol == CDCInitialSnapshotProtocolNoFullHLC
 }
 
 // UsesStableEpochInitialSnapshot reports whether persisted task options require
