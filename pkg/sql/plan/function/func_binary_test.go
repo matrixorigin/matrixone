@@ -3558,6 +3558,18 @@ func TestConvCoversRemainingTypedDomains(t *testing.T) {
 		})
 	}
 
+	t.Run("bit value is not reparsed from decimal text", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{15}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"15"}, []bool{false}), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
 	t.Run("unsupported fixed width type is rejected", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{

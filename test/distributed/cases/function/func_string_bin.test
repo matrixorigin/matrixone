@@ -19,6 +19,7 @@ select bin(-0.00000000000000000000000001);
 select bin("你好");
 # typed dispatch and prepared runtime domains
 SELECT bin(TRUE) AS bin_true, bin(FALSE) AS bin_false;
+SELECT conv(0b1111, 2, 10) AS conv_bit_value;
 SELECT bin(DATE '2024-05-06') AS bin_date, bin(CAST('2024-05-06 12:34:56' AS DATETIME)) AS bin_datetime, bin(CAST('12:34:56' AS TIME)) AS bin_time;
 SELECT conv(TRUE, 10, 16) AS conv_bool, conv(CAST('15.5' AS DECIMAL(4,1)), 10, 16) AS conv_decimal;
 SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.2345678901234567e-5 AS DOUBLE), 10, 16) AS conv_float_scientific;

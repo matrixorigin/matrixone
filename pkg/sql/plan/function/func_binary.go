@@ -3226,9 +3226,11 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 
 	// Handle different input types for N
 	// MySQL behavior:
-	// - For numeric types: the magnitude is base 10; from_base's sign still
-	//   selects signed versus unsigned 64-bit interpretation
-	// - For string types: parse according to from_base
+	// - For ordinary numeric types: render the value as text and parse its
+	//   leading digits according to from_base.
+	// - BIT/bit literals are the exception: MySQL reads their numeric value
+	//   directly, so from_base only selects the signed output domain.
+	// - For string types: parse according to from_base.
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
@@ -3244,7 +3246,7 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 				return 0
 			}, toBase, rs, length, selectList)
 	case types.T_bit:
-		return convUnsignedPrefix(
+		return convUnsignedDirect(
 			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
 			fromBase, toBase, rs, length, selectList)
 	case types.T_any:
@@ -3851,6 +3853,47 @@ func convUnsignedPrefix[T constraints.Unsigned](
 		}
 	}
 	return nil
+}
+
+// convUnsignedDirect preserves MySQL's BIT/bit-literal contract. Unlike an
+// ordinary numeric value, a BIT value is already a numeric bit pattern; its
+// digits must not be reparsed using from_base. A negative from_base still
+// selects the signed 64-bit output domain, matching the historical typed path.
+func convUnsignedDirect[T constraints.Unsigned](
+	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes([]byte(formatConvUint64(uint64(value), fromBase, toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatConvUint64(val uint64, fromBase, toBase int64) string {
+	if fromBase < 0 {
+		if val > uint64(math.MaxInt64) {
+			val = uint64(math.MaxInt64)
+		}
+		return formatSignedToBase(int64(val), toBase)
+	}
+	return formatUnsignedToBase(val, toBase)
 }
 
 // AddTime: ADDTIME(expr1, expr2) - Adds expr2 (time) to expr1 (time or datetime)
