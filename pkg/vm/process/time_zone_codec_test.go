@@ -22,9 +22,8 @@ import (
 )
 
 func TestProcessCodecPreservesNamedTimeZoneRulesAcrossHops(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.UTC
-	defer func() { time.Local = oldLocal }()
+	// Two different named zones expose the lossy legacy codec regardless of
+	// the worker's Local zone, without changing process-global time.Local.
 	for _, test := range []struct{ name, winter, summer string }{
 		{"Asia/Shanghai", "2024-01-01 08:00:00", "2024-07-01 08:00:00"},
 		{"America/New_York", "2023-12-31 19:00:00", "2024-06-30 20:00:00"}} {

@@ -51,6 +51,7 @@ func TestNamedGroupConcatNegotiatesPlacementAndFencesOldWorkers(t *testing.T) {
 		}
 	}
 	c.proc.Base.SessionInfo.TimeZone = time.Local
+	require.Error(t, validateGroupConcatTimeZoneDestination(nil, wire))
 	require.Error(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
 	c.proc.Base.SessionInfo.TimeZone = time.FixedZone("FixedZone", 8*3600)
 	client.version = defines.MORPCVersion64

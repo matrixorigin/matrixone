@@ -27,8 +27,11 @@ import (
 
 func groupConcatTimeZoneRequirement(proc *process.Process, owner any) (named, local bool, err error) {
 	required, err := plan.RequiresGroupConcatTimeZone(owner)
-	if err != nil || !required || proc == nil {
+	if err != nil || !required {
 		return false, false, err
+	}
+	if proc == nil || proc.Base == nil {
+		return false, true, nil
 	}
 	location := proc.GetSessionInfo().TimeZone
 	if location == nil || location.String() == "Local" {
