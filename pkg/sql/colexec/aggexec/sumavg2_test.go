@@ -106,6 +106,121 @@ func TestSumDecimal128UsesDecimal256Accumulator(t *testing.T) {
 	}
 }
 
+func TestDecimalSumLegacyStateWireCompatibility(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	assertLegacyLayout := func(t *testing.T, exec AggFuncExec) {
+		t.Helper()
+		var stateTypes []types.Type
+		switch typed := exec.(type) {
+		case *sumDecimal64FastExec:
+			stateTypes = typed.aggInfo.stateTypes
+		case *sumDecimal128FastExec:
+			stateTypes = typed.aggInfo.stateTypes
+		default:
+			require.FailNow(t, "unexpected legacy SUM executor", "%T", exec)
+		}
+		require.Len(t, stateTypes, 2)
+		require.Equal(t, types.T_decimal128, stateTypes[0].Oid)
+		require.Equal(t, types.T_int64, stateTypes[1].Oid)
+	}
+
+	tests := []struct {
+		name       string
+		param      types.Type
+		appendOne  func(*vector.Vector) error
+		makeLegacy func() AggFuncExec
+		makeBase   func() AggFuncExec
+	}{
+		{
+			name:  "wide decimal64",
+			param: types.New(types.T_decimal64, 18, 0),
+			appendOne: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, types.Decimal64(1), false, mp)
+			},
+			makeLegacy: func() AggFuncExec {
+				return makeSumAvgExecWithLegacyDecimalSumState(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0), true)
+			},
+			makeBase: func() AggFuncExec {
+				return newSumDecimal64FastExec(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0))
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 38, 0),
+			appendOne: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, types.Decimal128FromInt64(1), false, mp)
+			},
+			makeLegacy: func() AggFuncExec {
+				return makeSumAvgExecWithLegacyDecimalSumState(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0), true)
+			},
+			makeBase: func() AggFuncExec {
+				return newSumDecimal128FastExec(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := vector.NewVec(test.param)
+			defer input.Free(mp)
+			require.NoError(t, test.appendOne(input))
+
+			modern := makeSumAvgExec(mp, true, AggIdOfSum, false, test.param)
+			defer modern.Free()
+			switch test.param.Oid {
+			case types.T_decimal64:
+				require.IsType(t, &sumAvgDecExec[types.Decimal64, types.Decimal256]{}, modern)
+			case types.T_decimal128:
+				require.IsType(t, &sumAvgDecExec[types.Decimal128, types.Decimal256]{}, modern)
+			}
+
+			directions := []struct {
+				name         string
+				makeSource   func() AggFuncExec
+				makeTarget   func() AggFuncExec
+				wantResultID types.T
+			}{
+				{name: "base partial to new merge", makeSource: test.makeBase, makeTarget: test.makeLegacy, wantResultID: types.T_decimal256},
+				{name: "new partial to base merge", makeSource: test.makeLegacy, makeTarget: test.makeBase, wantResultID: types.T_decimal128},
+			}
+			for _, direction := range directions {
+				t.Run(direction.name, func(t *testing.T) {
+					source := direction.makeSource()
+					defer source.Free()
+					target := direction.makeTarget()
+					defer target.Free()
+					assertLegacyLayout(t, source)
+					assertLegacyLayout(t, target)
+
+					require.NoError(t, source.GroupGrow(1))
+					require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+					var wire bytes.Buffer
+					require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+					require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+
+					results, err := target.Flush()
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+					defer results[0].Free(mp)
+					require.Equal(t, direction.wantResultID, results[0].GetType().Oid)
+					switch direction.wantResultID {
+					case types.T_decimal128:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).Format(0))
+					case types.T_decimal256:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(0))
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestAvgExactNumericReturnType(t *testing.T) {
 	for _, test := range []struct {
 		name  string

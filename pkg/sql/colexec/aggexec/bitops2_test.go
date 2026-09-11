@@ -30,7 +30,7 @@ func TestBitwiseAggregateRejectsOversizedBinaryOperand(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 
 	for _, aggID := range []int64{AggIdOfBitAnd, AggIdOfBitOr, AggIdOfBitXor} {
-		exec, ok, err := makeSpecialAggExec(mp, aggID, false, false, false,
+		exec, ok, err := makeSpecialAggExec(mp, aggID, false, false, false, false,
 			types.New(types.T_varbinary, MaxBitwiseAggregateOperandBytes+1, 0))
 		require.True(t, ok)
 		require.Nil(t, exec)

@@ -1903,6 +1903,14 @@ func makeSumAvgExec(
 	mp *mpool.MPool, isSum bool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
+	return makeSumAvgExecWithLegacyDecimalSumState(
+		mp, isSum, aggID, isDistinct, param, false)
+}
+
+func makeSumAvgExecWithLegacyDecimalSumState(
+	mp *mpool.MPool, isSum bool,
+	aggID int64, isDistinct bool,
+	param types.Type, legacyDecimalSumState bool) AggFuncExec {
 
 	switch param.Oid {
 	case types.T_int8:
@@ -1937,12 +1945,20 @@ func makeSumAvgExec(
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
 		if isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			if legacyDecimalSumState {
+				return newSumDecimal64LegacyStateExec(mp, aggID, isDistinct, param)
+			}
 			return newSumAvgDecExec[types.Decimal64, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 		}
 		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
-		if (isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256) ||
-			(!isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256) {
+		if isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			if legacyDecimalSumState {
+				return newSumDecimal128LegacyStateExec(mp, aggID, isDistinct, param)
+			}
+			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
+		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
 			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 		}
 		return newSumDecimal128FastExec(mp, isSum, aggID, isDistinct, param)

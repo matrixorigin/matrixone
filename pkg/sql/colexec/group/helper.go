@@ -1826,15 +1826,17 @@ func (ctr *container) makeAggListWithAllocation(
 			)
 		}
 		singleGroup := ctr.mtyp == H0
-		if ctr.legacyTextMinMax || ctr.legacyVarianceState {
+		if ctr.legacyTextMinMax || ctr.legacyVarianceState || ctr.legacyDecimalSumState {
 			if singleGroup {
 				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState,
+					allocation, agExpr.GetExtraInformation(), typs...)
 			} else {
 				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState,
+					allocation, agExpr.GetExtraInformation(), typs...)
 			}
 		} else if singleGroup {
 			aggList[i], err = aggexec.MakeSingleGroupAgg(
@@ -1891,6 +1893,23 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion35
+}
+
+// Decimal SUM must use the pre-v63 state on every side of a distributed
+// aggregation while the cluster protocol is still mixed. Unlike the older
+// remote-only gates, this includes the coordinator's local MergeGroup: it may
+// consume a partial produced by an older CN.
+func useLegacyDecimalSumState(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return true
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion63
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

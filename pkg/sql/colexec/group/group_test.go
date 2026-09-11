@@ -3978,3 +3978,20 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
+
+func TestDecimalSumUsesLegacyStateBeforeProtocolV63(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	// The coordinator-side MergeGroup is intentionally gated too; it can read
+	// a partial emitted by an older CN even though its process is not remote.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion62)
+	require.True(t, useLegacyDecimalSumState(proc))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	require.True(t, useLegacyDecimalSumState(proc))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+	require.False(t, useLegacyDecimalSumState(proc))
+}
