@@ -207,6 +207,121 @@ drop table t_pk_only_noop;
 
 -- test for on duplicate key update with NULL values in multi-row insert
 drop table if exists t_null_dup;
+
+-- #28160: MySQL-compatible INSERT VALUES/SET row and column aliases.
+drop table if exists t_odku_row_alias;
+create table t_odku_row_alias (id int primary key, a int, b int);
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias (b, id, a) values (30, 1, 20) as incoming(new_b, new_id, new_a) on duplicate key update a = t_odku_row_alias.a + incoming.new_a, b = incoming.new_b;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias values (1, 7, 0) as n on duplicate key update a = t_odku_row_alias.a + 1, b = n.a, a = t_odku_row_alias.a + n.a;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 2, 0), (1, 3, 0), (2, 4, 0) as n on duplicate key update a = t_odku_row_alias.a + n.a, b = n.a;
+select * from t_odku_row_alias order by id;
+
+drop table if exists t_odku_scope_source;
+create table t_odku_scope_source (x int primary key, y int);
+insert into t_odku_scope_source values (1, 70);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+select * from t_odku_row_alias order by id;
+
+-- A target-correlated subquery must not read a stale target snapshot after an
+-- earlier ordered assignment or across input rows that can hit the same target.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+
+-- The target row must be available to a correlated subquery below the
+-- candidate pipeline, even when the source alias does not shadow the row alias.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+select * from t_odku_row_alias order by id;
+
+-- A scalar UPDATE expression must not run for a non-conflicting insert. The
+-- target lookup is NULL, so this otherwise multi-row scalar result is unused.
+drop table if exists t_odku_scope_multi;
+create table t_odku_scope_multi (x int, y int);
+insert into t_odku_scope_multi values (0, 10), (0, 20);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
+select * from t_odku_row_alias order by id;
+
+-- A nested subquery input cannot be guarded by the outer target-match
+-- predicate. Reject it before the unused UPDATE branch can execute.
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
+drop table t_odku_scope_multi;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 6, 0) as n on duplicate key update b = case when n.a > 5 then n.a else NULL end;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + s.y from t_odku_scope_source as s where s.x = n.x);
+select * from t_odku_row_alias order by id;
+drop table t_odku_scope_source;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias set id = 1, a = 8, b = 9 as n on duplicate key update a = n.a, b = n.b;
+insert into t_odku_row_alias set id = 2, a = 6, b = 7 as n on duplicate key update a = n.a, b = n.b;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+prepare s_row_alias from insert into t_odku_row_alias values (?, ?, ?) as n(k, x, y) on duplicate key update a = t_odku_row_alias.a + n.x, b = n.y;
+set @row_id = 1;
+set @row_a = 4;
+set @row_b = 8;
+execute s_row_alias using @row_id, @row_a, @row_b;
+set @row_a = 3;
+set @row_b = 9;
+execute s_row_alias using @row_id, @row_a, @row_b;
+set @row_id = 2;
+set @row_a = 7;
+set @row_b = 6;
+execute s_row_alias using @row_id, @row_a, @row_b;
+select * from t_odku_row_alias order by id;
+deallocate prepare s_row_alias;
+drop table t_odku_row_alias;
+
+-- A generated DEFAULT keeps the original row-alias positions while the
+-- no-key ODKU route falls back to a plain insert.
+drop table if exists t_odku_no_key_generated;
+create table t_odku_no_key_generated (
+    a int,
+    g int generated always as (a + 1) stored
+);
+insert into t_odku_no_key_generated(a, g) values (1, default) as n(x, y) on duplicate key update a = n.x;
+select * from t_odku_no_key_generated;
+prepare s_odku_no_key_generated from insert into t_odku_no_key_generated(a, g) values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_a = 2;
+set @odku_no_key_delta = 3;
+execute s_odku_no_key_generated using @odku_no_key_a, @odku_no_key_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated;
+drop table t_odku_no_key_generated;
+
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);

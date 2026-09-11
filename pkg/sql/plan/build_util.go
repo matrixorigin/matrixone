@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -2340,13 +2341,39 @@ func checkTableColumnNameValid(name string) bool {
 // Check the expr has paramExpr
 func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	for _, expr := range exprs {
-		if _, ok := expr.(*tree.ParamExpr); ok {
+		if len(collectParamExprOffsets(expr)) > 0 {
 			return true
-		} else if e, ok := expr.(*tree.FuncExpr); ok {
-			return checkExprHasParamExpr(e.Exprs)
 		}
 	}
 	return false
+}
+
+// collectParamExprOffsets walks the complete expression tree, including CASE,
+// binary/comparison operands and nested subqueries. The legacy no-key INSERT
+// fallback does not bind its discarded ODKU expression, so it uses these
+// offsets to retain the prepared-parameter metadata without evaluating or
+// resolving row-alias references.
+func collectParamExprOffsets(expr tree.Expr) []int {
+	if expr == nil {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		param, ok := candidate.(*tree.ParamExpr)
+		if ok {
+			seen[param.Offset] = struct{}{}
+		}
+		return true
+	})
+	if len(seen) == 0 {
+		return nil
+	}
+	offsets := make([]int, 0, len(seen))
+	for offset := range seen {
+		offsets = append(offsets, offset)
+	}
+	slices.Sort(offsets)
+	return offsets
 }
 
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "

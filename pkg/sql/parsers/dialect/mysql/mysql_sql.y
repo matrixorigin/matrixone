@@ -57,6 +57,26 @@ func sqlTaskBodyString(stmt tree.Statement) string {
     return strings.Join(parts, "; ")
 }
 
+// mysqlRowValue/mysqlValuesList retain the explicit ROW keyword while the
+// parser lowers INSERT VALUES rows to the existing []tree.Exprs shape.
+// MySQL treats VALUES ROW(...) as a query expression, so it must not enter the
+// row-alias grammar even though both forms share the same row payload.
+type mysqlRowValue struct {
+    rows       tree.Exprs
+    hasRowWord bool
+}
+
+type mysqlValuesList struct {
+    rows       []tree.Exprs
+    hasRowWord bool
+}
+
+func makeInsertValuesClause(values *mysqlValuesList) *tree.ValuesClause {
+    clause := tree.NewValuesClause(values.rows)
+    clause.HasRowWord = values.hasRowWord
+    return clause
+}
+
 func sqlTaskInt64(v any) int64 {
     switch value := v.(type) {
     case int:
@@ -202,6 +222,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     selectOption uint64
 
     insert *tree.Insert
+    insertRowAlias *tree.AliasClause
+    valuesList *mysqlValuesList
+    rowValue *mysqlRowValue
     multiInsertTarget *tree.MultiInsertTarget
     multiInsertTargets []*tree.MultiInsertTarget
     multiInsertWhen *tree.MultiInsertWhen
@@ -741,7 +764,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <unresolvedName> insert_target_column
 %type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
+%type <identifierList> column_list column_list_opt insert_row_alias_column_list insert_row_alias_column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
 %type <insertColumns> insert_column_list
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
@@ -861,7 +884,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> value_expression_list
-%type <exprs> expression_list row_value window_partition_by window_partition_by_opt
+%type <exprs> expression_list window_partition_by window_partition_by_opt
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
@@ -942,17 +965,19 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
+%type <insertRowAlias> insert_row_alias_opt
 %type <statement> multi_insert_stmt
 %type <multiInsertTarget> multi_insert_into
 %type <multiInsertTargets> multi_insert_into_list multi_insert_else_opt
 %type <multiInsertWhen> multi_insert_when
 %type <multiInsertWhens> multi_insert_when_list
 %type <replace> replace_data
-%type <rowsExprs> values_list
+%type <valuesList> values_list
 %type <str> name_datetime_scale braces_opt name_braces
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
-%type <exprs> data_values data_opt row_value
+%type <exprs> data_values data_opt
+%type <rowValue> row_value
 %type <boolVal> local_opt
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
@@ -5935,7 +5960,7 @@ replace_stmt:
 replace_data:
     VALUES values_list
     {
-        vc := tree.NewValuesClause($2)
+        vc := makeInsertValuesClause($2)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
         }
@@ -5948,7 +5973,7 @@ replace_data:
     }
 |   '(' insert_column_list ')' VALUES values_list
     {
-        vc := tree.NewValuesClause($5)
+        vc := makeInsertValuesClause($5)
         $$ = &tree.Replace{
             Columns: $2.Identifiers,
             ColumnNames: $2.Names,
@@ -5957,7 +5982,7 @@ replace_data:
     }
 |   '(' ')' VALUES values_list
     {
-        vc := tree.NewValuesClause($4)
+        vc := makeInsertValuesClause($4)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
         }
@@ -6116,6 +6141,10 @@ insert_no_with_stmt:
 |   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if ins.RowAlias != nil {
+            yylex.Error("INSERT OVERWRITE does not support a row alias")
+            goto ret1
+        }
         if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
@@ -6271,11 +6300,16 @@ accounts_list:
     }
 
 insert_data:
-    VALUES values_list
+    VALUES values_list insert_row_alias_opt
     {
-        vc := tree.NewValuesClause($2)
+        if $3 != nil && $2.hasRowWord {
+            yylex.Error("VALUES ROW(...) does not support an INSERT row alias")
+            goto ret1
+        }
+        vc := makeInsertValuesClause($2)
         $$ = &tree.Insert{
             Rows: tree.NewSelect(vc, nil, nil),
+            RowAlias: $3,
         }
     }
 |   select_stmt
@@ -6284,20 +6318,30 @@ insert_data:
             Rows: $1,
         }
     }
-|   '(' insert_column_list ')' VALUES values_list
+|   '(' insert_column_list ')' VALUES values_list insert_row_alias_opt
     {
-        vc := tree.NewValuesClause($5)
+        if $6 != nil && $5.hasRowWord {
+            yylex.Error("VALUES ROW(...) does not support an INSERT row alias")
+            goto ret1
+        }
+        vc := makeInsertValuesClause($5)
         $$ = &tree.Insert{
             Columns: $2.Identifiers,
             ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
+            RowAlias: $6,
         }
     }
-|   '(' ')' VALUES values_list
+|   '(' ')' VALUES values_list insert_row_alias_opt
     {
-        vc := tree.NewValuesClause($4)
+        if $5 != nil && $4.hasRowWord {
+            yylex.Error("VALUES ROW(...) does not support an INSERT row alias")
+            goto ret1
+        }
+        vc := makeInsertValuesClause($4)
         $$ = &tree.Insert{
             Rows: tree.NewSelect(vc, nil, nil),
+            RowAlias: $5,
         }
     }
 |   '(' insert_column_list ')' select_stmt
@@ -6308,7 +6352,7 @@ insert_data:
             Rows: $4,
         }
     }
-|   SET set_value_list
+|   SET set_value_list insert_row_alias_opt
     {
         if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
@@ -6327,7 +6371,40 @@ insert_data:
 			Columns: identList,
 			ColumnNames: columnNames,
             Rows: tree.NewSelect(vc, nil, nil),
+            RowAlias: $3,
         }
+    }
+
+insert_row_alias_opt:
+    %prec RETURNING
+    {
+        $$ = nil
+    }
+|   AS ident insert_row_alias_column_list_opt
+    {
+        $$ = &tree.AliasClause{
+            Alias: tree.Identifier($2.Origin()),
+            Cols:  $3,
+        }
+    }
+
+insert_row_alias_column_list_opt:
+    {
+        $$ = nil
+    }
+|   '(' insert_row_alias_column_list ')'
+    {
+        $$ = $2
+    }
+
+insert_row_alias_column_list:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1.Origin())}
+    }
+|   insert_row_alias_column_list ',' ident
+    {
+        $$ = append($1, tree.Identifier($3.Origin()))
     }
 
 on_duplicate_key_update_opt:
@@ -6420,22 +6497,36 @@ merge_insert_column_list:
 values_list:
     row_value
     {
-        $$ = []tree.Exprs{$1}
+        $$ = &mysqlValuesList{
+            rows:       []tree.Exprs{$1.rows},
+            hasRowWord: $1.hasRowWord,
+        }
     }
 |   values_list ',' row_value
     {
-        $$ = append($1, $3)
+        $$ = &mysqlValuesList{
+            rows:       append($1.rows, $3.rows),
+            hasRowWord: $1.hasRowWord || $3.hasRowWord,
+        }
     }
 
 row_value:
     row_opt '(' data_opt ')'
     {
-        $$ = $3
+        $$ = &mysqlRowValue{
+            rows:       $3,
+            hasRowWord: $1 != "",
+        }
     }
 
 row_opt:
-    {}
+    {
+        $$ = ""
+    }
 |    ROW
+    {
+        $$ = "ROW"
+    }
 
 data_opt:
     {
