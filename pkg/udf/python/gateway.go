@@ -682,10 +682,17 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if !inputEnded || lastSequence != batchIndex {
 		return fmt.Errorf("python udf: input stream did not reach EndInput")
 	}
+	// Close the local Arrow writer before accepting the worker's terminal
+	// Finish.  If finalizing the local input owner fails, the admission cleanup
+	// still has a chance to cancel/close the remote invocation; acknowledging
+	// Finish first would publish remote success while returning a local error.
+	if err := closeInputEncoder(); err != nil {
+		return err
+	}
 	if err := g.receiveFinish(streamCtx, client, stream, execution.Tuple, execution.Length, rows, &sequence); err != nil {
 		return err
 	}
-	return closeInputEncoder()
+	return nil
 }
 
 // invocationAdmission is the real Gateway owner for the CN-side execution
