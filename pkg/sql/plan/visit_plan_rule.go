@@ -1020,6 +1020,12 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
 		return nil, false, nil
 	}
+	if kind == vector.PrepareParamFloat && !typ.Oid.IsFloat() {
+		// SQL EXECUTE transports user variables through a text vector. Within a
+		// deferred numeric expression, the retained parameter category is the
+		// source of truth for overload selection and FLOAT assignment semantics.
+		typ = types.T_float64.ToType()
+	}
 	isBin := false
 	if pos < len(rule.paramValues) {
 		if param, ok := rule.paramValues[pos].(ParamValue); ok {
@@ -1156,6 +1162,10 @@ func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]stru
 	}
 	if param := expr.GetP(); param != nil && param.Pos >= 0 {
 		positions[param.Pos] = struct{}{}
+		return
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+		collectNumericValueParamPositions(literal.Src, positions)
 		return
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
@@ -1598,6 +1608,23 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	case "cast", "cast_assign", "cast_ignore", "cast_strict":
 	default:
 		return expr, false, nil
+	}
+	if _, direct := preparedParamPosition(fn.Args[0]); !direct {
+		positions := preparedNumericValueParamPositions(fn.Args[0])
+		if len(positions) > 0 {
+			source, changed, err := rule.rebindPreparedNumericExpr(fn.Args[0], positions)
+			if err != nil {
+				return nil, true, err
+			}
+			if changed {
+				rewritten, err := forceAssignmentCastExprWithName(rule.ctx, source, expr.Typ, funcName)
+				if err != nil {
+					return nil, true, err
+				}
+				rule.specialized = true
+				return rewritten, true, nil
+			}
+		}
 	}
 	paramPos, ok := preparedParamPosition(fn.Args[0])
 	if !ok || paramPos < 0 || paramPos >= len(rule.paramValues) ||

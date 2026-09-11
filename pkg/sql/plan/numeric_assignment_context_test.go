@@ -1452,29 +1452,42 @@ func TestInsertValuesFractionalLiteralsKeepSourceDomain(t *testing.T) {
 				"exact row %d must keep DECIMAL source: %s", row, expr.String())
 			continue
 		}
-		wideOID := types.T_int64
-		if targetOID.IsUnsignedInt() {
-			wideOID = types.T_uint64
-		}
-		require.Equal(t, int32(wideOID), assignment.Args[0].Typ.Id,
-			"approximate row %d must round in a widened integer domain: %s", row, expr.String())
-		wideCast := assignment.Args[0].GetF()
-		require.NotNil(t, wideCast, "approximate row %d: %s", row, expr.String())
-		require.NotEmpty(t, wideCast.Args, "approximate row %d: %s", row, expr.String())
-		require.True(t, types.T(wideCast.Args[0].Typ.Id).IsFloat(),
-			"approximate row %d must keep FLOAT source: %s", row, expr.String())
+		require.True(t, types.T(assignment.Args[0].Typ.Id).IsFloat(),
+			"approximate row %d must keep FLOAT source for assignment: %s", row, expr.String())
+	}
+}
+
+func TestPreparedNestedIntegerAssignmentRebindsNumericOverload(t *testing.T) {
+	for _, sourceSQL := range []string{"abs(?)", "? + 0"} {
+		t.Run(sourceSQL, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t,
+				"insert into constraint_test.emp (empno) values ("+sourceSQL+")")
+			require.Equal(t, []int32{0}, PreparedDMLIntegerAssignmentParamPositions(prepared.Plan))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+				t.Context(), prepared.Plan, []any{ParamValue{
+					Value: "-2.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true,
+					IsBinaryProtocol: true, RetainParamRef: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(t.Context(), filled))
+			exprs := insertValueRowsetExprs(t, filled)
+			require.Len(t, exprs, 1)
+			assignment := exprs[0].GetF()
+			require.NotNil(t, assignment)
+			require.True(t, types.T(assignment.Args[0].Typ.Id).IsFloat(), assignment.Args[0].String())
+		})
 	}
 }
 
 func TestPreparedInsertIntegerAssignmentUsesNumericSourceType(t *testing.T) {
 	tests := []struct {
-		name        string
-		value       string
-		kind        vector.PrepareParamKind
-		sourceType  types.Type
-		wantSource  types.T
-		wantNested  types.T
-		wantWidened bool
+		name       string
+		value      string
+		kind       vector.PrepareParamKind
+		sourceType types.Type
+		wantSource types.T
 	}{
 		{
 			name:       "exact decimal",
@@ -1484,12 +1497,11 @@ func TestPreparedInsertIntegerAssignmentUsesNumericSourceType(t *testing.T) {
 			wantSource: types.T_decimal64,
 		},
 		{
-			name:        "approximate double",
-			value:       "2.5",
-			kind:        vector.PrepareParamFloat,
-			sourceType:  types.T_float64.ToType(),
-			wantNested:  types.T_float64,
-			wantWidened: true,
+			name:       "approximate double",
+			value:      "2.5",
+			kind:       vector.PrepareParamFloat,
+			sourceType: types.T_float64.ToType(),
+			wantSource: types.T_float64,
 		},
 		{
 			name:       "text remains text",
@@ -1523,19 +1535,7 @@ func TestPreparedInsertIntegerAssignmentUsesNumericSourceType(t *testing.T) {
 			require.NotNil(t, assignment, exprs[0].String())
 			require.NotEmpty(t, assignment.Args, exprs[0].String())
 			source := assignment.Args[0]
-			wantSource := test.wantSource
-			if test.wantWidened {
-				wantSource = types.T_int64
-				if types.T(exprs[0].Typ.Id).IsUnsignedInt() {
-					wantSource = types.T_uint64
-				}
-			}
-			require.Equal(t, int32(wantSource), source.Typ.Id, exprs[0].String())
-			if test.wantNested != 0 {
-				require.NotNil(t, source.GetF(), exprs[0].String())
-				require.NotEmpty(t, source.GetF().Args, exprs[0].String())
-				require.Equal(t, int32(test.wantNested), source.GetF().Args[0].Typ.Id, exprs[0].String())
-			}
+			require.Equal(t, int32(test.wantSource), source.Typ.Id, exprs[0].String())
 		})
 	}
 }

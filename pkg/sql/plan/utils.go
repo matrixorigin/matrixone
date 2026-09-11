@@ -3735,8 +3735,8 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
-// PreparedDMLIntegerAssignmentParamPositions returns direct prepared markers
-// whose DML write roots assign into an integer target. The frontend caches this
+// PreparedDMLIntegerAssignmentParamPositions returns prepared markers beneath
+// DML write roots that assign into an integer target. The frontend caches this
 // bounded metadata per prepared-plan generation so ordinary prepared writes do
 // not need a plan walk on every execution.
 func PreparedDMLIntegerAssignmentParamPositions(preparePlan *Plan) []int32 {
@@ -3757,10 +3757,7 @@ func PreparedDMLIntegerAssignmentParamPositions(preparePlan *Plan) []int32 {
 		default:
 			continue
 		}
-		position, ok := preparedParamPosition(fn.Args[0])
-		if ok {
-			positions[int32(position)] = struct{}{}
-		}
+		collectNumericValueParamPositions(fn.Args[0], positions)
 	}
 	if len(positions) == 0 {
 		return nil

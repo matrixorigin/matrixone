@@ -3734,7 +3734,6 @@ func TestSQLExecuteNumericSourceSpecializesDMLIntegerAssignment(t *testing.T) {
 		name       string
 		param      plan2.ParamValue
 		wantSource types.T
-		wantNested types.T
 	}{
 		{
 			name: "decimal",
@@ -3748,8 +3747,7 @@ func TestSQLExecuteNumericSourceSpecializesDMLIntegerAssignment(t *testing.T) {
 			param: plan2.ParamValue{
 				Value: "2.5", PrepareParamKind: vector.PrepareParamFloat,
 			},
-			wantSource: types.T_uint64,
-			wantNested: types.T_float64,
+			wantSource: types.T_float64,
 		},
 		{
 			name: "binary protocol float",
@@ -3757,8 +3755,7 @@ func TestSQLExecuteNumericSourceSpecializesDMLIntegerAssignment(t *testing.T) {
 				Value: "2.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true,
 				IsBinaryProtocol: true,
 			},
-			wantSource: types.T_uint64,
-			wantNested: types.T_float64,
+			wantSource: types.T_float64,
 		},
 		{
 			name: "text",
@@ -3790,10 +3787,6 @@ func TestSQLExecuteNumericSourceSpecializesDMLIntegerAssignment(t *testing.T) {
 			require.True(t, applied)
 			source := assignmentSource(runtimePlan)
 			require.Equal(t, int32(test.wantSource), source.Typ.Id)
-			if test.wantNested != 0 {
-				require.NotNil(t, source.GetF())
-				require.Equal(t, int32(test.wantNested), source.GetF().Args[0].Typ.Id)
-			}
 		})
 	}
 }

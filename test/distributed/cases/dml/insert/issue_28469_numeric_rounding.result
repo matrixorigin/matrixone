@@ -1,6 +1,7 @@
 DROP DATABASE IF EXISTS issue_28469;
 CREATE DATABASE issue_28469;
 USE issue_28469;
+SET sql_mode = 'STRICT_TRANS_TABLES';
 CREATE TABLE t_rounding (
 id INT PRIMARY KEY,
 value_int INT,
@@ -63,4 +64,39 @@ SELECT * FROM t_rounding WHERE id BETWEEN 30 AND 33 ORDER BY id;
 31  ¦  2  ¦  -2  𝄀
 32  ¦  4  ¦  -4
 DEALLOCATE PREPARE insert_rounding;
+CREATE TABLE t_nested_abs (value_bigint BIGINT);
+CREATE TABLE t_nested_add (value_bigint BIGINT);
+PREPARE insert_nested_abs FROM 'INSERT INTO t_nested_abs VALUES (ABS(?))';
+PREPARE insert_nested_add FROM 'INSERT INTO t_nested_add VALUES (? + 0)';
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_abs USING @nested_value;
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_add USING @nested_value;
+SELECT * FROM t_nested_abs;
+➤ value_bigint[-5,64,0]  𝄀
+2
+SELECT * FROM t_nested_add;
+➤ value_bigint[-5,64,0]  𝄀
+-2
+DEALLOCATE PREPARE insert_nested_abs;
+DEALLOCATE PREPARE insert_nested_add;
+CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
+INSERT INTO t_unsigned VALUES (1, -1E0);
+Data truncation: data out of range: data type float, value '-1'
+SELECT COUNT(*) FROM t_unsigned WHERE id = 1;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT IGNORE INTO t_unsigned VALUES (2, -1E0), (3, 2.5E0);
+SELECT * FROM t_unsigned ORDER BY id;
+➤ id[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+2  ¦  0  𝄀
+3  ¦  2
+PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
+SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+Data truncation: data out of range: data type float, value '-1'
+SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE insert_unsigned;
 DROP DATABASE issue_28469;

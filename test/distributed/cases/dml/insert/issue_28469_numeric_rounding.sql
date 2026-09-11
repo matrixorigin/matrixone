@@ -6,6 +6,7 @@
 DROP DATABASE IF EXISTS issue_28469;
 CREATE DATABASE issue_28469;
 USE issue_28469;
+SET sql_mode = 'STRICT_TRANS_TABLES';
 
 CREATE TABLE t_rounding (
     id INT PRIMARY KEY,
@@ -53,5 +54,34 @@ SET @id = 33, @int_value = '2.5', @bigint_value = '-2.5';
 EXECUTE insert_rounding USING @id, @int_value, @bigint_value;
 SELECT * FROM t_rounding WHERE id BETWEEN 30 AND 33 ORDER BY id;
 DEALLOCATE PREPARE insert_rounding;
+
+-- Runtime specialization of nested expressions must leave the assignment cast
+-- in charge of FLOAT-to-integer ties-to-even behavior.
+CREATE TABLE t_nested_abs (value_bigint BIGINT);
+CREATE TABLE t_nested_add (value_bigint BIGINT);
+PREPARE insert_nested_abs FROM 'INSERT INTO t_nested_abs VALUES (ABS(?))';
+PREPARE insert_nested_add FROM 'INSERT INTO t_nested_add VALUES (? + 0)';
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_abs USING @nested_value;
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_add USING @nested_value;
+SELECT * FROM t_nested_abs;
+SELECT * FROM t_nested_add;
+DEALLOCATE PREPARE insert_nested_abs;
+DEALLOCATE PREPARE insert_nested_add;
+
+-- Negative approximate values must not wrap while assigning to unsigned
+-- integers. Strict assignment rejects the row; IGNORE clamps it to zero.
+CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
+INSERT INTO t_unsigned VALUES (1, -1E0);
+SELECT COUNT(*) FROM t_unsigned WHERE id = 1;
+INSERT IGNORE INTO t_unsigned VALUES (2, -1E0), (3, 2.5E0);
+SELECT * FROM t_unsigned ORDER BY id;
+
+PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
+SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
+DEALLOCATE PREPARE insert_unsigned;
 
 DROP DATABASE issue_28469;

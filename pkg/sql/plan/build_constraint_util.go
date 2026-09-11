@@ -1365,10 +1365,6 @@ func forceCastExpr2WithProcess(
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
-	expr, err = widenApproximateIntegerAssignment(ctx, expr, targetType.Typ)
-	if err != nil {
-		return nil, err
-	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
 		return expr, nil
@@ -1410,23 +1406,6 @@ func (builder *QueryBuilder) forceCastExpr2(
 	)
 }
 
-// widenApproximateIntegerAssignment makes the source domain explicit before
-// an assignment cast narrows it to the destination integer. MySQL rounds an
-// approximate value to the nearest even integer, while the generic numeric
-// cast uses half-away-from-zero. The explicit BIGINT/UNSIGNED overload already
-// owns the ties-to-even and 64-bit boundary checks; a following assignment cast
-// retains the actual destination's narrower range checks.
-func widenApproximateIntegerAssignment(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	if expr == nil || !types.T(targetType.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() {
-		return expr, nil
-	}
-	wideType := types.T_int64.ToType()
-	if types.T(targetType.Id).IsUnsignedInt() {
-		wideType = types.T_uint64.ToType()
-	}
-	return appendExplicitCastBeforeExpr(ctx, expr, makePlan2Type(&wideType))
-}
-
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	return forceCastExprWithName(ctx, expr, targetType, "cast")
 }
@@ -1436,6 +1415,9 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && types.T(targetType.Id).IsInteger() {
+		return "cast_ignore"
+	}
 	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
@@ -1770,12 +1752,6 @@ func forceCastExprWithNameAndAssignment(
 	}
 	if isTypedArrayPlanType(&targetType) {
 		return funcCastForTypedArrayType(ctx, expr, targetType)
-	}
-	if isAssignment {
-		expr, err = widenApproximateIntegerAssignment(ctx, expr, targetType)
-		if err != nil {
-			return nil, err
-		}
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {

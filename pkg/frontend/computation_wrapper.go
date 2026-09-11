@@ -1143,6 +1143,32 @@ func preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
 	return false
 }
 
+func preparedDMLNumericParamsNeedSpecialization(preparePlan *plan2.Plan, paramVals []any) bool {
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return false
+	}
+	switch query.StmtType {
+	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+	default:
+		return false
+	}
+	for _, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		if param.PrepareParamKind == vector.PrepareParamDecimal ||
+			param.PrepareParamKind == vector.PrepareParamFloat {
+			return true
+		}
+		if param.HasSourceType && (param.SourceType.IsDecimal() || param.SourceType.Oid.IsFloat()) {
+			return true
+		}
+	}
+	return false
+}
+
 func preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
 	runtimeTypes []types.Type,
 	positions []int32,
@@ -1711,9 +1737,21 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
+		if preparedDMLNumericParamsNeedSpecialization(executionPlan, cwft.paramVals) {
+			for i, value := range cwft.paramVals {
+				param, ok := value.(plan2.ParamValue)
+				if !ok || param.Value == nil || param.PrepareParamKind != vector.PrepareParamFloat {
+					continue
+				}
+				param.RuntimeType = types.T_float64.ToType()
+				param.HasRuntimeType = true
+				cwft.paramVals[i] = param
+			}
+		}
 		runtimeDMLIntegerAssignmentCandidate =
 			preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
-				cwft.paramVals, prepareStmt.dmlIntegerAssignmentParamPositions)
+				cwft.paramVals, prepareStmt.dmlIntegerAssignmentParamPositions) ||
+				preparedDMLNumericParamsNeedSpecialization(executionPlan, cwft.paramVals)
 		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
 		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
 			bitCountNumericOverloadCandidate
