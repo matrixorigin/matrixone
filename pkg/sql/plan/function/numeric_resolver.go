@@ -282,6 +282,17 @@ func resolveNumericBinaryTypes(
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if op == numericOpDiv && left.Oid.IsInteger() && right.Oid.IsInteger() {
+		precision := integerDecimalDigits(left.Oid) + 4
+		if precision > 38 {
+			precision = 38
+		}
+		return numericTypeResolution{
+			left:   left,
+			right:  right,
+			result: types.New(types.T_decimal128, precision, 4),
+		}, true
+	}
 
 	var cast bool
 	var castLeft, castRight types.Type

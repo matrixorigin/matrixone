@@ -501,6 +501,19 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
+func exactIntegerDivFn(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return decimalBatchArith[types.Decimal128, types.Decimal128](
+		parameters, result, proc, length,
+		d128DivWithResultScaleKernel(4, shouldError), selectList)
+}
+
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {

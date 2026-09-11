@@ -747,10 +747,26 @@ func d128DivKernel(shouldError bool) func(v1, v2 []types.Decimal128, rs []types.
 	}
 }
 
+func d128DivWithResultScaleKernel(resultScale int32, shouldError bool) func(
+	v1, v2 []types.Decimal128,
+	rs []types.Decimal128,
+	scale1, scale2 int32,
+	rsnull *nulls.Nulls,
+) error {
+	return func(
+		v1, v2 []types.Decimal128,
+		rs []types.Decimal128,
+		scale1, scale2 int32,
+		rsnull *nulls.Nulls,
+	) error {
+		return d128DivWithResultScale(
+			v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
+	}
+}
+
 // d64DivKernel returns a batch division kernel for Decimal64 → Decimal128.
 
 func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	bmp := rsnull.GetBitmap()
 	// Compute result scale once (same logic as Decimal128.Div).
 	scale := int32(12)
 	if scale > scale1+6 {
@@ -759,7 +775,19 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 	if scale < scale1 {
 		scale = scale1
 	}
-	scaleAdj := scale - scale1 + scale2
+	return d128DivWithResultScale(
+		v1, v2, rs, scale1, scale2, scale, rsnull, shouldError)
+}
+
+func d128DivWithResultScale(
+	v1, v2 []types.Decimal128,
+	rs []types.Decimal128,
+	scale1, scale2, resultScale int32,
+	rsnull *nulls.Nulls,
+	shouldError bool,
+) error {
+	bmp := rsnull.GetBitmap()
+	scaleAdj := resultScale - scale1 + scale2
 
 	// Pre-compute scale factor for the fast inline path.
 	var scaleFactor uint64

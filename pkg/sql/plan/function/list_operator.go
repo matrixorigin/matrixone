@@ -2040,6 +2040,13 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if inputs[0].Oid.IsInteger() && inputs[1].Oid.IsInteger() {
+					left := types.New(
+						types.T_decimal128, integerDecimalDigits(inputs[0].Oid), 0)
+					right := types.New(
+						types.T_decimal128, integerDecimalDigits(inputs[1].Oid), 0)
+					return newCheckResultWithCast(2, []types.Type{left, right})
+				}
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
 					if divOperatorSupportsVectorScalar(t1, t2) {
@@ -2100,6 +2107,19 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return divFnVectorScalar
 
+				},
+			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					precision := parameters[0].Width + 4
+					if precision > 38 {
+						precision = 38
+					}
+					return types.New(types.T_decimal128, precision, 4)
+				},
+				newOp: func() executeLogicOfOverload {
+					return exactIntegerDivFn
 				},
 			},
 		},
