@@ -16,7 +16,7 @@ select group_concat(b order by id separator '|') =
 group_concat(cast(b as char) order by id separator '|')
 from bool_values;
 group_concat(b, |,order by id) = group_concat(cast(b as char), |,order by id)
-true
+1
 prepare group_concat_bool_stmt from
 'select group_concat(b order by id separator \'|\') from bool_values';
 execute group_concat_bool_stmt;
