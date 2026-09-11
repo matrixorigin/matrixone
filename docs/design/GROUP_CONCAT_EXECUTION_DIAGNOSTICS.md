@@ -172,6 +172,9 @@ serialization applies a separate conservative frame byte budget:
 GROUP_CONCAT messages contain only a row number, while existing scalar conversion
 messages can contain input text. This design does not newly cap scalar message
 length, and does not claim to bound the existing aggregate payload/spill memory.
+The current remote receiver uses the existing 64 MiB result-fragment limit as
+the terminal budget (and subtracts protobuf message overhead), which is below
+the default 100 MiB MORPC body limit.
 Plan size and simultaneously live fragments also multiply the per-owner bound.
 
 The per-contributing-row addition is counter arithmetic. Message formatting and
