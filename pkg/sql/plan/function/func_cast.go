@@ -6692,11 +6692,12 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 // behavior intact for the historical string overloads that still call the
 // direct executor (for example CEIL/FLOOR's BOOL compatibility fallback).
 func parseMathStringToFloat(s string, isBinary bool, proc *process.Process) (float64, error) {
-	value, err := parseBytesToFloat([]byte(s), isBinary, 64, SQLCompatibilityMySQL)
+	mode := CompatibilityModeFromProcess(proc)
+	value, err := parseBytesToFloat([]byte(s), isBinary, 64, mode)
 	if err != nil {
 		return 0, err
 	}
-	if !isBinary {
+	if !isBinary && mode == SQLCompatibilityMySQL {
 		appendNumericCoercionWarning(proc, s)
 	}
 	return value, nil

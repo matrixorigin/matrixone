@@ -113,6 +113,96 @@ func TestMathStringExecutorsEmitNumericCoercionWarnings(t *testing.T) {
 	}
 }
 
+func TestHistoricalCeilFloorVarcharOverloadCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fid  int32
+		want []float64
+	}{
+		{name: "ceil", fid: CEIL, want: []float64{2, 0, 0}},
+		{name: "floor", fid: FLOOR, want: []float64{1, 0, 0}},
+	} {
+		t.Run(tc.name+"/mysql_numeric_prefix", func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc := testutil.NewProcess(t)
+			proc.Session = session
+			input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+				[]byte("1.5tail"), []byte("abc"), []byte(""),
+			}, nil)
+			defer input.Free(proc.Mp())
+
+			output, err := RunFunctionDirectly(proc, EncodeOverloadID(tc.fid, 12),
+				[]*vector.Vector{input}, input.Length())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[float64](output))
+			require.Len(t, session.warnings, 2)
+			for _, warning := range session.warnings {
+				require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+				require.Contains(t, warning.msg, "DOUBLE")
+			}
+			output.Free(proc.Mp())
+		})
+
+		t.Run(tc.name+"/native_rejects_prefixes", func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().MatrixOneNativeMode = true
+			for _, value := range []string{"1.5tail", "abc", ""} {
+				input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(),
+					[][]byte{[]byte(value)}, nil)
+				output, err := RunFunctionDirectly(proc, EncodeOverloadID(tc.fid, 12),
+					[]*vector.Vector{input}, input.Length())
+				require.Error(t, err, value)
+				if output != nil {
+					output.Free(proc.Mp())
+				}
+				input.Free(proc.Mp())
+			}
+		})
+
+		t.Run(tc.name+"/native_unicode_whitespace", func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().MatrixOneNativeMode = true
+			proc.Session = session
+			input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+				[]byte("\u00a01.5\u00a0"),
+			}, nil)
+			defer input.Free(proc.Mp())
+
+			output, err := RunFunctionDirectly(proc, EncodeOverloadID(tc.fid, 12),
+				[]*vector.Vector{input}, input.Length())
+			require.NoError(t, err)
+			require.Equal(t, []float64{tc.want[0]}, vector.MustFixedColWithTypeCheck[float64](output))
+			require.Empty(t, session.warnings)
+			output.Free(proc.Mp())
+		})
+
+		for _, native := range []bool{false, true} {
+			modeName := "mysql"
+			if native {
+				modeName = "native"
+			}
+			t.Run(tc.name+"/"+modeName+"_binary_literal", func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.GetSessionInfo().MatrixOneNativeMode = native
+				session := &numericWarningSession{}
+				proc.Session = session
+				input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(),
+					[][]byte{{0x31}}, nil)
+				input.SetIsBin(true)
+				defer input.Free(proc.Mp())
+
+				output, err := RunFunctionDirectly(proc, EncodeOverloadID(tc.fid, 12),
+					[]*vector.Vector{input}, input.Length())
+				require.NoError(t, err)
+				require.Equal(t, []float64{49}, vector.MustFixedColWithTypeCheck[float64](output))
+				require.Empty(t, session.warnings)
+				output.Free(proc.Mp())
+			})
+		}
+	}
+}
+
 func TestExactMathStringNumericPrefixTypeMatching(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
