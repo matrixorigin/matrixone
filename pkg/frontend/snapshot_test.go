@@ -1893,6 +1893,20 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh.sql2result[modeQuery(snapshot)] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		return bh
 	}
+	currentUDFTable := &tableInfo{
+		dbName:    moCatalog,
+		tblName:   "mo_user_defined_function",
+		createSql: MoCatalogMoUserDefinedFunctionDDL,
+	}
+
+	t.Run("current schema preserves revision head", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentUDFTable, sourceAccount, snapshotTS))
+		require.Contains(t, bh.executedSQLs[len(bh.executedSQLs)-1],
+			" select "+userDefinedFunctionCatalogSourceColumns+" from ")
+	})
 
 	t.Run("same account timestamp snapshot", func(t *testing.T) {
 		bh := newExec(" {MO_TS = 123}")
@@ -1903,7 +1917,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 			dropTableIfExistsSQL(moCatalog, udfTable.tblName),
 			MoCatalogMoUserDefinedFunctionDDL,
 			"insert into `mo_catalog`.`mo_user_defined_function` (" + userDefinedFunctionCatalogColumns +
-				") select " + userDefinedFunctionCatalogSourceColumns +
+				") select " + userDefinedFunctionCatalogLegacySourceColumns +
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 		}, bh.executedSQLs)
 		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
@@ -1915,7 +1929,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS, false))
 		require.Equal(t,
 			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
-				") select "+userDefinedFunctionCatalogSourceColumns+
+				") select "+userDefinedFunctionCatalogLegacySourceColumns+
 				" from `mo_catalog`.`mo_user_defined_function` {SNAPSHOT = 'udf_snapshot'}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
@@ -1929,7 +1943,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		))
 		require.Equal(t,
 			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
-				") select "+userDefinedFunctionCatalogSourceColumns+
+				") select "+userDefinedFunctionCatalogLegacySourceColumns+
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
@@ -1942,7 +1956,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "udf_pitr", snapshotTS, udfTable))
 		require.Equal(t,
 			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
-				") select "+userDefinedFunctionCatalogSourceColumns+
+				") select "+userDefinedFunctionCatalogLegacySourceColumns+
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
@@ -1976,6 +1990,105 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		require.Equal(t, MoCatalogMoStoredProcedureDDL, bh.executedSQLs[2])
 		require.Contains(t, bh.executedSQLs[3], "lang, body, 'PIPES_AS_CONCAT', db")
 		require.Equal(t, sourceAccount, bh.executionAccountIDs[0])
+	})
+}
+
+func TestRecreatePythonFunctionRevisionCatalogPreservesCurrentSchema(t *testing.T) {
+	const (
+		sourceAccount = uint32(10)
+		targetAccount = uint32(20)
+		snapshotName  = "python_revision_snapshot"
+		snapshotTS    = int64(123)
+	)
+	legacyCreateSQL := "create table mo_catalog.mo_function_revisions (function_id bigint, revision bigint, name varchar(100), body text)"
+	legacyTable := &tableInfo{
+		dbName:    moCatalog,
+		tblName:   "mo_function_revisions",
+		createSql: legacyCreateSQL,
+	}
+	currentTable := &tableInfo{
+		dbName:    moCatalog,
+		tblName:   "mo_function_revisions",
+		createSql: MoCatalogMoFunctionRevisionDDL,
+	}
+	copySQL := func(sourceSnapshot string) string {
+		return "insert into `mo_catalog`.`mo_function_revisions` (" + functionRevisionCatalogColumns +
+			") select " + functionRevisionCatalogColumns +
+			" from `mo_catalog`.`mo_function_revisions`" + sourceSnapshot
+	}
+	validationSQL := fmt.Sprintf(
+		"select %s from %s order by function_id, revision;",
+		functionRevisionCatalogColumns,
+		qualifiedTableName(moCatalog, "mo_function_revisions"),
+	)
+
+	t.Run("same account current revision schema", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[validationSQL] = &MysqlResultSet{}
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, sourceAccount, snapshotTS))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
+			MoCatalogMoFunctionRevisionDDL,
+			copySQL(" {MO_TS = 123}"),
+			validationSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("legacy revision rows are not copied", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, legacyTable, sourceAccount, snapshotTS))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, legacyTable.tblName),
+			MoCatalogMoFunctionRevisionDDL,
+		}, bh.executedSQLs)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+	})
+
+	t.Run("cross account named snapshot", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[validationSQL] = &MysqlResultSet{}
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, targetAccount, snapshotTS))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
+			MoCatalogMoFunctionRevisionDDL,
+			copySQL(" {SNAPSHOT = 'python_revision_snapshot'}"),
+			validationSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("cross account timestamp restore", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[validationSQL] = &MysqlResultSet{}
+		require.NoError(t, recreateTableFromTS(
+			t.Context(), "", bh, currentTable, snapshotTS, sourceAccount, targetAccount,
+		))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
+			MoCatalogMoFunctionRevisionDDL,
+			copySQL(" {MO_TS = 123}"),
+			validationSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("point in time recovery", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[validationSQL] = &MysqlResultSet{}
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "python_revision_pitr", snapshotTS, currentTable))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
+			MoCatalogMoFunctionRevisionDDL,
+			copySQL(" {MO_TS = 123}"),
+			validationSQL,
+		}, bh.executedSQLs)
 	})
 }
 

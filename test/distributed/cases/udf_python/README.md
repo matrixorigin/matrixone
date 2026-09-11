@@ -39,6 +39,14 @@ The cases keep the data sets small and target contract boundaries:
   UUID round trips, and NULL.
 - `temporal_boundaries.sql` checks leap days, microseconds, TIME limits, SQL
   zero-date values, and NULL.
+- `relational_positions.sql` checks UDF evaluation in WHERE, JOIN ON and outer
+  join predicates, aggregate arguments, window ordering, and nested calls.
+- `dml_positions.sql` checks UDF evaluation in INSERT values, UPDATE
+  assignments, and DELETE predicates while preserving SQL NULL filtering.
+- `dml_error_paths.sql` checks that handler failures abort UPDATE, INSERT
+  SELECT, and DELETE atomically without publishing partial changes.
+- `revision_lifecycle.sql` checks create, immutable-revision replacement,
+  prepared-plan invalidation, drop, and recreate on the same SQL signature.
 
 The shape follows established correctness coverage from
 [DuckDB's scalar UDF tests](https://github.com/duckdb/duckdb-go/blob/main/scalar_udf_test.go)
