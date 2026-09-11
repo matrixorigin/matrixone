@@ -37,3 +37,7 @@ select @@session.group_concat_max_len;
 set session group_concat_max_len = default;
 show warnings;
 select @@session.group_concat_max_len;
+
+-- A rejected assignment must not replace the last valid session value.
+set session group_concat_max_len = '18446744073709551616';
+select @@session.group_concat_max_len;

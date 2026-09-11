@@ -59,3 +59,8 @@ show warnings;
 select @@session.group_concat_max_len;
 ➤ @@group_concat_max_len[-1,16383,0]  𝄀
 1024
+set session group_concat_max_len = '18446744073709551616';
+internal error: convert to the system variable uint type failed
+select @@session.group_concat_max_len;
+➤ @@group_concat_max_len[-1,16383,0]  𝄀
+1024
