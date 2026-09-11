@@ -32,6 +32,32 @@ from (select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 select group_concat(a order by a) as exact_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_int where a in (1,2,3,4,5,6) order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 
+-- Keep raw vectors for the cosine and inner-product forms used by the
+-- incident workload.  Probe every list so the expected IDs are an exact
+-- oracle while the index reader and Multi-CN route are still exercised.
+create table t_cos(a bigint primary key, b vecf32(4));
+insert into t_cos values
+(1, '[1,0,0,0]'),(2, '[0.8,0.6,0,0]'),(3, '[0,1,0,0]'),(4, '[-1,0,0,0]');
+create index idx_cos_b using ivfflat on t_cos(b) lists=4 op_type 'vector_cosine_ops';
+
+select group_concat(a order by a) as cosine_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_cos order by cosine_distance(b, '[1,0,0,0]') limit 3) s;
+
+create table t_ip(a bigint primary key, b vecf32(4));
+insert into t_ip values
+(1, '[1,0,0,0]'),(2, '[0.8,0.6,0,0]'),(3, '[0,1,0,0]'),(4, '[-0.2,0,0,0]');
+create index idx_ip_b using ivfflat on t_ip(b) lists=4 op_type 'vector_ip_ops';
+
+select group_concat(a order by a) as ip_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+
+select count(*) as empty_count
+from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+
+-- A query after the empty result must still use the same reader/connection.
+select group_concat(a order by a) as ip_followup_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 2) s;
+
 create table t_str(a varchar(8) primary key, b vecf32(4));
 insert into t_str values
 ('p01', '[0,0,0,0]'),('p02', '[1,0,0,0]'),('p03', '[2,0,0,0]'),('p04', '[3,0,0,0]'),
