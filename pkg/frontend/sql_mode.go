@@ -47,3 +47,11 @@ func sqlModeHasHighNotPrecedenceValue(value interface{}) (bool, bool) {
 	}
 	return mysql.HasSQLMode(mode, "HIGH_NOT_PRECEDENCE"), true
 }
+
+func sqlModeParserFlagsValue(value interface{}) (mysql.SQLModeFlags, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return 0, false
+	}
+	return mysql.ParseSQLModeFlags(mode), true
+}

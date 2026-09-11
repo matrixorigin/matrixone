@@ -467,6 +467,20 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "HIGH_NOT_PRECEDENCE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	for _, mode := range []string{
+		"ANSI_QUOTES",
+		"PIPES_AS_CONCAT",
+		"NO_BACKSLASH_ESCAPES",
+		"REAL_AS_FLOAT",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+		stmt = &trackedStatement{}
+		ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,"+mode))
+		require.False(t, ses.isCached("cached-sql"), mode)
+		require.Equal(t, 1, stmt.freed, mode)
+	}
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {

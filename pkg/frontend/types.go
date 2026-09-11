@@ -1769,11 +1769,13 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
 	oldHighNotPrecedence := false
+	oldParserFlags := mysql.SQLModeFlags(0)
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
+		oldParserFlags = ses.sqlModeParserFlags()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1833,7 +1835,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
