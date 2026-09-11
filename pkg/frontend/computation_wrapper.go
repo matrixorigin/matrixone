@@ -560,6 +560,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				false,
 				&cwft.schedulingTrace,
 				preparedRetry,
+				cwft.preparedStmt.groupConcatMaxLenFloor,
 			)
 			if err != nil {
 				cwft.completeRuntimeCacheCandidate(nil, err)
@@ -632,6 +633,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			false,
 			&cwft.schedulingTrace,
 			preparedExprRetry,
+			0,
 		)
 		if err != nil {
 			return nil, err
@@ -1450,6 +1452,7 @@ func initExecuteStmtParamWithResolverInSession(
 					true,
 					nil,
 					nil,
+					prepareStmt.groupConcatMaxLenFloor,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2754,7 +2757,16 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramBinaryString[i] && sourceType.Id != 0 {
+		if paramKinds[i] == vector.PrepareParamBoolean {
+			// SQL EXECUTE keeps its historical text transport for a bare result
+			// parameter.  Carry the logical source type so numeric consumers can
+			// rebind Boolean values as 0/1, but do not advertise a runtime result
+			// type here: that metadata is reserved for COM_STMT packets and would
+			// turn an unrelated direct `?` projection into a BOOL literal whenever
+			// another expression in the same statement is specialized.
+			paramValue.SourceType = types.T_bool.ToType()
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] && sourceType.Id != 0 {
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		} else if paramBinaryString[i] {
@@ -2851,6 +2863,7 @@ func createCompile(
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
 	preparedRetry *preparedExecutionRetry,
+	groupConcatMaxLenFloor uint64,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -2918,6 +2931,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))

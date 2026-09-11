@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -625,6 +627,18 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	return buildDefaultExprWithColumns(col, typ, proc, nil)
+}
+
+// buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
+// unscoped form remains for call sites that bind an expression which is not a
+// table-row default (for example internal compatibility expressions).
+func buildDefaultExprWithColumns(
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -667,10 +681,23 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
-	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	var binder *DefaultBinder
+	if columns != nil {
+		binder = NewDefaultBinderWithColumns(proc.Ctx, typ, columns)
+	} else {
+		binder = NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	}
 	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+	if exprHasLocalColumnRef(planExpr) {
+		if err := requireExpressionDefaultProtocol(proc); err != nil {
+			return nil, err
+		}
 	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
@@ -699,6 +726,23 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}, nil
 }
 
+// Admission must precede catalog publication: older VALUE_SCAN consumers cannot
+// evaluate a persisted default containing row references. The deployment must
+// keep its protocol at the old value until all CNs have been upgraded.
+func requireExpressionDefaultProtocol(proc *process.Process) error {
+	if proc != nil {
+		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
+			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			version, valid := value.(int64)
+			if ok && valid && version >= defines.MORPCVersion60 {
+				return nil
+			}
+		}
+	}
+	return moerr.NewNotSupported(context.Background(),
+		"column-reference defaults require all CNs to support protocol version 60")
+}
+
 func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
@@ -716,6 +760,9 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
+		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
 
@@ -800,6 +847,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
 	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
 	if err != nil {
+		return nil, err
+	}
+	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
 
@@ -940,6 +990,905 @@ func validateNoForwardGenRef(ctx context.Context, expr *plan.Expr, currentIdx in
 	return nil
 }
 
+// validateDefaultColumnDependencies validates the references persisted in
+// expression defaults.  Defaults are evaluated per row, so a reference to a
+// generated or auto-increment column is not a stable input.  The dependency
+// graph also has to be acyclic; otherwise DML expansion would recurse forever
+// (and, more importantly, the schema would have no defined row value).
+func validateDefaultColumnDependencies(ctx context.Context, cols []*ColDef) error {
+	state := make([]uint8, len(cols)) // 0=unvisited, 1=visiting, 2=done
+	var visit func(int) error
+	visit = func(colIdx int) error {
+		if colIdx < 0 || colIdx >= len(cols) || cols[colIdx] == nil {
+			return moerr.NewInvalidInput(ctx, "default expression references an invalid column")
+		}
+		switch state[colIdx] {
+		case 1:
+			return moerr.NewInvalidInputf(ctx,
+				"default expression for column '%s' has a circular dependency",
+				cols[colIdx].Name)
+		case 2:
+			return nil
+		}
+		state[colIdx] = 1
+		col := cols[colIdx]
+		if col.Default != nil && col.Default.Expr != nil {
+			for _, refIdx := range collectRefColPos(col.Default.Expr) {
+				ref := int(refIdx)
+				if ref < 0 || ref >= len(cols) || cols[ref] == nil {
+					return moerr.NewInvalidInputf(ctx,
+						"default expression for column '%s' references an invalid column position %d",
+						col.Name, ref)
+				}
+				refCol := cols[ref]
+				if ref == colIdx {
+					return moerr.NewInvalidInputf(ctx,
+						"default expression for column '%s' cannot refer to itself",
+						col.Name)
+				}
+				if refCol.GeneratedCol != nil {
+					return moerr.NewInvalidInputf(ctx,
+						"default expression for column '%s' cannot refer to generated column '%s'",
+						col.Name, refCol.Name)
+				}
+				if refCol.Typ.AutoIncr {
+					return moerr.NewInvalidInputf(ctx,
+						"default expression for column '%s' cannot refer to auto-increment column '%s'",
+						col.Name, refCol.Name)
+				}
+				if refCol.Default != nil && refCol.Default.Expr != nil {
+					if err := visit(ref); err != nil {
+						return err
+					}
+					if ref > colIdx && isExpressionDefault(refCol.Default) {
+						return moerr.NewInvalidInputf(ctx,
+							"default expression for column '%s' cannot refer to column '%s' defined after it when that column has an expression default",
+							col.Name, refCol.Name)
+					}
+				}
+			}
+		}
+		state[colIdx] = 2
+		return nil
+	}
+
+	for i, col := range cols {
+		if col == nil || col.Default == nil || col.Default.Expr == nil {
+			continue
+		}
+		if err := visit(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isExpressionDefault distinguishes an expression default from a plain
+// literal default in the persisted catalog metadata. Parentheses survive in
+// OriginString when constant folding turns an expression into a literal;
+// column references and non-literal roots cover expressions that remain as
+// plan nodes. This lets us retain MySQL's forward-reference compatibility for
+// ordinary base columns while rejecting a forward reference to another
+// expression default.
+func isExpressionDefault(def *plan.Default) bool {
+	if def == nil {
+		return false
+	}
+	if isGeneratedExpressionDefault(def) || len(collectRefColPos(def.Expr)) > 0 {
+		return true
+	}
+	if def.Expr == nil {
+		return false
+	}
+	switch def.Expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		return false
+	default:
+		// Non-literal roots (for example CURRENT_TIMESTAMP) remain expressions
+		// even when the source syntax did not use an outer pair of parentheses.
+		return true
+	}
+}
+
+// defaultExprExpander replaces row-local ColRef(0, colIdx) references with
+// the expression that supplies that column for the current DML row.  It is
+// deliberately memoized: a chain such as c -> b -> a is expanded once per
+// column, avoiding repeated tree growth when several defaults share a base
+// column.  RelPos values other than zero belong to the surrounding plan and
+// must remain untouched.
+type defaultExprExpander struct {
+	ctx      context.Context
+	resolve  func(int32) (*plan.Expr, bool)
+	state    map[int32]uint8
+	memo     map[int32]*plan.Expr
+	nodes    int
+	maxNodes int
+}
+
+// A few planner-only callers still need expression inlining (for example,
+// checks that are not attached to a writable projection). Keep those callers
+// fail-fast when a malformed or adversarial dependency graph would otherwise
+// produce an exponential protobuf tree. DML write paths use
+// appendMaterializedExprProjections and do not depend on this limit.
+const maxDefaultExpansionNodes = 1 << 20
+
+// appendMaterializedExprProjections evaluates row-local expressions in dependency
+// order. A PROJECT cannot safely read a sibling expression from the same
+// projection: each sibling is evaluated against the child batch. Inlining a
+// dependency therefore both duplicates work and re-evaluates volatile defaults
+// (for example, b DEFAULT (a) where a DEFAULT (rand())). Keep one fixed-width
+// row image and add a projection boundary for each dependency level. Independent
+// expressions share a boundary, so a wide schema does not pay one full-width
+// projection per materialized column. Every dependent expression then reads the
+// already materialized value from the preceding boundary.
+//
+// projection contains one expression per output position. expressions maps a
+// table-column position to the raw expression supplying that column, and order
+// is the deterministic table-column order in which those expressions were
+// collected. materialize marks the expressions that must be evaluated after the
+// initial projection (normally defaults/generated columns containing local
+// references). The helper preserves projection width and positions throughout,
+// so downstream PRE_INSERT and index projections need only retag their column
+// references to the returned tag.
+func (builder *QueryBuilder) appendMaterializedExprProjections(
+	nodeCtx *BindContext,
+	childID int32,
+	initialTag int32,
+	projection []*plan.Expr,
+	colIdxToProjPos map[int32]int32,
+	expressions map[int32]*plan.Expr,
+	materialize map[int32]bool,
+	order []int32,
+) (int32, int32, error) {
+	// Keep the caller's map immutable. Some callers reuse the expression map to
+	// build index/update projections after this function returns.
+	materialized := make(map[int32]bool, len(materialize))
+	for colIdx, needsStage := range materialize {
+		if needsStage {
+			materialized[colIdx] = true
+		}
+	}
+
+	// A generated column can depend on a volatile default without having a
+	// local reference itself. For example, a DEFAULT (rand()) and g AS (a+1)
+	// would otherwise inline rand() into g and evaluate it twice. Detect that
+	// dependency closure here, after all raw expressions (including generated
+	// expressions) are known, so every DML entry point gets the same rule.
+	// Only sort and inspect the full projection when at least one raw
+	// expression contains a row-local reference. Ordinary INSERTs with literal
+	// values/defaults still use this helper, but do not need the dependency
+	// closure or its O(width log width) work.
+	needsVolatileClosure := false
+	for colIdx := range colIdxToProjPos {
+		if raw, ok := expressions[colIdx]; ok && raw != nil && exprHasLocalColumnRef(raw) {
+			needsVolatileClosure = true
+			break
+		}
+	}
+	var projectionColumns []int32
+	if needsVolatileClosure {
+		projectionColumns = make([]int32, 0, len(colIdxToProjPos))
+		for colIdx := range colIdxToProjPos {
+			projectionColumns = append(projectionColumns, colIdx)
+		}
+		sort.Slice(projectionColumns, func(i, j int) bool {
+			left, right := colIdxToProjPos[projectionColumns[i]], colIdxToProjPos[projectionColumns[j]]
+			if left == right {
+				return projectionColumns[i] < projectionColumns[j]
+			}
+			return left < right
+		})
+		for _, colIdx := range projectionColumns {
+			if materialized[colIdx] {
+				continue
+			}
+			raw, ok := expressions[colIdx]
+			if !ok || raw == nil {
+				continue
+			}
+			if !exprHasLocalColumnRef(raw) {
+				continue
+			}
+			needsStage, err := hasVolatileLocalDependency(
+				builder.GetContext(), colIdx, expressions, materialized,
+			)
+			if err != nil {
+				return 0, 0, err
+			}
+			if needsStage {
+				materialized[colIdx] = true
+			}
+		}
+	}
+
+	materializationOrder := make([]int32, 0, len(materialized))
+	ordered := make(map[int32]struct{}, len(materialized))
+	appendOrder := func(colIdx int32) {
+		if !materialized[colIdx] {
+			return
+		}
+		if _, exists := ordered[colIdx]; exists {
+			return
+		}
+		ordered[colIdx] = struct{}{}
+		materializationOrder = append(materializationOrder, colIdx)
+	}
+	for _, colIdx := range order {
+		appendOrder(colIdx)
+	}
+	// The volatile-closure pass can add columns that the caller did not know
+	// needed a stage. Include all such columns in stable projection order.
+	for _, colIdx := range projectionColumns {
+		appendOrder(colIdx)
+	}
+
+	initial := DeepCopyExprList(projection)
+	for colIdx := range materialized {
+		projPos, ok := colIdxToProjPos[colIdx]
+		raw, rawOK := expressions[colIdx]
+		if !ok || projPos < 0 || int(projPos) >= len(initial) || !rawOK || raw == nil {
+			return 0, 0, moerr.NewInvalidInputf(builder.GetContext(),
+				"expression for column position %d cannot be materialized", colIdx)
+		}
+		// The value is filled by a later stage. A typed NULL keeps the initial
+		// projection executable while preserving the target column metadata.
+		nullExpr := makePlan2NullConstExprWithType()
+		nullExpr.Typ = raw.Typ
+		nullExpr.Typ.NotNullable = false
+		initial[projPos] = nullExpr
+	}
+	for pos, expr := range initial {
+		if expr == nil {
+			return 0, 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"nil expression at projection position %d", pos)
+		}
+	}
+
+	currentID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: initial,
+		Children:    []int32{childID},
+		BindingTags: []int32{initialTag},
+	}, nodeCtx)
+	currentTag := initialTag
+	currentProjection := initial
+	// Compute the longest materialized dependency distance for each column.
+	// Columns with the same distance can be evaluated against the same input
+	// image: none of them may depend on another column in that group. Besides
+	// reducing plan depth, this preserves the rule that every local reference
+	// reads a value from an earlier projection boundary.
+	state := make(map[int32]uint8, len(materialized))
+	level := make(map[int32]int, len(materialized))
+	var levelOf func(int32) (int, error)
+	levelOf = func(colIdx int32) (int, error) {
+		if !materialized[colIdx] {
+			return -1, nil
+		}
+		switch state[colIdx] {
+		case 1:
+			return 0, moerr.NewInvalidInputf(builder.GetContext(),
+				"expression has a circular dependency at column position %d", colIdx)
+		case 2:
+			return level[colIdx], nil
+		}
+		raw, ok := expressions[colIdx]
+		if !ok || raw == nil {
+			return 0, moerr.NewInvalidInputf(builder.GetContext(),
+				"expression for column position %d is missing", colIdx)
+		}
+		state[colIdx] = 1
+		columnLevel := 0
+		for _, refIdx := range collectRefColPos(raw) {
+			if _, mapped := colIdxToProjPos[refIdx]; !mapped {
+				return 0, moerr.NewInvalidInputf(builder.GetContext(),
+					"expression for column position %d references unavailable column position %d",
+					colIdx, refIdx)
+			}
+			if !materialized[refIdx] {
+				continue
+			}
+			refLevel, err := levelOf(refIdx)
+			if err != nil {
+				return 0, err
+			}
+			if refLevel+1 > columnLevel {
+				columnLevel = refLevel + 1
+			}
+		}
+		state[colIdx] = 2
+		level[colIdx] = columnLevel
+		return columnLevel, nil
+	}
+
+	maxLevel := -1
+	for _, colIdx := range materializationOrder {
+		columnLevel, err := levelOf(colIdx)
+		if err != nil {
+			return 0, 0, err
+		}
+		if columnLevel > maxLevel {
+			maxLevel = columnLevel
+		}
+	}
+	levels := make([][]int32, maxLevel+1)
+	for _, colIdx := range materializationOrder {
+		levels[level[colIdx]] = append(levels[level[colIdx]], colIdx)
+	}
+
+	for _, columns := range levels {
+		stage := make([]*plan.Expr, len(currentProjection))
+		for pos, expr := range currentProjection {
+			stage[pos] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: currentTag,
+					ColPos: int32(pos),
+				}},
+			}
+		}
+		for _, colIdx := range columns {
+			raw := expressions[colIdx]
+			rewritten, err := rewriteLocalRefsToProjection(builder.GetContext(), raw, currentTag, colIdxToProjPos)
+			if err != nil {
+				return 0, 0, err
+			}
+			stage[colIdxToProjPos[colIdx]] = rewritten
+		}
+		nextTag := builder.genNewBindTag()
+		currentID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: stage,
+			Children:    []int32{currentID},
+			BindingTags: []int32{nextTag},
+		}, nodeCtx)
+		currentTag = nextTag
+		currentProjection = stage
+	}
+	return currentID, currentTag, nil
+}
+
+// hasVolatileLocalDependency reports whether expr depends on a non-foldable
+// expression through the local table-column namespace. It follows raw
+// expressions rather than expanded copies, so the check is linear in the
+// dependency graph and cannot recreate the exponential planner tree that the
+// materialization boundary is intended to avoid.
+func hasVolatileLocalDependency(
+	ctx context.Context,
+	colIdx int32,
+	expressions map[int32]*plan.Expr,
+	materialized map[int32]bool,
+) (bool, error) {
+	state := make(map[int32]uint8)
+	memo := make(map[int32]bool)
+	var visit func(int32) (bool, error)
+	visit = func(current int32) (bool, error) {
+		if value, ok := memo[current]; ok {
+			return value, nil
+		}
+		if state[current] == 1 {
+			return false, moerr.NewInvalidInputf(ctx,
+				"expression has a circular dependency at column position %d", current)
+		}
+		expr, ok := expressions[current]
+		if !ok || expr == nil {
+			return false, moerr.NewInvalidInputf(ctx,
+				"expression for column position %d references unavailable expression", current)
+		}
+		state[current] = 1
+		if containsVolatileFunction(expr) {
+			state[current] = 2
+			memo[current] = true
+			return true, nil
+		}
+		for _, refIdx := range collectRefColPos(expr) {
+			if materialized[refIdx] {
+				state[current] = 2
+				memo[current] = true
+				return true, nil
+			}
+			if _, exists := expressions[refIdx]; !exists {
+				return false, moerr.NewInvalidInputf(ctx,
+					"expression for column position %d references unavailable column position %d",
+					current, refIdx)
+			}
+			needsStage, err := visit(refIdx)
+			if err != nil {
+				return false, err
+			}
+			if needsStage {
+				state[current] = 2
+				memo[current] = true
+				return true, nil
+			}
+		}
+		state[current] = 2
+		memo[current] = false
+		return false, nil
+	}
+	return visit(colIdx)
+}
+
+// rewriteLocalRefsToProjection makes a single expression read the current
+// materialized row image. Outer references (RelPos != 0) are intentionally
+// untouched; only the default/generated-column local namespace is remapped.
+func rewriteLocalRefsToProjection(
+	ctx context.Context,
+	expr *plan.Expr,
+	tag int32,
+	colIdxToProjPos map[int32]int32,
+) (*plan.Expr, error) {
+	ret := DeepCopyExpr(expr)
+	var rewrite func(*plan.Expr) error
+	rewrite = func(node *plan.Expr) error {
+		if node == nil {
+			return nil
+		}
+		switch impl := node.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col == nil || impl.Col.RelPos != 0 {
+				return nil
+			}
+			projPos, ok := colIdxToProjPos[impl.Col.ColPos]
+			if !ok {
+				return moerr.NewInvalidInputf(ctx,
+					"local expression references unavailable column position %d", impl.Col.ColPos)
+			}
+			name := impl.Col.Name
+			node.Expr = &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: tag,
+				ColPos: projPos,
+				Name:   name,
+			}}
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				if err := rewrite(arg); err != nil {
+					return err
+				}
+			}
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				if err := rewrite(item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := rewrite(ret); err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func newDefaultExprExpander(ctx context.Context, resolve func(int32) (*plan.Expr, bool)) *defaultExprExpander {
+	return &defaultExprExpander{
+		ctx:      ctx,
+		resolve:  resolve,
+		state:    make(map[int32]uint8),
+		memo:     make(map[int32]*plan.Expr),
+		maxNodes: maxDefaultExpansionNodes,
+	}
+}
+
+func (e *defaultExprExpander) expandColumn(colIdx int32) (*plan.Expr, error) {
+	switch e.state[colIdx] {
+	case 1:
+		return nil, moerr.NewInvalidInputf(e.ctx,
+			"default expression has a circular dependency at column position %d", colIdx)
+	case 2:
+		return e.copyExpandedExpr(e.memo[colIdx])
+	}
+	raw, ok := e.resolve(colIdx)
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	e.state[colIdx] = 1
+	expanded, err := e.expandExpr(raw)
+	if err != nil {
+		return nil, err
+	}
+	e.state[colIdx] = 2
+	e.memo[colIdx] = expanded
+	return e.copyExpandedExpr(expanded)
+}
+
+func (e *defaultExprExpander) expandExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
+		if impl.Col == nil || impl.Col.RelPos != 0 {
+			return DeepCopyExpr(expr), nil
+		}
+		raw, ok := e.resolve(impl.Col.ColPos)
+		if !ok || raw == nil {
+			return DeepCopyExpr(expr), nil
+		}
+		return e.expandColumn(impl.Col.ColPos)
+	case *plan.Expr_F:
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
+		ret := &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_F{F: &plan.Function{}}}
+		*ret.GetF() = *impl.F
+		ret.GetF().Args = make([]*plan.Expr, len(impl.F.Args))
+		ret.GetF().AggConfig = bytes.Clone(impl.F.AggConfig)
+		retFunc := ret.GetF()
+		for i, arg := range impl.F.Args {
+			child, err := e.expandExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			retFunc.Args[i] = child
+		}
+		return ret, nil
+	case *plan.Expr_List:
+		if err := e.consumeNode(); err != nil {
+			return nil, err
+		}
+		ret := &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{}}}
+		retList := ret.GetList()
+		retList.List = make([]*plan.Expr, len(impl.List.List))
+		for i, item := range impl.List.List {
+			child, err := e.expandExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			retList.List[i] = child
+		}
+		return ret, nil
+	default:
+		if err := e.consumeTree(expr); err != nil {
+			return nil, err
+		}
+		return DeepCopyExpr(expr), nil
+	}
+}
+
+func (e *defaultExprExpander) consumeNode() error {
+	if err := e.ctx.Err(); err != nil {
+		return err
+	}
+	if e.nodes >= e.maxNodes {
+		return moerr.NewInvalidInput(e.ctx,
+			"default expression expansion exceeds the planner limit")
+	}
+	e.nodes++
+	return nil
+}
+
+func (e *defaultExprExpander) consumeTree(expr *plan.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	if err := e.consumeNode(); err != nil {
+		return err
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if err := e.consumeTree(arg); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if err := e.consumeTree(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *defaultExprExpander) copyExpandedExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if err := e.consumeTree(expr); err != nil {
+		return nil, err
+	}
+	return DeepCopyExpr(expr), nil
+}
+
+// expandDefaultExprsInProjection expands only the projection entries listed
+// in defaultPositions.  The resolver maps physical table-column positions to
+// the expressions currently supplying those columns (explicit values or
+// other defaults).
+func expandDefaultExprsInProjection(
+	ctx context.Context,
+	projection []*plan.Expr,
+	defaultPositions []int32,
+	columnExprs map[int32]*plan.Expr,
+) error {
+	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
+		expr, ok := columnExprs[colIdx]
+		return expr, ok
+	})
+	for _, pos := range defaultPositions {
+		if pos < 0 || int(pos) >= len(projection) || projection[pos] == nil {
+			continue
+		}
+		expr, err := expander.expandExpr(projection[pos])
+		if err != nil {
+			return err
+		}
+		projection[pos] = expr
+	}
+	return nil
+}
+
+func expandDefaultExprWithColumnExprs(
+	ctx context.Context,
+	expr *plan.Expr,
+	columnExprs map[int32]*plan.Expr,
+) (*plan.Expr, error) {
+	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
+		expr, ok := columnExprs[colIdx]
+		return expr, ok
+	})
+	return expander.expandExpr(expr)
+}
+
+// expandDefaultExprsInValueScan resolves row-local default references in a
+// VALUES rowset.  The rowset is column-major, so defaults are expanded one row
+// at a time without constructing a second full-width row matrix.  That keeps
+// the extra memory bounded by the expression dependency chain rather than by
+// (number of rows * number of table columns).
+func expandDefaultExprsInValueScan(
+	ctx context.Context,
+	tableDef *TableDef,
+	inputColumns []string,
+	rowsetData *plan.RowsetData,
+) error {
+	if tableDef == nil || rowsetData == nil || len(inputColumns) == 0 {
+		return nil
+	}
+	inputToTable := make(map[int]int, len(inputColumns))
+	tableToInput := make(map[int32]int32, len(inputColumns))
+	for inputPos, name := range inputColumns {
+		tablePos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			for i, col := range tableDef.Cols {
+				if col != nil && strings.EqualFold(col.Name, name) {
+					tablePos = int32(i)
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok || tablePos < 0 || int(tablePos) >= len(tableDef.Cols) {
+			return moerr.NewInvalidInputf(ctx, "insert column '%s' does not exist", name)
+		}
+		inputToTable[inputPos] = int(tablePos)
+		if _, exists := tableToInput[tablePos]; exists {
+			return moerr.NewInvalidInputf(ctx, "insert column '%s' is specified more than once", name)
+		}
+		tableToInput[tablePos] = int32(inputPos)
+	}
+	rowCount := int(rowsetData.RowCount)
+	for row := 0; row < rowCount; row++ {
+		// Most VALUES statements contain only constants or parameters.  Check
+		// the current row before allocating the dependency map; local
+		// references are only produced by DEFAULT (and by REPLACE's
+		// DEFAULT-like binder).
+		needsExpansion := false
+		for inputPos := range inputToTable {
+			if inputPos >= len(rowsetData.Cols) || rowsetData.Cols[inputPos] == nil ||
+				row >= len(rowsetData.Cols[inputPos].Data) || rowsetData.Cols[inputPos].Data[row] == nil ||
+				rowsetData.Cols[inputPos].Data[row].Expr == nil {
+				return moerr.NewInvalidInputf(ctx, "invalid VALUES rowset at row %d", row+1)
+			}
+			if exprHasLocalColumnRef(rowsetData.Cols[inputPos].Data[row].Expr) {
+				needsExpansion = true
+			}
+		}
+		if !needsExpansion {
+			continue
+		}
+
+		raw := make(map[int32]*plan.Expr, len(inputToTable))
+		for inputPos, tablePos := range inputToTable {
+			raw[int32(tablePos)] = rowsetData.Cols[inputPos].Data[row].Expr
+		}
+
+		defaultExprs := make(map[int32]*plan.Expr, len(tableDef.Cols))
+		var resolveErr error
+		expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
+			// Values supplied by this row already have an executable vector
+			// position. Keep their local reference intact so the VALUE_SCAN
+			// operator can read the materialized source value instead of replaying
+			// a volatile expression (a DEFAULT (a) chain is the canonical case).
+			if _, ok := raw[colIdx]; ok {
+				return nil, false
+			}
+			if colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+				return nil, false
+			}
+			if expr, ok := defaultExprs[colIdx]; ok {
+				return expr, true
+			}
+			expr, err := getDefaultExpr(ctx, tableDef.Cols[colIdx])
+			if err != nil {
+				resolveErr = err
+				return nil, false
+			}
+			defaultExprs[colIdx] = expr
+			return expr, true
+		})
+
+		for inputPos, tablePos := range inputToTable {
+			rowExpr := raw[int32(tablePos)]
+			if !exprHasLocalColumnRef(rowExpr) {
+				continue
+			}
+			expr, err := expander.expandExpr(rowExpr)
+			if err != nil {
+				return err
+			}
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if err := remapValueScanLocalRefs(ctx, expr, tableToInput); err != nil {
+				return err
+			}
+			rowsetData.Cols[inputPos].Data[row].Expr = expr
+		}
+	}
+	return nil
+}
+
+// valueScanColumnsWithDefaultDependencies returns the input columns plus any
+// target-table columns required by row-local expressions in the VALUES rowset.
+// VALUE_SCAN owns the row image used to evaluate those expressions.  Keeping
+// an omitted dependency in that image is important for volatile defaults:
+//
+//	a DEFAULT (rand()), b DEFAULT (a), INSERT INTO t(b) VALUES (DEFAULT)
+//
+// must evaluate rand() once and let both stored columns observe that value.
+// The closure follows persisted default expressions transitively and emits
+// newly discovered columns in deterministic first-reference order.
+func valueScanColumnsWithDefaultDependencies(
+	ctx context.Context,
+	tableDef *TableDef,
+	inputColumns []string,
+	rowsetData *plan.RowsetData,
+) ([]string, error) {
+	if tableDef == nil {
+		return append([]string(nil), inputColumns...), nil
+	}
+	columns := append([]string(nil), inputColumns...)
+	tableToInput := make(map[int32]struct{}, len(columns))
+	for _, name := range columns {
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			for i, col := range tableDef.Cols {
+				if col != nil && strings.EqualFold(col.Name, name) {
+					pos = int32(i)
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"insert column '%s' does not exist", name)
+		}
+		if _, duplicate := tableToInput[pos]; duplicate {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"insert column '%s' is specified more than once", name)
+		}
+		tableToInput[pos] = struct{}{}
+	}
+
+	refs := make([]int32, 0)
+	if rowsetData != nil {
+		for _, col := range rowsetData.Cols {
+			if col == nil {
+				continue
+			}
+			for _, row := range col.Data {
+				if row != nil {
+					refs = append(refs, collectRefColPos(row.Expr)...)
+				}
+			}
+		}
+	}
+	for next := 0; next < len(refs); next++ {
+		ref := refs[next]
+		if ref < 0 || int(ref) >= len(tableDef.Cols) || tableDef.Cols[ref] == nil {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"VALUES expression references invalid column position %d", ref)
+		}
+		if _, present := tableToInput[ref]; !present {
+			col := tableDef.Cols[ref]
+			if col.GeneratedCol != nil {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"VALUES expression cannot depend on generated column '%s'", col.Name)
+			}
+			if col.Typ.AutoIncr {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"VALUES expression cannot depend on auto-increment column '%s'", col.Name)
+			}
+			tableToInput[ref] = struct{}{}
+			columns = append(columns, col.Name)
+			// A nullable ordinary column may have no persisted Default metadata
+			// (older catalogs and synthetic plans are both allowed to omit it).
+			// Its implicit default is NULL; do not dereference the absent metadata
+			// while discovering the dependency closure.
+			if col.Default != nil {
+				refs = append(refs, collectRefColPos(col.Default.GetExpr())...)
+			}
+		}
+	}
+	return columns, nil
+}
+
+func exprHasLocalColumnRef(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return impl.Col != nil && impl.Col.RelPos == 0
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if exprHasLocalColumnRef(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if exprHasLocalColumnRef(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// remapValueScanLocalRefs changes table-column positions in a VALUES expression
+// to positions in the synthetic VALUE_SCAN batch. INSERT permits an explicit
+// column list in any order (for example, INSERT INTO t(b, a) ...), while the
+// rowset vectors follow that input order. References retained for supplied
+// values therefore must use the input position, not the physical table
+// position. References to omitted columns are expanded away before this pass.
+func remapValueScanLocalRefs(
+	ctx context.Context,
+	expr *plan.Expr,
+	tableToInput map[int32]int32,
+) error {
+	if expr == nil {
+		return nil
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col == nil || impl.Col.RelPos != 0 {
+			return nil
+		}
+		inputPos, ok := tableToInput[impl.Col.ColPos]
+		if !ok {
+			return moerr.NewInvalidInputf(ctx,
+				"VALUES expression references unavailable column position %d", impl.Col.ColPos)
+		}
+		impl.Col.ColPos = inputPos
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if err := remapValueScanLocalRefs(ctx, arg, tableToInput); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if err := remapValueScanLocalRefs(ctx, item, tableToInput); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // remapGeneratedColExpr rewrites ColRef positions in a generated column expression
 // for use in INSERT/UPDATE projections. The stored expression has ColRef(0, colIdx)
 // inlineGeneratedColExpr replaces ColRef(0, colIdx) in a generated column expression
@@ -972,37 +1921,89 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
-// remapGeneratedColExprsToTableOrder normalizes generated-column references
-// after CTAS merges explicit target definitions with source columns. The
-// generated-column binder resolves references against declaration order, while
-// CTAS intentionally stores target-only columns before source-only columns.
-// DML generated-column expansion uses the final TableDef order, so leave the
-// catalog with one stable coordinate system.
-func remapGeneratedColExprsToTableOrder(tableCols, declarationCols []*ColDef) {
-	if len(tableCols) == 0 || len(declarationCols) == 0 {
+// remapCTASColumnExprsToTableOrder normalizes expressions from the two
+// independent CTAS input schemas. Explicit target definitions are bound
+// against declaration order; inherited defaults on SELECT-only columns retain
+// the SELECT output order. Treating every final column as if it came from the
+// explicit declaration list can silently corrupt an inherited source default
+// when target-only columns are prepended.
+func remapCTASColumnExprsToTableOrder(
+	tableCols, declarationCols, sourceCols []*ColDef,
+) {
+	if len(tableCols) == 0 {
 		return
 	}
-	tablePosByName := make(map[string]int, len(tableCols))
-	for pos, col := range tableCols {
+
+	explicitNames := make(map[string]struct{}, len(declarationCols))
+	for _, col := range declarationCols {
 		if col != nil {
-			tablePosByName[col.Name] = pos
-		}
-	}
-	declarationToTablePos := make(map[int32]int32, len(declarationCols))
-	for declarationPos, col := range declarationCols {
-		if col == nil {
-			continue
-		}
-		if tablePos, ok := tablePosByName[col.Name]; ok {
-			declarationToTablePos[int32(declarationPos)] = int32(tablePos)
+			explicitNames[strings.ToLower(col.Name)] = struct{}{}
 		}
 	}
 
+	explicitOwners := make([]*ColDef, 0, len(declarationCols))
+	sourceOwners := make([]*ColDef, 0, len(sourceCols))
 	for _, col := range tableCols {
-		if col == nil || col.GeneratedCol == nil {
+		if col == nil {
 			continue
 		}
-		remapGeneratedColExprPositions(col.GeneratedCol.Expr, declarationToTablePos)
+		if _, ok := explicitNames[strings.ToLower(col.Name)]; ok {
+			explicitOwners = append(explicitOwners, col)
+		} else {
+			sourceOwners = append(sourceOwners, col)
+		}
+	}
+
+	remapColumnExprsToTableOrder(explicitOwners, declarationCols, tableCols)
+	remapColumnExprsToTableOrder(sourceOwners, sourceCols, tableCols)
+}
+
+// remapColumnExprsToTableOrder remaps expressions owned by tableCols. The
+// origin list supplies the coordinates used when those expressions were
+// bound, while finalTableCols supplies the coordinates persisted in the
+// resulting table. DEFAULT and generated expressions share the same row-local
+// ColRef representation and therefore must be remapped together.
+func remapColumnExprsToTableOrder(
+	tableCols, originCols, finalTableCols []*ColDef,
+) {
+	if len(tableCols) == 0 || len(originCols) == 0 || len(finalTableCols) == 0 {
+		return
+	}
+
+	finalPosByName := make(map[string]int, len(finalTableCols))
+	for pos, col := range finalTableCols {
+		if col != nil {
+			finalPosByName[strings.ToLower(col.Name)] = pos
+		}
+	}
+	originToFinal := make(map[int32]int32, len(originCols))
+	for originPos, col := range originCols {
+		if col == nil {
+			continue
+		}
+		if finalPos, ok := finalPosByName[strings.ToLower(col.Name)]; ok {
+			originToFinal[int32(originPos)] = int32(finalPos)
+		}
+	}
+	remapColumnExprsByPosition(tableCols, originToFinal)
+}
+
+// remapColumnExprsByPosition applies a complete coordinate map to every
+// row-local expression attached to the supplied columns.
+func remapColumnExprsByPosition(cols []*ColDef, positions map[int32]int32) {
+	if len(cols) == 0 || len(positions) == 0 {
+		return
+	}
+	for _, col := range cols {
+		if col == nil {
+			continue
+		}
+		if col.Default != nil && col.Default.Expr != nil {
+			remapGeneratedColExprPositions(col.Default.Expr, positions)
+		}
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			remapGeneratedColExprPositions(col.GeneratedCol.Expr, positions)
+		}
 	}
 }
 
@@ -1012,7 +2013,7 @@ func remapGeneratedColExprPositions(expr *plan.Expr, positions map[int32]int32) 
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 {
+		if e.Col != nil && e.Col.RelPos == 0 {
 			if pos, ok := positions[e.Col.ColPos]; ok {
 				e.Col.ColPos = pos
 			}
@@ -1107,7 +2108,7 @@ func collectRefColPos(expr *plan.Expr) []int32 {
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 {
+		if e.Col != nil && e.Col.RelPos == 0 {
 			return []int32{e.Col.ColPos}
 		}
 		return nil
@@ -1239,6 +2240,22 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 // }
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
+	if d == nil {
+		return nil, moerr.NewInvalidInput(ctx, "cannot resolve default value for a missing column definition")
+	}
+	if d.Default == nil {
+		if d.Typ.NotNullable && !d.Typ.AutoIncr {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid default value for column '%s'", d.Name)
+		}
+		typ := d.Typ
+		typ.NotNullable = false
+		return &Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{Isnull: true},
+			},
+			Typ: typ,
+		}, nil
+	}
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for column '%s'", d.Name)
 	}

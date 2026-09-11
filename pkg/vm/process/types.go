@@ -570,6 +570,9 @@ type Process struct {
 	Ctx     context.Context
 	Cancel  context.CancelCauseFunc
 	Session Session
+	// WarningSink is an immutable execution-attempt destination. Children inherit
+	// the pointer; remote callbacks retain it after a failed attempt is sealed.
+	WarningSink any
 }
 
 type sqlHelper interface {
@@ -586,14 +589,18 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	MsgId           uint64
-	Uid             uuid.UUID
-	Cs              morpc.ClientSession
-	Err             chan error
-	ReserveBatch    func(context.Context, uint64) (uint64, error)
-	RollbackBatch   func(uint64)
-	BatchCredits    uint32
-	ByteCredits     uint64
+	// TerminalBacked marks registrations whose immutable terminal owns the
+	// generation result. Such registrations must not use Err for a second,
+	// competing terminal notification; Err is nil for that path.
+	TerminalBacked bool
+	MsgId          uint64
+	Uid            uuid.UUID
+	Cs             morpc.ClientSession
+	Err            chan error
+	ReserveBatch   func(context.Context, uint64) (uint64, error)
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -1146,4 +1153,12 @@ func (proc *Process) DebugBreakDump(cond bool) {
 	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
+}
+
+// GetWarningSink preserves session diagnostics outside an execution attempt.
+func (proc *Process) GetWarningSink() any {
+	if proc.WarningSink != nil {
+		return proc.WarningSink
+	}
+	return proc.Session
 }

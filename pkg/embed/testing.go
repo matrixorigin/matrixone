@@ -135,6 +135,31 @@ func (c *SharedTestCluster) Close() error {
 	return nil
 }
 
+// CloseIfActive releases an initialized shared fixture and resets a successful
+// release for a later test invocation. It is useful for a test package that
+// combines a short shared-cluster suite with later scenarios that need their
+// own topology. Callers must invoke it only after Run has returned; Run holds
+// the same mutex while the scenario body is executing.
+func (c *SharedTestCluster) CloseIfActive() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cluster == nil {
+		return nil
+	}
+	if err := c.cluster.Close(); err != nil {
+		// A failed close leaves ownership with this state, but prevents a later
+		// scenario from observing a partially closed fixture. A subsequent
+		// CloseIfActive call can retry the underlying cleanup.
+		c.closed = true
+		return err
+	}
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = false
+	return nil
+}
+
 func init() {
 	stats.SkipPanicONDuplicate.Store(true)
 }
@@ -145,6 +170,20 @@ func init() {
 // is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
+	// Keep every embedded UT cluster on the short test-only readiness cadence.
+	// Shared base clusters already use this callback, but dedicated scenarios
+	// commonly provide their own pre-start adjustment and would otherwise fall
+	// back to the production one-second polling intervals. Apply the cadence
+	// first so an explicit scenario-specific value can still override it.
+	opts = append(opts, func(c *cluster) {
+		preStart := c.options.preStart
+		c.options.preStart = func(svc ServiceOperator) {
+			adjustClusterStartupRetryIntervals(svc)
+			if preStart != nil {
+				preStart(svc)
+			}
+		}
+	})
 	c, err := NewCluster(opts...)
 	if err != nil {
 		return cleanupClusterOnError(c, err)
@@ -329,4 +368,14 @@ func RunSingleCNBaseClusterTests(
 	}, func(c Cluster) {
 		fn(c)
 	})
+}
+
+// CloseSingleCNBaseClusterTests releases the process-local one-CN fixture if
+// it was initialized. A successful release leaves the fixture reusable for a
+// later test invocation, which keeps -count and shuffled test order valid. It
+// is a lifecycle boundary for packages that mix the canonical shared one-CN
+// suite with specialized clusters; unused fixtures are left reusable so a
+// later shared test still initializes normally.
+func CloseSingleCNBaseClusterTests() error {
+	return singleCNClusterState.CloseIfActive()
 }

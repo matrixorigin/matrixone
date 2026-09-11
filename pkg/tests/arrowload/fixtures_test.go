@@ -15,9 +15,9 @@
 // Package arrowload holds release-level, end-to-end BVT coverage for
 // `LOAD DATA ... format='arrow'` (issue #23684). Tests run against dedicated,
 // non-shared embedded clusters (see cluster_test.go). The main BVTs exercise the
-// local-only default configuration, while focused cases explicitly opt into S3
-// or distributed Arrow LOAD without affecting any other package's shared
-// embedded cluster.
+// default-on configuration across local, S3/stage, and distributed paths, while
+// focused cases explicitly disable kill switches without affecting any other
+// package's shared embedded cluster.
 package arrowload
 
 import (
@@ -397,6 +397,11 @@ const (
 	largeFixtureBatches   = 100
 	largeFixtureBatchRows = 1000
 	largeFixtureRows      = largeFixtureBatches * largeFixtureBatchRows
+	// The ownership-policy test only needs several batches to exercise Arrow
+	// conversion. Keep the 100-batch fixture for tests that actually prove
+	// distributed fan-out or mid-load cancellation.
+	forceMaterializeFixtureBatches = 4
+	forceMaterializeFixtureRows    = forceMaterializeFixtureBatches * largeFixtureBatchRows
 )
 
 // fixtureLarge writes an IPC File (so record-batch parallel shard fan-out applies)
@@ -406,12 +411,21 @@ const (
 // observe or interrupt without relying on a sleep.
 func fixtureLarge(t testing.TB) (path string, schemaDDL string) {
 	t.Helper()
+	return fixtureLargeWithBatches(t, largeFixtureBatches)
+}
+
+// fixtureLargeWithBatches keeps the schema and row construction identical for
+// the large fan-out fixture and the smaller single-CN ownership-policy fixture.
+// A separate batch count prevents a policy check from accidentally carrying the
+// fan-out workload while retaining multiple record-batch conversion.
+func fixtureLargeWithBatches(t testing.TB, batches int) (path string, schemaDDL string) {
+	t.Helper()
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
 		{Name: "payload", Type: arrow.BinaryTypes.String, Nullable: false},
 	}, nil)
 	path = writeArrowFile(t, t.TempDir(), "large.arrow", containerFile, schema, func(alloc memory.Allocator, write func(arrow.RecordBatch) error) {
-		for b := 0; b < largeFixtureBatches; b++ {
+		for b := 0; b < batches; b++ {
 			builder := array.NewRecordBuilder(alloc, schema)
 			ids := make([]int64, largeFixtureBatchRows)
 			payloads := make([]string, largeFixtureBatchRows)
@@ -429,4 +443,9 @@ func fixtureLarge(t testing.TB) (path string, schemaDDL string) {
 		}
 	})
 	return path, "id BIGINT NOT NULL, payload VARCHAR(128) NOT NULL"
+}
+
+func fixtureForceMaterialize(t testing.TB) (path string, schemaDDL string) {
+	t.Helper()
+	return fixtureLargeWithBatches(t, forceMaterializeFixtureBatches)
 }

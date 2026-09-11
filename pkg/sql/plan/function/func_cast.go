@@ -452,6 +452,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
 		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1334,6 +1335,12 @@ func boolToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return boolToFloat(source, rs, length, selectList)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return boolToFloat(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return boolToYear(source, rs, length, selectList)
@@ -3564,10 +3571,14 @@ func boolToStr(
 func boolToInteger[T constraints.Integer](
 	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	var dft T
-	for i = 0; i < l; i++ {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -3583,6 +3594,35 @@ func boolToInteger[T constraints.Integer](
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func boolToFloat[T constraints.Float](
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	var dft T
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if v {
+			if err := to.Append(1, false); err != nil {
+				return err
+			}
+		} else if err := to.Append(dft, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -4626,7 +4666,7 @@ func mysqlTimeOutOfRangeForCast(
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
 				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
@@ -4663,7 +4703,7 @@ func mysqlInvalidTimeForCast(
 		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
 		}
@@ -6758,7 +6798,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	if proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6780,7 +6820,7 @@ func appendIntegerNumericCoercionWarning(
 	if trimmed == "" || proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -7230,12 +7270,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

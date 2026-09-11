@@ -1,11 +1,12 @@
 # #23684 Arrow LOAD design
 
-Status: approved for fail-closed implementation delivery; production rollout
-approval is pending. The independent implementation approval is recorded at
+Status: the default-on policy is implemented for issue #28517; operational
+rollout approval is pending. The independent implementation approval is recorded at
 [PR review #5127791633](https://github.com/matrixorigin/matrixone/pull/28145#pullrequestreview-5127791633)
 for reviewed revision `53af58d64c2e1d928445cd8104511346a5a156a3`. It approves
-merging the fail-closed implementation and expressly does not authorize remote
-or distributed production enablement. The release-readiness matrix is maintained in
+the original fail-closed implementation substrate; this issue changes the
+omitted-value policy while retaining explicit rollback gates. It does not itself
+authorize provider or mixed-version operational rollout. The release-readiness matrix is maintained in
 [`evidence/23684_arrow_load_release_readiness.md`](evidence/23684_arrow_load_release_readiness.md).
 The separately versioned
 [`implementation delivery decision`](evidence/23684_arrow_load_delivery_decision.md)
@@ -50,19 +51,21 @@ semantics mode.
 ## Configuration, rollout, and compatibility
 
 `frontend.arrow-load.enabled`, `s3-enabled`, and `distributed-enabled` all
-default to false. Planning samples the
-settings for its scope, but every `External.Prepare` repeats the gate using the
-worker CN's `ParameterUnit` before constructing an Arrow reader:
+default to true when omitted. They are explicit deployment kill switches.
+Planning samples the settings for its scope, but every `External.Prepare`
+repeats the gate using the worker CN's `ParameterUnit` before constructing an
+Arrow reader:
 
 | Source/execution | Required worker settings | Default |
 | --- | --- | --- |
-| local File or Stream | `enabled` | rejected |
-| direct S3 or S3-backed stage | `enabled`, `s3-enabled` | rejected |
-| distributed Arrow scope | `enabled`, `distributed-enabled` | rejected |
-| distributed S3 scope | all three | rejected |
+| local File or Stream | `enabled` | available |
+| direct S3 or S3-backed stage | `enabled`, `s3-enabled` | available |
+| distributed Arrow scope | `enabled`, `distributed-enabled` | available |
+| distributed S3 scope | all three | available |
 
-This prevents a coordinator's stale or more-permissive configuration from
-bypassing a worker's fail-closed policy during a rolling change.  The execution
+An explicit `false` still disables the corresponding surface, and worker-side
+checks prevent a coordinator's stale or more-permissive configuration from
+bypassing a worker's rollback policy during a rolling change. The execution
 scope remains a positive compile authorization. Arrow fanout additionally
 serializes `arrow_distributed_execution`; it is independent of the requested
 `Parallel` flag because already-planned shard scopes must clear that flag to
@@ -70,8 +73,9 @@ avoid a second split. `External.Prepare` applies the worker's distributed gate
 to this execution fact before it opens I/O. MORPC v57 remains the receiver
 compatibility gate. v57 is `up/main` v56 plus one on the delivery
 rebase; older peers reject the additive Arrow pipeline fields, so mixed-version
-deployments must drain or keep remote Arrow modes disabled.  Downgrade is safe
-under the same gates because local Arrow does not advertise a remote capability.
+deployments and downgrades must keep `distributed-enabled=false` until the exact
+release artifacts and supported order are validated. Local File/Stream can
+remain enabled because it does not advertise a remote capability.
 
 ## Ownership and failure model
 
@@ -109,14 +113,14 @@ Arrow File/Stream, identity, MinIO, multi-CN, rollback, and SQL BVT cases cover
 the consumer and public paths.  The immediate predecessor compatibility test
 is retained with the MORPC v57 gate and exercises v56 as the rejecting peer.
 
-Before remote production enablement, the readiness record requires a bounded
-cross-worker aggregate admission design, real-provider evidence, exact-release
-mixed-version validation, deployment A/B, and independent SQL/execution/
-resource/FileService/storage/security-release decisions.  Until then the
-defaults above are the conservative rollback and failure-containment plan.
+Before treating the default-on policy as fully release-ready, the readiness
+record requires a bounded cross-worker aggregate admission design, real-provider
+evidence, exact-release mixed-version validation, deployment A/B, and independent
+SQL/execution/resource/FileService/storage/security-release decisions. Until
+then the explicit kill switches remain the rollback and failure-containment plan.
 
 ## Open decisions
 
-Independent owners must approve the proposed remote rollout only after the
-listed acceptance evidence exists.  No product choice is needed to ship this
-documented fail-closed default: every mode requires explicit deployment opt-in.
+Independent owners must approve the proposed operational rollout only after the
+listed acceptance evidence exists. The product contract is default-on when the
+gate fields are omitted; explicit `false` values provide per-surface rollback.

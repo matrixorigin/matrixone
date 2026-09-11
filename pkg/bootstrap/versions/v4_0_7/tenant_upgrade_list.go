@@ -1,4 +1,4 @@
-// Copyright 2021 - 2024 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux
+package v4_0_7
 
-package logservice
+import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 
-import (
-	"github.com/cakturk/go-netstat/netstat"
-)
-
-func listAllPorts() map[uint16]struct{} {
-	tabs, err := netstat.TCPSocks(func(s *netstat.SockTabEntry) bool {
-		return true
-	})
-	if err != nil {
-		return nil
-	}
-	ret := map[uint16]struct{}{}
-	for _, e := range tabs {
-		ret[e.LocalAddr.Port] = struct{}{}
-		ret[e.RemoteAddr.Port] = struct{}{}
-	}
-	return ret
-}
+// The index metadata provenance migration is NOT an entry: the set of tables it alters is
+// only known at runtime (one metadata table per index, per account), which a fixed UpgSql
+// cannot express. It runs from HandleTenantUpgrade, the same escape hatch v4_0_6 uses for
+// upgradeLegacyForeignKeyMetadata.
+var tenantUpgEntries = []versions.UpgradeEntry{}

@@ -2745,6 +2745,15 @@ func createPrepareStmtInSession(
 		return nil, err
 	}
 	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
+	groupConcatValue, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return nil, err
+	}
+	groupConcatLimit, validGroupConcat := groupConcatValue.(int64)
+	if !validGroupConcat || groupConcatLimit < 4 {
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "invalid group_concat_max_len: %v", groupConcatValue)
+	}
+	groupConcatFloor := uint64(groupConcatLimit)
 
 	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -2775,6 +2784,7 @@ func createPrepareStmtInSession(
 			true,
 			nil,
 			nil,
+			groupConcatFloor,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2792,21 +2802,22 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		Name:             preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:              originSQL,
-		compile:          comp,
-		PreparePlan:      preparePlan,
-		PrepareStmt:      saveStmt,
-		NativeMode:       owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:  owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:       owner.sqlModeHasEnableBoolSumAvg(),
-		sqlModeFlagsSet:  true,
-		remapDb:          maps.Clone(execCtx.remapDb),
-		defaultDatabase:  executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion: owner.GetTempTableVersion(),
-		ddlVersion:       owner.getDDLVersion(),
-		cloneSQL:         cloneSQL,
-		protocolVersion:  protocolVersion,
+		groupConcatMaxLenFloor: groupConcatFloor,
+		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                    originSQL,
+		compile:                comp,
+		PreparePlan:            preparePlan,
+		PrepareStmt:            saveStmt,
+		NativeMode:             owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
+		sqlModeFlagsSet:        true,
+		remapDb:                maps.Clone(execCtx.remapDb),
+		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:       owner.GetTempTableVersion(),
+		ddlVersion:             owner.getDDLVersion(),
+		cloneSQL:               cloneSQL,
+		protocolVersion:        protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(

@@ -32,6 +32,17 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 }
 
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		if b.havingBinder != nil {
+			previousHaving := b.havingBinder.bindingProjectedAlias
+			b.havingBinder.bindingProjectedAlias = true
+			defer func() { b.havingBinder.bindingProjectedAlias = previousHaving }()
+		}
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
@@ -53,7 +64,20 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+		return &plan.Expr{
+			Typ: b.ctx.aggregates[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		(!isGroupConcatAggregateExpr(astExpr) || b.allowGroupConcatReuse) {
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{

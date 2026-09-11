@@ -8573,6 +8573,166 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *tes
 	require.Empty(t, collectReachableSortNodes(query))
 }
 
+func TestGroupConcatLogicalCallsKeepIndependentAggregateSlots(t *testing.T) {
+	// GROUP_CONCAT produces both a value and a warning side effect. The two
+	// calls below have the same value expression, but they are two logical
+	// aggregate instances in the SELECT list and MySQL reports a truncation
+	// warning for each one. The planner must not collapse the second call into
+	// the first aggregate slot through aggregateByAst.
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY),
+		        HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))
+		   FROM NATION`,
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var aggregateSlots []int
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		count := 0
+		for _, agg := range node.AggList {
+			if fn := agg.GetF(); fn != nil && fn.Func != nil &&
+				fn.Func.ObjName == NameGroupConcat {
+				count++
+			}
+		}
+		if count > 0 {
+			aggregateSlots = append(aggregateSlots, count)
+		}
+	}
+	require.NotEmpty(t, aggregateSlots)
+	for _, count := range aggregateSlots {
+		require.Equal(t, 2, count)
+	}
+}
+
+func TestGroupConcatAliasReferencesReuseAggregateSlot(t *testing.T) {
+	queries := map[string]struct {
+		sql  string
+		want int
+	}{
+		"having alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                   FROM NATION
+		                  HAVING LENGTH(g) > 0`,
+			want: 1,
+		},
+		"order alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                 FROM NATION
+		                ORDER BY g`,
+			want: 1,
+		},
+		"nested order alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                         FROM NATION
+		                        ORDER BY HEX(g)`,
+			want: 1,
+		},
+		"order exact expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                           FROM NATION
+		                          ORDER BY GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)`,
+			want: 1,
+		},
+		"parenthesized exact expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                           FROM NATION
+		                          GROUP BY N_REGIONKEY
+		                          ORDER BY (GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 1,
+		},
+		"order wrapped expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                              FROM NATION
+		                             GROUP BY N_REGIONKEY
+		                             ORDER BY HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 2,
+		},
+		"single row wrapped expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                              FROM NATION
+		                             ORDER BY HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 1,
+		},
+		"order ordinal": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                   FROM NATION
+		                  ORDER BY 1`,
+			want: 1,
+		},
+		"distinct exact expression": {
+			sql: `SELECT DISTINCT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                              FROM NATION
+		                             ORDER BY GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)`,
+			want: 1,
+		},
+	}
+	for name, query := range queries {
+		t.Run(name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query.sql)
+			require.NoError(t, err)
+			require.Equal(t, query.want, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+		})
+	}
+
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		   FROM NATION
+		  HAVING LENGTH(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)) > 0`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+}
+
+func TestGroupConcatAliasesKeepTheirOwnAggregateSlots(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`WITH t AS (SELECT 1 AS id)
+		 SELECT GROUP_CONCAT(UUID()) AS a, GROUP_CONCAT(UUID()) AS b
+		   FROM t
+		  HAVING a <> b`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+}
+
+func TestGroupConcatAliasExpansionDoesNotChangeGroupByBinding(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`WITH t AS (SELECT 1 AS id UNION ALL SELECT 2 AS id)
+		 SELECT id + 1 AS a
+		   FROM t
+		  GROUP BY (a)`,
+	)
+	require.NoError(t, err)
+}
+
+func countGroupConcatAggregateSlots(query *plan.Query) int {
+	count := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if fn := agg.GetF(); fn != nil && fn.Func != nil &&
+				fn.Func.ObjName == NameGroupConcat {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 	tests := map[string]string{
 		"positional": `SELECT n.N_REGIONKEY,

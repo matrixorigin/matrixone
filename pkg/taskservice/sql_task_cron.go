@@ -119,6 +119,7 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 			s.removeSQLTask(id)
 		}
 	}
+	notifySQLTaskRefreshForTest(s)
 }
 
 func (s *taskService) addSQLTask(sqlTask SQLTask) {
@@ -128,7 +129,16 @@ func (s *taskService) addSQLTask(sqlTask SQLTask) {
 		return
 	}
 	if sqlTask.NextFireTime > 0 && time.Now().After(time.UnixMilli(sqlTask.NextFireTime)) {
-		if err := s.sqlCrons.stopper.RunTask(func(context.Context) { job.Run() }); err != nil {
+		finished := observeSQLTaskCatchUpForTest(s, sqlTask.TaskID)
+		if err := s.sqlCrons.stopper.RunTask(func(context.Context) {
+			if finished != nil {
+				defer finished()
+			}
+			job.Run()
+		}); err != nil {
+			if finished != nil {
+				finished()
+			}
 			panic(err)
 		}
 	}
