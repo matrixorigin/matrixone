@@ -731,15 +731,12 @@ func requestSnapshotReadUntilReady(
 	err := common.RetryWithInterval(
 		retryCtx,
 		func() (bool, error) {
-			// The fallback retry context only bounds completed Succeed=false
-			// responses. A ready snapshot request may legitimately take longer while
-			// TN walks a long checkpoint-manifest chain. Keep that in-flight work
-			// under the caller's context instead of misclassifying it as checkpoint
-			// lag when the fallback budget expires.
-			response, err := RequestSnapshotRead(ctx, tbl, snapshot)
+			// TxnOperator.Debug requires a deadline. retryCtx preserves the caller's
+			// deadline when present and supplies the bounded fallback otherwise.
+			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
 			if err != nil {
-				if ctx.Err() != nil {
-					return true, context.Cause(ctx)
+				if retryCtx.Err() != nil {
+					return true, context.Cause(retryCtx)
 				}
 				return true, err
 			}

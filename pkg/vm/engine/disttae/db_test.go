@@ -25,7 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/require"
@@ -49,6 +52,54 @@ func (m mockCluster) DebugUpdateCNWorkState(string, int) error             { ret
 func (m mockCluster) RemoveCN(string)                                      {}
 func (m mockCluster) AddCN(metadata.CNService)                             {}
 func (m mockCluster) UpdateCN(metadata.CNService)                          {}
+
+type mockClusterWithTN struct {
+	mockCluster
+	service metadata.TNService
+}
+
+func (m *mockClusterWithTN) GetTNService(
+	selector clusterservice.Selector,
+	apply func(metadata.TNService) bool,
+) {
+	apply(m.service)
+}
+
+func (m *mockClusterWithTN) GetAllTNServices() []metadata.TNService {
+	return []metadata.TNService{m.service}
+}
+
+type snapshotReadTxnSender struct {
+	calls       int
+	hadDeadline bool
+}
+
+func (s *snapshotReadTxnSender) Send(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+) (*rpc.SendResult, error) {
+	s.calls++
+	_, s.hadDeadline = ctx.Deadline()
+
+	payload, err := (&cmd_util.SnapshotReadResp{Succeed: true}).MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]txn.TxnResponse, 0, len(requests))
+	for _, request := range requests {
+		responses = append(responses, txn.TxnResponse{
+			Txn:    &request.Txn,
+			Method: request.Method,
+			Flag:   request.Flag,
+			CNOpResponse: &txn.CNOpResponse{
+				Payload: payload,
+			},
+		})
+	}
+	return &rpc.SendResult{Responses: responses}, nil
+}
+
+func (s *snapshotReadTxnSender) Close() error { return nil }
 
 func Test_requestSnapshotRead_Smoke(t *testing.T) {
 	ctx := context.Background()
@@ -98,6 +149,56 @@ func TestRequestSnapshotReadUntilReadyRetriesTemporaryCheckpointLag(t *testing.T
 	require.NoError(t, err)
 	require.True(t, resp.Succeed)
 	require.Equal(t, 2, calls)
+}
+
+func TestRequestSnapshotReadUntilReadyAddsDeadlineForTxnRequest(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	oldCluster, hadOldCluster := rt.GetGlobalVariables(runtime.ClusterService)
+	cluster := &mockClusterWithTN{service: metadata.TNService{
+		TxnServiceAddress: "tn-test-address",
+		Shards: []metadata.TNShard{{
+			TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+			ReplicaID:     1,
+		}},
+	}}
+	rt.SetGlobalVariables(runtime.ClusterService, cluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			rt.SetGlobalVariables(runtime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.ClusterService, cluster)
+		}
+	})
+
+	sender := &snapshotReadTxnSender{}
+	client := txnclient.NewTxnClient("", sender)
+	client.Resume()
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+
+	createCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	txnOp, err := client.New(createCtx, types.BuildTS(0, 0).ToTimestamp())
+	require.NoError(t, err)
+
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnClient = client
+	proc.Base.TxnOperator = txnOp
+	tbl := &txnTable{}
+	tbl.proc.Store(proc)
+
+	ts := types.BuildTS(10, 0)
+	resp, err := requestSnapshotReadUntilReady(
+		context.Background(),
+		tbl,
+		&ts,
+		time.Millisecond,
+		time.Second,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.Succeed)
+	require.Equal(t, 1, sender.calls)
+	require.True(t, sender.hadDeadline)
 }
 
 func TestRequestSnapshotReadUntilReadyBoundsCheckpointLag(t *testing.T) {
