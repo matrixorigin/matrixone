@@ -1872,7 +1872,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if widened, ok := widenedDecimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
@@ -1931,7 +1931,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if widened, ok := widenedDecimalArithmeticInputs("-", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
@@ -2004,7 +2004,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
@@ -2203,7 +2203,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if modOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
