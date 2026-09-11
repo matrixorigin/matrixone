@@ -235,8 +235,11 @@ func (c *cluster) startServiceLocked(op *operator) error {
 		err = op.Start()
 	}
 	if err != nil {
-		return fmt.Errorf("embedded cluster %d start %s service %q: %w",
-			c.id, op.serviceType, op.sid, err)
+		return errors.Join(
+			moerr.NewInternalErrorNoCtxf("embedded cluster %d start %s service %q",
+				c.id, op.serviceType, op.sid),
+			err,
+		)
 	}
 	return nil
 }

@@ -754,8 +754,10 @@ func TestDoStartLockedConcurrentErrors(t *testing.T) {
 	require.ErrorAs(t, err, &pathErr)
 	require.Same(t, second, pathErr)
 	require.EqualError(t, err,
-		"embedded cluster 42 start CN service \"cn-a\": connection refused\n"+
-			"embedded cluster 42 start CN service \"cn-b\": open catalog: permission denied")
+		"internal error: embedded cluster 42 start CN service \"cn-a\"\n"+
+			"connection refused\n"+
+			"internal error: embedded cluster 42 start CN service \"cn-b\"\n"+
+			"open catalog: permission denied")
 
 	// Startup results belong to this invocation, including incremental CN starts.
 	c.startFn = func(op *operator) error {
